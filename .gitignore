@@ -1,0 +1,15 @@
+# secrets and server state — never commit
+.env
+.env.bak
+data/
+awg-server/data/
+demo/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# misc
+*.zip
+.DS_Store
