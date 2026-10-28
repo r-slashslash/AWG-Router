@@ -69,6 +69,6 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo PANEL_PORT=8099 PUBLIC_HOST=203.0.
 Demo mode (`DRY_RUN=1`) fakes the AWG server; useful with Playwright for UI checks in all four
 languages, desktop and 375 px mobile (no horizontal overflow; RTL for fa).
 
-## Not verified end-to-end yet
-Real `docker build` of both images on a server, real Let's Encrypt issuance through the installer,
-the host-mode systemd path, and `awg-router uninstall` on a live server.
+## Status
+Verified on a real server (Ubuntu 22.04, AmneziaVPN container): image builds, Let's Encrypt
+issuance through the installer, the panel itself, update from GitHub.
