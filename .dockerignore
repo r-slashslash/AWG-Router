@@ -1,0 +1,9 @@
+data
+tests
+docs
+.git
+.env
+.env.bak
+**/__pycache__
+*.pyc
+awg-server

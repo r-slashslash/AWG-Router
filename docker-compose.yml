@@ -1,0 +1,20 @@
+services:
+  awg-router:
+    build: .
+    image: awg-router:latest
+    container_name: awg-router
+    restart: unless-stopped
+    # Host network: the panel listens on its own port and on port 80 (Let's Encrypt
+    # validation) and manages AWG on the host; it enters the Amnezia container via nsenter.
+    network_mode: host
+    pid: host
+    privileged: true
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
