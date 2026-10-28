@@ -1,5 +1,5 @@
 <p align="center">
-  <b>English</b> · <a href="README.ru.md">Русский</a>
+  <b>English</b> · <a href="README.ru.md">Русский</a> · <a href="README.zh.md">中文</a> · <a href="README.fa.md">فارسی</a>
 </p>
 
 # AWG Router
