@@ -22,10 +22,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 |---|---|
 | `app/main.py` | API endpoints, auth (signed cookie, 4 h session, 8 fails → 10 min block, optional TOTP step: `need_code`; a password changed in the panel lives as PBKDF2 in `data/panel_password.json` and wins over `.env`), backup/restore, startup, `data/status.json` |
 | `app/totp.py` | Optional 2FA (RFC 6238): secret in `data/totp.json` (re-read by mtime; `awg-router 2fa-off` deletes it), replay-protected codes; enabling/disabling changes the session tag → other sessions end |
-| `app/traffic.py` | Per-client traffic totals and months (`data/traffic.json`), deltas between polls survive counter resets |
+| `app/traffic.py` | Per-client traffic totals and months (`data/traffic.json`, `{"_v": 2, "clients": …}`), deltas between polls survive counter resets; the first sight of a peer is only a baseline |
 | `app/limits.py` | Client end date / traffic quota (`state.limits`): auto-off (`auto_off`: `exp` / `quota:<month>`), monthly auto-on; called after each poll |
 | `app/updates.py` / `app/version.py` | Panel version and the update check |
-| `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/*` — **outside the secret path, no login** (token in `state.shares`) |
+| `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/<whitelisted file>` — **outside the secret path, no login** (token in `state.shares`; unknown tokens → 404) |
 | `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
 | `app/web.py` | HTTP server: routing, JSON, static, TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, body draining |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |
@@ -66,6 +66,12 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 - Real AWG re-enable of a peer may need ~15 s (WireGuard session timers) — e2e retries.
 - `install.sh` reads answers from `/dev/tty` (works under `curl | bash`); `ask` falls back to defaults without a TTY.
 - Installer never deletes an existing `amnezia-awg2` container: it renames it `…-old-<date>`.
+- Counting a peer's counter at first sight adds all traffic since the interface started (1.2.0 bug) —
+  `traffic.py` treats the first sight as a baseline only.
+- Auto-refresh (every 5 s) re-renders the tab: skip it while the user is typing in a field in `#main`.
+- Anything outside the secret path is visible to scanners: keep public routes minimal, `Server: httpd`.
+- Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
+  old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 
 ## Testing
 ```bash

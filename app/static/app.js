@@ -191,6 +191,9 @@ $("#login-form").addEventListener("submit", async (e) => {
 });
 
 /* ================================================================ каркас */
+let lastTyping = 0;
+document.addEventListener("input", () => { lastTyping = Date.now(); }, true);
+document.addEventListener("focusin", (e) => { if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) lastTyping = Date.now(); }, true);
 async function refresh(auto = false) {
   try {
     S = await api("GET", "state");
@@ -202,6 +205,10 @@ async function refresh(auto = false) {
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;
   if (auto && $("#modal").open) return;
+  // не перерисовываем, пока человек печатает в поиске или выбирает сортировку
+  const a = document.activeElement;
+  if (auto && a && $("#main").contains(a) && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName)
+      && Date.now() - lastTyping < 15000) return;
   render();
 }
 
@@ -424,6 +431,7 @@ function limitTags(c) {
   let h = "";
   if (L.auto_off === "exp") h += `<span class="tag tag-off">${esc(t("cl.tag_expired"))}</span>`;
   else if ((L.auto_off || "").startsWith("quota:")) h += `<span class="tag tag-off">${esc(t("cl.tag_quota"))}</span>`;
+  else if (L.expires && L.expires <= S.now) h += `<span class="tag tag-warn">${esc(t("cl.tag_expired"))}</span>`;
   else if (L.expires) h += `<span class="tag ${L.expires - S.now < 3 * 86400 ? "tag-warn" : ""}">${esc(t("cl.tag_until", { date: fmtDay(L.expires) }))}</span>`;
   return h;
 }

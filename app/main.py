@@ -148,6 +148,7 @@ updates = UpdateChecker(lambda v: notifier.event("update", "update_available", c
 app = App(BASE)
 app.static = (BASE + "/static", STATIC)
 app.public_static = ("/s/assets", STATIC)   # для личных страниц клиентов (без секретного пути)
+app.public_files = {"share.js", "i18n.js", "qrcode.js", "app.css"}
 app.index_file = os.path.join(STATIC, "index.html")
 
 
@@ -562,8 +563,14 @@ SHARE_HTML = os.path.join(STATIC, "share.html")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,40}$")
 
 
+def _share_exists(token: str) -> bool:
+    return bool(TOKEN_RE.match(token)) and token in store.snapshot().get("shares", {})
+
+
 @app.get("/s/{token}", public=True)
 def share_page(req, token):
+    if not _share_exists(token):       # на чужие адреса — как будто страницы нет
+        bad("err.not_found", 404)
     with open(SHARE_HTML, "rb") as f:
         return Page(f.read())
 
