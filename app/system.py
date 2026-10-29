@@ -402,6 +402,7 @@ class DemoTarget(Target):
         self.root = os.path.join(config.DATA_DIR, "demo-root")
         self.log: list[str] = []
         self.handshakes: dict[str, float] = {}
+        self.born = time.time()
         self._seed()
 
     def host_path(self, p: str) -> str:
@@ -442,6 +443,7 @@ class DemoTarget(Target):
     def _server_dump(self) -> str:
         sc = awgserver.parse(self.read_file(self.conf_path) or "")
         now = time.time()
+        grow = int(now - self.born)
         lines = ["priv\tpub\t47823\toff"]
         for i, p in enumerate(sc.peers):
             if not p.enabled:
@@ -449,7 +451,8 @@ class DemoTarget(Target):
             age = [40, 300, 15, 4000, 86400 * 3, 0, 25, 9][i % 8]
             hs = int(now - age) if age else 0
             lines.append(f"{p.public_key}\t{p.psk or '(none)'}\t198.51.100.{20 + i}:{40000 + i}\t"
-                         f"{p.allowed_ips}\t{hs}\t{(i + 1) * 98_304_000}\t{(i + 1) * 734_003_200}\t0")
+                         f"{p.allowed_ips}\t{hs}\t{(i + 1) * 98_304_000 + grow * 40_000 * (i + 1)}\t"
+                         f"{(i + 1) * 734_003_200 + grow * 300_000 * (i + 1)}\t0")
         return "\n".join(lines) + "\n"
 
     def _seed(self) -> None:

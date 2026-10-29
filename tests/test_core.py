@@ -350,3 +350,78 @@ class NotifyTest(unittest.TestCase):
         self.assertNotIn("token", v)
         self.assertTrue(v["token_set"])
         self.assertEqual(v["token_hint"], "123456:…AAAA")
+
+
+class TrafficTest(unittest.TestCase):
+    def test_accumulate_and_reset(self):
+        from app.traffic import Traffic, month_key
+        tr = Traffic(os.path.join(tempfile.mkdtemp(), "t.json"))
+        c = {"public_key": "K", "enabled": True, "live": {"rx": 100, "tx": 1000}}
+        tr.update([c], now=1_000_000)
+        c["live"] = {"rx": 150, "tx": 1500}
+        tr.update([c], now=1_000_010)
+        c["live"] = {"rx": 20, "tx": 30}            # счётчики обнулились (перезапуск)
+        tr.update([c], now=1_000_020)
+        self.assertEqual(tr.total("K"), [170, 1530])
+        self.assertEqual(tr.month("K", month_key(1_000_000)), [170, 1530])
+        tr.update([{"public_key": "K", "enabled": False, "live": None}], now=1_000_030)
+        self.assertEqual(tr.used("K", "total"), 1700)
+        tr.save()
+        tr2 = Traffic(tr.path)
+        self.assertEqual(tr2.total("K"), [170, 1530])
+
+
+class LimitsTest(unittest.TestCase):
+    def _engine(self, limits_state, used):
+        from app import limits as lim
+
+        class Store:
+            def __init__(s):
+                s.st = {"limits": limits_state}
+
+            def snapshot(s):
+                return json.loads(json.dumps(s.st))
+
+            def mutate(s, fn):
+                fn(s.st)
+
+        class Srv:
+            def __init__(s, eng):
+                s.e = eng
+
+            def update_client(s, pk, enabled=None):
+                for c in s.e.clients:
+                    if c["public_key"] == pk:
+                        c["enabled"] = enabled
+
+        class Tr:
+            def used(s, pk, period):
+                return used
+
+        class Eng:
+            pass
+        e = Eng()
+        e.store, e.traffic, e.events = Store(), Tr(), []
+        e.clients = [{"public_key": "K", "name": "n", "enabled": True}]
+        e.srv = Srv(e)
+        e.event = lambda lvl, m: e.events.append(m.key)
+        return e, lim
+
+    def test_quota_and_new_month(self):
+        e, lim = self._engine({"K": {"quota": 100, "period": "month"}}, used=150)
+        lim.enforce(e, now=1_000_000)
+        self.assertFalse(e.clients[0]["enabled"])
+        self.assertTrue(e.store.st["limits"]["K"]["auto_off"].startswith("quota:"))
+        lim.enforce(e, now=1_000_000 + 40 * 86400)           # следующий месяц
+        self.assertTrue(e.clients[0]["enabled"])
+        self.assertIn("ev.client_quota_reset", e.events)
+
+    def test_expiry_and_manual_enable(self):
+        e, lim = self._engine({"K": {"expires": 1_000_000}}, used=0)
+        lim.enforce(e, now=1_000_001)
+        self.assertFalse(e.clients[0]["enabled"])
+        self.assertEqual(e.store.st["limits"]["K"]["auto_off"], "exp")
+        e.clients[0]["enabled"] = True                      # включили вручную
+        lim.enforce(e, now=1_000_100)
+        self.assertTrue(e.clients[0]["enabled"])            # повторно не отключаем
+        self.assertIsNone(e.store.st["limits"]["K"]["auto_off"])
