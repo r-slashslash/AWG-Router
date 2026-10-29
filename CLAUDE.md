@@ -18,7 +18,9 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 ## Layout
 | Path | What |
 |---|---|
-| `app/main.py` | API endpoints, auth (signed cookie, 4 h session, 8 fails → 10 min block), startup, `data/status.json` |
+| `app/main.py` | API endpoints, auth (signed cookie, 4 h session, 8 fails → 10 min block, optional TOTP step: `need_code`), startup, `data/status.json` |
+| `app/totp.py` | Optional 2FA (RFC 6238): secret in `data/totp.json` (re-read by mtime; `awg-router 2fa-off` deletes it), replay-protected codes; enabling/disabling changes the session tag → other sessions end |
+| `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
 | `app/web.py` | HTTP server: routing, JSON, static, TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, body draining |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |
 | `app/nftgen.py` | nftables ruleset generator (table `ip awgr`, chains `c_prerouting`/`c_forward`/`c_postrouting`) |

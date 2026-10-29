@@ -13,7 +13,7 @@ import socket
 import threading
 import time
 
-from . import awgconf, config, lists, system
+from . import awgconf, config, lists, notify, system, totp
 from .engine import Engine
 from .i18n import Msg, MsgError
 from .store import ID_RE, Store, new_id
@@ -56,9 +56,18 @@ def _sign(payload: str) -> str:
     return hmac.new(SECRET, payload.encode(), hashlib.sha256).hexdigest()[:32]
 
 
+def sec_tag() -> str:
+    """Метка в сессии: смена пароля или включение/выключение входа по коду = выход везде."""
+    t = totp.load()
+    if not t:
+        return PW_TAG
+    return hashlib.sha256(f"{PASSWORD}|{t['secret']}".encode()).hexdigest()[:8]
+
+
 def make_session() -> str:
     exp = str(int(time.time()) + SESSION_TTL)
-    return f"{exp}.{PW_TAG}.{_sign(exp + PW_TAG)}"
+    tag = sec_tag()
+    return f"{exp}.{tag}.{_sign(exp + tag)}"
 
 
 def check_session(v: str | None) -> bool:
@@ -71,7 +80,7 @@ def check_session(v: str | None) -> bool:
         return False
     now = time.time()
     # срок не дольше SESSION_TTL: старые длинные сессии (раньше было 7 дней) тоже перестают действовать
-    return now < int(exp) <= now + SESSION_TTL and pw == PW_TAG
+    return now < int(exp) <= now + SESSION_TTL and pw == sec_tag()
 
 
 _fails: dict[str, list[float]] = {}
@@ -80,6 +89,11 @@ _fails: dict[str, list[float]] = {}
 store = Store()
 engine = Engine(store)
 tls = TLSManager(lambda: engine.srv.public_host(store.snapshot()))
+notifier = notify.Notifier(store, lambda st: tls.host() if tls.enabled else engine.srv.public_host(st))
+engine.notifier = notifier
+tls.on_fail = lambda exp: notifier.event(
+    "tls", "tls_fail", cooldown=12 * 3600,
+    date=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp or 0)))
 app = App(BASE)
 app.static = (BASE + "/static", STATIC)
 app.index_file = os.path.join(STATIC, "index.html")
@@ -143,22 +157,42 @@ def v_name(v, maxlen: int = 40) -> str:
 
 
 # --------------------------------------------------------------------- auth
+def _check_blocked(ip: str) -> None:
+    now = time.time()
+    _fails[ip] = [t for t in _fails.get(ip, []) if now - t < 600]
+    if len(_fails[ip]) >= 8:
+        bad("err.too_many_attempts", 429)
+
+
+def _failed(ip: str, msg: str) -> None:
+    _fails.setdefault(ip, []).append(time.time())
+    if len(_fails[ip]) == 8:
+        notifier.event("login", "login_blocked", cooldown=600, ip=ip)
+    time.sleep(1)
+    bad(msg, 403)
+
+
+def _set_session(req) -> None:
+    req.cookie(COOKIE, make_session(), max_age=SESSION_TTL, path=BASE or "/",
+               secure=bool(tls.context()) or req.headers.get("X-Forwarded-Proto") == "https")
+
+
 @app.post("/api/login")
 def login(req):
     ip = req.client_ip
-    now = time.time()
-    fails = [t for t in _fails.get(ip, []) if now - t < 600]
-    if len(fails) >= 8:
-        bad("err.too_many_attempts", 429)
+    _check_blocked(ip)
     body = req.json()
     if not hmac.compare_digest(str(body.get("password", "")).encode(), PASSWORD.encode()):
-        fails.append(now)
-        _fails[ip] = fails
-        time.sleep(1)
-        bad("err.wrong_password", 403)
+        _failed(ip, "err.wrong_password")
+    if totp.load():
+        # второй шаг: пароль верный, нужен код из приложения
+        if not str(body.get("code") or "").strip():
+            return {"ok": False, "need_code": True}
+        if not totp.check_and_use(body.get("code")):
+            _failed(ip, "err.wrong_code")
     _fails.pop(ip, None)
-    req.cookie(COOKIE, make_session(), max_age=SESSION_TTL, path=BASE or "/",
-               secure=bool(tls.context()) or req.headers.get("X-Forwarded-Proto") == "https")
+    _set_session(req)
+    notifier.event("login", "login_ok", cooldown=60, ip=ip)
     return {"ok": True}
 
 
@@ -166,6 +200,116 @@ def login(req):
 def logout(req):
     req.cookie(COOKIE, "", max_age=0, path=BASE or "/")
     return {"ok": True}
+
+
+# -------------------------------------------------------- вход по коду (2FA)
+_totp_pending: dict = {}
+
+
+@app.post("/api/totp/setup")
+def totp_setup(req):
+    if totp.load():
+        bad("err.totp_already")
+    secret = totp.new_secret()
+    _totp_pending.clear()
+    _totp_pending.update(secret=secret, t=time.time())
+    label = tls.host() if tls.enabled else engine.srv.public_host(store.snapshot())
+    return {"secret": secret, "uri": totp.uri(secret, label or "")}
+
+
+@app.post("/api/totp/enable")
+def totp_enable(req):
+    body = req.json()
+    p = dict(_totp_pending)
+    if not p or time.time() - p["t"] > 1800:
+        bad("err.totp_expired")
+    st = totp.match(p["secret"], body.get("code"))
+    if st is None:
+        bad("err.wrong_code", 403)
+    totp.save({"secret": p["secret"], "since": time.time(), "last_step": st})
+    _totp_pending.clear()
+    _set_session(req)          # остальные сессии больше не действуют, текущая — новая
+    log.info("Two-factor sign-in enabled")
+    return {"ok": True}
+
+
+@app.post("/api/totp/disable")
+def totp_disable(req):
+    ip = req.client_ip
+    _check_blocked(ip)
+    body = req.json()
+    if not totp.load():
+        return {"ok": True}
+    if not totp.check_and_use(body.get("code")):
+        _failed(ip, "err.wrong_code")
+    totp.save(None)
+    _set_session(req)
+    log.info("Two-factor sign-in disabled")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- telegram
+TG_TOKEN_RE = re.compile(r"^\d{5,15}:[A-Za-z0-9_-]{30,60}$")
+TG_CHAT_RE = re.compile(r"^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
+
+
+def _tg_draft(body: dict) -> dict:
+    """Настройки из формы поверх сохранённых (пустой токен = оставить прежний)."""
+    c = notify.cfg_of(store.snapshot())
+    tok = str(body.get("token") or "").strip()
+    if tok:
+        if not TG_TOKEN_RE.match(tok):
+            bad("err.tg_token")
+        c["token"] = tok
+    if "chat_id" in body:
+        chat = str(body.get("chat_id") or "").strip()
+        if chat and not TG_CHAT_RE.match(chat):
+            bad("err.tg_chat")
+        c["chat_id"] = chat
+    if "lang" in body:
+        if body["lang"] not in notify.LANGS:
+            bad("err.bad_value")
+        c["lang"] = body["lang"]
+    if isinstance(body.get("events"), dict):
+        c["events"] = {k: bool(body["events"].get(k, c["events"].get(k, True))) for k in notify.KINDS}
+    if "enabled" in body:
+        c["enabled"] = bool(body["enabled"])
+    return c
+
+
+@app.put("/api/telegram")
+def put_telegram(req):
+    c = _tg_draft(req.json())
+    if c["enabled"] and not (c["token"] and c["chat_id"]):
+        bad("err.tg_incomplete")
+    store.mutate(lambda st: st["settings"].__setitem__("telegram", c))
+    return {"ok": True}
+
+
+@app.post("/api/telegram/test")
+def telegram_test(req):
+    c = _tg_draft(req.json())
+    if not (c["token"] and c["chat_id"]):
+        bad("err.tg_incomplete")
+    try:
+        notify.send(c["token"], c["chat_id"], notify.render(c["lang"], "test", notifier.host_fn(store.snapshot())))
+    except notify.NotifyError as e:
+        bad(Msg("err.tg_failed", error=str(e)), 502)
+    return {"ok": True}
+
+
+@app.post("/api/telegram/detect")
+def telegram_detect(req):
+    c = _tg_draft(req.json())
+    if not c["token"]:
+        bad("err.tg_token")
+    try:
+        chat = notify.detect_chat(c["token"])
+    except notify.NotifyError as e:
+        bad(Msg("err.tg_failed", error=str(e)), 502)
+    if not chat:
+        bad("err.tg_no_chat", 404)
+    return chat
 
 
 # -------------------------------------------------------------------- state
@@ -215,7 +359,9 @@ def get_state(req):
                    "last_error": engine.last_error, "ruleset_size": len(engine.ruleset)},
         "routing": st["routing"],
         "global_effective": engine.resolve(st["routing"]["default"], st),
-        "settings": st["settings"],
+        "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},
+        "security": {"totp": bool(totp.load()), "session_hours": SESSION_TTL // 3600},
+        "notify_error": notifier.last_error,
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
         "lists": [{**l, "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "clients": clients,

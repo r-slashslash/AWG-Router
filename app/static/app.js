@@ -158,20 +158,35 @@ function applyStaticTexts() {
 /* ================================================================ вход */
 function showLogin() {
   clearInterval(pollTimer);
+  closeModal();
   $("#app").hidden = true;
   $("#login").hidden = false;
+  $("#login-code-wrap").hidden = true;
+  $("#login-code").value = "";
   $("#login-pass").focus();
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#login-err").hidden = true;
+  const codeWrap = $("#login-code-wrap");
+  const body = { password: $("#login-pass").value };
+  if (!codeWrap.hidden) body.code = $("#login-code").value.replace(/\D/g, "");
   try {
-    await api("POST", "login", { password: $("#login-pass").value });
+    const r = await api("POST", "login", body);
+    if (r && r.need_code) {
+      // пароль верный, включён вход по коду — спрашиваем код
+      codeWrap.hidden = false;
+      $("#login-code").focus();
+      return;
+    }
     $("#login-pass").value = "";
+    $("#login-code").value = "";
+    codeWrap.hidden = true;
     boot();
   } catch (err) {
     $("#login-err").textContent = err.message;
     $("#login-err").hidden = false;
+    if (!codeWrap.hidden) { $("#login-code").value = ""; $("#login-code").focus(); }
   }
 });
 
@@ -1014,6 +1029,10 @@ function viewSystem() {
     </div>
   </section>
   <div class="grid2">
+    ${viewTelegram()}
+    ${viewSecurity()}
+  </div>
+  <div class="grid2">
     <section class="section">
       <div class="section-head"><h2>${esc(t("sy.conn"))}</h2></div>
       <div class="panel panel-pad">
@@ -1062,6 +1081,8 @@ bind.system = () => {
     catch (e) { toast(e.message, true); }
     refresh();
   };
+  bindTelegram();
+  bindSecurity();
   $("#reapply").onclick = async () => { await api("POST", "reapply", {}); toast(t("toast.applying")); setTimeout(refresh, 1500); };
   $("#logout").onclick = async () => { await api("POST", "logout", {}); showLogin(); };
   $("#load-debug").onclick = async () => {
@@ -1075,6 +1096,143 @@ bind.system = () => {
     } catch (e) { toast(e.message, true); }
   };
 };
+
+/* ===================================================== уведомления в Telegram */
+const TG_KINDS = ["exit", "server", "login", "tls"];
+function viewTelegram() {
+  const c = S.settings.telegram || {};
+  const ev = c.events || {};
+  return `
+  <section class="section">
+    <div class="section-head"><div><h2>${esc(t("tg.title"))}</h2><p class="muted small">${esc(t("tg.sub"))}</p></div></div>
+    <div class="panel panel-pad">
+      <label class="check"><input type="checkbox" id="tg-on" ${c.enabled ? "checked" : ""}><span><b>${esc(t("tg.enable"))}</b></span></label>
+      <label class="field"><span>${esc(t("tg.token"))}</span>
+        <input type="text" id="tg-token" autocomplete="off" spellcheck="false" dir="ltr"
+          placeholder="${esc(c.token_set ? t("tg.token_saved", { hint: c.token_hint }) : "123456789:AA…")}">
+        <span class="hint">${th("tg.token_hint", { bot: "<bdi><b>@BotFather</b></bdi>" })}</span></label>
+      <div class="field"><span>${esc(t("tg.chat"))}</span>
+        <div class="input-btn"><input type="text" id="tg-chat" autocomplete="off" spellcheck="false" dir="ltr" value="${esc(c.chat_id || "")}">
+          <button type="button" class="btn sm" id="tg-detect">${esc(t("tg.find"))}</button></div>
+        <span class="hint">${esc(t("tg.chat_hint"))}</span></div>
+      <label class="field"><span>${esc(t("tg.lang"))}</span>
+        <select id="tg-lang" style="max-width:220px">${Object.entries(LANGS).map(([k, v]) =>
+          `<option value="${k}" ${k === (c.enabled || c.token_set ? c.lang : LANG) ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
+      <div class="field"><span>${esc(t("tg.events"))}</span>
+        ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div>
+      ${c.enabled && S.notify_error ? `<p class="err small">${esc(t("tg.last_error"))}: <bdi>${esc(S.notify_error)}</bdi></p>` : ""}
+      <div class="actions"><button class="btn sm primary" id="tg-save">${esc(t("btn.save"))}</button><button class="btn sm" id="tg-test">${esc(t("tg.test"))}</button></div>
+    </div>
+  </section>`;
+}
+function bindTelegram() {
+  const body = () => {
+    const events = {};
+    TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });
+    return { enabled: $("#tg-on").checked, token: $("#tg-token").value.trim(),
+      chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, events };
+  };
+  const busy = (id, fn) => async () => {
+    const b = $(id); b.disabled = true;
+    try { await fn(); } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+    b.disabled = false;
+  };
+  $("#tg-save").onclick = busy("#tg-save", async () => {
+    await api("PUT", "telegram", body());
+    toast(t("tg.saved"));
+    refresh();
+  });
+  $("#tg-test").onclick = busy("#tg-test", async () => {
+    await api("POST", "telegram/test", body());
+    toast(t("tg.test_ok"));
+  });
+  $("#tg-detect").onclick = busy("#tg-detect", async () => {
+    const r = await api("POST", "telegram/detect", { token: $("#tg-token").value.trim() });
+    $("#tg-chat").value = r.id;
+    toast(t("tg.found", { name: r.title || r.id }));
+  });
+}
+
+/* ======================================================= вход по коду (2FA) */
+function viewSecurity() {
+  const on = !!(S.security && S.security.totp);
+  const hours = (S.security && S.security.session_hours) || 4;
+  return `
+  <section class="section">
+    <div class="section-head"><h2>${esc(t("sec.title"))}</h2></div>
+    <div class="panel panel-pad">
+      <div class="kv" style="margin-bottom:14px">
+        <div><span>${esc(t("sec.session"))}</span><b>${esc(t("sec.session_val", { n: hours }))}</b></div>
+        <div><span>${esc(t("sec.totp"))}</span><b><span class="state"><span class="dot ${on ? "ok" : ""}"></span>${esc(t(on ? "sec.on" : "sec.off"))}</span></b></div>
+      </div>
+      <p class="muted small" style="margin-top:0">${esc(t(on ? "sec.on_hint" : "sec.off_hint"))}</p>
+      <div class="actions"><button class="btn sm ${on ? "" : "primary"}" id="totp-btn">${esc(t(on ? "sec.disable" : "sec.enable"))}</button></div>
+      ${on ? `<p class="muted small" style="margin:12px 0 0">${th("sec.lost", { cmd: `<bdi class="mono">awg-router 2fa-off</bdi>` })}</p>` : ""}
+    </div>
+  </section>`;
+}
+function codeField(id, label) {
+  return `<label class="field"><span>${esc(label)}</span>
+    <input type="text" id="${id}" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="7" dir="ltr"></label>`;
+}
+function bindSecurity() {
+  const on = !!(S.security && S.security.totp);
+  $("#totp-btn").onclick = on ? totpDisable : totpEnable;
+}
+function modalAction(btnId, inputId, fn) {
+  const go = async () => {
+    const code = $("#" + inputId).value.replace(/\D/g, "");
+    if (code.length !== 6) { $("#" + inputId).focus(); return; }
+    $("#" + btnId).disabled = true;
+    try { await fn(code); }
+    catch (e) {
+      if (!(e instanceof AuthError)) toast(e.message, true);
+      $("#" + btnId).disabled = false;
+      $("#" + inputId).value = ""; $("#" + inputId).focus();
+    }
+  };
+  $("#" + btnId).onclick = go;
+  $("#" + inputId).onkeydown = (e) => { if (e.key === "Enter") go(); };
+  $("#" + inputId).focus();
+}
+async function totpEnable() {
+  let r;
+  try { r = await api("POST", "totp/setup", {}); } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); return; }
+  const key = r.secret.replace(/(.{4})/g, "$1 ").trim();
+  openModal(t("sec.enable_title"), `
+    <p style="margin-top:0">${esc(t("sec.off_hint"))}</p>
+    <div class="connect">
+      <div class="qr-box">${qrSvg(r.uri)}</div>
+      <div>
+        <p style="margin-top:0"><b>1.</b> ${esc(t("sec.step1"))}</p>
+        <p class="muted small" style="margin-bottom:4px">${esc(t("sec.manual"))}</p>
+        <p class="mono" dir="ltr" style="margin:0 0 6px;word-break:break-all">${esc(key)}</p>
+        <button type="button" class="btn sm" id="totp-copy">${esc(t("sec.copy_key"))}</button>
+        <p style="margin-bottom:6px"><b>2.</b> ${esc(t("sec.step2"))}</p>
+        ${codeField("totp-code", t("sec.code"))}
+      </div>
+    </div>`,
+  `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="totp-ok">${esc(t("sec.enable"))}</button>`);
+  $("#totp-copy").onclick = () => copyText(r.secret);
+  modalAction("totp-ok", "totp-code", async (code) => {
+    await api("POST", "totp/enable", { code });
+    closeModal();
+    toast(t("sec.enabled_toast"));
+    refresh();
+  });
+}
+function totpDisable() {
+  openModal(t("sec.disable_title"), `
+    <p style="margin-top:0">${esc(t("sec.disable_hint"))}</p>
+    ${codeField("totp-code", t("sec.code"))}`,
+  `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn danger" id="totp-ok">${esc(t("sec.disable"))}</button>`);
+  modalAction("totp-ok", "totp-code", async (code) => {
+    await api("POST", "totp/disable", { code });
+    closeModal();
+    toast(t("sec.disabled_toast"));
+    refresh();
+  });
+}
 
 /* ================================================================ модалка */
 function openModal(title, body, foot) {

@@ -389,6 +389,8 @@ case "\${1:-info}" in
   password)    P=\$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)
                sed -i "s/^PANEL_PASSWORD=.*/PANEL_PASSWORD=\$P/" "\$DIR/.env"
                cd "\$DIR" && docker compose up -d >/dev/null 2>&1; sleep 3; bash "\$DIR/install.sh" --info ;;
+  2fa-off)     rm -f "\$DIR/data/totp.json"
+               echo "Two-factor sign-in is off: the panel password alone is enough now." ;;
   uninstall)   printf 'Remove AWG Router? The AmneziaWG server and its clients stay. Type yes: '
                read -r A </dev/tty; [ "\$A" = yes ] || exit 1
                cd "\$DIR" && docker compose down
@@ -396,7 +398,7 @@ case "\${1:-info}" in
                docker image rm awg-router:latest >/dev/null 2>&1
                rm -f /usr/local/bin/awg-router
                echo "Done. Settings are kept in \$DIR — delete the folder to remove them too." ;;
-  *) echo "awg-router info | restart | logs | password | update | reconfigure | uninstall" ;;
+  *) echo "awg-router info | restart | logs | password | 2fa-off | update | reconfigure | uninstall" ;;
 esac
 EOF
 chmod 755 /usr/local/bin/awg-router
