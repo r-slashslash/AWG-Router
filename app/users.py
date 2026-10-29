@@ -164,6 +164,8 @@ class ServerManager:
             def forget(st):
                 st.get("keys", {}).pop(pk, None)
                 st["clients"].pop(pk, None)
+                st.get("limits", {}).pop(pk, None)
+                st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
             self.e.store.mutate(forget)
             self.e.event("info", Msg("ev.user_deleted", name=name))
 

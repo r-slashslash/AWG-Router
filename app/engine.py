@@ -17,9 +17,10 @@ import subprocess
 import threading
 import time
 
-from . import awgconf, config, lists, nftgen, system
+from . import awgconf, config, limits, lists, nftgen, system
 from .i18n import Msg, msg_of
 from .store import Store
+from .traffic import Traffic
 from .users import ServerManager
 
 log = logging.getLogger("awgr.engine")
@@ -64,6 +65,7 @@ class Engine:
         self.last_reconcile: float | None = None
         self.events: list[dict] = []
         self.notifier = None          # notify.Notifier, задаёт main.py
+        self.traffic = Traffic()
         self.matcher = lists.Matcher()
         self._list_cache: dict[str, tuple[float, list[str]]] = {}
         self._parsed: dict[str, awgconf.UpstreamConf] = {}
@@ -471,6 +473,12 @@ class Engine:
                 self.clients = self.srv.list_clients(t)
             except Exception as e:  # noqa: BLE001
                 self.event("warn", Msg("ev.clients_failed", error=msg_of(e)))
+            else:
+                try:
+                    self.traffic.update(self.clients)
+                    limits.enforce(self)
+                except Exception:  # noqa: BLE001
+                    log.exception("traffic/limits")
 
             self._sync_upstreams(t, st)
             self._update_health(t, st)
@@ -515,6 +523,7 @@ class Engine:
     def shutdown(self) -> None:
         self.stop_ev.set()
         self.wake.set()
+        self.traffic.save()
         st = self.store.snapshot()
         if st["settings"].get("on_stop") == "restore":
             self.teardown()
