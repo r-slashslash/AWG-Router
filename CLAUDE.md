@@ -18,7 +18,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 ## Layout
 | Path | What |
 |---|---|
-| `app/main.py` | API endpoints, auth (signed cookie, 8 fails → 10 min block), startup, `data/status.json` |
+| `app/main.py` | API endpoints, auth (signed cookie, 4 h session, 8 fails → 10 min block), startup, `data/status.json` |
 | `app/web.py` | HTTP server: routing, JSON, static, TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, body draining |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |
 | `app/nftgen.py` | nftables ruleset generator (table `ip awgr`, chains `c_prerouting`/`c_forward`/`c_postrouting`) |
