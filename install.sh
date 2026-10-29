@@ -192,6 +192,8 @@ if ! docker compose version >/dev/null 2>&1; then
   fi
   docker compose version >/dev/null 2>&1 || die "Failed to install docker compose"
 fi
+# Compose 2.40.2+ needs buildx to build; Ubuntu's docker.io only suggests it. Optional: older Compose builds without it
+docker buildx version >/dev/null 2>&1 || apt_install docker-buildx || true
 ok "Docker $(docker --version | awk '{print $3}' | tr -d ,)"
 
 # ------------------------------------------------------------------ AmneziaWG server
