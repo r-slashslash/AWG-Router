@@ -290,3 +290,63 @@ class InitServerTest(unittest.TestCase):
         before = open(os.path.join(d, "awg0.conf")).read()
         initserver.main(["--out", d, "--port", "1234"])
         self.assertEqual(open(os.path.join(d, "awg0.conf")).read(), before)
+
+
+class TotpTest(unittest.TestCase):
+    SECRET = base64.b32encode(b"12345678901234567890").decode()
+
+    def test_rfc6238_vectors(self):
+        from app import totp
+        # RFC 6238, SHA-1: последние 6 цифр восьмизначных кодов
+        for ts, code in ((59, "287082"), (1111111109, "081804"), (1234567890, "005924"),
+                         (2000000000, "279037")):
+            self.assertEqual(totp.code_at(self.SECRET, ts // 30), code)
+
+    def test_match_window_and_replay(self):
+        from app import totp
+        now = 1234567890
+        c = totp.code_at(self.SECRET, now // 30)
+        self.assertEqual(totp.match(self.SECRET, c, now), now // 30)
+        self.assertEqual(totp.match(self.SECRET, c[:3] + " " + c[3:], now + 30), now // 30)
+        self.assertIsNone(totp.match(self.SECRET, c, now + 90))
+        self.assertIsNone(totp.match(self.SECRET, c, now, after=now // 30))
+        self.assertIsNone(totp.match(self.SECRET, "12345", now))
+
+    def test_store_and_use_once(self):
+        from app import totp
+        totp.save({"secret": self.SECRET, "since": 0, "last_step": -1})
+        try:
+            import time
+            c = totp.code_at(self.SECRET, int(time.time() // 30))
+            self.assertTrue(totp.check_and_use(c))
+            self.assertFalse(totp.check_and_use(c))       # повтор того же кода
+            self.assertIn("secret=" + self.SECRET, totp.uri(self.SECRET, "1.2.3.4"))
+        finally:
+            totp.save(None)
+        self.assertIsNone(totp.load())
+
+
+class NotifyTest(unittest.TestCase):
+    def test_texts_complete(self):
+        from app import notify
+        keys = set(notify.TEXTS["en"])
+        for lang in notify.LANGS:
+            self.assertEqual(set(notify.TEXTS[lang]), keys, lang)
+            for k in keys:
+                self.assertEqual(sorted(set(__import__("re").findall(r"\{\w+\}", notify.TEXTS[lang][k]))),
+                                 sorted(set(__import__("re").findall(r"\{\w+\}", notify.TEXTS["en"][k]))), (lang, k))
+        for _, key in notify.ENGINE_EVENTS.values():
+            self.assertIn(key, keys)
+
+    def test_render_and_view(self):
+        from app import notify
+        self.assertEqual(notify.render("ru", "exit_up", "1.2.3.4", name="de"),
+                         "AWG Router · 1.2.3.4\n✅ Выход «de» снова работает.")
+        c = notify.cfg_of({"settings": {"telegram": {"enabled": True, "token": "123456:" + "A" * 35,
+                                                     "events": {"login": False}}}})
+        self.assertTrue(c["events"]["exit"])
+        self.assertFalse(c["events"]["login"])
+        v = notify.public_view(c)
+        self.assertNotIn("token", v)
+        self.assertTrue(v["token_set"])
+        self.assertEqual(v["token_hint"], "123456:…AAAA")

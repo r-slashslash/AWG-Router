@@ -22,6 +22,10 @@
     <label class="field"><span data-i18n="login.password"></span>
       <input type="password" id="login-pass" autocomplete="current-password" required autofocus>
     </label>
+    <label class="field" id="login-code-wrap" hidden><span data-i18n="login.code"></span>
+      <input type="text" id="login-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" dir="ltr">
+      <span class="hint" data-i18n="login.code_hint"></span>
+    </label>
     <p class="err" id="login-err" hidden></p>
     <button class="btn primary wide" type="submit" data-i18n="login.submit"></button>
   </form>

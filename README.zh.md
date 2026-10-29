@@ -42,7 +42,9 @@
 **面板**
 - 使用为服务器 IP 签发的 Let's Encrypt 证书提供 HTTPS。证书有效期 6 天，会自动续期。
 - 也可以设置为只能通过 SSH 隧道访问面板。
-- 地址包含随机端口和秘密路径，登录需要密码，并有防暴力破解保护。
+- 地址包含随机端口和秘密路径，登录需要密码，并有防暴力破解保护。登录有效期为 4 小时。
+- 可选的第二重验证：身份验证器应用（Google Authenticator、Aegis、2FAS…）中的 6 位代码。在 **系统** 选项卡中启用。
+- 可选的 Telegram 通知：出口停止或恢复工作、AmneziaWG 服务器不可达或重启、面板登录、证书无法续期。在 **系统** 选项卡中设置。
 - 界面语言：英语、俄语、中文和波斯语。语言跟随浏览器或系统设置，手动选择的语言会被记住。
 
 <p align="center">
@@ -83,6 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router info` | 显示链接和密码 |
 | `awg-router update` | 下载最新版本并更新（保留设置） |
 | `awg-router password` | 设置新的随机密码 |
+| `awg-router 2fa-off` | 关闭验证器代码登录（手机丢失时） |
 | `awg-router restart` | 重启面板 |
 | `awg-router logs` | 查看面板日志 |
 | `awg-router reconfigure` | 重新选择模式和访问方式 |
