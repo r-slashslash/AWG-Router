@@ -94,7 +94,7 @@ function listName(id) {
   const l = listObj(id);
   if (!l) return id;
   if (l.name) return l.name;
-  return l.kind === "country" ? countryName(l.source) : l.source;
+  return l.kind === "country" ? countryName(l.source) : (l.source || l.id);
 }
 function exitName(v) {
   if (v === "direct") return t("out.direct");
@@ -940,6 +940,15 @@ function editList(id, kind) {
   }
   const title = l ? t("ls.edit", { name: listName(l.id) }) : t("ls.new." + kind);
   openModal(title, body, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="l-save">${esc(t(l ? "btn.save" : "btn.add"))}</button>`);
+  if (l && kind === "manual") {
+    // текст ручного списка не приходит в /api/state (он бывает в мегабайты) — берём отдельно
+    const ta = $("#l-src"), save = $("#l-save");
+    ta.disabled = save.disabled = true;
+    ta.placeholder = t("ls.loading");
+    api("GET", "lists/" + l.id)
+      .then((r) => { ta.value = r.source || ""; ta.disabled = save.disabled = false; })
+      .catch((err) => toast(err.message, true));
+  }
   $("#l-save").onclick = async (e) => {
     const b = { kind, source: $("#l-src").value.trim() };
     if ($("#l-name")) b.name = $("#l-name").value.trim();
