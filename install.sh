@@ -185,6 +185,11 @@ fi
 if ! docker compose version >/dev/null 2>&1; then
   echo "  Installing Docker Compose…"
   apt_install docker-compose-v2 || apt_install docker-compose-plugin || true
+  # Debian 13+ ships Compose v2 as plain "docker-compose"; older Debian has v1 under that name, so check the version first
+  if ! docker compose version >/dev/null 2>&1 \
+     && LC_ALL=C apt-cache policy docker-compose 2>/dev/null | grep -q 'Candidate: 2\.'; then
+    apt_install docker-compose || true
+  fi
   docker compose version >/dev/null 2>&1 || die "Failed to install docker compose"
 fi
 ok "Docker $(docker --version | awk '{print $3}' | tr -d ,)"
