@@ -1,10 +1,16 @@
 # Changelog
 
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
-so every user-visible change gets a new version. Release tags (`vX.Y.Z`) are never moved.
+so every user-visible change gets a new version.
 
-## 1.2.1 — 2026-10-30
+## 1.2.0 — 2026-10-30
 
+- Traffic per client by month and in total, end dates and traffic limits with auto-off,
+  personal links for clients, backup and restore, password change in the panel, version check.
+- Optional two-factor sign-in (TOTP) and Telegram notifications.
+- A panel sign-in lasts 4 hours (was 7 days).
+- Traffic is counted from the first sight of a client; auto-refresh no longer interrupts
+  typing; unknown personal links answer 404; `Server: httpd`.
 - **Fonts are served by the panel itself.** Google Fonts are no longer used: they are blocked
   in China and Iran (the page loaded slowly there) and they told Google about every visit to
   the panel and to personal pages.
@@ -24,16 +30,6 @@ so every user-visible change gets a new version. Release tags (`vX.Y.Z`) are nev
   links and settings. A damaged field is named in the error. `PreUp`/`PostUp`/`PreDown`/`PostDown`
   commands from a backup are not restored: a server on the host gets the panel's standard NAT
   rules, a container server gets none (its start script does NAT).
-- Also includes the fixes published on 2026-10-30 under the number 1.2.0: traffic counted from
-  the first sight of a client, auto-refresh no longer interrupts typing, unknown personal links
-  answer 404, `Server: httpd`.
-
-## 1.2.0 — 2026-10-29
-
-- Traffic per client by month and in total, end dates and traffic limits with auto-off,
-  personal links for clients, backup and restore, password change in the panel, version check.
-- Optional two-factor sign-in (TOTP) and Telegram notifications.
-- A panel sign-in lasts 4 hours (was 7 days).
 
 ## 1.0.0 — 2026-10-29
 
