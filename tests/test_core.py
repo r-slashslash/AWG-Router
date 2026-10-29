@@ -353,22 +353,52 @@ class NotifyTest(unittest.TestCase):
 
 
 class TrafficTest(unittest.TestCase):
+    def _tr(self):
+        from app.traffic import Traffic
+        return Traffic(os.path.join(tempfile.mkdtemp(), "t.json"))
+
     def test_accumulate_and_reset(self):
         from app.traffic import Traffic, month_key
-        tr = Traffic(os.path.join(tempfile.mkdtemp(), "t.json"))
+        tr = self._tr()
         c = {"public_key": "K", "enabled": True, "live": {"rx": 100, "tx": 1000}}
-        tr.update([c], now=1_000_000)
+        tr.update([c], now=1_000_000)               # первое наблюдение — только точка отсчёта
+        self.assertEqual(tr.total("K"), [0, 0])
         c["live"] = {"rx": 150, "tx": 1500}
         tr.update([c], now=1_000_010)
         c["live"] = {"rx": 20, "tx": 30}            # счётчики обнулились (перезапуск)
         tr.update([c], now=1_000_020)
-        self.assertEqual(tr.total("K"), [170, 1530])
-        self.assertEqual(tr.month("K", month_key(1_000_000)), [170, 1530])
-        tr.update([{"public_key": "K", "enabled": False, "live": None}], now=1_000_030)
-        self.assertEqual(tr.used("K", "total"), 1700)
+        self.assertEqual(tr.total("K"), [70, 530])
+        self.assertEqual(tr.month("K", month_key(1_000_000)), [70, 530])
         tr.save()
-        tr2 = Traffic(tr.path)
-        self.assertEqual(tr2.total("K"), [170, 1530])
+        self.assertEqual(Traffic(tr.path).total("K"), [70, 530])
+
+    def test_disable_enable(self):
+        tr = self._tr()
+        tr.update([{"public_key": "K", "enabled": True, "live": {"rx": 500, "tx": 500}}], now=1)
+        tr.update([{"public_key": "K", "enabled": True, "live": {"rx": 600, "tx": 600}}], now=2)
+        tr.update([{"public_key": "K", "enabled": False, "live": None}], now=3)
+        # после включения пир начинает с нуля, даже если быстро набрал больше прежнего
+        tr.update([{"public_key": "K", "enabled": True, "live": {"rx": 700, "tx": 50}}], now=4)
+        self.assertEqual(tr.total("K"), [800, 150])
+
+    def test_restore_keeps_baseline(self):
+        tr = self._tr()
+        tr.update([{"public_key": "K", "enabled": True, "live": {"rx": 10 ** 12, "tx": 10 ** 12}}], now=1)
+        tr.update([{"public_key": "K", "enabled": True, "live": {"rx": 10 ** 12 + 5, "tx": 10 ** 12}}], now=2)
+        backup = tr.export()
+        tr.replace(backup)
+        tr.update([{"public_key": "K", "enabled": True, "live": {"rx": 10 ** 12 + 7, "tx": 10 ** 12}}], now=3)
+        self.assertEqual(tr.total("K"), [7, 0])
+
+    def test_old_format_starts_over(self):
+        from app.traffic import Traffic
+        path = os.path.join(tempfile.mkdtemp(), "t.json")
+        with open(path, "w") as f:
+            json.dump({"K": {"total": [9 ** 12, 9 ** 12], "months": {"2026-10": [1, 1]}, "last": [100, 100]}}, f)
+        tr = Traffic(path)
+        self.assertEqual(tr.total("K"), [0, 0])
+        tr.update([{"public_key": "K", "enabled": True, "live": {"rx": 130, "tx": 100}}], now=1)
+        self.assertEqual(tr.total("K"), [30, 0])
 
 
 class LimitsTest(unittest.TestCase):

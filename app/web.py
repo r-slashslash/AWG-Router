@@ -82,6 +82,7 @@ class App:
         self.middleware = None
         self.static: tuple[str, str] | None = None
         self.public_static: tuple[str, str] | None = None   # без секретного пути и без входа
+        self.public_files: set[str] = set()                  # какие файлы отдавать по public_static
         self.index_file: str | None = None
         self.public: set = set()                             # обработчики без проверки входа
 
@@ -110,6 +111,9 @@ class App:
         class H(BaseHTTPRequestHandler):
             server_version = "awg-router"
             sys_version = ""
+
+            def version_string(self):  # заголовок Server не выдаёт панель сканерам
+                return "httpd"
 
             def log_message(self, fmt, *args):  # тихо
                 pass
@@ -163,7 +167,10 @@ class App:
                     # статика
                     for mount in (app.static, app.public_static):
                         if mount and path.startswith(mount[0] + "/") and self.command in ("GET", "HEAD"):
-                            return self._static(mount[1], path[len(mount[0]) + 1:])
+                            rel = path[len(mount[0]) + 1:]
+                            if mount is app.public_static and rel not in app.public_files:
+                                raise HTTPError(404, "err.not_found")
+                            return self._static(mount[1], rel)
                     if app.index_file and self.command in ("GET", "HEAD"):
                         if path == app.base + "/" or path == "/" and not app.base:
                             body = open(app.index_file, "rb").read()

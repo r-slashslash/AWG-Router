@@ -3,8 +3,15 @@
 AWG отдаёт счётчики с момента подключения пира к интерфейсу, и они обнуляются при
 перезапуске сервера или отключении клиента. Здесь мы копим прирост между опросами:
 если счётчик стал меньше прежнего — значит, он обнулился, и весь текущий — новый трафик.
+Первое наблюдение пира только запоминает точку отсчёта: трафик до появления панели
+(или до обновления на версию с учётом) не считается — иначе в первый месяц попал бы
+трафик за всё время работы сервера.
 Направления — со стороны сервера: rx — получено от клиента (отдача клиента),
 tx — отправлено клиенту (загрузка клиента).
+
+Формат файла: {"_v": 2, "clients": {ключ: {"total", "months", "last"}}}.
+Файл версии 1.2.0 (без "_v") содержал этот лишний трафик — из него берём только
+точки отсчёта.
 """
 from __future__ import annotations
 
@@ -19,12 +26,17 @@ from . import config
 log = logging.getLogger("awgr.traffic")
 
 PATH = os.path.join(config.DATA_DIR, "traffic.json")
+FORMAT = 2
 KEEP_MONTHS = 24
 SAVE_EVERY = 60
 
 
 def month_key(ts: float | None = None) -> str:
     return time.strftime("%Y-%m", time.gmtime(time.time() if ts is None else ts))
+
+
+def _rec() -> dict:
+    return {"total": [0, 0], "months": {}, "last": None}
 
 
 class Traffic:
@@ -37,10 +49,16 @@ class Traffic:
         try:
             with open(path) as f:
                 d = json.load(f)
-            if isinstance(d, dict):
-                self.data = {k: v for k, v in d.items() if isinstance(v, dict)}
         except (OSError, ValueError):
-            pass
+            d = None
+        if isinstance(d, dict) and d.get("_v") == FORMAT and isinstance(d.get("clients"), dict):
+            self.data = {k: v for k, v in d["clients"].items() if isinstance(v, dict)}
+        elif isinstance(d, dict):
+            # данные 1.2.0: итоги завышены, оставляем только точки отсчёта
+            self.data = {k: {**_rec(), "last": v.get("last")} for k, v in d.items()
+                         if isinstance(v, dict) and isinstance(v.get("last"), list)}
+            self._dirty = True
+            log.info("traffic: counters started over (data from 1.2.0 included pre-panel traffic)")
 
     # ---------------------------------------------------------------- учёт
     def update(self, clients: list[dict], now: float | None = None) -> None:
@@ -48,15 +66,25 @@ class Traffic:
         mk = month_key(now)
         with self.lock:
             for c in clients:
-                live = c.get("live")
-                if not live or not c.get("enabled"):
-                    continue
                 pk = c["public_key"]
+                if not c.get("enabled"):
+                    # отключённый пир убран из интерфейса: после включения счётчик начнётся с нуля
+                    d = self.data.get(pk)
+                    if d and d.get("last") != [0, 0]:
+                        d["last"] = [0, 0]
+                        self._dirty = True
+                    continue
+                live = c.get("live")
+                if not live:
+                    continue
                 cur = [int(live.get("rx") or 0), int(live.get("tx") or 0)]
-                d = self.data.setdefault(pk, {"total": [0, 0], "months": {}, "last": [0, 0]})
-                last = d.get("last") or [0, 0]
-                delta = [cur[i] - last[i] if cur[i] >= last[i] else cur[i] for i in (0, 1)]
+                d = self.data.setdefault(pk, _rec())
+                last = d.get("last")
                 d["last"] = cur
+                self._dirty = True
+                if last is None:
+                    continue            # первое наблюдение — только точка отсчёта
+                delta = [cur[i] - last[i] if cur[i] >= last[i] else cur[i] for i in (0, 1)]
                 if not any(delta):
                     continue
                 d["total"] = [d["total"][i] + delta[i] for i in (0, 1)]
@@ -65,7 +93,6 @@ class Traffic:
                 if len(d["months"]) > KEEP_MONTHS:
                     for old in sorted(d["months"])[:-KEEP_MONTHS]:
                         d["months"].pop(old, None)
-                self._dirty = True
         if self._dirty and now - self._saved >= SAVE_EVERY:
             self.save()
 
@@ -76,7 +103,7 @@ class Traffic:
             tmp = self.path + ".tmp"
             try:
                 with open(tmp, "w") as f:
-                    json.dump(self.data, f)
+                    json.dump({"_v": FORMAT, "clients": self.data}, f)
                 os.replace(tmp, self.path)
                 self._dirty = False
                 self._saved = time.time()
@@ -90,9 +117,16 @@ class Traffic:
         self.save()
 
     def replace(self, data: dict) -> None:
-        """Восстановление из резервной копии: счётчики «последнего опроса» сбрасываем."""
+        """Восстановление из резервной копии. Итоги берём из копии, а точки отсчёта —
+        текущие: счётчики интерфейса на этом сервере продолжают идти как шли."""
+        if isinstance(data, dict) and data.get("_v") == FORMAT:
+            data = data.get("clients") or {}
+        elif isinstance(data, dict):
+            data = {}                   # копия из 1.2.0: итоги в ней завышены
         with self.lock:
-            self.data = {k: {**v, "last": [0, 0]} for k, v in (data or {}).items()
+            cur = {k: v.get("last") for k, v in self.data.items()}
+            self.data = {k: {"total": v["total"], "months": v.get("months") or {}, "last": cur.get(k)}
+                         for k, v in (data or {}).items()
                          if isinstance(v, dict) and isinstance(v.get("total"), list)}
             self._dirty = True
         self.save()
@@ -117,4 +151,4 @@ class Traffic:
 
     def export(self) -> dict:
         with self.lock:
-            return json.loads(json.dumps(self.data))
+            return json.loads(json.dumps({"_v": FORMAT, "clients": self.data}))
