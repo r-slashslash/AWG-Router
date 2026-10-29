@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 
@@ -26,6 +27,7 @@ from . import config
 log = logging.getLogger("awgr.traffic")
 
 PATH = os.path.join(config.DATA_DIR, "traffic.json")
+MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 FORMAT = 2
 KEEP_MONTHS = 24
 SAVE_EVERY = 60
@@ -123,11 +125,24 @@ class Traffic:
             data = data.get("clients") or {}
         elif isinstance(data, dict):
             data = {}                   # копия из 1.2.0: итоги в ней завышены
+        def pair(x):
+            ok = isinstance(x, list) and len(x) == 2 and all(
+                isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in x)
+            return list(x) if ok else None
+
         with self.lock:
             cur = {k: v.get("last") for k, v in self.data.items()}
-            self.data = {k: {"total": v["total"], "months": v.get("months") or {}, "last": cur.get(k)}
-                         for k, v in (data or {}).items()
-                         if isinstance(v, dict) and isinstance(v.get("total"), list)}
+            out = {}
+            for k, v in (data or {}).items():
+                if not isinstance(v, dict) or not pair(v.get("total")):
+                    continue
+                months = v.get("months") if isinstance(v.get("months"), dict) else {}
+                out[str(k)[:64]] = {
+                    "total": pair(v["total"]),
+                    "months": {m: pair(x) for m, x in months.items()
+                               if isinstance(m, str) and MONTH_RE.match(m) and pair(x)},
+                    "last": cur.get(k)}
+            self.data = out
             self._dirty = True
         self.save()
 

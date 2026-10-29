@@ -1,3 +1,7 @@
+/* Шрифты лежат в самой панели: Google Fonts недоступны в Китае и Иране и видят каждый вход */
+@font-face { font-family: "Golos Text"; src: url("fonts/GolosText.woff") format("woff"); font-weight: 400 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+@font-face { font-family: "Vazirmatn"; src: url("fonts/Vazirmatn.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 :root {
   --bg: #eef1f4;
   --surface: #ffffff;

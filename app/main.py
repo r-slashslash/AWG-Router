@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -14,16 +15,15 @@ import threading
 import time
 
 from . import awgconf, awgserver, config, limits, lists, notify, system, totp
-from .store import DEFAULT_STATE
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
 from .engine import Engine
 from .i18n import Msg, MsgError
-from .store import ID_RE, Store, new_id
+from .store import DEFAULT_STATE, ID_RE, Store, new_id
 from .tlsmgr import TLSManager
 from .users import UserError
-from .web import App, HTTPError, Page
+from .web import App, HTTPError, Page, content_length
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("awgr")
@@ -148,7 +148,8 @@ updates = UpdateChecker(lambda v: notifier.event("update", "update_available", c
 app = App(BASE)
 app.static = (BASE + "/static", STATIC)
 app.public_static = ("/s/assets", STATIC)   # для личных страниц клиентов (без секретного пути)
-app.public_files = {"share.js", "i18n.js", "qrcode.js", "app.css"}
+app.public_files = {"share.js", "i18n.js", "qrcode.js", "app.css", "fonts/GolosText.woff",
+                    "fonts/JetBrainsMono.woff2", "fonts/Vazirmatn.woff2"}
 app.index_file = os.path.join(STATIC, "index.html")
 
 
@@ -158,8 +159,8 @@ def auth_mw(req) -> None:
     if not check_session(req.cookies.get(COOKIE)):
         raise HTTPError(401, "auth")
     # тело запроса — только JSON (простые формы с чужих сайтов так не отправить)
-    if int(req.headers.get("Content-Length") or 0) > 0 and \
-            "application/json" not in req.headers.get("Content-Type", ""):
+    ctype = req.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    if content_length(req.headers) > 0 and ctype != "application/json":
         raise HTTPError(415, "err.json_required")
 
 
@@ -408,37 +409,229 @@ def get_backup(req):
             "server": srv}
 
 
+def _num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _int_or_none(v):
+    return int(v) if _num(v) and v > 0 else None
+
+
+QUOTA_KEY_RE = re.compile(r"^(\d{4}-\d{2}|total)$")
+
+
+def clean_backup_state(new: dict) -> dict:
+    """Состояние из резервной копии → проверенное состояние.
+
+    Каждое поле проходит те же проверки, что и при вводе в панели: идентификаторы
+    из файла попадают в имена наборов nftables, интерфейсов и файлов, поэтому
+    ничего не берём «как есть». Неверное поле — ошибка с его именем."""
+    def fail(field: str):
+        bad(Msg("err.backup_field", field=field))
+
+    def check(field: str, fn):
+        try:
+            return fn()
+        except HTTPError:
+            fail(field)
+
+    def arr(key: str) -> list:
+        v = new.get(key, [])
+        if not isinstance(v, list):
+            fail(key)
+        return v
+
+    def obj(key: str) -> dict:
+        v = new.get(key, {})
+        if not isinstance(v, dict):
+            fail(key)
+        return v
+
+    st = json.loads(json.dumps(DEFAULT_STATE))
+    st["lists"], st["upstreams"] = [], []
+
+    # списки сетей
+    for i, l in enumerate(arr("lists")):
+        f = f"lists[{i}]"
+        if not isinstance(l, dict) or not isinstance(l.get("id"), str) or not ID_RE.match(l["id"]) \
+                or Store.lst(st, l["id"]):
+            fail(f)
+        d = check(f, lambda: _list_body(st, {k: l.get(k) for k in ("kind", "source", "name")}))
+        if d["kind"] == "country" and d["source"] != l["id"]:
+            fail(f)
+        st["lists"].append({"id": l["id"], **d})
+
+    # выходы: сначала все, потом резервные выходы (могут ссылаться друг на друга)
+    raw_ups = arr("upstreams")
+    for i, u in enumerate(raw_ups):
+        f = f"upstreams[{i}]"
+        if not isinstance(u, dict) or not isinstance(u.get("id"), str) or not ID_RE.match(u["id"]) \
+                or Store.upstream(st, u["id"]):
+            fail(f)
+        num = u.get("num")
+        if not isinstance(num, int) or isinstance(num, bool) or not 1 <= num <= config.MAX_UPSTREAMS \
+                or any(x["num"] == num for x in st["upstreams"]):
+            fail(f + ".num")
+        try:
+            pc = awgconf.parse_upstream(str(u.get("config") or ""))
+        except awgconf.ConfigError:
+            fail(f + ".config")
+        st["upstreams"].append({"id": u["id"], "name": check(f + ".name", lambda: v_name(u.get("name"))),
+                                "num": num, "config": pc.raw, "enabled": bool(u.get("enabled", True)),
+                                "fallback": "direct", "created": u.get("created") if _num(u.get("created")) else None})
+    for i, u in enumerate(raw_ups):
+        fb = check(f"upstreams[{i}].fallback", lambda: v_outbound(st, u.get("fallback") or "direct"))
+        if fb == "up:" + u["id"]:
+            fail(f"upstreams[{i}].fallback")
+        st["upstreams"][i]["fallback"] = fb
+
+    # маршрутизация
+    r = obj("routing")
+    st["routing"] = {"default": check("routing.default", lambda: v_outbound(st, r.get("default", "direct"))),
+                     "rules": check("routing.rules", lambda: v_rules(st, r.get("rules", [])))}
+
+    # политики клиентов
+    for pk, c in obj("clients").items():
+        f = f"clients.{pk[:12]}"
+        if not awgconf.KEY_RE.match(pk) or not isinstance(c, dict):
+            fail(f)
+        mode = c.get("rules_mode", "inherit")
+        if mode not in ("inherit", "custom"):
+            fail(f)
+        st["clients"][pk] = {
+            "outbound": check(f, lambda: v_outbound(st, c.get("outbound", "inherit"), allow_inherit=True)),
+            "rules_mode": mode,
+            "rules": check(f, lambda: v_rules(st, c.get("rules") or [])) if mode == "custom" else [],
+            "note": str(c.get("note") or "")[:120], "name": str(c.get("name") or "")[:60]}
+
+    # закрытые ключи клиентов
+    for pk, priv in obj("keys").items():
+        if not awgconf.KEY_RE.match(pk) or not isinstance(priv, str) or not awgconf.KEY_RE.match(priv):
+            fail(f"keys.{pk[:12]}")
+        st["keys"][pk] = priv
+
+    # сроки и лимиты
+    for pk, L in obj("limits").items():
+        if not awgconf.KEY_RE.match(pk) or not isinstance(L, dict):
+            fail(f"limits.{pk[:12]}")
+        ao = L.get("auto_off")
+        qd = L.get("quota_done")
+        st["limits"][pk] = {
+            "expires": _int_or_none(L.get("expires")), "quota": _int_or_none(L.get("quota")),
+            "period": L.get("period") if L.get("period") in ("month", "total") else "month",
+            "auto_off": ao if ao == "exp" or (isinstance(ao, str) and ao.startswith("quota:")
+                                              and QUOTA_KEY_RE.match(ao[6:])) else None,
+            "exp_done": _int_or_none(L.get("exp_done")),
+            "quota_done": qd if isinstance(qd, str) and QUOTA_KEY_RE.match(qd) else None}
+
+    # личные ссылки
+    for tok, sh in obj("shares").items():
+        if not TOKEN_RE.match(tok) or not isinstance(sh, dict) or not awgconf.KEY_RE.match(str(sh.get("pk"))):
+            fail("shares")
+        st["shares"][tok] = {"pk": sh["pk"], "created": sh.get("created") if _num(sh.get("created")) else None}
+
+    # настройки: только известные поля
+    s, out = obj("settings"), st["settings"]
+    if "list_update_hours" in s:
+        if not _num(s["list_update_hours"]):
+            fail("settings.list_update_hours")
+        out["list_update_hours"] = max(1, min(int(s["list_update_hours"]), 24 * 30))
+    if s.get("on_stop") in ("keep", "restore"):
+        out["on_stop"] = s["on_stop"]
+    h = s.get("public_host")
+    if isinstance(h, str) and re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", h):
+        out["public_host"] = h
+    dns = s.get("client_dns")
+    if dns is not None:
+        if not isinstance(dns, list) or len(dns) > 4:
+            fail("settings.client_dns")
+        for d in dns:
+            try:
+                ipaddress.ip_address(str(d))
+            except ValueError:
+                fail("settings.client_dns")
+        out["client_dns"] = [str(d) for d in dns]
+    mtu = s.get("client_mtu")
+    if mtu not in (None, ""):
+        if not isinstance(mtu, int) or isinstance(mtu, bool) or not 1100 <= mtu <= 1500:
+            fail("settings.client_mtu")
+        out["client_mtu"] = mtu
+    ka = s.get("client_keepalive")
+    if ka not in (None, ""):
+        if not isinstance(ka, str) or not re.fullmatch(r"\d{1,5}(-\d{1,5})?", ka):
+            fail("settings.client_keepalive")
+        out["client_keepalive"] = ka
+    tg = s.get("telegram")
+    if tg is not None:
+        if not isinstance(tg, dict):
+            fail("settings.telegram")
+        c = notify.defaults()
+        tok, chat = str(tg.get("token") or ""), str(tg.get("chat_id") or "")
+        if (tok and not TG_TOKEN_RE.match(tok)) or (chat and not TG_CHAT_RE.match(chat)):
+            fail("settings.telegram")
+        c.update(token=tok, chat_id=chat, lang=tg.get("lang") if tg.get("lang") in notify.LANGS else "en",
+                 enabled=bool(tg.get("enabled")) and bool(tok and chat))
+        ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
+        c["events"] = {k: bool(ev.get(k, True)) for k in notify.KINDS}
+        out["telegram"] = c
+    return st
+
+
+def clean_server_files(srv: dict, kind: str) -> tuple[awgserver.ServerConf, dict[str, str]]:
+    """Файлы сервера из резервной копии → проверенный конфиг и служебные файлы."""
+    files = srv.get("files")
+    if not isinstance(files, dict):
+        bad("err.backup_format")
+    conf = files.get(srv.get("conf") or "")
+    if not isinstance(conf, str):
+        bad("err.backup_format")
+    sc = awgserver.parse(conf)
+    if not awgconf.KEY_RE.match(sc.get("PrivateKey")) or not sc.network:
+        bad("err.backup_format")
+    for p in sc.peers:
+        if not awgconf.KEY_RE.match(p.public_key) or (p.psk and not awgconf.KEY_RE.match(p.psk)):
+            bad(Msg("err.backup_field", field="server.peers"))
+    awgserver.safe_hooks(sc, kind == "host")
+    out = {}
+    for name in ("wireguard_psk.key", "wireguard_server_public_key.key"):
+        text = files.get(name)
+        if text is None:
+            continue
+        if not isinstance(text, str) or not awgconf.KEY_RE.match(text.strip()):
+            bad(Msg("err.backup_field", field=f"server.{name}"))
+        out[name] = text.strip() + "\n"
+    if isinstance(files.get("clientsTable"), str):
+        out["clientsTable"] = awgserver.render_clients_table(
+            awgserver.parse_clients_table(files["clientsTable"]))
+    return sc, out
+
+
 @app.post("/api/restore")
 def restore_backup(req):
     body = req.json()
     b = body.get("backup")
     if not isinstance(b, dict) or b.get("format") != BACKUP_FORMAT or not isinstance(b.get("state"), dict):
         bad("err.backup_format")
-    new = b["state"]
-    if not isinstance(new.get("routing"), dict) or not isinstance(new.get("upstreams"), list) \
-            or not isinstance(new.get("lists"), list) or not isinstance(new.get("settings"), dict):
+    if not all(k in b["state"] for k in ("routing", "upstreams", "lists", "settings")):
         bad("err.backup_format")
+    new = clean_backup_state(b["state"])
     srv = b.get("server") if body.get("server") else None
     t = engine.target
     sc = None
+    srv_files: dict[str, str] = {}
     if srv:
+        if not isinstance(srv, dict):
+            bad("err.backup_format")
         if not t or not t.exists:
             bad("srv.no_server")
         if srv.get("kind") != t.kind:
             bad("err.backup_kind")
-        conf = (srv.get("files") or {}).get(srv.get("conf") or "")
-        if not isinstance(conf, str):
-            bad("err.backup_format")
-        sc = awgserver.parse(conf)
-        if not sc.get("PrivateKey") or not sc.get("Address"):
-            bad("err.backup_format")
+        sc, srv_files = clean_server_files(srv, t.kind)
 
     def fn(st):
         keep_host = st["settings"].get("public_host")
         st.clear()
-        st.update(json.loads(json.dumps(new)))
-        for k, v in DEFAULT_STATE.items():
-            st.setdefault(k, json.loads(json.dumps(v)))
+        st.update(new)
         if keep_host:      # адрес этого сервера важнее адреса из копии (переезд)
             st["settings"]["public_host"] = keep_host
     store.mutate(fn)
@@ -450,10 +643,8 @@ def restore_backup(req):
             if t.kind != "host" and cur is not None:
                 sc.set("ListenPort", str(cur.port))   # порт контейнера задан Docker'ом
             t.write_file(t.conf_path, sc.render())
-            for name in SERVER_FILES:
-                text = srv["files"].get(name)
-                if isinstance(text, str):
-                    t.write_file(f"{t.dir}/{name}", text, 0o644 if name == "clientsTable" else 0o600)
+            for name, text in srv_files.items():
+                t.write_file(f"{t.dir}/{name}", text, 0o644 if name == "clientsTable" else 0o600)
             if isinstance(t, system.HostTarget):
                 system.open_firewall_udp(t, sc.port)
             t.restart()
@@ -654,7 +845,7 @@ def get_state(req):
         "month": month_key(),
         "notify_error": notifier.last_error,
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
-        "lists": [{**l, "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
+        "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "clients": clients,
         "events": engine.events[-40:][::-1],
         "country_codes": lists.COUNTRY_CODES,
@@ -805,6 +996,22 @@ def trace(req):
 
 
 # -------------------------------------------------------------------- lists
+def _list_view(l: dict | None) -> dict | None:
+    """Список для браузера. Текст ручного списка (до 2 МБ) не отдаём в /api/state,
+    который опрашивается каждые 5 секунд, — только по /api/lists/<id>."""
+    if l is None or l.get("kind") != "manual":
+        return l
+    return {**l, "source": None}
+
+
+@app.get("/api/lists/{lid}")
+def get_list(req, lid):
+    l = Store.lst(store.snapshot(), lid)
+    if not l:
+        bad("err.not_found", 404)
+    return l
+
+
 def _list_body(st: dict, body: dict, existing: dict | None = None) -> dict:
     kind = body.get("kind", existing["kind"] if existing else None)
     if kind not in ("country", "asn", "url", "manual"):
@@ -848,7 +1055,7 @@ def add_list(req):
         return lid
     lid = store.mutate(fn)
     engine.refresh_lists(False, [lid])
-    return {"id": lid, **(Store.lst(store.snapshot(), lid) or {})}
+    return {"id": lid, **(_list_view(Store.lst(store.snapshot(), lid)) or {})}
 
 
 @app.put("/api/lists/{lid}")
@@ -865,7 +1072,7 @@ def edit_list(req, lid):
         l.update(d)
     store.mutate(fn)
     engine.refresh_lists(False, [lid])
-    return Store.lst(store.snapshot(), lid)
+    return _list_view(Store.lst(store.snapshot(), lid))
 
 
 @app.delete("/api/lists/{lid}")
@@ -888,7 +1095,7 @@ def refresh_list(req, lid):
     if not Store.lst(store.snapshot(), lid):
         bad("err.not_found", 404)
     engine.refresh_lists(False, [lid])
-    return Store.lst(store.snapshot(), lid)
+    return _list_view(Store.lst(store.snapshot(), lid))
 
 
 @app.get("/api/lists/{lid}/cidrs")

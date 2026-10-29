@@ -488,14 +488,33 @@ def new_server(priv: str, port: int, subnet: str, params: dict[str, str], wan_ma
     for k, v in params.items():
         sc.set(k, v)
     if wan_masq:
-        cidr = str(net.network)
-        wan = "$(ip -4 route show default | awk '{print $5; exit}')"
-        up = ("sysctl -qw net.ipv4.ip_forward=1; "
-              "iptables -I FORWARD -i %i -j ACCEPT; "
-              "iptables -I FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; "
-              f"iptables -t nat -A POSTROUTING -s {cidr} -o {wan} -j MASQUERADE; true")
-        down = ("iptables -D FORWARD -i %i -j ACCEPT; "
-                "iptables -D FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; "
-                f"iptables -t nat -D POSTROUTING -s {cidr} -o {wan} -j MASQUERADE; true")
+        up, down = nat_hooks(str(net.network))
         sc.iface += [("PostUp", up), ("PostDown", down)]
     return sc
+
+
+HOOK_KEYS = ("PreUp", "PostUp", "PreDown", "PostDown")
+
+
+def nat_hooks(cidr: str) -> tuple[str, str]:
+    """PostUp/PostDown сервера на хосте: пересылка и NAT подсети клиентов."""
+    wan = "$(ip -4 route show default | awk '{print $5; exit}')"
+    up = ("sysctl -qw net.ipv4.ip_forward=1; "
+          "iptables -I FORWARD -i %i -j ACCEPT; "
+          "iptables -I FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; "
+          f"iptables -t nat -A POSTROUTING -s {cidr} -o {wan} -j MASQUERADE; true")
+    down = ("iptables -D FORWARD -i %i -j ACCEPT; "
+            "iptables -D FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; "
+            f"iptables -t nat -D POSTROUTING -s {cidr} -o {wan} -j MASQUERADE; true")
+    return up, down
+
+
+def safe_hooks(sc: ServerConf, host_mode: bool) -> None:
+    """Команды PreUp/PostUp/… из чужого файла (резервной копии) не выполняем: awg-quick
+    запускает их от root. На хосте ставим стандартный NAT панели, в контейнере — ничего
+    (NAT там делает start.sh)."""
+    sc.iface = [(k, v) for k, v in sc.iface if k not in HOOK_KEYS]
+    net = sc.network
+    if host_mode and net:
+        up, down = nat_hooks(str(net.network))
+        sc.iface += [("PostUp", up), ("PostDown", down)]
