@@ -26,7 +26,7 @@ log = logging.getLogger("awgr")
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 COOKIE = "awgr_session"
-SESSION_TTL = 7 * 86400
+SESSION_TTL = 4 * 3600  # вход в панель действует 4 часа
 BASE = config.PANEL_BASE_PATH
 
 
@@ -67,7 +67,11 @@ def check_session(v: str | None) -> bool:
     exp, pw, sig = v.split(".")
     if not hmac.compare_digest(sig, _sign(exp + pw)):
         return False
-    return exp.isdigit() and int(exp) > time.time() and pw == PW_TAG
+    if not exp.isdigit():
+        return False
+    now = time.time()
+    # срок не дольше SESSION_TTL: старые длинные сессии (раньше было 7 дней) тоже перестают действовать
+    return now < int(exp) <= now + SESSION_TTL and pw == PW_TAG
 
 
 _fails: dict[str, list[float]] = {}
