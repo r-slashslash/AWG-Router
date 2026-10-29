@@ -20,7 +20,7 @@ log = logging.getLogger("awgr.notify")
 API = "https://api.telegram.org"
 LANGS = ("ru", "en", "zh", "fa")
 # категории событий, которые можно включать по отдельности
-KINDS = ("exit", "server", "login", "tls")
+KINDS = ("exit", "server", "clients", "login", "tls", "update")
 
 TEXTS = {
     "ru": {
@@ -34,6 +34,11 @@ TEXTS = {
         "login_ok": "🔑 Вход в панель с адреса {ip}.",
         "login_blocked": "🚫 Много неверных попыток входа с адреса {ip}. Вход с него заблокирован на 10 минут.",
         "tls_fail": "⚠️ Не удаётся продлить сертификат HTTPS панели. Текущий действует до {date}.",
+        "client_expired": "⏰ Клиент «{name}» отключён: истёк срок действия.",
+        "client_quota": "📦 Клиент «{name}» отключён: исчерпан лимит трафика {gb} ГБ.",
+        "client_quota_reset": "✅ Клиент «{name}» снова включён: начался новый месяц.",
+        "update_available": "🆕 Доступна новая версия панели {version}. Обновить на сервере: awg-router update",
+        "pw_changed": "🔑 Пароль панели изменён (с адреса {ip}).",
     },
     "en": {
         "test": "✅ Test message. Notifications are working.",
@@ -46,6 +51,11 @@ TEXTS = {
         "login_ok": "🔑 Panel sign-in from {ip}.",
         "login_blocked": "🚫 Too many failed sign-in attempts from {ip}. It is blocked for 10 minutes.",
         "tls_fail": "⚠️ The panel's HTTPS certificate can't be renewed. The current one is valid until {date}.",
+        "client_expired": "⏰ Client “{name}” was turned off: its access period ended.",
+        "client_quota": "📦 Client “{name}” was turned off: the {gb} GB traffic limit is used up.",
+        "client_quota_reset": "✅ Client “{name}” is on again: a new month has started.",
+        "update_available": "🆕 Panel version {version} is available. Update on the server: awg-router update",
+        "pw_changed": "🔑 The panel password was changed (from {ip}).",
     },
     "zh": {
         "test": "✅ 测试消息。通知功能正常。",
@@ -58,6 +68,11 @@ TEXTS = {
         "login_ok": "🔑 来自 {ip} 的面板登录。",
         "login_blocked": "🚫 来自 {ip} 的错误登录尝试过多，已封锁 10 分钟。",
         "tls_fail": "⚠️ 无法续期面板的 HTTPS 证书。当前证书有效期至 {date}。",
+        "client_expired": "⏰ 客户端“{name}”已停用：使用期限已到。",
+        "client_quota": "📦 客户端“{name}”已停用：{gb} GB 流量限额已用完。",
+        "client_quota_reset": "✅ 客户端“{name}”已重新启用：新的月份开始了。",
+        "update_available": "🆕 面板新版本 {version} 可用。在服务器上更新：awg-router update",
+        "pw_changed": "🔑 面板密码已更改（来自 {ip}）。",
     },
     "fa": {
         "test": "✅ پیام آزمایشی. اعلان‌ها کار می‌کنند.",
@@ -70,6 +85,11 @@ TEXTS = {
         "login_ok": "🔑 ورود به پنل از نشانی {ip}.",
         "login_blocked": "🚫 تلاش‌های ناموفق زیاد برای ورود از نشانی {ip}. ورود از آن ۱۰ دقیقه مسدود شد.",
         "tls_fail": "⚠️ تمدید گواهی HTTPS پنل ممکن نیست. گواهی فعلی تا {date} معتبر است.",
+        "client_expired": "⏰ کلاینت «{name}» غیرفعال شد: مدت اعتبارش تمام شد.",
+        "client_quota": "📦 کلاینت «{name}» غیرفعال شد: سقف ترافیک {gb} گیگابایت تمام شد.",
+        "client_quota_reset": "✅ کلاینت «{name}» دوباره فعال شد: ماه تازه شروع شد.",
+        "update_available": "🆕 نسخهٔ تازهٔ پنل {version} آماده است. به‌روزرسانی روی سرور: awg-router update",
+        "pw_changed": "🔑 رمز پنل تغییر کرد (از نشانی {ip}).",
     },
 }
 
@@ -80,6 +100,9 @@ ENGINE_EVENTS = {
     "ev.target_lost": ("server", "target_lost"),
     "ev.target_restarted": ("server", "target_restarted"),
     "ev.server_start_failed": ("server", "server_start_failed"),
+    "ev.client_expired": ("clients", "client_expired"),
+    "ev.client_quota": ("clients", "client_quota"),
+    "ev.client_quota_reset": ("clients", "client_quota_reset"),
 }
 
 
@@ -193,7 +216,7 @@ class Notifier:
             self._target_lost = True
         m = ENGINE_EVENTS.get(msg.key)
         if m:
-            self.event(m[0], m[1], **{k: v for k, v in msg.p.items() if k == "name"})
+            self.event(m[0], m[1], **{k: v for k, v in msg.p.items() if k in ("name", "gb")})
 
     def target_ok(self) -> None:
         if self._target_lost:

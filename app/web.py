@@ -28,6 +28,14 @@ class HTTPError(Exception):
         self.detail = detail
 
 
+class Page:
+    """Ответ-страница (HTML) вместо JSON."""
+
+    def __init__(self, body: bytes, ctype: str = "text/html; charset=utf-8"):
+        self.body = body
+        self.ctype = ctype
+
+
 class Request:
     def __init__(self, h: BaseHTTPRequestHandler, path: str, params: dict):
         self.h = h
@@ -73,23 +81,28 @@ class App:
         self.routes: list[tuple[str, re.Pattern, callable]] = []
         self.middleware = None
         self.static: tuple[str, str] | None = None
+        self.public_static: tuple[str, str] | None = None   # без секретного пути и без входа
         self.index_file: str | None = None
+        self.public: set = set()                             # обработчики без проверки входа
 
-    def route(self, method: str, pattern: str):
+    def route(self, method: str, pattern: str, public: bool = False):
         # /lists/{lid} → именованные группы; {pk:path} — с косыми чертами
+        # public=True: адрес без секретного префикса и без проверки входа
         rx = re.sub(r"\{(\w+):path\}", r"(?P<\1>.+)", pattern)
         rx = re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", rx)
-        compiled = re.compile("^" + re.escape(self.base) + rx + "$")
+        compiled = re.compile("^" + ("" if public else re.escape(self.base)) + rx + "$")
 
         def deco(fn):
             self.routes.append((method, compiled, fn))
+            if public:
+                self.public.add(fn)
             return fn
         return deco
 
-    def get(self, p): return self.route("GET", p)
-    def post(self, p): return self.route("POST", p)
-    def put(self, p): return self.route("PUT", p)
-    def delete(self, p): return self.route("DELETE", p)
+    def get(self, p, public=False): return self.route("GET", p, public)
+    def post(self, p, public=False): return self.route("POST", p, public)
+    def put(self, p, public=False): return self.route("PUT", p, public)
+    def delete(self, p, public=False): return self.route("DELETE", p, public)
 
     def handler(self):
         app = self
@@ -148,8 +161,9 @@ class App:
                 path = unquote(urlsplit(self.path).path)
                 try:
                     # статика
-                    if app.static and path.startswith(app.static[0] + "/") and self.command in ("GET", "HEAD"):
-                        return self._static(path[len(app.static[0]) + 1:])
+                    for mount in (app.static, app.public_static):
+                        if mount and path.startswith(mount[0] + "/") and self.command in ("GET", "HEAD"):
+                            return self._static(mount[1], path[len(mount[0]) + 1:])
                     if app.index_file and self.command in ("GET", "HEAD"):
                         if path == app.base + "/" or path == "/" and not app.base:
                             body = open(app.index_file, "rb").read()
@@ -166,9 +180,11 @@ class App:
                         if method != self.command:
                             continue
                         req = Request(self, path, m.groupdict())
-                        if app.middleware:
+                        if app.middleware and fn not in app.public:
                             app.middleware(req)
                         res = fn(req, **m.groupdict())
+                        if isinstance(res, Page):
+                            return self._send(200, res.body, res.ctype, [("Cache-Control", "no-store")])
                         return self._json(200, res if res is not None else {"ok": True},
                                           [("Set-Cookie", c) for c in req.set_cookies])
                     if allowed:
@@ -189,8 +205,8 @@ class App:
                     except Exception:  # noqa: BLE001
                         pass
 
-            def _static(self, rel: str):
-                root = os.path.realpath(app.static[1])
+            def _static(self, root: str, rel: str):
+                root = os.path.realpath(root)
                 p = os.path.realpath(os.path.join(root, rel))
                 if not p.startswith(root + os.sep) or not os.path.isfile(p):
                     raise HTTPError(404, "err.not_found")

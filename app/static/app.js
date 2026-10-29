@@ -367,20 +367,22 @@ function viewClients() {
     <div class="section-head">
       <div><h2>${esc(t("cl.title"))}</h2><p class="muted small">${esc(t("cl.subtitle"))}</p></div>
       <div class="add-row">
-        ${S.clients.length ? `<input type="search" id="client-search" placeholder="${esc(t("cl.search"))}" style="max-width:240px">` : ""}
+        ${S.clients.length ? `<input type="search" id="client-search" placeholder="${esc(t("cl.search"))}" style="max-width:240px">
+          <select id="client-sort" aria-label="${esc(t("cl.sort"))}" style="width:auto">${CLIENT_SORTS.map((k) =>
+            `<option value="${k}" ${k === clientSort ? "selected" : ""}>${esc(t("cl.sort_" + k))}</option>`).join("")}</select>` : ""}
         <button class="btn primary" id="add-client" ${serverMissing() || !S.target ? "disabled" : ""}>${esc(t("cl.add"))}</button>
       </div>
     </div>`;
   if (serverMissing()) return `<section class="section">${head}<div class="panel empty"><p>${esc(t("srv.missing"))}</p><button class="btn primary" data-goto="server">${esc(t("srv.create_title"))}</button></div></section>`;
   if (!S.clients.length) return `<section class="section">${head}<div class="panel empty"><p>${esc(t("cl.empty"))}</p><p class="small">${esc(t("cl.empty_hint2"))}</p></div></section>`;
-  const rows = S.clients.map((c) => {
+  const rows = sortedClients().map((c) => {
     const live = c.live || {};
     const age = live.handshake ? S.now - live.handshake : null;
     const online = c.enabled && age != null && age < 180;
     const p = c.policy;
     const tags = (!c.enabled ? `<span class="tag tag-off">${esc(t("cl.disabled_tag"))}</span>` : "") +
       (p.rules_mode === "custom" ? `<span class="tag">${esc(t("cl.custom_tag"))}</span>` : "") +
-      (p.note ? `<span class="tag"><bdi>${esc(p.note)}</bdi></span>` : "");
+      (p.note ? `<span class="tag"><bdi>${esc(p.note)}</bdi></span>` : "") + limitTags(c);
     const wanted = p.outbound !== "inherit" ? p.outbound : S.routing.default;
     const activity = !c.enabled ? `<span class="muted">—</span>`
       : `<span class="state"><span class="dot ${online ? "ok" : ""}"></span>${esc(online ? t("cl.online") : fmtAge(age))}</span>`;
@@ -388,17 +390,50 @@ function viewClients() {
       <td><span class="client-name"><bdi>${esc(c.name || t("cl.unnamed"))}</bdi></span>${tags}</td>
       <td data-m="sub" class="nowrap"><bdi>${esc(c.ip || "—")}</bdi></td>
       <td data-m="sub">${activity}</td>
-      <td data-m="hide" class="nowrap muted">↓ ${esc(fmtBytes(live.tx))} ↑ ${esc(fmtBytes(live.rx))}</td>
+      <td data-m="hide" class="nowrap muted">${trafficCell(c)}</td>
       <td data-m="right">${effChip(c.effective, wanted)}${p.outbound === "inherit" ? "" : `<div class="small muted" style="margin-top:3px">${esc(t("cl.manual"))}</div>`}</td>
     </tr>`;
   }).join("");
   return `
   <section class="section">${head}
     <div class="panel"><table class="table responsive">
-      <thead><tr><th>${esc(t("cl.col_name"))}</th><th>${esc(t("cl.col_ip"))}</th><th>${esc(t("cl.col_activity"))}</th><th>${esc(t("cl.col_traffic"))}</th><th>${esc(t("cl.col_exit"))}</th></tr></thead>
+      <thead><tr><th>${esc(t("cl.col_name"))}</th><th>${esc(t("cl.col_ip"))}</th><th>${esc(t("cl.col_activity"))}</th><th>${esc(t("cl.col_month"))}</th><th>${esc(t("cl.col_exit"))}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
   </section>`;
+}
+const CLIENT_SORTS = ["ip", "name", "traffic", "activity"];
+let clientSort = (() => { try { return localStorage.getItem("awgr.sort") || "ip"; } catch { return "ip"; } })();
+function monthBytes(c) { const x = c.traffic || {}; return (x.month_rx || 0) + (x.month_tx || 0); }
+function totalBytes(c) { const x = c.traffic || {}; return (x.total_rx || 0) + (x.total_tx || 0); }
+function sortedClients() {
+  const list = [...S.clients];
+  const hs = (c) => (c.enabled && c.live && c.live.handshake) || 0;
+  if (clientSort === "name") list.sort((a, b) => (a.name || "").localeCompare(b.name || "", LANG));
+  else if (clientSort === "traffic") list.sort((a, b) => monthBytes(b) - monthBytes(a));
+  else if (clientSort === "activity") list.sort((a, b) => hs(b) - hs(a));
+  return list;
+}
+function isoDay(ts) {
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function fmtDay(ts) { return new Date(ts * 1000).toLocaleDateString(LANG, { day: "numeric", month: "short", year: "numeric" }); }
+function limitTags(c) {
+  const L = c.limits || {};
+  let h = "";
+  if (L.auto_off === "exp") h += `<span class="tag tag-off">${esc(t("cl.tag_expired"))}</span>`;
+  else if ((L.auto_off || "").startsWith("quota:")) h += `<span class="tag tag-off">${esc(t("cl.tag_quota"))}</span>`;
+  else if (L.expires) h += `<span class="tag ${L.expires - S.now < 3 * 86400 ? "tag-warn" : ""}">${esc(t("cl.tag_until", { date: fmtDay(L.expires) }))}</span>`;
+  return h;
+}
+function trafficCell(c) {
+  const L = c.limits || {};
+  const used = L.period === "total" ? totalBytes(c) : monthBytes(c);
+  if (!L.quota) return esc(fmtBytes(monthBytes(c)));
+  const pct = Math.min(100, Math.round(used / L.quota * 100));
+  return `${esc(t("share.of", { used: fmtBytes(used), limit: fmtBytes(L.quota) }))}
+    <div class="meter ${pct >= 90 ? "hot" : ""}" title="${esc(t(L.period === "total" ? "cl.quota_total" : "cl.quota_month"))}"><span style="width:${pct}%"></span></div>`;
 }
 function filterClients() {
   const q = ($("#client-search").value || "").toLowerCase().trim();
@@ -407,6 +442,12 @@ function filterClients() {
 bind.clients = () => {
   const s = $("#client-search");
   if (s) s.oninput = filterClients;
+  const so = $("#client-sort");
+  if (so) so.onchange = () => {
+    clientSort = so.value;
+    try { localStorage.setItem("awgr.sort", clientSort); } catch { /* нет хранилища */ }
+    render();
+  };
   const add = $("#add-client");
   if (add) add.onclick = addClient;
   $$("[data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
@@ -475,6 +516,7 @@ function editClient(pk, section = null) {
   const draft = { outbound: c.policy.outbound, rules_mode: c.policy.rules_mode, note: c.policy.note,
     rules: structuredClone(c.policy.rules_mode === "custom" ? c.policy.rules : S.routing.rules) };
   let view = section || (c.has_config ? "connect" : "route");
+  const L = c.limits || {}, tr = c.traffic || {};
   openModal(c.name || c.ip, `
     <p class="muted small" style="margin-top:0"><bdi>${esc(c.ip || "")}</bdi> · ${esc(t("cl.key"))} <span class="mono">${esc(pk.slice(0, 10))}…</span>${c.enabled ? "" : ` · <span class="err">${esc(t("cl.disabled_tag"))}</span>`}</p>
     <div class="seg seg-wide" id="c-view">
@@ -496,6 +538,26 @@ function editClient(pk, section = null) {
     </div>
     <div id="c-pane-manage" class="c-pane">
       <label class="field"><span>${esc(t("cl.name"))}</span><input type="text" id="c-name" maxlength="60" value="${esc(c.name)}"></label>
+      <div class="kv" style="margin-bottom:16px">
+        <div><span>${esc(t("cl.this_month"))}</span><b>↓ ${esc(fmtBytes(tr.month_tx))} ↑ ${esc(fmtBytes(tr.month_rx))}</b></div>
+        <div><span>${esc(t("cl.all_time"))}</span><b>↓ ${esc(fmtBytes(tr.total_tx))} ↑ ${esc(fmtBytes(tr.total_rx))}</b></div>
+      </div>
+      <div class="row2">
+        <label class="field"><span>${esc(t("cl.expires"))}</span>
+          <input type="date" id="c-exp" value="${esc(L.expires ? isoDay(L.expires) : "")}">
+          <span class="hint">${esc(t("cl.expires_hint"))}</span></label>
+        <div class="field"><span>${esc(t("cl.quota"))}</span>
+          <div class="input-btn"><input type="number" id="c-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${L.quota ? +(L.quota / 1024 ** 3).toFixed(3) : ""}">
+            <select id="c-period" style="width:auto"><option value="month" ${L.period !== "total" ? "selected" : ""}>${esc(t("cl.per_month"))}</option><option value="total" ${L.period === "total" ? "selected" : ""}>${esc(t("cl.in_total"))}</option></select></div>
+          <span class="hint">${esc(t("cl.quota_hint"))}</span></div>
+      </div>
+      <div class="manage-row">
+        <div style="min-width:0"><b>${esc(t("cl.share"))}</b><div class="small muted">${esc(t(S.panel && S.panel.access === "ssh" ? "cl.share_ssh" : "cl.share_hint"))}</div>
+          ${c.share_url ? `<div class="mono small share-url" dir="ltr">${esc(c.share_url)}</div>` : ""}</div>
+        <div class="actions" style="flex:none">${c.share_url
+          ? `<button class="btn sm" id="c-share-copy">${esc(t("btn.copy"))}</button><button class="btn sm danger" id="c-share-del">${esc(t("cl.share_revoke"))}</button>`
+          : `<button class="btn sm" id="c-share-new" ${S.panel && S.panel.access === "ssh" ? "disabled" : ""}>${esc(t("cl.share_create"))}</button>`}</div>
+      </div>
       <div class="manage-row">
         <div><b>${esc(t(c.enabled ? "cl.disable" : "cl.enable"))}</b><div class="small muted">${esc(t(c.enabled ? "cl.disable_hint" : "cl.enable_hint"))}</div></div>
         <button class="btn sm" id="c-toggle">${esc(t(c.enabled ? "cl.disable_btn" : "cl.enable_btn"))}</button>
@@ -559,11 +621,33 @@ function editClient(pk, section = null) {
     try {
       const name = $("#c-name").value.trim();
       if (name && name !== c.name) await api("PUT", "users/" + encodeURIComponent(pk), { name });
+      const exp = $("#c-exp").value ? Math.floor(new Date($("#c-exp").value + "T23:59:59").getTime() / 1000) : null;
+      const q = $("#c-quota").value.trim();
+      const per = $("#c-period").value;
+      const oldQ = L.quota ? String(+(L.quota / 1024 ** 3).toFixed(3)) : "";
+      if (exp !== (L.expires || null) || q !== oldQ || per !== (L.period || "month")) {
+        const r = await api("PUT", "limits/" + encodeURIComponent(pk), { expires: exp, quota_gb: q === "" ? null : +q, period: per });
+        if (r.enabled) toast(t("toast.client_enabled"));
+      }
       await api("PUT", "clients/" + encodeURIComponent(pk), {
         outbound: $("#c-out").value, rules_mode: draft.rules_mode,
         rules: draft.rules_mode === "custom" ? draft.rules : [], note: $("#c-note").value.trim() });
       closeModal(); toast(t("toast.saved_applying")); refresh();
     } catch (e) { toast(e.message, true); }
+  };
+  const reopen = async () => { await refresh(); editClient(pk, "manage"); };
+  const shareNew = $("#c-share-new");
+  if (shareNew) shareNew.onclick = async () => {
+    try { const r = await api("POST", "shares/" + encodeURIComponent(pk)); await copyText(r.url); await reopen(); }
+    catch (e) { toast(e.message, true); }
+  };
+  const shareCopy = $("#c-share-copy");
+  if (shareCopy) shareCopy.onclick = () => copyText(c.share_url);
+  const shareDel = $("#c-share-del");
+  if (shareDel) shareDel.onclick = async () => {
+    if (!confirm(t("cl.share_revoke_confirm"))) return;
+    try { await api("DELETE", "shares/" + encodeURIComponent(pk)); toast(t("cl.share_revoked")); await reopen(); }
+    catch (e) { toast(e.message, true); }
   };
   $("#c-toggle").onclick = async () => {
     try {
@@ -1023,7 +1107,9 @@ function viewSystem() {
         <div><span>${esc(t("sy.url"))}</span><b><bdi>${esc(P.url || "—")}</bdi></b></div>
         <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b></div>
         <div><span>${esc(t("sy.cert"))}</span><b>${esc(tlsLine)}</b></div>
+        <div><span>${esc(t("sy.version"))}</span><b>${esc((S.version || {}).current || "—")}</b></div>
       </div>
+      ${S.version && S.version.available ? `<div class="notice" style="margin:14px 0 0">${th("sy.update_available", { version: `<b>${esc(S.version.latest)}</b>`, cmd: `<bdi class="mono">awg-router update</bdi>` })}</div>` : ""}
       ${T.error && T.active !== "letsencrypt" && P.access !== "ssh" ? `<p class="err small" style="margin-bottom:0">${esc(t("sy.tls_error"))}: ${esc(T.error)}</p>` : ""}
       ${T.mode === "letsencrypt" ? `<div class="actions" style="margin-top:12px"><button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button></div>` : ""}
     </div>
@@ -1032,6 +1118,7 @@ function viewSystem() {
     ${viewTelegram()}
     ${viewSecurity()}
   </div>
+  ${viewBackup()}
   <div class="grid2">
     <section class="section">
       <div class="section-head"><h2>${esc(t("sy.conn"))}</h2></div>
@@ -1083,6 +1170,7 @@ bind.system = () => {
   };
   bindTelegram();
   bindSecurity();
+  bindBackup();
   $("#reapply").onclick = async () => { await api("POST", "reapply", {}); toast(t("toast.applying")); setTimeout(refresh, 1500); };
   $("#logout").onclick = async () => { await api("POST", "logout", {}); showLogin(); };
   $("#load-debug").onclick = async () => {
@@ -1098,7 +1186,7 @@ bind.system = () => {
 };
 
 /* ===================================================== уведомления в Telegram */
-const TG_KINDS = ["exit", "server", "login", "tls"];
+const TG_KINDS = ["exit", "server", "clients", "login", "tls", "update"];
 function viewTelegram() {
   const c = S.settings.telegram || {};
   const ev = c.events || {};
@@ -1168,6 +1256,10 @@ function viewSecurity() {
       <p class="muted small" style="margin-top:0">${esc(t(on ? "sec.on_hint" : "sec.off_hint"))}</p>
       <div class="actions"><button class="btn sm ${on ? "" : "primary"}" id="totp-btn">${esc(t(on ? "sec.disable" : "sec.enable"))}</button></div>
       ${on ? `<p class="muted small" style="margin:12px 0 0">${th("sec.lost", { cmd: `<bdi class="mono">awg-router 2fa-off</bdi>` })}</p>` : ""}
+      <div class="manage-row" style="margin-top:16px">
+        <div><b>${esc(t("pw.title"))}</b><div class="small muted">${th("pw.hint", { cmd: `<bdi class="mono">awg-router password</bdi>` })}</div></div>
+        <button class="btn sm" id="pw-btn" style="flex:none">${esc(t("pw.change"))}</button>
+      </div>
     </div>
   </section>`;
 }
@@ -1178,6 +1270,83 @@ function codeField(id, label) {
 function bindSecurity() {
   const on = !!(S.security && S.security.totp);
   $("#totp-btn").onclick = on ? totpDisable : totpEnable;
+  $("#pw-btn").onclick = changePassword;
+}
+function changePassword() {
+  const f = (id, key, ac) => `<label class="field"><span>${esc(t(key))}</span><input type="password" id="${id}" autocomplete="${ac}" maxlength="128"></label>`;
+  openModal(t("pw.title"), `
+    ${f("pw-cur", "pw.current", "current-password")}
+    ${f("pw-new", "pw.new", "new-password")}
+    ${f("pw-new2", "pw.repeat", "new-password")}
+    <p class="muted small" style="margin:0">${esc(t("pw.rules"))}</p>`,
+  `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="pw-ok">${esc(t("pw.change"))}</button>`);
+  $("#pw-cur").focus();
+  $("#pw-ok").onclick = async () => {
+    const cur = $("#pw-cur").value, nw = $("#pw-new").value;
+    if (nw.length < 10) { toast(t("err.pw_length"), true); $("#pw-new").focus(); return; }
+    if (nw !== $("#pw-new2").value) { toast(t("pw.mismatch"), true); $("#pw-new2").focus(); return; }
+    $("#pw-ok").disabled = true;
+    try { await api("POST", "password", { current: cur, new: nw }); closeModal(); toast(t("pw.done")); refresh(); }
+    catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); $("#pw-ok").disabled = false; }
+  };
+}
+
+/* ====================================================== резервная копия */
+function viewBackup() {
+  return `
+  <section class="section">
+    <div class="section-head"><div><h2>${esc(t("bk.title"))}</h2><p class="muted small">${esc(t("bk.sub"))}</p></div></div>
+    <div class="panel panel-pad">
+      <div class="actions">
+        <button class="btn sm primary" id="bk-save">${esc(t("bk.download"))}</button>
+        <label class="btn sm" for="bk-file">${esc(t("bk.restore"))}</label>
+        <input type="file" id="bk-file" accept=".json,application/json" hidden>
+      </div>
+      <p class="muted small" style="margin:12px 0 0">${esc(t("bk.secret"))}</p>
+    </div>
+  </section>`;
+}
+function bindBackup() {
+  $("#bk-save").onclick = async () => {
+    try {
+      const b = await api("GET", "backup");
+      const d = new Date();
+      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      download(`awg-router-backup-${(b.host || "server").replace(/[^\w.-]+/g, "_")}-${day}.json`, JSON.stringify(b, null, 1));
+      toast(t("bk.saved"));
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+  };
+  $("#bk-file").onchange = async (ev) => {
+    const file = ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    let b;
+    try { b = JSON.parse(await file.text()); } catch { toast(t("err.backup_format"), true); return; }
+    if (!b || b.format !== "awg-router-backup") { toast(t("err.backup_format"), true); return; }
+    const st = b.state || {};
+    const srv = b.server && b.server.files ? b.server : null;
+    const sameKind = srv && S.target && srv.kind === S.target.kind;
+    const nClients = srv ? ((srv.files.clientsTable || "").match(/"clientId"/g) || []).length : 0;
+    openModal(t("bk.restore_title"), `
+      <div class="kv" style="margin-bottom:14px">
+        <div><span>${esc(t("bk.created"))}</span><b>${esc(b.created ? fmtDay(b.created) + ", " + new Date(b.created * 1000).toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" }) : "—")}</b></div>
+        <div><span>${esc(t("bk.from"))}</span><b><bdi>${esc(b.host || "—")}</bdi></b></div>
+        <div><span>${esc(t("tab.exits"))}</span><b>${esc(fmtNum((st.upstreams || []).length))}</b></div>
+        <div><span>${esc(t("tab.lists"))}</span><b>${esc(fmtNum((st.lists || []).length))}</b></div>
+      </div>
+      <p style="margin-top:0">${esc(t("bk.restore_what"))}</p>
+      <label class="check"><input type="checkbox" id="bk-srv" ${sameKind ? "checked" : "disabled"}>
+        <span>${esc(t("bk.restore_server", { n: nClients }))}<br><span class="small muted">${esc(t(!srv ? "bk.no_server" : sameKind ? "bk.restore_server_hint" : "bk.kind_differs"))}</span></span></label>
+      <div class="notice warn" style="margin:12px 0 0">${esc(t("bk.warn"))}</div>`,
+    `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="bk-go">${esc(t("bk.restore_btn"))}</button>`);
+    $("#bk-go").onclick = async () => {
+      $("#bk-go").disabled = true;
+      try {
+        const r = await api("POST", "restore", { backup: b, server: $("#bk-srv").checked });
+        closeModal(); toast(t(r.restarted ? "bk.done_server" : "bk.done")); setTimeout(refresh, 1500);
+      } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); $("#bk-go").disabled = false; }
+    };
+  };
 }
 function modalAction(btnId, inputId, fn) {
   const go = async () => {

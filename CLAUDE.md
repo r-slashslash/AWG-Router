@@ -14,12 +14,18 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 - The installer (`install.sh`) speaks English only.
 - Commits end with `Co-Authored-By: Claude …` only (no session links). Push to `main`;
   users update with `awg-router update`, which downloads the `main` tarball from GitHub.
+- **Bump `VERSION` in `app/version.py`** with every user-visible change: panels compare it with
+  `main` on GitHub (every 6 h) to show "update available".
 
 ## Layout
 | Path | What |
 |---|---|
-| `app/main.py` | API endpoints, auth (signed cookie, 4 h session, 8 fails → 10 min block, optional TOTP step: `need_code`), startup, `data/status.json` |
+| `app/main.py` | API endpoints, auth (signed cookie, 4 h session, 8 fails → 10 min block, optional TOTP step: `need_code`; a password changed in the panel lives as PBKDF2 in `data/panel_password.json` and wins over `.env`), backup/restore, startup, `data/status.json` |
 | `app/totp.py` | Optional 2FA (RFC 6238): secret in `data/totp.json` (re-read by mtime; `awg-router 2fa-off` deletes it), replay-protected codes; enabling/disabling changes the session tag → other sessions end |
+| `app/traffic.py` | Per-client traffic totals and months (`data/traffic.json`), deltas between polls survive counter resets |
+| `app/limits.py` | Client end date / traffic quota (`state.limits`): auto-off (`auto_off`: `exp` / `quota:<month>`), monthly auto-on; called after each poll |
+| `app/updates.py` / `app/version.py` | Panel version and the update check |
+| `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/*` — **outside the secret path, no login** (token in `state.shares`) |
 | `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
 | `app/web.py` | HTTP server: routing, JSON, static, TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, body draining |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |

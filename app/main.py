@@ -13,13 +13,17 @@ import socket
 import threading
 import time
 
-from . import awgconf, config, lists, notify, system, totp
+from . import awgconf, awgserver, config, limits, lists, notify, system, totp
+from .store import DEFAULT_STATE
+from .traffic import month_key
+from .updates import UpdateChecker
+from .version import VERSION
 from .engine import Engine
 from .i18n import Msg, MsgError
 from .store import ID_RE, Store, new_id
 from .tlsmgr import TLSManager
 from .users import UserError
-from .web import App, HTTPError
+from .web import App, HTTPError, Page
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("awgr")
@@ -51,6 +55,50 @@ else:
     log.warning("PANEL_PASSWORD is not set. Panel password: %s (file data/panel_password)", PASSWORD)
 PW_TAG = hashlib.sha256(PASSWORD.encode()).hexdigest()[:8]  # смена пароля = выход везде
 
+# Пароль, заданный в панели, хранится хешем и важнее PANEL_PASSWORD из .env.
+# `awg-router password` удаляет этот файл и задаёт новый пароль в .env.
+PW_FILE = os.path.join(config.DATA_DIR, "panel_password.json")
+PW_ITER = 200_000
+_pw_cache: tuple = (None, None)
+
+
+def custom_password() -> dict | None:
+    global _pw_cache
+    try:
+        mt = os.stat(PW_FILE).st_mtime
+    except OSError:
+        return None
+    if _pw_cache[0] != mt:
+        try:
+            with open(PW_FILE) as f:
+                d = json.load(f)
+            ok = isinstance(d, dict) and d.get("hash") and d.get("salt")
+        except (OSError, ValueError):
+            ok = False
+        _pw_cache = (mt, d if ok else None)
+    return _pw_cache[1]
+
+
+def _pw_hash(pw: str, salt: str, it: int = PW_ITER) -> str:
+    return hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), it).hex()
+
+
+def check_password(pw: str) -> bool:
+    c = custom_password()
+    if c:
+        return hmac.compare_digest(_pw_hash(pw, c["salt"], int(c.get("iter") or PW_ITER)), c["hash"])
+    return hmac.compare_digest(pw.encode(), PASSWORD.encode())
+
+
+def set_password(pw: str) -> None:
+    salt = secrets.token_hex(16)
+    d = {"salt": salt, "iter": PW_ITER, "hash": _pw_hash(pw, salt), "set_at": time.time()}
+    tmp = PW_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f)
+    os.replace(tmp, PW_FILE)
+
 
 def _sign(payload: str) -> str:
     return hmac.new(SECRET, payload.encode(), hashlib.sha256).hexdigest()[:32]
@@ -58,10 +106,12 @@ def _sign(payload: str) -> str:
 
 def sec_tag() -> str:
     """Метка в сессии: смена пароля или включение/выключение входа по коду = выход везде."""
+    c = custom_password()
     t = totp.load()
-    if not t:
+    if not c and not t:
         return PW_TAG
-    return hashlib.sha256(f"{PASSWORD}|{t['secret']}".encode()).hexdigest()[:8]
+    material = ("h:" + c["hash"]) if c else PASSWORD
+    return hashlib.sha256(f"{material}|{t['secret'] if t else ''}".encode()).hexdigest()[:8]
 
 
 def make_session() -> str:
@@ -94,8 +144,10 @@ engine.notifier = notifier
 tls.on_fail = lambda exp: notifier.event(
     "tls", "tls_fail", cooldown=12 * 3600,
     date=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp or 0)))
+updates = UpdateChecker(lambda v: notifier.event("update", "update_available", cooldown=86400, version=v))
 app = App(BASE)
 app.static = (BASE + "/static", STATIC)
+app.public_static = ("/s/assets", STATIC)   # для личных страниц клиентов (без секретного пути)
 app.index_file = os.path.join(STATIC, "index.html")
 
 
@@ -182,7 +234,7 @@ def login(req):
     ip = req.client_ip
     _check_blocked(ip)
     body = req.json()
-    if not hmac.compare_digest(str(body.get("password", "")).encode(), PASSWORD.encode()):
+    if not check_password(str(body.get("password", ""))):
         _failed(ip, "err.wrong_password")
     if totp.load():
         # второй шаг: пароль верный, нужен код из приложения
@@ -312,6 +364,231 @@ def telegram_detect(req):
     return chat
 
 
+# ------------------------------------------------------------- смена пароля
+@app.post("/api/password")
+def change_password(req):
+    ip = req.client_ip
+    _check_blocked(ip)
+    body = req.json()
+    if not check_password(str(body.get("current", ""))):
+        _failed(ip, "err.wrong_password")
+    new = str(body.get("new", ""))
+    if len(new) < 10 or len(new) > 128:
+        bad("err.pw_length")
+    if check_password(new):
+        bad("err.pw_same")
+    set_password(new)
+    _set_session(req)          # остальные сессии больше не действуют
+    notifier.event("login", "pw_changed", cooldown=0, ip=ip)
+    log.info("Panel password changed in the panel")
+    return {"ok": True}
+
+
+# ------------------------------------------------------- резервная копия
+BACKUP_FORMAT = "awg-router-backup"
+SERVER_FILES = ("clientsTable", "wireguard_psk.key", "wireguard_server_public_key.key")
+
+
+@app.get("/api/backup")
+def get_backup(req):
+    st = store.snapshot()
+    srv = None
+    t = engine.target
+    if t and t.exists:
+        files = {}
+        with engine.lock:
+            for name in (os.path.basename(t.conf_path),) + SERVER_FILES:
+                text = t.read_file(f"{t.dir}/{name}")
+                if text is not None:
+                    files[name] = text
+        srv = {"kind": t.kind, "conf": os.path.basename(t.conf_path), "files": files}
+    return {"format": BACKUP_FORMAT, "version": 1, "panel_version": VERSION, "created": time.time(),
+            "host": engine.srv.public_host(st), "state": st, "traffic": engine.traffic.export(),
+            "server": srv}
+
+
+@app.post("/api/restore")
+def restore_backup(req):
+    body = req.json()
+    b = body.get("backup")
+    if not isinstance(b, dict) or b.get("format") != BACKUP_FORMAT or not isinstance(b.get("state"), dict):
+        bad("err.backup_format")
+    new = b["state"]
+    if not isinstance(new.get("routing"), dict) or not isinstance(new.get("upstreams"), list) \
+            or not isinstance(new.get("lists"), list) or not isinstance(new.get("settings"), dict):
+        bad("err.backup_format")
+    srv = b.get("server") if body.get("server") else None
+    t = engine.target
+    sc = None
+    if srv:
+        if not t or not t.exists:
+            bad("srv.no_server")
+        if srv.get("kind") != t.kind:
+            bad("err.backup_kind")
+        conf = (srv.get("files") or {}).get(srv.get("conf") or "")
+        if not isinstance(conf, str):
+            bad("err.backup_format")
+        sc = awgserver.parse(conf)
+        if not sc.get("PrivateKey") or not sc.get("Address"):
+            bad("err.backup_format")
+
+    def fn(st):
+        keep_host = st["settings"].get("public_host")
+        st.clear()
+        st.update(json.loads(json.dumps(new)))
+        for k, v in DEFAULT_STATE.items():
+            st.setdefault(k, json.loads(json.dumps(v)))
+        if keep_host:      # адрес этого сервера важнее адреса из копии (переезд)
+            st["settings"]["public_host"] = keep_host
+    store.mutate(fn)
+    engine.traffic.replace(b.get("traffic") or {})
+    restarted = False
+    if sc is not None:
+        with engine.lock:
+            cur = engine.srv.load(t)[0] if t.read_file(t.conf_path) else None
+            if t.kind != "host" and cur is not None:
+                sc.set("ListenPort", str(cur.port))   # порт контейнера задан Docker'ом
+            t.write_file(t.conf_path, sc.render())
+            for name in SERVER_FILES:
+                text = srv["files"].get(name)
+                if isinstance(text, str):
+                    t.write_file(f"{t.dir}/{name}", text, 0o644 if name == "clientsTable" else 0o600)
+            if isinstance(t, system.HostTarget):
+                system.open_firewall_udp(t, sc.port)
+            t.restart()
+            restarted = True
+        engine.event("warn", Msg("ev.restored_server"))
+    else:
+        engine.event("info", Msg("ev.restored"))
+    engine.applied_hash = None
+    engine.trigger()
+    threading.Thread(target=lambda: engine.refresh_lists(False), daemon=True).start()
+    return {"ok": True, "restarted": restarted}
+
+
+# ----------------------------------------------- срок и лимит трафика клиента
+@app.put("/api/limits/{pk:path}")
+def put_limits(req, pk):
+    _pk(pk)
+    body = req.json()
+    exp = body.get("expires")
+    if exp is not None:
+        try:
+            exp = int(exp)
+        except (TypeError, ValueError):
+            bad("err.bad_value")
+        if exp <= 0:
+            exp = None
+    quota = body.get("quota_gb")
+    if quota not in (None, ""):
+        try:
+            quota = float(quota)
+        except (TypeError, ValueError):
+            bad("err.quota")
+        if not 0 < quota <= 1_000_000:
+            bad("err.quota")
+        quota = int(quota * limits.GB)
+    else:
+        quota = None
+    period = body.get("period") or "month"
+    if period not in ("month", "total"):
+        bad("err.bad_value")
+    c = next((x for x in engine.clients if x["public_key"] == pk), None)
+    if not c:
+        bad("err.not_found", 404)
+    now = time.time()
+    enable = False
+
+    def fn(st):
+        nonlocal enable
+        L = st.setdefault("limits", {}).get(pk) or {}
+        if quota != L.get("quota") or period != L.get("period", "month"):
+            L["quota_done"] = None
+        ao = L.get("auto_off") or ""
+        if not c["enabled"] and ao == "exp" and (exp is None or exp > now):
+            enable = True
+        if not c["enabled"] and ao.startswith("quota:") and \
+                (quota is None or engine.traffic.used(pk, period) < quota):
+            enable = True
+        if enable:
+            L["auto_off"] = None
+        L.update(expires=exp, quota=quota, period=period)
+        if exp is None and quota is None and not L.get("auto_off"):
+            st["limits"].pop(pk, None)
+        else:
+            st["limits"][pk] = L
+    store.mutate(fn)
+    if enable:
+        _user_errors(lambda: engine.srv.update_client(pk, enabled=True))
+    engine.reconcile_soon()
+    return {"ok": True, "enabled": enable}
+
+
+# ------------------------------------------------- личные ссылки клиентов
+def panel_origin() -> str:
+    u = panel_url()
+    return u[: len(u) - len(BASE) - 1] if BASE else u.rstrip("/")
+
+
+def share_url(token: str) -> str:
+    return f"{panel_origin()}/s/{token}"
+
+
+@app.post("/api/shares/{pk:path}")
+def create_share(req, pk):
+    _pk(pk)
+    if not any(c["public_key"] == pk for c in engine.clients):
+        bad("err.not_found", 404)
+
+    def fn(st):
+        sh = st.setdefault("shares", {})
+        tok = next((k for k, v in sh.items() if v.get("pk") == pk), None)
+        if not tok:
+            tok = secrets.token_urlsafe(18)
+            sh[tok] = {"pk": pk, "created": time.time()}
+        return tok
+    return {"url": share_url(store.mutate(fn))}
+
+
+@app.delete("/api/shares/{pk:path}")
+def delete_share(req, pk):
+    def fn(st):
+        st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
+    store.mutate(fn)
+    return {"ok": True}
+
+
+SHARE_HTML = os.path.join(STATIC, "share.html")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,40}$")
+
+
+@app.get("/s/{token}", public=True)
+def share_page(req, token):
+    with open(SHARE_HTML, "rb") as f:
+        return Page(f.read())
+
+
+@app.get("/s/api/{token}", public=True)
+def share_data(req, token):
+    st = store.snapshot()
+    sh = st.get("shares", {}).get(token) if TOKEN_RE.match(token) else None
+    c = next((x for x in engine.clients if x["public_key"] == (sh or {}).get("pk")), None)
+    if not c:
+        bad("err.share_gone", 404)
+    pk = c["public_key"]
+    cfg = None
+    if pk in st.get("keys", {}):
+        try:
+            cfg = engine.srv.client_config(pk)
+            cfg.pop("warn_host", None)
+        except Exception:  # noqa: BLE001
+            cfg = None
+    live = c.get("live") or {}
+    return {"name": c.get("name") or "", "enabled": c["enabled"], "now": time.time(),
+            "handshake": live.get("handshake") or None, "config": cfg,
+            "traffic": engine.traffic.view(pk), "limits": limits.view(st.get("limits", {}).get(pk))}
+
+
 # -------------------------------------------------------------------- state
 def _upstream_view(st: dict, u: dict) -> dict:
     try:
@@ -339,6 +616,10 @@ def get_state(req):
         pol = engine.policy_for(st, c["public_key"])
         clients.append({
             **c,
+            "traffic": engine.traffic.view(c["public_key"]),
+            "limits": limits.view(st.get("limits", {}).get(c["public_key"])),
+            "share_url": next((share_url(k) for k, v in st.get("shares", {}).items()
+                               if v.get("pk") == c["public_key"]), None),
             "policy": {"outbound": cp.get("outbound", "inherit"),
                        "rules_mode": cp.get("rules_mode", "inherit"),
                        "rules": cp.get("rules") or [], "note": cp.get("note", "")},
@@ -360,7 +641,10 @@ def get_state(req):
         "routing": st["routing"],
         "global_effective": engine.resolve(st["routing"]["default"], st),
         "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},
-        "security": {"totp": bool(totp.load()), "session_hours": SESSION_TTL // 3600},
+        "security": {"totp": bool(totp.load()), "session_hours": SESSION_TTL // 3600,
+                     "password_custom": bool(custom_password())},
+        "version": updates.status(),
+        "month": month_key(),
         "notify_error": notifier.last_error,
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
         "lists": [{**l, "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
@@ -689,6 +973,13 @@ def edit_user(req, pk):
     body = req.json()
     _user_errors(lambda: engine.srv.update_client(
         _pk(pk), name=body.get("name"), enabled=body.get("enabled")))
+    if body.get("enabled") is not None:
+        # включили или выключили вручную — автоматическое отключение больше не наше
+        def fn(st):
+            L = st.get("limits", {}).get(pk)
+            if L and L.get("auto_off"):
+                L["auto_off"] = None
+        store.mutate(fn)
     engine.reconcile_soon()
     return {"ok": True}
 
@@ -696,6 +987,7 @@ def edit_user(req, pk):
 @app.delete("/api/users/{pk:path}")
 def del_user(req, pk):
     _user_errors(lambda: engine.srv.delete_client(_pk(pk)))
+    engine.traffic.forget(pk)
     engine.reconcile_soon()
     return {"ok": True}
 
@@ -770,6 +1062,8 @@ def run():
     except OSError:
         pass
     engine.start()
+    if not config.DRY_RUN:
+        updates.start(engine.stop_ev)
     if tls.enabled:
         # адрес для сертификата: из настроек или определённый автоматически
         for _ in range(30):

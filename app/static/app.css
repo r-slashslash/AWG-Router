@@ -363,3 +363,16 @@ input:disabled { background: var(--surface-2); color: var(--muted); }
 .input-btn { display: flex; gap: 8px; align-items: stretch; }
 .input-btn input { flex: 1; min-width: 0; }
 .code-input { max-width: 180px; font-family: var(--mono); font-size: 1.15rem !important; letter-spacing: .25em; text-align: center; }
+.tag-warn { background: color-mix(in srgb, var(--warn) 12%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.meter { height: 4px; border-radius: 2px; background: var(--surface-2); border: 1px solid var(--rule); margin-top: 4px; overflow: hidden; min-width: 80px; }
+.meter span { display: block; height: 100%; background: var(--ok); }
+.meter.hot span { background: var(--bad); }
+.share-url { margin-top: 4px; word-break: break-all; color: var(--ink-2); }
+label.btn { cursor: pointer; }
+
+/* ---------- личная страница клиента ---------- */
+.share-main { max-width: 760px; }
+.share-title { font-size: 1.6rem; margin: 6px 0 4px; letter-spacing: -.01em; }
+.share-state { margin: 0 0 14px; }
+.share-steps { margin: 0 0 16px; padding-inline-start: 22px; display: grid; gap: 4px; }
+bdi.mono { white-space: nowrap; }

@@ -135,7 +135,11 @@ print_info() {
   else
     printf '  Link:     %s%s%s\n' "$C$B" "$url" "$N"
   fi
-  printf '  Password: %s%s%s\n' "$B" "$pass" "$N"
+  if [ -f "$DIR/data/panel_password.json" ]; then
+    echo "  Password: changed in the panel (forgot it? run: awg-router password)"
+  else
+    printf '  Password: %s%s%s\n' "$B" "$pass" "$N"
+  fi
   if [ -f "$DIR/data/status.json" ] && [ "$access" != "ssh" ]; then
     tls_line=$(python3 - "$DIR/data/status.json" <<'PY' 2>/dev/null
 import json, sys, time
@@ -388,6 +392,7 @@ case "\${1:-info}" in
   reconfigure) bash "\$DIR/install.sh" --reconfigure ;;
   password)    P=\$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)
                sed -i "s/^PANEL_PASSWORD=.*/PANEL_PASSWORD=\$P/" "\$DIR/.env"
+               rm -f "\$DIR/data/panel_password.json"
                cd "\$DIR" && docker compose up -d >/dev/null 2>&1; sleep 3; bash "\$DIR/install.sh" --info ;;
   2fa-off)     rm -f "\$DIR/data/totp.json"
                echo "Two-factor sign-in is off: the panel password alone is enough now." ;;

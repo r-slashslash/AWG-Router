@@ -31,6 +31,8 @@ DEFAULT_STATE = {
     ],
     "clients": {},
     "keys": {},
+    "limits": {},     # срок и лимит трафика клиентов (limits.py)
+    "shares": {},     # личные ссылки клиентов: токен → {pk, created}
     "settings": {"list_update_hours": 24},
 }
 
