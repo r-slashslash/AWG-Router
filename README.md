@@ -42,7 +42,9 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 **Panel**
 - HTTPS with a Let's Encrypt certificate issued for the server's IP. The certificate lasts 6 days and renews itself.
 - Alternatively, the panel can be reachable only through an SSH tunnel.
-- The address uses a random port and a secret path, and login is password-protected with brute-force protection.
+- The address uses a random port and a secret path, and login is password-protected with brute-force protection. A sign-in lasts 4 hours.
+- Optional second factor: a 6-digit code from an authenticator app (Google Authenticator, Aegis, 2FAS…). Turned on in **System**.
+- Optional Telegram notifications: an exit stops or recovers, the AmneziaWG server is unreachable or restarted, panel sign-ins, a certificate that can't be renewed. Set up in **System**.
 - Languages: English, Russian, Chinese and Persian. The language follows the browser or system setting, and a manual choice is remembered.
 
 <p align="center">
@@ -83,6 +85,7 @@ The rest is automatic: a random 4-digit port, a password, the build, the certifi
 | `awg-router info` | show the link and password |
 | `awg-router update` | download the latest version and update (settings are kept) |
 | `awg-router password` | set a new random password |
+| `awg-router 2fa-off` | turn off the authenticator code (if you lost your phone) |
 | `awg-router restart` | restart the panel |
 | `awg-router logs` | show the panel log |
 | `awg-router reconfigure` | choose the mode and access method again |

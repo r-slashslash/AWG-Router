@@ -63,6 +63,7 @@ class Engine:
         self.last_error: str | None = None
         self.last_reconcile: float | None = None
         self.events: list[dict] = []
+        self.notifier = None          # notify.Notifier, задаёт main.py
         self.matcher = lists.Matcher()
         self._list_cache: dict[str, tuple[float, list[str]]] = {}
         self._parsed: dict[str, awgconf.UpstreamConf] = {}
@@ -78,6 +79,8 @@ class Engine:
         log.log(logging.WARNING if level != "info" else logging.INFO, "%s", msg)
         self.events.append({"t": time.time(), "level": level, "msg": msg})
         self.events[:] = self.events[-100:]
+        if self.notifier:
+            self.notifier.engine_event(msg)
 
     def trigger(self) -> None:
         self.wake.set()
@@ -454,6 +457,8 @@ class Engine:
                 self.clients = []
                 return
             self.target_error = None
+            if self.notifier:
+                self.notifier.target_ok()
             if self.target is None or self.target.key != t.key or not self.target.exists:
                 if self.target is not None and self.target.exists:
                     self.event("warn", Msg("ev.target_restarted"))

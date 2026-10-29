@@ -52,6 +52,7 @@ class TLSManager:
         self.error: str | None = None
         self.last_try: float | None = None
         self.stop_ev = threading.Event()
+        self.on_fail = None   # вызов(expires), если продлить не удаётся, а срок подходит
         os.makedirs(TLS_DIR, exist_ok=True)
 
     @property
@@ -157,6 +158,9 @@ class TLSManager:
             if self.stop_ev.wait(wait):
                 return
             ok = self._lego()
+            if not ok and self.active == "letsencrypt" and self.on_fail and \
+                    (self.expires or 0) < time.time() + 2 * 86400:
+                self.on_fail(self.expires)   # до конца срока меньше двух суток — сообщаем
             if not ok and self.active == "letsencrypt" and (self.expires or 0) < time.time() + 600:
                 self._selfsigned()   # сертификат вот-вот истечёт, а продлить не удалось
 
