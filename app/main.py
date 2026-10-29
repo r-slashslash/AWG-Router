@@ -581,8 +581,11 @@ def share_data(req, token):
         try:
             cfg = engine.srv.client_config(pk)
             cfg.pop("warn_host", None)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            log.warning("share %s…: config failed: %s", pk[:8], e, exc_info=True)
             cfg = None
+    else:
+        log.info("share %s…: no private key stored (client created outside the panel)", pk[:8])
     live = c.get("live") or {}
     return {"name": c.get("name") or "", "enabled": c["enabled"], "now": time.time(),
             "handshake": live.get("handshake") or None, "config": cfg,
