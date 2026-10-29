@@ -218,17 +218,23 @@ class Engine:
                 except OSError:
                     pass
                 os.makedirs(SOCK_DIR, exist_ok=True)
-                logf = open(os.path.join(LOG_DIR, f"{ifn}.log"), "w")
                 env = dict(os.environ, LOG_LEVEL="error")
-                r.proc = subprocess.Popen(
-                    ["nsenter", "-t", str(t.pid), "-n", "--", "amneziawg-go", "-f", ifn],
-                    stdout=logf, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+                # у процесса своя копия дескриптора журнала — наш закрываем сразу,
+                # иначе каждый перезапуск туннеля оставлял бы открытый файл
+                with open(os.path.join(LOG_DIR, f"{ifn}.log"), "w") as logf:
+                    r.proc = subprocess.Popen(
+                        ["nsenter", "-t", str(t.pid), "-n", "--", "amneziawg-go", "-f", ifn],
+                        stdout=logf, stderr=subprocess.STDOUT, env=env, start_new_session=True)
                 for _ in range(50):
                     if os.path.exists(sock) or r.proc.poll() is not None:
                         break
                     time.sleep(0.1)
                 if not os.path.exists(sock):
                     r.proc.kill()
+                    try:
+                        r.proc.wait(5)          # не оставлять процесс-зомби
+                    except subprocess.TimeoutExpired:
+                        pass
                     raise system.SysError(Msg("sys.awg_start_failed", iface=ifn))
         self.rt[uid] = r
         path = os.path.join(RUN_DIR, f"{ifn}.conf")

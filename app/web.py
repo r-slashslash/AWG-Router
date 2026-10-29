@@ -8,6 +8,8 @@ import os
 import re
 import socket
 import ssl
+import threading
+import time
 import traceback
 from http import cookies as httpcookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +19,20 @@ from .i18n import Msg, to_json
 
 log = logging.getLogger("awgr.web")
 MAX_BODY = 4 * 1024 * 1024
+MAX_CONNECTIONS = 128      # одновременных соединений; лишние закрываются сразу
+MAX_PER_IP = 24            # с одного адреса: один источник не займёт все места
+IDLE_TIMEOUT = 60          # секунд на заголовки, тело и ожидание следующего запроса
+
+
+def content_length(headers) -> int:
+    """Длина тела из заголовка; отрицательная, нечисловая или больше лимита — ошибка."""
+    raw = (headers.get("Content-Length") or "0").strip()
+    if not (raw.isascii() and raw.isdigit()):
+        raise HTTPError(400, "err.bad_json")
+    n = int(raw)
+    if n > MAX_BODY:
+        raise HTTPError(413, "err.too_large")
+    return n
 
 
 class HTTPError(Exception):
@@ -55,9 +71,7 @@ class Request:
 
     def json(self) -> dict:
         if self._body is None:
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > MAX_BODY:
-                raise HTTPError(413, "err.too_large")
+            n = content_length(self.headers)
             raw = self.h.rfile.read(n) if n else b"{}"
             self.h.body_read = True
             try:
@@ -111,6 +125,7 @@ class App:
         class H(BaseHTTPRequestHandler):
             server_version = "awg-router"
             sys_version = ""
+            timeout = IDLE_TIMEOUT    # медленный или молчащий клиент не держит поток вечно
 
             def version_string(self):  # заголовок Server не выдаёт панель сканерам
                 return "httpd"
@@ -220,8 +235,18 @@ class App:
                 ctype = mimetypes.guess_type(p)[0] or "application/octet-stream"
                 if ctype.startswith("text/") or ctype in ("application/javascript",):
                     ctype += "; charset=utf-8"
+                st = os.stat(p)
+                etag = f'"{int(st.st_mtime)}-{st.st_size}"'
+                hdrs = [("Cache-Control", "no-cache"), ("ETag", etag)]
+                # браузер перепроверяет файл, но не скачивает заново, если он не менялся
+                if self.headers.get("If-None-Match") == etag:
+                    self.send_response(304)
+                    for k, v in hdrs:
+                        self.send_header(k, v)
+                    self.end_headers()
+                    return
                 with open(p, "rb") as f:
-                    self._send(200, f.read(), ctype, [("Cache-Control", "no-cache")])
+                    self._send(200, f.read(), ctype, hdrs)
 
             do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = _dispatch
 
@@ -239,6 +264,53 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
     tls = None
     request_queue_size = 64
+
+    def __init__(self, *a, **kw):
+        self._conn_lock = threading.Lock()
+        self._conns = 0
+        self._per_ip: dict[str, int] = {}
+        self._warned = 0.0
+        super().__init__(*a, **kw)
+
+    def _take(self, ip: str) -> bool:
+        with self._conn_lock:
+            if self._conns >= MAX_CONNECTIONS or self._per_ip.get(ip, 0) >= MAX_PER_IP:
+                return False
+            self._conns += 1
+            self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
+            return True
+
+    def _give(self, ip: str) -> None:
+        with self._conn_lock:
+            self._conns -= 1
+            n = self._per_ip.get(ip, 1) - 1
+            if n > 0:
+                self._per_ip[ip] = n
+            else:
+                self._per_ip.pop(ip, None)
+
+    def process_request(self, request, client_address):
+        # Поток на соединение, но с пределом: иначе тысячи «висящих» соединений
+        # без пароля съедят память, а один адрес не должен занять все места
+        ip = client_address[0]
+        if not self._take(ip):
+            now = time.monotonic()
+            if now - self._warned > 60:          # не засоряем журнал при наплыве
+                self._warned = now
+                log.warning("connection limit reached (%s), dropping new connections", ip)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._give(ip)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._give(client_address[0])
 
     def finish_request(self, request, client_address):
         ctx = self.tls() if self.tls else None

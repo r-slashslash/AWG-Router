@@ -15,7 +15,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 - Commits end with `Co-Authored-By: Claude …` only (no session links). Push to `main`;
   users update with `awg-router update`, which downloads the `main` tarball from GitHub.
 - **Bump `VERSION` in `app/version.py`** with every user-visible change: panels compare it with
-  `main` on GitHub (every 6 h) to show "update available".
+  `main` on GitHub (every 6 h) to show "update available". A fix after a release is a new version,
+  never the same number again; add it to `CHANGELOG.md`; tag `vX.Y.Z` and never move a tag.
+- No requests to third-party hosts from the browser: fonts and scripts are served by the panel
+  (`app/static/fonts`, OFL). Google and CDNs are blocked in CN/IR and leak who opens the panel.
 
 ## Layout
 | Path | What |
@@ -27,7 +30,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/updates.py` / `app/version.py` | Panel version and the update check |
 | `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/<whitelisted file>` — **outside the secret path, no login** (token in `state.shares`; unknown tokens → 404) |
 | `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
-| `app/web.py` | HTTP server: routing, JSON, static, TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, body draining |
+| `app/web.py` | HTTP server: routing, JSON, static (ETag/304), TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, strict `Content-Length`, body draining, ≤ 128 connections (≤ 24 per IP), 60 s idle timeout |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |
 | `app/nftgen.py` | nftables ruleset generator (table `ip awgr`, chains `c_prerouting`/`c_forward`/`c_postrouting`) |
 | `app/system.py` | Targets: `ContainerTarget` (nsenter into Amnezia container), `HostTarget` (pid 1), `DemoTarget`; docker API via socket; host runtime install |
@@ -43,7 +46,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `awg-server/` | Dockerfile + start.sh for an Amnezia-compatible `amnezia-awg2` container the installer can create |
 | `Dockerfile` | Builds amneziawg-go + static awg/awg-quick (Go), copies lego; Python 3.13 alpine runtime |
 | `install.sh` | Installer/updater; works via `curl … | bash` (bootstraps code into `/opt/awg-router`) |
-| `tests/` | `test_core.py` (unittest), `netns_e2e.py` (routing in netns, needs root + pyroute2), `awg_real_e2e.py` (real AWG tunnels) |
+| `tests/` | `test_core.py`, `test_api.py` (unittest; `test_api` imports `main` in demo mode), `netns_e2e.py` (routing in netns, needs root + pyroute2), `awg_real_e2e.py` (real AWG tunnels) |
 
 ## How it works (essentials)
 - Panel container: `network_mode: host`, `pid: host`, `privileged`, docker.sock mounted; data in `./data`.
@@ -70,6 +73,13 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   `traffic.py` treats the first sight as a baseline only.
 - Auto-refresh (every 5 s) re-renders the tab: skip it while the user is typing in a field in `#main`.
 - Anything outside the secret path is visible to scanners: keep public routes minimal, `Server: httpd`.
+  Files under `/s/assets/` are a whitelist (`app.public_files` in `main.py`) — add new ones there.
+- `/api/state` is polled every 5 s: keep it small. Manual list text (up to 2 MB) is left out
+  (`_list_view`) and fetched by the editor from `GET /api/lists/<id>`.
+- Restore (`clean_backup_state`, `clean_server_files`) re-validates every field like panel input:
+  ids end up in nft set names, interface names and file names. Hooks (`PostUp` …) from a backup
+  are replaced (`awgserver.safe_hooks`) — awg-quick runs them as root.
+- Exit configs: `FwMark`/`ListenPort` are dropped (`awgconf.LOCAL_ONLY_KEYS`).
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 

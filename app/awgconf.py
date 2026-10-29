@@ -14,6 +14,11 @@ from .i18n import Msg, MsgError
 QUICK_ONLY_KEYS = {"address", "dns", "mtu", "table", "preup", "postup",
                    "predown", "postdown", "saveconfig"}
 
+# Настройки локального интерфейса, которые в чужом конфиге выхода опасны:
+# FwMark может совпасть с метками маршрутизации панели (0x2000+N) и зациклить трафик,
+# ListenPort — занять порт сервера. Отбрасываем: порт туннеля выбирается случайно.
+LOCAL_ONLY_KEYS = {"fwmark", "listenport"}
+
 KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")
 
 
@@ -209,7 +214,7 @@ def parse_upstream(user_input: str) -> UpstreamConf:
     out = ["[Interface]"]
     params = {}
     for k, v in iface:
-        if k.lower() in QUICK_ONLY_KEYS or v == "":
+        if k.lower() in QUICK_ONLY_KEYS or k.lower() in LOCAL_ONLY_KEYS or v == "":
             continue
         out.append(f"{k} = {v}")
         if k.lower() != "privatekey":
