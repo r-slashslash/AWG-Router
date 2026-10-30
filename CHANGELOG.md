@@ -16,6 +16,14 @@ so every user-visible change gets a new version.
   notifications at 90 %, at the limit and when a new month starts.
 - Exit cards show monthly and all-time traffic instead of the tunnel counter that reset with
   every tunnel restart.
+- Client configs download as `.conf` on Android too (Chrome used to save them as
+  `.conf.txt`, which the AmneziaVPN app does not accept).
+- Installer: Docker is installed after the questions; a stopped Docker service is started;
+  apt waits for a running unattended upgrade instead of failing. Compose comes from the
+  distro when it is v2, otherwise from GitHub (Debian 11/12). A missing or old buildx
+  (Debian 13 ships 0.13, Compose needs 0.17+) is replaced with the latest release from
+  GitHub, checked against its sha256. Images are built with `docker build`, so a
+  Compose/buildx version mismatch no longer stops the install.
 
 ## 1.2.0 — 2026-10-30
 
