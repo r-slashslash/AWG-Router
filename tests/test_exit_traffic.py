@@ -154,14 +154,15 @@ class TrafficOutsTest(unittest.TestCase):
 
 
 class ExitQuotaTest(unittest.TestCase):
-    def engine(self, used, quota=100, action="fallback", flags=None):
+    def engine(self, used, quota=100, action="direct", flags=None):
         from app.engine import Engine
         from app.i18n import Msg  # noqa: F401
 
         class Store:
             def __init__(s):
                 s.st = {"upstreams": [{"id": "u1", "num": 1, "name": "NL", "quota": quota,
-                                       "quota_action": action, **(flags or {})}]}
+                                       "quota_action": action, **(flags or {})},
+                                      {"id": "u2", "num": 2, "name": "DE"}]}
 
             def snapshot(s):
                 return json.loads(json.dumps(s.st))
@@ -175,14 +176,17 @@ class ExitQuotaTest(unittest.TestCase):
 
         class E:
             over_quota = Engine.over_quota
+            quota_target = staticmethod(Engine.quota_target)
             _exit_quotas = Engine._exit_quotas
+            resolve = Engine.resolve
         e = E()
         e.store, e.traffic, e.acct_state, e.events = Store(), Tr(), "ok", []
+        e.health = {"u1": {"healthy": True}, "u2": {"healthy": True}}
         e.event = lambda lvl, m: e.events.append(m.key)
         return e
 
     def test_over_quota(self):
-        u = {"id": "u1", "quota": 100, "quota_action": "fallback"}
+        u = {"id": "u1", "quota": 100, "quota_action": "direct"}
         self.assertTrue(self.engine(100).over_quota(u))
         self.assertFalse(self.engine(99).over_quota(u))
         self.assertFalse(self.engine(500).over_quota({**u, "quota_action": "notify"}))
@@ -196,7 +200,36 @@ class ExitQuotaTest(unittest.TestCase):
         e.traffic.out_used = lambda out: 100
         e._exit_quotas(e.store.snapshot())
         e._exit_quotas(e.store.snapshot())
-        self.assertEqual(e.events, ["ev.upstream_quota_warn", "ev.upstream_quota"])
+        self.assertEqual(e.events, ["ev.upstream_quota_warn", "ev.upstream_quota_direct"])
+
+    def test_targets(self):
+        from app.engine import Engine
+        self.assertIsNone(Engine.quota_target({"quota_action": "notify"}))
+        self.assertIsNone(Engine.quota_target({}))
+        self.assertEqual(Engine.quota_target({"quota_action": "up:u2"}), "up:u2")
+        # значение из первых сборок 1.3.0 — как резерв
+        self.assertEqual(Engine.quota_target({"quota_action": "fallback", "fallback": "block"}), "block")
+        self.assertEqual(Engine.quota_target({"quota_action": "fallback"}), "direct")
+        for action, key in (("block", "ev.upstream_quota_block"), ("up:u2", "ev.upstream_quota")):
+            e = self.engine(100, action=action)
+            e._exit_quotas(e.store.snapshot())
+            self.assertEqual(e.events, [key])
+
+    def test_resolve(self):
+        """Исчерпан лимит → цель лимита; не работает → резерв (поле fallback)."""
+        def st(action, fallback="block"):
+            return {"upstreams": [{"id": "u1", "num": 1, "name": "NL", "quota": 100,
+                                   "quota_action": action, "fallback": fallback},
+                                  {"id": "u2", "num": 2, "name": "DE", "fallback": "direct"}]}
+        for action, want in (("direct", "direct"), ("block", "block"), ("up:u2", 2), ("notify", 1)):
+            self.assertEqual(self.engine(100).resolve("up:u1", st(action)), want, action)
+        self.assertEqual(self.engine(99).resolve("up:u1", st("direct")), 1)
+        e = self.engine(100)
+        e.health["u1"] = {"healthy": False}
+        self.assertEqual(e.resolve("up:u1", st("direct")), "block")     # упал — резерв, не лимит
+        e = self.engine(100)
+        e.health["u2"] = {"healthy": False}
+        self.assertEqual(e.resolve("up:u1", st("up:u2")), "direct")     # цель упала — её резерв
 
     def test_notify_only_and_new_month(self):
         e = self.engine(150, action="notify")
@@ -299,17 +332,28 @@ class ExitQuotaApiTest(unittest.TestCase):
         main.store.mutate(lambda s: main.Store.upstream(s, uid).update(quota_hit="2026-10"))
         main.edit_upstream(Req({"name": "NL2"}), uid)                     # без квоты — не трогаем
         self.assertEqual(main.Store.upstream(main.store.snapshot(), uid)["quota_hit"], "2026-10")
-        main.edit_upstream(Req({"quota_gb": "", "quota_action": "fallback"}), uid)
+        main.edit_upstream(Req({"quota_gb": "", "quota_action": "direct"}), uid)
         u = main.Store.upstream(main.store.snapshot(), uid)
         self.assertEqual((u["quota"], u["quota_hit"]), (None, None))
-        for bad in ({"quota_gb": "-1"}, {"quota_gb": "x"}, {"quota_gb": "5", "quota_action": "drop"}):
+        for bad in ({"quota_gb": "-1"}, {"quota_gb": "x"}, {"quota_gb": "5", "quota_action": "drop"},
+                    {"quota_gb": "5", "quota_action": "fallback"}, {"quota_gb": "5", "quota_action": "up:" + uid},
+                    {"quota_gb": "5", "quota_action": "up:u999999"}):
             with self.assertRaises(web.HTTPError):
                 main.edit_upstream(Req(bad), uid)
         view = main._upstream_view(main.store.snapshot(), main.Store.upstream(main.store.snapshot(), uid))
         self.assertIn("month_rx", view["traffic"])
         self.assertFalse(view["over_quota"])
+        # другой выход как цель лимита: показан в «используется», удалить нельзя
+        uid2 = main.add_upstream(Req({"name": "DE", "config": self.UP.replace("10.9.0.2", "10.9.0.3")}))["id"]
+        main.edit_upstream(Req({"quota_gb": "5", "quota_action": "up:" + uid2}), uid)
+        self.assertEqual(main.Store.upstream(main.store.snapshot(), uid)["quota_action"], "up:" + uid2)
+        self.assertEqual([m.key for m in main.Store.outbound_refs(main.store.snapshot(), "up:" + uid2)],
+                         ["ref.quota"])
+        with self.assertRaises(web.HTTPError):
+            main.del_upstream(None, uid2)
         main.engine.traffic.outs[uid] = {"total": [1, 1], "months": {}}
         main.del_upstream(None, uid)
+        main.del_upstream(None, uid2)
         self.assertNotIn(uid, main.engine.traffic.outs)
 
     def test_restore_validates_quota(self):
@@ -321,9 +365,12 @@ class ExitQuotaApiTest(unittest.TestCase):
         u = main.clean_backup_state(s)["upstreams"][0]
         self.assertEqual((u["quota"], u["quota_action"], u["quota_hit"], u["quota_warned"]),
                          (10 ** 9, "notify", "2026-10", None))
-        s["upstreams"][0]["quota_action"] = "explode"
-        with self.assertRaises(web.HTTPError):
-            main.clean_backup_state(s)
+        s["upstreams"][0].update(quota_action="fallback", fallback="block")    # первые сборки 1.3.0
+        self.assertEqual(main.clean_backup_state(s)["upstreams"][0]["quota_action"], "block")
+        for v in ("explode", "up:" + s["upstreams"][0]["id"], "up:u999999"):
+            s["upstreams"][0]["quota_action"] = v
+            with self.assertRaises(web.HTTPError):
+                main.clean_backup_state(s)
 
 
 if __name__ == "__main__":

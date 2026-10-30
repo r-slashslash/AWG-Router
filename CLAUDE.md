@@ -88,7 +88,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   the set declaration: set-level expressions need kernel ≥ 5.11.
 - Traffic file format stays `_v: 2` on purpose: new keys are ignored by older panels, so a
   downgrade does not wipe client totals.
-- Exit quota: `engine.over_quota` makes `resolve()` treat the exit as down (fallback); event
+- Exit quota: `quota_action` is `notify` or a target (`direct` / `block` / `up:<id>`, not itself),
+  independent of `fallback`; `engine.quota_target` (also maps `fallback` from early 1.3.0 builds) and
+  `over_quota` make `resolve()` send a healthy over-quota exit to that target (a dead exit still goes
+  to `fallback`). Targets count as references (`ref.quota`) — such an exit can't be deleted. Event
   marks `quota_hit` / `quota_warned` (month) live in the upstream in `state.json`.
 - Installer and Docker: images are built with `docker build` (`build_image`), not `docker compose build` —
   Compose 2.40.2+ refuses to build with buildx < 0.17 (Debian 13 ships 0.13.1); `compose up --no-build`

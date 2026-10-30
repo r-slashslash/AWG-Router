@@ -376,10 +376,21 @@ class Engine:
         pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
         self.traffic.update_outs(counters, out_of, pk_of, fresh=fresh, now=now)
 
+    @staticmethod
+    def quota_target(u: dict) -> str | None:
+        """Куда идёт трафик выхода, когда его квота исчерпана: 'direct' | 'block' | 'up:<id>';
+        None — только уведомить. 'fallback' — значение из первых сборок 1.3.0: как резерв."""
+        qa = u.get("quota_action") or "notify"
+        if qa == "notify":
+            return None
+        if qa == "fallback":
+            return u.get("fallback") or "direct"
+        return qa
+
     def over_quota(self, u: dict) -> bool:
-        """Месячная квота выхода исчерпана и выход должен уступить резервному."""
+        """Месячная квота выхода исчерпана и трафик должен уйти на выход из quota_target."""
         q = u.get("quota")
-        return bool(q) and u.get("quota_action", "fallback") == "fallback" and \
+        return bool(q) and self.quota_target(u) is not None and \
             self.traffic.out_used(u["id"]) >= q
 
     def _exit_quotas(self, st: dict) -> None:
@@ -395,12 +406,19 @@ class Engine:
                 continue
             used = self.traffic.out_used(u["id"])
             gb = float(f"{q / limits.GB:.3g}")
-            fb = u.get("quota_action", "fallback") == "fallback"
+            to = self.quota_target(u)
+            fb = to is not None
             p = {}
             if used >= q and u.get("quota_hit") != mk:
                 p["quota_hit"] = p["quota_warned"] = mk
-                self.event("warn", Msg("ev.upstream_quota" if fb else "ev.upstream_quota_notify",
-                                       name=u["name"], gb=gb))
+                if to is None:
+                    self.event("warn", Msg("ev.upstream_quota_notify", name=u["name"], gb=gb))
+                elif to in ("direct", "block"):
+                    self.event("warn", Msg(f"ev.upstream_quota_{to}", name=u["name"], gb=gb))
+                else:
+                    t = Store.upstream(st, to[3:])
+                    self.event("warn", Msg("ev.upstream_quota", name=u["name"], gb=gb,
+                                           to=t["name"] if t else "?"))
             elif q * 0.9 <= used < q and u.get("quota_warned") != mk:
                 p["quota_warned"] = mk
                 self.event("warn", Msg("ev.upstream_quota_warn", name=u["name"], gb=gb))
@@ -429,8 +447,10 @@ class Engine:
             if not u:
                 return "block"
             h = self.health.get(u["id"], {})
-            if u.get("enabled", True) and h.get("healthy") and not self.over_quota(u):
-                return u["num"]
+            if u.get("enabled", True) and h.get("healthy"):
+                if not self.over_quota(u):
+                    return u["num"]
+                return self.resolve(self.quota_target(u), st, depth + 1)
             return self.resolve(u.get("fallback") or "direct", st, depth + 1)
         return "block"
 

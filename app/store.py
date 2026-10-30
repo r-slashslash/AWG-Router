@@ -116,6 +116,8 @@ class Store:
         for u in state["upstreams"]:
             if u.get("fallback") == target:
                 refs.append(Msg("ref.fallback", name=u["name"]))
+            if u.get("quota_action") == target:
+                refs.append(Msg("ref.quota", name=u["name"]))
         for pk, c in state["clients"].items():
             name = c.get("name") or pk[:8]
             if c.get("outbound") == target:

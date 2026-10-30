@@ -27,7 +27,9 @@ TEXTS = {
         "test": "✅ Тестовое сообщение. Уведомления работают.",
         "exit_down": "⚠️ Выход «{name}» перестал работать. Клиенты, которые шли через него, переключены на резервный выход.",
         "exit_up": "✅ Выход «{name}» снова работает.",
-        "exit_quota": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. Трафик переключён на резервный выход до начала следующего месяца.",
+        "exit_quota": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца трафик идёт через «{to}».",
+        "exit_quota_direct": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца трафик идёт напрямую.",
+        "exit_quota_block": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца трафик заблокирован.",
         "exit_quota_notify": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. Трафик продолжает идти через него.",
         "exit_quota_warn": "⚠️ Выход «{name}»: израсходовано 90% лимита {gb} ГБ за месяц.",
         "exit_quota_reset": "✅ Выход «{name}» снова используется: начался новый месяц.",
@@ -48,7 +50,9 @@ TEXTS = {
         "test": "✅ Test message. Notifications are working.",
         "exit_down": "⚠️ Exit “{name}” stopped working. Clients that used it have been switched to the fallback exit.",
         "exit_up": "✅ Exit “{name}” is working again.",
-        "exit_quota": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Traffic goes to the fallback exit until next month.",
+        "exit_quota": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Until next month traffic goes through “{to}”.",
+        "exit_quota_direct": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Until next month traffic goes direct.",
+        "exit_quota_block": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Until next month traffic is blocked.",
         "exit_quota_notify": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Traffic still goes through it.",
         "exit_quota_warn": "⚠️ Exit “{name}”: 90% of the monthly {gb} GB limit is used.",
         "exit_quota_reset": "✅ Exit “{name}” is in use again: a new month has started.",
@@ -69,7 +73,9 @@ TEXTS = {
         "test": "✅ 测试消息。通知功能正常。",
         "exit_down": "⚠️ 出口“{name}”已停止工作。经由它的客户端已切换到备用出口。",
         "exit_up": "✅ 出口“{name}”已恢复工作。",
-        "exit_quota": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量改走备用出口。",
+        "exit_quota": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量经由“{to}”。",
+        "exit_quota_direct": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量直连。",
+        "exit_quota_block": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量被阻止。",
         "exit_quota_notify": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。流量仍经由它转发。",
         "exit_quota_warn": "⚠️ 出口“{name}”：本月 {gb} GB 限额已用掉 90%。",
         "exit_quota_reset": "✅ 出口“{name}”已重新启用：新的月份开始了。",
@@ -90,7 +96,9 @@ TEXTS = {
         "test": "✅ پیام آزمایشی. اعلان‌ها کار می‌کنند.",
         "exit_down": "⚠️ خروجی «{name}» از کار افتاد. کلاینت‌هایی که از آن می‌رفتند به خروجی پشتیبان منتقل شدند.",
         "exit_up": "✅ خروجی «{name}» دوباره کار می‌کند.",
-        "exit_quota": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک از خروجی پشتیبان می‌رود.",
+        "exit_quota": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک از «{to}» می‌رود.",
+        "exit_quota_direct": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک مستقیم می‌رود.",
+        "exit_quota_block": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک مسدود است.",
         "exit_quota_notify": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. ترافیک همچنان از آن می‌رود.",
         "exit_quota_warn": "⚠️ خروجی «{name}»: ۹۰٪ سقف ماهانهٔ {gb} گیگابایت مصرف شد.",
         "exit_quota_reset": "✅ خروجی «{name}» دوباره استفاده می‌شود: ماه تازه شروع شد.",
@@ -115,6 +123,8 @@ ENGINE_EVENTS = {
     "ev.upstream_ok": ("exit", "exit_up"),
     "ev.upstream_quota": ("exit", "exit_quota"),
     "ev.upstream_quota_notify": ("exit", "exit_quota_notify"),
+    "ev.upstream_quota_direct": ("exit", "exit_quota_direct"),
+    "ev.upstream_quota_block": ("exit", "exit_quota_block"),
     "ev.upstream_quota_warn": ("exit", "exit_quota_warn"),
     "ev.upstream_quota_reset": ("exit", "exit_quota_reset"),
     "ev.target_lost": ("server", "target_lost"),
@@ -236,7 +246,7 @@ class Notifier:
             self._target_lost = True
         m = ENGINE_EVENTS.get(msg.key)
         if m:
-            self.event(m[0], m[1], **{k: v for k, v in msg.p.items() if k in ("name", "gb")})
+            self.event(m[0], m[1], **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to")})
 
     def target_ok(self) -> None:
         if self._target_lost:
