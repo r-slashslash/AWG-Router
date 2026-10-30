@@ -23,7 +23,7 @@ import subprocess
 import time
 import urllib.parse
 
-from . import awgserver, config
+from . import awgserver, config, nftgen
 from .i18n import Msg, MsgError
 
 log = logging.getLogger("awgr.system")
@@ -414,6 +414,8 @@ class DemoTarget(Target):
         out = ""
         if cmd[:2] == ["nft", "list"]:
             out = "table ip awgr {}"
+        if cmd[:3] == ["nft", "-j", "list"] and cmd[-1] == nftgen.ACCT_TABLE:
+            out = self._acct_dump()
         if cmd[:1] == ["ip"] and "-j" in cmd:
             out = "[]"
         if len(cmd) > 3 and cmd[1] == "show" and cmd[-1] == "dump":
@@ -454,6 +456,29 @@ class DemoTarget(Target):
                          f"{p.allowed_ips}\t{hs}\t{(i + 1) * 98_304_000 + grow * 40_000 * (i + 1)}\t"
                          f"{(i + 1) * 734_003_200 + grow * 300_000 * (i + 1)}\t0")
         return "\n".join(lines) + "\n"
+
+    def _acct_dump(self) -> str:
+        """Таблица учёта трафика по выходам: у каждого клиента часть трафика идёт напрямую,
+        часть через выходы 1 и 2 (если такие добавлены в демо)."""
+        sc = awgserver.parse(self.read_file(self.conf_path) or "")
+        grow = int(time.time() - self.born)
+        items = [{"rule": {"family": "ip", "table": nftgen.ACCT_TABLE, "chain": "c_acct",
+                           "comment": nftgen.acct_marker(self.iface)}}]
+        sets = {"up": [], "down": []}
+        for i, p in enumerate(sc.peers):
+            if not p.enabled:
+                continue
+            ip = p.allowed_ips.split("/")[0]
+            for ifn, share in (("eth0", 5), ("awgr1", 3), ("awgr2", 1)):
+                base = (i + 1) * share
+                for name, rate in (("up", 4_000), ("down", 30_000)):
+                    b = base * grow * rate
+                    sets[name].append({"elem": {"val": {"concat": [ip, ifn]},
+                                                "counter": {"packets": b // 900, "bytes": b}}})
+        for name, elems in sets.items():
+            items.append({"set": {"family": "ip", "name": name, "table": nftgen.ACCT_TABLE,
+                                  "type": ["ipv4_addr", "ifname"], "elem": elems}})
+        return json.dumps({"nftables": items})
 
     def _seed(self) -> None:
         if os.path.exists(self.host_path(self.conf_path)):

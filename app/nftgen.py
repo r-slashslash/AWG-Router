@@ -19,6 +19,74 @@ LOCAL_NETS = [
 ]
 
 
+ACCT_TABLE = "awgr_acct"
+ACCT_VER = 1
+
+
+def acct_marker(wg_iface: str) -> str:
+    """Метка в комментарии правила: по ней видно, что таблица учёта наша и актуальна."""
+    return f"awgr-acct {ACCT_VER} {wg_iface}"
+
+
+def acct_ruleset(wg_iface: str) -> str:
+    """Отдельная таблица учёта трафика по выходам.
+
+    Только считает: никаких меток, маршрутов и запретов, поэтому на маршрутизацию не
+    влияет. Основная таблица пересоздаётся при каждом изменении правил, а эта — только
+    когда её нет (иначе счётчики обнулялись бы). Ключ — адрес клиента и «другой»
+    интерфейс пакета: awgrN — выход N, всё остальное — напрямую. Цепочка стоит после
+    c_forward, поэтому заблокированный трафик (reject там) сюда не доходит.
+    Счётчик задан в правиле, а не в наборе: так работает и на ядрах до 5.11."""
+    T = ACCT_TABLE
+    w = wg_iface
+    sets = "".join(f"""\tset {name} {{
+\t\ttype ipv4_addr . ifname
+\t\tsize 65535
+\t\tflags dynamic
+\t}}
+""" for name in ("up", "down"))
+    return f"""table ip {T}
+delete table ip {T}
+table ip {T} {{
+{sets}\tchain c_acct {{
+\t\ttype filter hook forward priority filter + 10; policy accept;
+\t\tiifname "{w}" oifname != "{w}" update @up {{ ip saddr . oifname counter }} comment "{acct_marker(w)}"
+\t\toifname "{w}" iifname != "{w}" update @down {{ ip daddr . iifname counter }}
+\t}}
+}}
+"""
+
+
+def parse_acct(data: dict, wg_iface: str) -> dict[tuple[str, str], list[int]] | None:
+    """`nft -j list table ip awgr_acct` → {(ip, интерфейс): [от клиента, к клиенту]}.
+    None — таблица не наша или устарела (нужно пересоздать)."""
+    items = data.get("nftables") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return None
+    marker = acct_marker(wg_iface)
+    if not any(isinstance(x, dict) and isinstance(x.get("rule"), dict)
+               and x["rule"].get("comment") == marker for x in items):
+        return None
+    out: dict[tuple[str, str], list[int]] = {}
+    for x in items:
+        s = x.get("set") if isinstance(x, dict) else None
+        if not isinstance(s, dict) or s.get("table") != ACCT_TABLE or s.get("name") not in ("up", "down"):
+            continue
+        i = 0 if s["name"] == "up" else 1
+        for e in s.get("elem") or []:
+            e = e.get("elem") if isinstance(e, dict) else None
+            if not isinstance(e, dict):
+                continue
+            key = (e.get("val") or {}).get("concat") if isinstance(e.get("val"), dict) else None
+            cnt = e.get("counter") or {}
+            b = cnt.get("bytes") if isinstance(cnt, dict) else None
+            if not (isinstance(key, list) and len(key) == 2 and all(isinstance(k, str) for k in key)
+                    and isinstance(b, int) and b >= 0):
+                continue
+            out.setdefault((key[0], key[1]), [0, 0])[i] = b
+    return out
+
+
 def out_chain(out) -> str:
     if out == "direct":
         return "o_direct"
