@@ -269,6 +269,7 @@ const bind = {};
 function stateBadge(u) {
   const h = u.health || {};
   if (!u.enabled) return `<span class="state"><span class="dot"></span>${esc(t("st.disabled"))}</span>`;
+  if (quotaSwitched(u)) return `<span class="state"><span class="dot warn"></span>${esc(t("st.quota"))}</span>`;
   if (h.healthy) return `<span class="state"><span class="dot ok"></span>${esc(t("st.working"))}</span>`;
   if (h.state === "error") return `<span class="state"><span class="dot bad"></span>${esc(t("st.error"))}</span>`;
   if (h.state === "connecting") return `<span class="state"><span class="dot warn"></span>${esc(t("st.connecting"))}</span>`;
@@ -318,19 +319,20 @@ function viewOverview() {
   let lines = "";
   for (const u of S.upstreams) {
     const h = u.health || {};
-    const dead = !u.enabled || !h.healthy;
+    const dead = !u.enabled || !h.healthy || quotaSwitched(u);
     const na = assigned["up:" + u.id] || 0;
     const meta = [
       `<span><bdi>${esc(u.endpoint || "")}</bdi></span>`,
       h.healthy ? `<span>${esc(t("ov.handshake", { ago: fmtAge(h.handshake_age) }))}</span>` : "",
-      h.rx != null && u.enabled ? `<span>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</span>` : "",
+      acctOn() ? `<span>${esc(t("ex.month"))} ${arrows(u.traffic)}</span>`
+        : h.rx != null && u.enabled ? `<span>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</span>` : "",
       dead ? `<span>${esc(na ? t("ov.assigned_now", { n: na }) : t("ov.traffic_goes"))} ${effChip(u.effective)}</span>` : "",
     ].join("");
     lines += track(dead ? "dead" : "", lineVar(u), `<h3><bdi>${esc(u.name)}</bdi></h3>${stateBadge(u)}`, meta,
       countHtml(u.num) + (u.enabled ? probeSide("up:" + u.id) : ""));
   }
   lines += track("direct", "var(--direct)", `<h3>${esc(t("out.direct"))}</h3><span class="muted small">${esc(t("ov.direct_sub"))}</span>`,
-    "", countHtml("direct") + probeSide("direct"));
+    acctOn() ? `<span>${esc(t("ex.month"))} ${arrows(S.direct_traffic)}</span>` : "", countHtml("direct") + probeSide("direct"));
   if (counts.block) lines += track("dead", "var(--block)", `<h3>${esc(t("ov.blocked"))}</h3>`, "", countHtml("block"));
 
   const evs = [];
@@ -443,6 +445,30 @@ function trafficCell(c) {
   return `${esc(t("share.of", { used: fmtBytes(used), limit: fmtBytes(L.quota) }))}
     <div class="meter ${pct >= 90 ? "hot" : ""}" title="${esc(t(L.period === "total" ? "cl.quota_total" : "cl.quota_month"))}"><span style="width:${pct}%"></span></div>`;
 }
+/* трафик по выходам: месячные итоги, квоты выходов */
+function acctOn() { return !!(S.acct && S.acct.state === "ok"); }
+function arrows(x, period = "month") {
+  x = x || {};
+  return `↓ ${esc(fmtBytes(x[period + "_tx"]))} ↑ ${esc(fmtBytes(x[period + "_rx"]))}`;
+}
+function quotaSwitched(u) { return !!(u.enabled && u.over_quota && u.quota_action === "fallback"); }
+function exitQuota(u) {
+  const x = u.traffic || {}, used = (x.month_rx || 0) + (x.month_tx || 0);
+  const pct = Math.min(100, Math.round(used / u.quota * 100));
+  return `${esc(t("share.of", { used: fmtBytes(used), limit: fmtBytes(u.quota) }))}
+    <div class="meter ${pct >= 90 ? "hot" : ""}"><span style="width:${pct}%"></span></div>`;
+}
+/** разбивка трафика клиента за месяц по выходам */
+function byExitHtml(c) {
+  const bo = (c.traffic || {}).by_out || {};
+  const keys = ["direct", ...S.upstreams.map((u) => u.id)].filter((k) => bo[k]);
+  if (!keys.length) return "";
+  const rows = keys.map((k) => {
+    const name = k === "direct" ? esc(t("out.direct")) : `<bdi>${esc(upstreamById(k).name)}</bdi>`;
+    return `<div><span>${name}</span><b>↓ ${esc(fmtBytes(bo[k][1]))} ↑ ${esc(fmtBytes(bo[k][0]))}</b></div>`;
+  }).join("");
+  return `<p class="small muted" style="margin:0 0 6px">${esc(t("cl.by_exit"))}</p><div class="kv" style="margin-bottom:16px">${rows}</div>`;
+}
 function filterClients() {
   const q = ($("#client-search").value || "").toLowerCase().trim();
   $$("tr[data-q]").forEach((tr) => tr.hidden = q && !tr.dataset.q.includes(q));
@@ -550,6 +576,7 @@ function editClient(pk, section = null) {
         <div><span>${esc(t("cl.this_month"))}</span><b>↓ ${esc(fmtBytes(tr.month_tx))} ↑ ${esc(fmtBytes(tr.month_rx))}</b></div>
         <div><span>${esc(t("cl.all_time"))}</span><b>↓ ${esc(fmtBytes(tr.total_tx))} ↑ ${esc(fmtBytes(tr.total_rx))}</b></div>
       </div>
+      ${byExitHtml(c)}
       <div class="row2">
         <label class="field"><span>${esc(t("cl.expires"))}</span>
           <input type="date" id="c-exp" value="${esc(L.expires ? isoDay(L.expires) : "")}">
@@ -776,7 +803,7 @@ function viewExits() {
   const cards = S.upstreams.map((u) => {
     const h = u.health || {};
     let st = stateBadge(u);
-    if (u.enabled && h.healthy) st = `<span class="state"><span class="dot ok"></span>${esc(t("ex.working", { ago: fmtAge(h.handshake_age) }))}</span>`;
+    if (u.enabled && h.healthy && !quotaSwitched(u)) st = `<span class="state"><span class="dot ok"></span>${esc(t("ex.working", { ago: fmtAge(h.handshake_age) }))}</span>`;
     else if (u.enabled && h.state === "error") st = `<span class="state"><span class="dot bad"></span>${esc(tm(h.error) || t("st.error"))}</span>`;
     else if (u.enabled && h.handshake_age) st += ` <span class="muted small">${esc(t("ex.last_handshake", { ago: fmtAge(h.handshake_age) }))}</span>`;
     const ver = u.version ? `AWG ${u.version}` : u.config_error ? "" : "WireGuard";
@@ -793,7 +820,11 @@ function viewExits() {
         <div class="kv">
           <div><span>${esc(t("ex.server"))}</span><b><bdi>${esc(u.endpoint || "—")}</bdi></b></div>
           <div><span>${esc(t("ex.address"))}</span><b><bdi>${esc(u.address || "—")}</bdi></b></div>
-          <div><span>${esc(t("ex.traffic"))}</span><b>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</b></div>
+          ${acctOn()
+            ? `<div><span>${esc(t("ex.month"))}</span><b>${arrows(u.traffic)}</b></div>
+               <div><span>${esc(t("ex.all_time"))}</span><b>${arrows(u.traffic, "total")}</b></div>`
+            : `<div><span>${esc(t("ex.traffic"))}</span><b>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</b></div>`}
+          ${u.quota ? `<div><span>${esc(t(u.quota_action === "notify" ? "ex.limit_notify" : "ex.limit"))}</span><b>${exitQuota(u)}</b></div>` : ""}
           <div><span>${esc(t("ex.on_fail"))}</span><b>${outChip(u.fallback)}</b></div>
         </div>
         ${u.refs.length ? `<div class="small muted">${esc(t("ex.used_by", { refs: tm(u.refs) }))}</div>` : ""}
@@ -806,13 +837,30 @@ function viewExits() {
       </div>
     </div>`;
   }).join("");
+  const direct = acctOn() ? `
+    <div class="panel exit" style="--c:var(--direct)">
+      <div class="exit-bar"></div>
+      <div class="exit-main">
+        <div class="exit-head"><h3>${esc(t("out.direct"))}</h3></div>
+        <div class="small muted">${esc(t("ex.direct_sub"))}</div>
+        <div class="kv">
+          <div><span>${esc(t("ex.month"))}</span><b>${arrows(S.direct_traffic)}</b></div>
+          <div><span>${esc(t("ex.all_time"))}</span><b>${arrows(S.direct_traffic, "total")}</b></div>
+        </div>
+      </div>
+    </div>` : "";
+  const off = S.acct && S.acct.state === "off"
+    ? `<div class="notice warn">${esc(t("ex.acct_off", { error: S.acct.error || "?" }))}</div>` : "";
   return `
   <section class="section">
     <div class="section-head">
       <div><h2>${esc(t("ex.title"))}</h2><p class="muted small">${esc(t("ex.subtitle"))}</p></div>
       <button class="btn primary" id="add-up">${esc(t("ov.add_exit"))}</button>
     </div>
+    ${off}
     ${cards || `<div class="panel empty"><p>${esc(t("ex.empty"))}</p><p class="small">${esc(t("ex.empty_hint"))}</p><button class="btn primary" data-add-empty>${esc(t("ov.add_exit"))}</button></div>`}
+    ${direct}
+    ${acctOn() ? `<p class="small muted">${esc(t("ex.month_note"))}</p>` : ""}
   </section>`;
 }
 bind.exits = () => {
@@ -851,6 +899,16 @@ async function editUpstream(id) {
       <select id="u-fb">${outOptions(u ? u.fallback : "direct", { exclude: u ? "up:" + u.id : null })}</select>
       <span class="hint">${esc(t("ex.fallback_hint"))}</span>
     </label>
+    <div class="row2">
+      <label class="field"><span>${esc(t("ex.quota"))}</span>
+        <input type="number" id="u-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.quota ? +(u.quota / 1024 ** 3).toFixed(3) : ""}"></label>
+      <label class="field"><span>${esc(t("ex.quota_action"))}</span>
+        <select id="u-qa">
+          <option value="fallback" ${!u || u.quota_action !== "notify" ? "selected" : ""}>${esc(t("ex.qa_fallback"))}</option>
+          <option value="notify" ${u && u.quota_action === "notify" ? "selected" : ""}>${esc(t("ex.qa_notify"))}</option>
+        </select></label>
+    </div>
+    <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.quota_hint"))}</p>
     ${u ? "" : `<label class="check"><input type="checkbox" id="u-def" ${S.routing.default === "direct" ? "checked" : ""}><span>${esc(t("ex.make_default"))}</span></label>`}
   `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`);
   $("#u-file").onchange = async (e) => {
@@ -859,7 +917,8 @@ async function editUpstream(id) {
     if (!$("#u-name").value) $("#u-name").value = f.name.replace(/\.(conf|txt|vpn)$/i, "").slice(0, 40);
   };
   $("#u-save").onclick = async () => {
-    const body = { name: $("#u-name").value.trim(), fallback: $("#u-fb").value };
+    const body = { name: $("#u-name").value.trim(), fallback: $("#u-fb").value,
+      quota_gb: $("#u-quota").value.trim(), quota_action: $("#u-qa").value };
     const c = $("#u-conf").value.trim();
     if (!u || c !== conf.trim()) body.config = c;
     try {

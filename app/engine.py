@@ -20,7 +20,7 @@ import time
 from . import awgconf, config, limits, lists, nftgen, system
 from .i18n import Msg, msg_of
 from .store import Store
-from .traffic import Traffic
+from .traffic import Traffic, month_key
 from .users import ServerManager
 
 log = logging.getLogger("awgr.engine")
@@ -66,6 +66,11 @@ class Engine:
         self.events: list[dict] = []
         self.notifier = None          # notify.Notifier, задаёт main.py
         self.traffic = Traffic()
+        # учёт трафика по выходам (таблица nftables awgr_acct): ok | off | None (ещё не было)
+        self.acct_state: str | None = None
+        self.acct_error: str | None = None
+        self._acct_key: str | None = None      # для какой цели таблица проверена
+        self._acct_retry = 0.0
         self.matcher = lists.Matcher()
         self._list_cache: dict[str, tuple[float, list[str]]] = {}
         self._parsed: dict[str, awgconf.UpstreamConf] = {}
@@ -331,6 +336,87 @@ class Engine:
                 "since": r.started,
             }
 
+    # ------------------------------------------------- трафик по выходам
+    def _account(self, t: system.Target, st: dict) -> None:
+        """Счётчики таблицы учёта → traffic. Ошибка здесь не мешает маршрутизации:
+        учёт выключается, и через час (или при смене цели) пробуем снова."""
+        now = time.time()
+        if self.acct_state == "off" and self._acct_key == t.key and now < self._acct_retry:
+            return
+        fresh = False
+        p = t.ns(["nft", "-j", "list", "table", "ip", nftgen.ACCT_TABLE], check=False, timeout=20)
+        counters = None
+        if p.returncode == 0:
+            try:
+                counters = nftgen.parse_acct(json.loads(p.stdout or "{}"), t.iface)
+            except ValueError:
+                counters = None
+        if counters is None:
+            path = os.path.join(RUN_DIR, "acct.nft")
+            with open(path, "w") as f:
+                f.write(nftgen.acct_ruleset(t.iface))
+            r = t.ns(["nft", "-f", path], check=False, timeout=60)
+            if r.returncode != 0:
+                err = (r.stderr or r.stdout or "").strip()[-300:]
+                if self.acct_state != "off":
+                    log.warning("exit traffic accounting is off: %s", err)
+                    self.event("warn", Msg("ev.acct_off", error=err))
+                self.acct_state, self.acct_error = "off", err
+                self._acct_key, self._acct_retry = t.key, now + 3600
+                return
+            counters, fresh = {}, True
+        self.acct_state, self.acct_error, self._acct_key = "ok", None, t.key
+        by_num = {u["num"]: u["id"] for u in st["upstreams"]}
+        pfx = config.IFACE_PREFIX
+
+        def out_of(ifn: str):
+            if ifn.startswith(pfx) and ifn[len(pfx):].isdigit():
+                return by_num.get(int(ifn[len(pfx):]))   # выход удалён — не считаем
+            return "direct"
+        pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
+        self.traffic.update_outs(counters, out_of, pk_of, fresh=fresh, now=now)
+
+    def over_quota(self, u: dict) -> bool:
+        """Месячная квота выхода исчерпана и выход должен уступить резервному."""
+        q = u.get("quota")
+        return bool(q) and u.get("quota_action", "fallback") == "fallback" and \
+            self.traffic.out_used(u["id"]) >= q
+
+    def _exit_quotas(self, st: dict) -> None:
+        """События квот выходов: 90 %, исчерпана, новый месяц. Отметки — в state, чтобы
+        не повторять событие после перезапуска панели."""
+        if self.acct_state != "ok":
+            return
+        mk = month_key()
+        patches: dict[str, dict] = {}
+        for u in st["upstreams"]:
+            q = u.get("quota")
+            if not q:
+                continue
+            used = self.traffic.out_used(u["id"])
+            gb = float(f"{q / limits.GB:.3g}")
+            fb = u.get("quota_action", "fallback") == "fallback"
+            p = {}
+            if used >= q and u.get("quota_hit") != mk:
+                p["quota_hit"] = p["quota_warned"] = mk
+                self.event("warn", Msg("ev.upstream_quota" if fb else "ev.upstream_quota_notify",
+                                       name=u["name"], gb=gb))
+            elif q * 0.9 <= used < q and u.get("quota_warned") != mk:
+                p["quota_warned"] = mk
+                self.event("warn", Msg("ev.upstream_quota_warn", name=u["name"], gb=gb))
+            if u.get("quota_hit") and u["quota_hit"] != mk and used < q and "quota_hit" not in p:
+                p["quota_hit"] = None
+                if fb:
+                    self.event("info", Msg("ev.upstream_quota_reset", name=u["name"]))
+            if p:
+                patches[u["id"]] = p
+        if patches:
+            def fn(s):
+                for x in s["upstreams"]:
+                    if x["id"] in patches:
+                        x.update(patches[x["id"]])
+            self.store.mutate(fn)
+
     # --------------------------------------------------------------- policy
     def resolve(self, out: str, st: dict, depth: int = 0):
         """Выход из настроек → фактический: 'direct' | 'block' | номер туннеля."""
@@ -343,7 +429,7 @@ class Engine:
             if not u:
                 return "block"
             h = self.health.get(u["id"], {})
-            if u.get("enabled", True) and h.get("healthy"):
+            if u.get("enabled", True) and h.get("healthy") and not self.over_quota(u):
                 return u["num"]
             return self.resolve(u.get("fallback") or "direct", st, depth + 1)
         return "block"
@@ -485,6 +571,11 @@ class Engine:
                     limits.enforce(self)
                 except Exception:  # noqa: BLE001
                     log.exception("traffic/limits")
+            try:
+                self._account(t, st)
+                self._exit_quotas(st)
+            except Exception:  # noqa: BLE001
+                log.exception("exit traffic")
 
             self._sync_upstreams(t, st)
             self._update_health(t, st)
@@ -514,6 +605,8 @@ class Engine:
             self._stop_all()
             if t:
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
+                t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
+                self._acct_key = None
                 p = t.ns(["ip", "-j", "rule", "show"], check=False)
                 try:
                     for rule in json.loads(p.stdout or "[]"):

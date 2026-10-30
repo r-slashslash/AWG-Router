@@ -38,6 +38,7 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 
 **Routing**
 - Exits are client configs from other AmneziaWG servers. If an exit fails, its traffic goes direct, gets blocked or moves to another exit, whichever you choose.
+- Traffic per exit and direct for the month and all time, and each client's monthly traffic split by exit. An exit can have a monthly limit: when it is used up, its clients move to the fallback exit until the 1st (or you only get a notification).
 - Rules map a list of networks to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, or your own subnets, and they refresh automatically.
 - Each client can have its own exit and its own rules.
 - **Route check** shows which way an IP or domain would go.
@@ -47,7 +48,7 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Alternatively, the panel can be reachable only through an SSH tunnel.
 - The address uses a random port and a secret path, and login is password-protected with brute-force protection. A sign-in lasts 4 hours.
 - Optional second factor: a 6-digit code from an authenticator app (Google Authenticator, Aegis, 2FAS…). Turned on in **System**.
-- Optional Telegram notifications: an exit stops or recovers, the AmneziaWG server is unreachable or restarted, a client hits its end date or limit, panel sign-ins, a certificate that can't be renewed, a new panel version. Set up in **System**.
+- Optional Telegram notifications: an exit stops or recovers or nears its limit, the AmneziaWG server is unreachable or restarted, a client hits its end date or limit, panel sign-ins, a certificate that can't be renewed, a new panel version. Set up in **System**.
 - The password can be changed right in the panel.
 - Backup and restore in one file: panel settings, exits, rules, client keys and the AmneziaWG server config — handy for moving to another server.
 - The panel shows its version and tells you when an update is out.
