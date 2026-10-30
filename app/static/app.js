@@ -1070,10 +1070,10 @@ function viewServer() {
     } else {
       input = `<input type="text" data-p="${k}" dir="ltr" value="${esc(d[k] || "")}" ${meta.type === "key" ? 'class="mono"' : ""}>`;
     }
-    return `<label class="field param ${meta.type === "text" || meta.type === "key" ? "param-wide" : ""}"><span>${esc(k)} ${side}</span>${input}<span class="hint">${esc(t("p." + k))}</span></label>`;
+    return `<label class="field param ${meta.type === "text" || meta.type === "key" ? "param-wide" : ""}"><span><span class="pname" title="${esc(k)}">${esc(k)}</span>${side}</span>${input}<span class="hint">${esc(t("p." + k))}</span></label>`;
   };
   return `
-  <div class="grid2">
+  <div class="grid2 pair">
     <section class="section">
       <div class="section-head"><h2>${esc(t("srv.title"))}</h2></div>
       <div class="panel panel-pad">
@@ -1106,7 +1106,7 @@ function viewServer() {
       <button class="btn" id="s-gen">${esc(t("srv.generate"))}</button>
     </div>
     <div class="panel panel-pad">
-      ${PARAM_GROUPS.map(([g, keys]) => `<fieldset class="pgroup"><legend>${esc(t(g))}</legend><div class="pgrid">${keys.map(param).join("")}</div></fieldset>`).join("")}
+      ${PARAM_GROUPS.map(([g, keys]) => `<fieldset class="pgroup"><legend>${esc(t(g))}</legend><div class="pgrid" style="--cols:${Math.min(keys.length, 4)}">${keys.map(param).join("")}</div></fieldset>`).join("")}
     </div>
     <div class="savebar" id="s-bar" ${srvDirty() ? "" : "hidden"}><span id="s-bar-text">${esc(t("srv.save_hint"))}</span>
       <span class="actions"><button class="btn sm" id="s-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="s-save">${esc(t("btn.save"))}</button></span></div>
@@ -1196,12 +1196,22 @@ function viewSystem() {
       ${T.mode === "letsencrypt" ? `<div class="actions" style="margin-top:12px"><button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button></div>` : ""}
     </div>
   </section>
-  <div class="grid2">
-    ${viewTelegram()}
+  <div class="grid2 pair even">
     ${viewSecurity()}
+    <section class="section">
+      <div class="section-head"><h2>${esc(t("sy.settings"))}</h2></div>
+      <div class="panel panel-pad">
+        <label class="field"><span>${esc(t("lang"))}</span>${langSelect("lang-sys")}</label>
+        <label class="field"><span>${esc(t("sy.hours"))}</span><input type="number" id="s-hours" min="1" max="720" value="${S.settings.list_update_hours}" style="max-width:120px"></label>
+        <div class="field"><span>${esc(t("sy.on_stop"))}</span>
+          <div class="seg" id="s-stop"><button type="button" data-v="keep">${esc(t("sy.keep"))}</button><button type="button" data-v="restore">${esc(t("sy.restore"))}</button></div>
+          <span class="hint">${esc(t("sy.on_stop_hint"))}</span></div>
+        <div class="actions"><button class="btn sm primary" id="s-save">${esc(t("btn.save"))}</button><button class="btn sm ghost" id="logout">${esc(t("sy.logout"))}</button></div>
+      </div>
+    </section>
   </div>
-  ${viewBackup()}
-  <div class="grid2">
+  ${viewTelegram()}
+  <div class="grid2 pair even">
     <section class="section">
       <div class="section-head"><h2>${esc(t("sy.conn"))}</h2></div>
       <div class="panel panel-pad">
@@ -1216,17 +1226,7 @@ function viewSystem() {
         <div class="actions" style="margin-top:14px"><button class="btn sm" id="reapply">${esc(t("sy.reapply"))}</button></div>
       </div>
     </section>
-    <section class="section">
-      <div class="section-head"><h2>${esc(t("sy.settings"))}</h2></div>
-      <div class="panel panel-pad">
-        <label class="field"><span>${esc(t("lang"))}</span>${langSelect("lang-sys")}</label>
-        <label class="field"><span>${esc(t("sy.hours"))}</span><input type="number" id="s-hours" min="1" max="720" value="${S.settings.list_update_hours}" style="max-width:120px"></label>
-        <div class="field"><span>${esc(t("sy.on_stop"))}</span>
-          <div class="seg" id="s-stop"><button type="button" data-v="keep">${esc(t("sy.keep"))}</button><button type="button" data-v="restore">${esc(t("sy.restore"))}</button></div>
-          <span class="hint">${esc(t("sy.on_stop_hint"))}</span></div>
-        <div class="actions"><button class="btn sm primary" id="s-save">${esc(t("btn.save"))}</button><button class="btn sm ghost" id="logout">${esc(t("sy.logout"))}</button></div>
-      </div>
-    </section>
+    ${viewBackup()}
   </div>
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("sy.now"))}</h2><p class="muted small">${esc(t("sy.now_sub"))}</p></div><button class="btn sm" id="load-debug">${esc(t("sy.show"))}</button></div>
@@ -1277,6 +1277,7 @@ function viewTelegram() {
     <div class="section-head"><div><h2>${esc(t("tg.title"))}</h2><p class="muted small">${esc(t("tg.sub"))}</p></div></div>
     <div class="panel panel-pad">
       <label class="check"><input type="checkbox" id="tg-on" ${c.enabled ? "checked" : ""}><span><b>${esc(t("tg.enable"))}</b></span></label>
+      <div class="tg-cols"><div>
       <label class="field"><span>${esc(t("tg.token"))}</span>
         <input type="text" id="tg-token" autocomplete="off" spellcheck="false" dir="ltr"
           placeholder="${esc(c.token_set ? t("tg.token_saved", { hint: c.token_hint }) : "123456789:AA…")}">
@@ -1288,8 +1289,8 @@ function viewTelegram() {
       <label class="field"><span>${esc(t("tg.lang"))}</span>
         <select id="tg-lang" style="max-width:220px">${Object.entries(LANGS).map(([k, v]) =>
           `<option value="${k}" ${k === (c.enabled || c.token_set ? c.lang : LANG) ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
-      <div class="field"><span>${esc(t("tg.events"))}</span>
-        ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div>
+      </div><div class="field"><span>${esc(t("tg.events"))}</span>
+        ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div></div>
       ${c.enabled && S.notify_error ? `<p class="err small">${esc(t("tg.last_error"))}: <bdi>${esc(S.notify_error)}</bdi></p>` : ""}
       <div class="actions"><button class="btn sm primary" id="tg-save">${esc(t("btn.save"))}</button><button class="btn sm" id="tg-test">${esc(t("tg.test"))}</button></div>
     </div>
@@ -1377,8 +1378,9 @@ function changePassword() {
 function viewBackup() {
   return `
   <section class="section">
-    <div class="section-head"><div><h2>${esc(t("bk.title"))}</h2><p class="muted small">${esc(t("bk.sub"))}</p></div></div>
+    <div class="section-head"><h2>${esc(t("bk.title"))}</h2></div>
     <div class="panel panel-pad">
+      <p class="small" style="margin:0 0 14px">${esc(t("bk.sub"))}</p>
       <div class="actions">
         <button class="btn sm primary" id="bk-save">${esc(t("bk.download"))}</button>
         <label class="btn sm" for="bk-file">${esc(t("bk.restore"))}</label>

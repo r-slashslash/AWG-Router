@@ -25,6 +25,9 @@ so every user-visible change gets a new version.
   sha256); distro packages are only a fallback when GitHub is unreachable (Debian 11/12 have
   only Compose v1, Debian 13 ships buildx 0.13 while Compose needs 0.17+). Images are built
   with `docker build`, so a Compose/buildx version mismatch no longer stops the install.
+- System and Server tabs are laid out evenly: cards side by side have the same height, the
+  Telegram card spans the width with its events in a second column, obfuscation parameters
+  fill whole rows and long parameter names no longer run into the client/server tag.
 - The exit limit hint says that traffic inside the tunnel is counted; the footnote under the
   exit cards is gone.
 
