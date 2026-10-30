@@ -19,11 +19,13 @@ so every user-visible change gets a new version.
 - Client configs download as `.conf` on Android too (Chrome used to save them as
   `.conf.txt`, which the AmneziaVPN app does not accept).
 - Installer: Docker is installed after the questions; a stopped Docker service is started;
-  apt waits for a running unattended upgrade instead of failing. Compose comes from the
-  distro when it is v2, otherwise from GitHub (Debian 11/12). A missing or old buildx
-  (Debian 13 ships 0.13, Compose needs 0.17+) is replaced with the latest release from
-  GitHub, checked against its sha256. Images are built with `docker build`, so a
-  Compose/buildx version mismatch no longer stops the install.
+  apt waits for a running unattended upgrade instead of failing. Docker Compose and buildx
+  are kept at the latest GitHub release on every install and update (checked against their
+  sha256); distro packages are only a fallback when GitHub is unreachable (Debian 11/12 have
+  only Compose v1, Debian 13 ships buildx 0.13 while Compose needs 0.17+). Images are built
+  with `docker build`, so a Compose/buildx version mismatch no longer stops the install.
+- Exit limit hint: says that traffic inside the tunnel is counted; the footnote under the
+  exit cards is gone.
 
 ## 1.2.0 — 2026-10-30
 

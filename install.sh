@@ -400,11 +400,28 @@ if ! command -v docker >/dev/null; then
 fi
 ensure_daemon
 
-# Compose: the distro package when it is v2, otherwise the release from GitHub
-# (Ubuntu: docker-compose-v2; Docker's own repo: docker-compose-plugin; Debian 13: docker-compose 2.x;
-#  Debian 11/12 only have Compose v1, which cannot be used)
+# Compose and buildx are kept at the latest GitHub release on every install and update
+# (sha256-checked, into $PLUGINS). Distro packages are only a fallback when GitHub is unreachable:
+# Debian 11/12 have only Compose v1, Debian 13 ships buildx 0.13 while Compose 2.40.2+ needs 0.17+.
+plugin_latest() { # $1 label, $2 owner/repo, $3 tag if GitHub is silent, $4 asset (@TAG@ = tag), $5 plugin file, $6 installed version, $7 minimum
+  local cur="$6" tag
+  tag="$(gh_latest "$2" "")"
+  if [ -z "$tag" ]; then
+    { [ -n "$cur" ] && ver_ge "$cur" "$7"; } && return 0    # cannot check, the installed one is enough
+    tag="$3"
+  fi
+  { [ -n "$cur" ] && ver_ge "$cur" "${tag#v}"; } && return 0
+  echo "  Installing $1 ${tag#v}${cur:+ (installed: $cur)}…"
+  gh_plugin "$2" "$tag" "${4//@TAG@/$tag}" "$5" && return 0
+  warn "Could not download $1 ${tag#v} from GitHub"
+  return 1
+}
+dc_ver() { docker compose version --short 2>/dev/null | sed 's/^v//; s/[+-].*//'; }
+
+[ -n "$DC_ARCH" ] && plugin_latest "Docker Compose" docker/compose v5.6.1 \
+  "docker-compose-linux-$DC_ARCH" docker-compose "$(dc_ver)" 2.0.0
 if ! docker compose version >/dev/null 2>&1; then
-  echo "  Installing Docker Compose…"
+  # Ubuntu: docker-compose-v2; Docker's own repo: docker-compose-plugin; Debian 13: docker-compose 2.x
   for p in docker-compose-v2 docker-compose-plugin; do
     apt_has "$p" && apt_install "$p" && docker compose version >/dev/null 2>&1 && break
   done
@@ -412,32 +429,19 @@ if ! docker compose version >/dev/null 2>&1; then
      && LC_ALL=C apt-cache policy docker-compose 2>/dev/null | grep -q 'Candidate: 2\.'; then
     apt_install docker-compose || true
   fi
-  if ! docker compose version >/dev/null 2>&1 && [ -n "$DC_ARCH" ]; then
-    tag="$(gh_latest docker/compose v5.6.1)"
-    gh_plugin docker/compose "$tag" "docker-compose-linux-$DC_ARCH" docker-compose || true
-  fi
   docker compose version >/dev/null 2>&1 || die "Failed to install Docker Compose"
 fi
 
-# buildx: Compose 2.40.2+ refuses to build with buildx older than 0.17, and distros ship older ones
-# (Debian 13: 0.13). A missing or old one is replaced with the latest release from GitHub;
-# the distro package is only a fallback when GitHub is unreachable.
 BX_MIN=0.17.0
+[ -n "$BX_ARCH" ] && plugin_latest "Docker buildx" docker/buildx v0.38.1 \
+  "buildx-@TAG@.linux-$BX_ARCH" docker-buildx "$(buildx_ver)" "$BX_MIN"
+[ -n "$(buildx_ver)" ] || apt_install docker-buildx || apt_install docker-buildx-plugin || true
 bx="$(buildx_ver)"
-if [ -z "$bx" ] || ! ver_ge "$bx" "$BX_MIN"; then
-  echo "  Installing the latest Docker buildx${bx:+ (installed: $bx)}…"
-  if [ -n "$BX_ARCH" ]; then
-    tag="$(gh_latest docker/buildx v0.38.1)"
-    gh_plugin docker/buildx "$tag" "buildx-$tag.linux-$BX_ARCH" docker-buildx || true
-  fi
-  [ -n "$(buildx_ver)" ] || apt_install docker-buildx || apt_install docker-buildx-plugin || true
-  bx="$(buildx_ver)"
-  if [ -z "$bx" ]; then warn "Docker buildx is not available — the panel is built with the classic builder"
-  elif ! ver_ge "$bx" "$BX_MIN"; then
-    warn "Docker buildx $bx is old (an older copy in ~/.docker/cli-plugins?) — the panel is built without Compose"
-  fi
+if [ -z "$bx" ]; then warn "Docker buildx is not available — the panel is built with the classic builder"
+elif ! ver_ge "$bx" "$BX_MIN"; then
+  warn "Docker buildx $bx is old (an older copy in ~/.docker/cli-plugins?)"
 fi
-ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), Compose $(docker compose version --short 2>/dev/null | sed 's/^v//')${bx:+, buildx $bx}"
+ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), Compose $(dc_ver)${bx:+, buildx $bx}"
 
 # ------------------------------------------------------------------ build
 # Images are built by "docker build" rather than "docker compose build": it does not depend on

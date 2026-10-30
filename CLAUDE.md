@@ -92,8 +92,9 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   marks `quota_hit` / `quota_warned` (month) live in the upstream in `state.json`.
 - Installer and Docker: images are built with `docker build` (`build_image`), not `docker compose build` —
   Compose 2.40.2+ refuses to build with buildx < 0.17 (Debian 13 ships 0.13.1); `compose up --no-build`
-  only starts. A missing/old buildx (and Compose on Debian 11/12, which only have v1) is downloaded from
-  GitHub releases into `/usr/local/lib/docker/cli-plugins` with a sha256 check. Docker is installed
+  only starts. Compose and buildx are updated to the latest GitHub release on every run (`plugin_latest`,
+  into `/usr/local/lib/docker/cli-plugins`, sha256-checked); apt packages are only the fallback (Debian
+  11/12 have only Compose v1). Docker is installed
   after the questions; an installed but stopped daemon is started first (needed to find Amnezia).
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
