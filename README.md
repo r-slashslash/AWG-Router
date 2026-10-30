@@ -38,10 +38,14 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 
 **Routing**
 - Exits are client configs from other AmneziaWG servers. If an exit fails, its traffic goes direct, gets blocked or moves to another exit, whichever you choose.
-- Traffic per exit and direct for the month and all time, and each client's monthly traffic split by exit. An exit can have a monthly limit: when it is used up, its clients move to the fallback exit until the 1st (or you only get a notification).
+- Traffic per exit and direct for the month and all time, and each client's monthly traffic split by exit. An exit can have a monthly limit; when it is used up, its traffic until the 1st goes direct, gets blocked or moves to another exit, whichever you choose (or you only get a notification).
 - Rules map a list of networks to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, or your own subnets, and they refresh automatically.
 - Each client can have its own exit and its own rules.
 - **Route check** shows which way an IP or domain would go.
+
+<p align="center">
+  <img src="docs/screenshots/exits.png" alt="Exits: traffic per exit and direct, monthly limits" width="860">
+</p>
 
 **Panel**
 - HTTPS with a Let's Encrypt certificate issued for the server's IP. The certificate lasts 6 days and renews itself.

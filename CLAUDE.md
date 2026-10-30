@@ -111,6 +111,9 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo PANEL_PORT=8099 PUBLIC_HOST=203.0.
 ```
 Demo mode (`DRY_RUN=1`) fakes the AWG server; useful with Playwright for UI checks in all four
 languages, desktop and 375 px mobile (no horizontal overflow; RTL for fa).
+README screenshots (`docs/screenshots`) come from demo mode: English, light theme, 1280×860 at
+scale 1.25 (1600×1075) and phone 390×844 at scale 3; hide the demo banner and "(demo)", quantize
+to 256 colours.
 
 ## Status
 Verified on a real server (Ubuntu 22.04, AmneziaVPN container): image builds, Let's Encrypt
