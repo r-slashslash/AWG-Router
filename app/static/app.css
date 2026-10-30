@@ -283,6 +283,10 @@ select { appearance: none; padding-inline-end: 30px; cursor: pointer;
 .list-row-src { font-size: .84rem; color: var(--muted); word-break: break-all; }
 .cc { display: inline-grid; place-items: center; min-width: 30px; height: 22px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--rule); font-weight: 600; font-size: .78rem; margin-inline-end: 8px; }
 .add-row { display: flex; gap: 8px; flex-wrap: wrap; }
+/* в шапке раздела поиск, сортировка и кнопка — одной строкой; переносится вся группа целиком */
+.section-head > .add-row { flex-wrap: nowrap; }
+.add-row .btn { flex: none; white-space: nowrap; }
+@media (max-width: 560px) { .section-head > .add-row { flex-wrap: wrap; } }
 .table td.acts { text-align: end; width: 1%; }
 
 /* ---------- events ---------- */
