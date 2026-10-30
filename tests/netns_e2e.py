@@ -7,6 +7,7 @@
 Туннель AWG заменён veth — для маршрутизации разницы нет.
 Запуск: PYTHONPATH=<pyroute2>:. python3 tests/netns_e2e.py
 """
+import json
 import os
 import subprocess
 import sys
@@ -131,6 +132,18 @@ def panel_apply(global_policy, clients, upstream_alive=True):
                 pass
 
 
+def acct():
+    """Счётчики таблицы учёта трафика по выходам в amz."""
+    p = sh("amz", "nft", "-j", "list", "table", "ip", nftgen.ACCT_TABLE)
+    assert p.returncode == 0, p.stderr
+    return nftgen.parse_acct(json.loads(p.stdout), "awg0")
+
+
+def check(label, ok):
+    print(f"{'OK ' if ok else 'BAD'} {label}")
+    return ok
+
+
 def probe(target, src="10.8.1.2"):
     return sh("cli", sys.executable, "-c", CLIENT, TARGETS[target], src, timeout=10).stdout.strip()
 
@@ -146,6 +159,8 @@ def main():
     procs = setup()
     results = []
     try:
+        # таблица учёта стоит с самого начала: все проверки маршрутов ниже идут с ней
+        nft("amz", nftgen.acct_ruleset("awg0"))
         g = {"rules": [(["ru"], "direct")], "default": 1}
         panel_apply(g, {})
         results += [expect("глобально: всё через выход, RU напрямую", "foreign", "UP1 from 10.8.1.3"),
@@ -156,8 +171,19 @@ def main():
                            "DIRECT from 172.20.0.2", src="10.8.1.3")]
         panel_apply(g, {"10.8.1.2": {"rules": [], "default": "direct"}})
         results += [expect("клиенту назначено «напрямую»", "foreign", "DIRECT")]
+        before = acct()
         panel_apply(g, {"10.8.1.2": {"rules": [], "default": "block"}})
         results += [expect("клиенту назначено «блокировать»", "foreign", "FAIL")]
+        a = acct()
+        results += [
+            check("учёт: клиент .2 через выход — счётчики в обе стороны",
+                  all(a.get(("10.8.1.2", "awgr1"), [0, 0]))),
+            check("учёт: клиент .2 напрямую (RU) — счётчики в обе стороны",
+                  all(a.get(("10.8.1.2", "eth0"), [0, 0]))),
+            check("учёт: клиент .3 напрямую", all(a.get(("10.8.1.3", "eth0"), [0, 0]))),
+            check("учёт: заблокированный трафик не считается", a == before),
+            check("учёт: таблица пережила 4 пересоздания основной таблицы", a.get(("10.8.1.2", "awgr1"))
+                  is not None and a[("10.8.1.2", "awgr1")] >= before[("10.8.1.2", "awgr1")])]
         panel_apply({"rules": [], "default": 1}, {})
         results += [expect("без правил: RU тоже через выход", "russian", "UP1")]
         # туннель исчез (упал amneziawg-go): маршрут по таблице → unreachable, утечки нет

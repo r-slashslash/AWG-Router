@@ -25,14 +25,14 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 |---|---|
 | `app/main.py` | API endpoints, auth (signed cookie, 4 h session, 8 fails → 10 min block, optional TOTP step: `need_code`; a password changed in the panel lives as PBKDF2 in `data/panel_password.json` and wins over `.env`), backup/restore, startup, `data/status.json` |
 | `app/totp.py` | Optional 2FA (RFC 6238): secret in `data/totp.json` (re-read by mtime; `awg-router 2fa-off` deletes it), replay-protected codes; enabling/disabling changes the session tag → other sessions end |
-| `app/traffic.py` | Per-client traffic totals and months (`data/traffic.json`, `{"_v": 2, "clients": …}`), deltas between polls survive counter resets; the first sight of a peer is only a baseline |
+| `app/traffic.py` | Per-client traffic totals and months (`data/traffic.json`, `{"_v": 2, "clients": …, "outs": …, "acct": …}`), deltas between polls survive counter resets; the first sight of a peer is only a baseline. `outs` — totals per exit (`direct` or upstream id, used by exit quotas); `by_out` in a client — month split by exit; `acct` — last values of the nft counters |
 | `app/limits.py` | Client end date / traffic quota (`state.limits`): auto-off (`auto_off`: `exp` / `quota:<month>`), monthly auto-on; called after each poll |
 | `app/updates.py` / `app/version.py` | Panel version and the update check |
 | `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/<whitelisted file>` — **outside the secret path, no login** (token in `state.shares`; unknown tokens → 404) |
 | `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
 | `app/web.py` | HTTP server: routing, JSON, static (ETag/304), TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, strict `Content-Length`, body draining, ≤ 128 connections (≤ 24 per IP), 60 s idle timeout |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |
-| `app/nftgen.py` | nftables ruleset generator (table `ip awgr`, chains `c_prerouting`/`c_forward`/`c_postrouting`) |
+| `app/nftgen.py` | nftables ruleset generator (table `ip awgr`, chains `c_prerouting`/`c_forward`/`c_postrouting`); `acct_ruleset` — separate counting table `ip awgr_acct` (dynamic sets `up`/`down` keyed `client ip . ifname`, forward hook at priority filter+10) |
 | `app/system.py` | Targets: `ContainerTarget` (nsenter into Amnezia container), `HostTarget` (pid 1), `DemoTarget`; docker API via socket; host runtime install |
 | `app/users.py` | `ServerManager`: clients CRUD, client configs/vpn:// links, server params, host init |
 | `app/awgserver.py` | Server conf model (Amnezia layout), parameter generation/validation, client conf, vpn:// encoder |
@@ -80,6 +80,16 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   ids end up in nft set names, interface names and file names. Hooks (`PostUp` …) from a backup
   are replaced (`awgserver.safe_hooks`) — awg-quick runs them as root.
 - Exit configs: `FwMark`/`ListenPort` are dropped (`awgconf.LOCAL_ONLY_KEYS`).
+- The counting table `awgr_acct` must **never** be rebuilt with the main `awgr` table (counters
+  would reset): `engine._account` creates it only when it is missing or its rule comment marker
+  (`nftgen.acct_marker`, bump `ACCT_VER` when the table changes) differs. It only counts — no
+  marks, no verdicts — so a failure turns counting off (`acct_state = "off"`, retry in 1 h or on a
+  new target) without touching routing. Counter is in the rule (`update @up { … counter }`), not in
+  the set declaration: set-level expressions need kernel ≥ 5.11.
+- Traffic file format stays `_v: 2` on purpose: new keys are ignored by older panels, so a
+  downgrade does not wipe client totals.
+- Exit quota: `engine.over_quota` makes `resolve()` treat the exit as down (fallback); event
+  marks `quota_hit` / `quota_warned` (month) live in the upstream in `state.json`.
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 

@@ -418,6 +418,7 @@ def _int_or_none(v):
 
 
 QUOTA_KEY_RE = re.compile(r"^(\d{4}-\d{2}|total)$")
+MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
 def clean_backup_state(new: dict) -> dict:
@@ -476,9 +477,15 @@ def clean_backup_state(new: dict) -> dict:
             pc = awgconf.parse_upstream(str(u.get("config") or ""))
         except awgconf.ConfigError:
             fail(f + ".config")
+        qa = u.get("quota_action", "fallback")
+        if qa not in QUOTA_ACTIONS:
+            fail(f + ".quota_action")
+        flags = {k: u.get(k) if isinstance(u.get(k), str) and MONTH_RE.match(u[k]) else None
+                 for k in ("quota_hit", "quota_warned")}
         st["upstreams"].append({"id": u["id"], "name": check(f + ".name", lambda: v_name(u.get("name"))),
                                 "num": num, "config": pc.raw, "enabled": bool(u.get("enabled", True)),
-                                "fallback": "direct", "created": u.get("created") if _num(u.get("created")) else None})
+                                "fallback": "direct", "created": u.get("created") if _num(u.get("created")) else None,
+                                "quota": _int_or_none(u.get("quota")), "quota_action": qa, **flags})
     for i, u in enumerate(raw_ups):
         fb = check(f"upstreams[{i}].fallback", lambda: v_outbound(st, u.get("fallback") or "direct"))
         if fb == "up:" + u["id"]:
@@ -784,7 +791,9 @@ def share_data(req, token):
     live = c.get("live") or {}
     return {"name": c.get("name") or "", "enabled": c["enabled"], "now": time.time(),
             "handshake": live.get("handshake") or None, "config": cfg,
-            "traffic": engine.traffic.view(pk), "limits": limits.view(st.get("limits", {}).get(pk))}
+            # разбивка по выходам — только в панели: на публичной странице она ни к чему
+            "traffic": {k: v for k, v in engine.traffic.view(pk).items() if k != "by_out"},
+            "limits": limits.view(st.get("limits", {}).get(pk))}
 
 
 # -------------------------------------------------------------------- state
@@ -801,7 +810,10 @@ def _upstream_view(st: dict, u: dict) -> dict:
             "iface": f"{config.IFACE_PREFIX}{u['num']}", "enabled": u.get("enabled", True),
             "fallback": u.get("fallback", "direct"), "created": u.get("created"),
             **info, "health": engine.health.get(u["id"], {"state": "down"}), "effective": eff,
-            "refs": Store.outbound_refs(st, "up:" + u["id"])}
+            "refs": Store.outbound_refs(st, "up:" + u["id"]),
+            "quota": u.get("quota"), "quota_action": u.get("quota_action", "fallback"),
+            "over_quota": bool(u.get("quota")) and engine.traffic.out_used(u["id"]) >= u["quota"],
+            "traffic": engine.traffic.out_view(u["id"])}
 
 
 @app.get("/api/state")
@@ -845,6 +857,8 @@ def get_state(req):
         "month": month_key(),
         "notify_error": notifier.last_error,
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
+        "direct_traffic": engine.traffic.out_view("direct"),
+        "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "clients": clients,
         "events": engine.events[-40:][::-1],
@@ -853,9 +867,32 @@ def get_state(req):
 
 
 # ---------------------------------------------------------------- upstreams
+QUOTA_ACTIONS = ("fallback", "notify")
+
+
+def v_exit_quota(body: dict) -> tuple[int | None, str]:
+    """quota_gb ("" / None — без лимита) и quota_action из формы выхода."""
+    q = body.get("quota_gb")
+    if q in (None, ""):
+        quota = None
+    else:
+        try:
+            q = float(q)
+        except (TypeError, ValueError):
+            bad("err.quota")
+        if not 0 < q <= 1_000_000:
+            bad("err.quota")
+        quota = int(q * limits.GB)
+    action = body.get("quota_action") or "fallback"
+    if action not in QUOTA_ACTIONS:
+        bad("err.bad_value")
+    return quota, action
+
+
 @app.post("/api/upstreams")
 def add_upstream(req):
     body = req.json()
+    quota, action = v_exit_quota(body)
     try:
         pc = awgconf.parse_upstream(str(body.get("config", "")))
     except awgconf.ConfigError as e:
@@ -865,7 +902,8 @@ def add_upstream(req):
     def fn(st):
         fb = v_outbound(st, body.get("fallback") or "direct")
         u = {"id": new_id("u"), "name": name, "num": Store.free_num(st), "config": pc.raw,
-             "enabled": True, "fallback": fb, "created": time.time()}
+             "enabled": True, "fallback": fb, "created": time.time(),
+             "quota": quota, "quota_action": action}
         st["upstreams"].append(u)
         if body.get("make_default") and st["routing"]["default"] in ("direct", "block"):
             st["routing"]["default"] = "up:" + u["id"]
@@ -886,6 +924,9 @@ def get_upstream_config(req, uid):
 @app.put("/api/upstreams/{uid}")
 def edit_upstream(req, uid):
     body = req.json()
+    quota = None
+    if "quota_gb" in body:
+        quota, action = v_exit_quota(body)
 
     def fn(st):
         u = Store.upstream(st, uid)
@@ -905,6 +946,10 @@ def edit_upstream(req, uid):
                 u["config"] = awgconf.parse_upstream(str(body["config"])).raw
             except awgconf.ConfigError as e:
                 bad(e.msg)
+        if "quota_gb" in body:
+            if quota != u.get("quota") or action != u.get("quota_action", "fallback"):
+                u["quota_hit"] = u["quota_warned"] = None   # события квоты — заново
+            u["quota"], u["quota_action"] = quota, action
     store.mutate(fn)
     engine.trigger()
     return {"ok": True}
@@ -920,6 +965,7 @@ def del_upstream(req, uid):
             bad(Msg("err.upstream_in_use", refs=refs[:6]))
         st["upstreams"] = [u for u in st["upstreams"] if u["id"] != uid]
     store.mutate(fn)
+    engine.traffic.forget_out(uid)
     engine.trigger()
     return {"ok": True}
 

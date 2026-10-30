@@ -3,6 +3,20 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.3.0 — 2026-10-30
+
+- **Traffic per exit.** The panel now counts how much client traffic goes through each exit
+  and how much goes direct, for the month and all time, and splits each client's monthly
+  traffic by exit (client → Manage). Counting runs in a separate nftables table
+  (`awgr_acct`) that only counts: it sets no marks or routes, it is not rebuilt when rules
+  change (so counters don't reset) and, if the kernel can't load it, the panel turns
+  counting off with one log entry and routing works as before. Blocked traffic is not counted.
+- **Monthly limit for an exit.** When it is used up, the exit's clients go to its fallback
+  exit until the 1st (UTC), or the panel only notifies you. Log entries and Telegram
+  notifications at 90 %, at the limit and when a new month starts.
+- Exit cards show monthly and all-time traffic instead of the tunnel counter that reset with
+  every tunnel restart.
+
 ## 1.2.0 — 2026-10-30
 
 - Traffic per client by month and in total, end dates and traffic limits with auto-off,
