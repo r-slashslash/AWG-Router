@@ -11,8 +11,9 @@ so every user-visible change gets a new version.
   (`awgr_acct`) that only counts: it sets no marks or routes, it is not rebuilt when rules
   change (so counters don't reset) and, if the kernel can't load it, the panel turns
   counting off with one log entry and routing works as before. Blocked traffic is not counted.
-- **Monthly limit for an exit.** When it is used up, the exit's clients go to its fallback
-  exit until the 1st (UTC), or the panel only notifies you. Log entries and Telegram
+- **Monthly limit for an exit.** You choose what happens when it is used up: notify only,
+  block, go direct or switch to another exit, until the 1st (UTC). This is separate from the
+  exit's "if the server stops responding" choice. Log entries and Telegram
   notifications at 90 %, at the limit and when a new month starts.
 - Exit cards show monthly and all-time traffic instead of the tunnel counter that reset with
   every tunnel restart.
@@ -24,7 +25,7 @@ so every user-visible change gets a new version.
   sha256); distro packages are only a fallback when GitHub is unreachable (Debian 11/12 have
   only Compose v1, Debian 13 ships buildx 0.13 while Compose needs 0.17+). Images are built
   with `docker build`, so a Compose/buildx version mismatch no longer stops the install.
-- Exit limit hint: says that traffic inside the tunnel is counted; the footnote under the
+- The exit limit hint says that traffic inside the tunnel is counted; the footnote under the
   exit cards is gone.
 
 ## 1.2.0 — 2026-10-30

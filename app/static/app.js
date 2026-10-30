@@ -451,7 +451,14 @@ function arrows(x, period = "month") {
   x = x || {};
   return `↓ ${esc(fmtBytes(x[period + "_tx"]))} ↑ ${esc(fmtBytes(x[period + "_rx"]))}`;
 }
-function quotaSwitched(u) { return !!(u.enabled && u.over_quota && u.quota_action === "fallback"); }
+function quotaSwitched(u) { return !!(u.enabled && u.over_quota && u.quota_action !== "notify"); }
+// варианты «Когда лимит исчерпан»: уведомить, блокировать, напрямую, другие выходы (не сам)
+function quotaOptions(u) {
+  const sel = u ? u.quota_action : "notify";
+  const opts = [["notify", t("ex.qa_notify")], ["block", t("out.block")], ["direct", t("out.direct")]];
+  for (const x of S.upstreams) if (!u || x.id !== u.id) opts.push(["up:" + x.id, t("out.via", { name: x.name })]);
+  return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${esc(l)}</option>`).join("");
+}
 function exitQuota(u) {
   const x = u.traffic || {}, used = (x.month_rx || 0) + (x.month_tx || 0);
   const pct = Math.min(100, Math.round(used / u.quota * 100));
@@ -827,6 +834,7 @@ function viewExits() {
                <div><span>${esc(t("ex.all_time"))}</span><b>${arrows(u.traffic, "total")}</b></div>`
             : `<div><span>${esc(t("ex.traffic"))}</span><b>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</b></div>`}
           ${u.quota ? `<div><span>${esc(t(u.quota_action === "notify" ? "ex.limit_notify" : "ex.limit"))}</span><b>${exitQuota(u)}</b></div>` : ""}
+          ${u.quota && u.quota_action !== "notify" ? `<div><span>${esc(t("ex.quota_action"))}</span><b>${outChip(u.quota_action)}</b></div>` : ""}
           <div><span>${esc(t("ex.on_fail"))}</span><b>${outChip(u.fallback)}</b></div>
         </div>
         ${u.refs.length ? `<div class="small muted">${esc(t("ex.used_by", { refs: tm(u.refs) }))}</div>` : ""}
@@ -904,10 +912,7 @@ async function editUpstream(id) {
       <label class="field"><span>${esc(t("ex.quota"))}</span>
         <input type="number" id="u-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.quota ? +(u.quota / 1024 ** 3).toFixed(3) : ""}"></label>
       <label class="field"><span>${esc(t("ex.quota_action"))}</span>
-        <select id="u-qa">
-          <option value="fallback" ${!u || u.quota_action !== "notify" ? "selected" : ""}>${esc(t("ex.qa_fallback"))}</option>
-          <option value="notify" ${u && u.quota_action === "notify" ? "selected" : ""}>${esc(t("ex.qa_notify"))}</option>
-        </select></label>
+        <select id="u-qa">${quotaOptions(u)}</select></label>
     </div>
     <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.quota_hint"))}</p>
     ${u ? "" : `<label class="check"><input type="checkbox" id="u-def" ${S.routing.default === "direct" ? "checked" : ""}><span>${esc(t("ex.make_default"))}</span></label>`}
