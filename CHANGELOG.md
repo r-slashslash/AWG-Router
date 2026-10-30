@@ -3,6 +3,13 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.3.1 — 2026-10-31
+
+- Clients tab: search, sorting and "Add client" stay on one line on a wide screen (the button
+  used to drop under the search box or squeeze its text into two lines).
+- README: new screenshots, including the Exits tab; the exit limit is described as it works
+  since 1.3.0 (you choose where traffic goes). `SECURITY.md`: how to report a vulnerability.
+
 ## 1.3.0 — 2026-10-30
 
 - **Traffic per exit.** The panel now counts how much client traffic goes through each exit
