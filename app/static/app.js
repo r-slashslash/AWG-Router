@@ -527,9 +527,11 @@ function qrSvg(text) {
   return `<svg class="qr" viewBox="0 0 ${n + 2 * m} ${n + 2 * m}" role="img" aria-label="QR" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
 }
 
+// application/octet-stream: с text/plain Chrome на Android дописывает к имени «.txt»,
+// и приложение AmneziaVPN не принимает файл «client.conf.txt»
 function download(name, text) {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/octet-stream" }));
   a.download = name;
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
@@ -860,7 +862,6 @@ function viewExits() {
     ${off}
     ${cards || `<div class="panel empty"><p>${esc(t("ex.empty"))}</p><p class="small">${esc(t("ex.empty_hint"))}</p><button class="btn primary" data-add-empty>${esc(t("ov.add_exit"))}</button></div>`}
     ${direct}
-    ${acctOn() ? `<p class="small muted">${esc(t("ex.month_note"))}</p>` : ""}
   </section>`;
 }
 bind.exits = () => {

@@ -43,9 +43,11 @@ async function copyText(text) {
   }
   toast(t("toast.copied"));
 }
+// application/octet-stream: с text/plain Chrome на Android дописывает к имени «.txt»,
+// и приложение AmneziaVPN не принимает файл «client.conf.txt»
 function download(name, text) {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/octet-stream" }));
   a.download = name;
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);

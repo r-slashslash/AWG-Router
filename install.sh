@@ -162,47 +162,105 @@ PY
 if [ "$INFO_ONLY" = 1 ]; then print_info; exit 0; fi
 [ "$(id -u)" = 0 ] || die "Run as root: sudo bash install.sh"
 
-# ------------------------------------------------------------------ dependencies
-step "Checking dependencies"
-if ! command -v apt-get >/dev/null; then
-  command -v docker >/dev/null || die "Debian/Ubuntu (apt) or a preinstalled Docker is required"
-fi
+# ------------------------------------------------------------------ system
+step "Checking the system"
+mkdir -p "$DIR/data"; chmod 700 "$DIR/data"
+APT_LOG="$DIR/data/apt.log"
 APT_UPDATED=0
 apt_install() {
-  [ "$APT_UPDATED" = 1 ] || { DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1; APT_UPDATED=1; }
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" >/dev/null 2>&1
+  command -v apt-get >/dev/null || return 1
+  # a fresh VM often runs unattended-upgrades for a few minutes: wait for the lock instead of failing
+  [ "$APT_UPDATED" = 1 ] || {
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -qq >>"$APT_LOG" 2>&1; APT_UPDATED=1; }
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y -qq "$@" >>"$APT_LOG" 2>&1
 }
+apt_has() { LC_ALL=C apt-cache policy "$1" 2>/dev/null | grep -q 'Candidate: [0-9]'; }
+ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }   # $1 >= $2
+osr() { ( . /etc/os-release 2>/dev/null; eval "echo \"\${$1:-}\"" ); }       # a field of /etc/os-release
+
+OS_ID="$(osr ID)"; OS_VER="$(osr VERSION_ID)"; OS_LIKE="$(osr ID_LIKE)"; OS_NAME="$(osr PRETTY_NAME)"
+OS_NAME="${OS_NAME:-$(uname -s)}"
+case "$OS_ID" in
+  debian) { [ -z "$OS_VER" ] || ver_ge "$OS_VER" 11; } && ok "$OS_NAME" \
+            || warn "$OS_NAME: Debian 11 or newer is supported, trying anyway" ;;
+  ubuntu) ver_ge "${OS_VER:-0}" 20.04 && ok "$OS_NAME" \
+            || warn "$OS_NAME: Ubuntu 20.04 or newer is supported, trying anyway" ;;
+  *) if command -v apt-get >/dev/null; then warn "$OS_NAME is not tested (Debian or Ubuntu is), trying anyway"
+     elif command -v docker >/dev/null; then warn "$OS_NAME: no apt, using the installed Docker as is"
+     else die "Debian/Ubuntu (apt) or a preinstalled Docker is required"; fi ;;
+esac
+
 for b in curl openssl ss python3; do
   command -v "$b" >/dev/null || case "$b" in
     ss) apt_install iproute2 ;; *) apt_install "$b" ;;
   esac
 done
-if ! command -v docker >/dev/null; then
-  echo "  Installing Docker…"
-  apt_install docker.io || die "Failed to install Docker"
-  systemctl enable --now docker >/dev/null 2>&1 || true
-fi
-if ! docker compose version >/dev/null 2>&1; then
-  echo "  Installing Docker Compose…"
-  apt_install docker-compose-v2 || apt_install docker-compose-plugin || true
-  # Debian 13+ ships Compose v2 as plain "docker-compose"; older Debian has v1 under that name, so check the version first
-  if ! docker compose version >/dev/null 2>&1 \
-     && LC_ALL=C apt-cache policy docker-compose 2>/dev/null | grep -q 'Candidate: 2\.'; then
-    apt_install docker-compose || true
+
+# Binaries from GitHub releases: the names differ between buildx and compose
+case "$(uname -m)" in
+  x86_64|amd64)  BX_ARCH=amd64;   DC_ARCH=x86_64 ;;
+  aarch64|arm64) BX_ARCH=arm64;   DC_ARCH=aarch64 ;;
+  armv7l|armhf)  BX_ARCH=arm-v7;  DC_ARCH=armv7 ;;
+  armv6l)        BX_ARCH=arm-v6;  DC_ARCH=armv6 ;;
+  ppc64le)       BX_ARCH=ppc64le; DC_ARCH=ppc64le ;;
+  riscv64)       BX_ARCH=riscv64; DC_ARCH=riscv64 ;;
+  s390x)         BX_ARCH=s390x;   DC_ARCH=s390x ;;
+  *)             BX_ARCH="";      DC_ARCH="" ;;
+esac
+PLUGINS=/usr/local/lib/docker/cli-plugins     # searched before the distro's /usr/lib and /usr/libexec
+
+gh_latest() { # $1 owner/repo, $2 tag to use if GitHub does not answer → the latest release tag
+  local u t
+  u=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --max-time 20 "https://github.com/$1/releases/latest" 2>/dev/null) || u=""
+  t="${u##*/}"
+  [[ "$t" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || t="$2"
+  echo "$t"
+}
+
+gh_plugin() { # $1 owner/repo, $2 tag, $3 asset, $4 plugin file — download, check sha256, install
+  local tmp sum base="https://github.com/$1/releases/download/$2"
+  tmp=$(mktemp -d) || return 1
+  if curl -fsSL --retry 3 --max-time 600 -o "$tmp/bin" "$base/$3" 2>/dev/null \
+     && curl -fsSL --retry 3 --max-time 60 -o "$tmp/sums" "$base/checksums.txt" 2>/dev/null; then
+    sum=$(awk -v f="$3" '{n=$2; sub(/^\*/, "", n)} n == f {print $1}' "$tmp/sums")
+    if [ -n "$sum" ] && echo "$sum  $tmp/bin" | sha256sum -c --status 2>/dev/null; then
+      install -D -m 0755 "$tmp/bin" "$PLUGINS/$4"; rm -rf "$tmp"; return 0
+    fi
   fi
-  docker compose version >/dev/null 2>&1 || die "Failed to install docker compose"
+  rm -rf "$tmp"; return 1
+}
+
+docker_up() { docker info >/dev/null 2>&1; }
+ensure_daemon() {
+  docker_up && return 0
+  echo "  Starting the Docker service…"
+  systemctl reset-failed docker >/dev/null 2>&1 || true
+  systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+  for _ in $(seq 1 15); do docker_up && return 0; sleep 1; done
+  systemctl restart docker >/dev/null 2>&1 || true
+  for _ in $(seq 1 30); do docker_up && return 0; sleep 1; done
+  journalctl -u docker -n 20 --no-pager 2>/dev/null | sed 's/^/    /'
+  die "The Docker service does not start (see the lines above; full log: journalctl -u docker)"
+}
+
+buildx_ver() { docker buildx version 2>/dev/null | awk '{v=$2; sub(/^v/, "", v); sub(/[+-].*/, "", v); print v; exit}'; }
+
+# The panel itself always runs in a container, so Docker is needed in both modes.
+# It is installed after the questions; if it is already here, it must be running to find an Amnezia container.
+HAVE_DOCKER=0
+if command -v docker >/dev/null; then
+  HAVE_DOCKER=1; ensure_daemon
+else
+  ok "Docker will be installed after a few questions (the panel runs in a container in every mode)"
 fi
-# Compose 2.40.2+ needs buildx to build; Ubuntu's docker.io only suggests it. Optional: older Compose builds without it
-docker buildx version >/dev/null 2>&1 || apt_install docker-buildx || true
-ok "Docker $(docker --version | awk '{print $3}' | tr -d ,)"
 
 # ------------------------------------------------------------------ AmneziaWG server
 AWG_MODE="$(envget AWG_MODE)"; ACCESS="$(envget PANEL_ACCESS)"
 AWG_INIT_PORT=""; INSTALL_AWG=""; AWG_PORT=""
 
-find_amnezia() { docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^amnezia-awg2?$' | sort -r | head -1; }
+find_amnezia() { [ "$HAVE_DOCKER" = 1 ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^amnezia-awg2?$' | sort -r | head -1; }
 AMN="$(find_amnezia)"
-if [ -z "$AMN" ]; then   # the container exists but is stopped — start it
+if [ -z "$AMN" ] && [ "$HAVE_DOCKER" = 1 ]; then   # the container exists but is stopped — start it
   STOPPED="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^amnezia-awg2?$' | sort -r | head -1)"
   if [ -n "$STOPPED" ]; then
     docker start "$STOPPED" >/dev/null 2>&1 && sleep 3
@@ -300,7 +358,7 @@ PANEL_BASE_PATH="$(envget PANEL_BASE_PATH)"
 if [ "$ACCESS" = ssh ]; then PANEL_HOST=127.0.0.1; TLS_MODE=off; else PANEL_HOST=0.0.0.0; TLS_MODE=letsencrypt; fi
 ok "Panel port: $PANEL_PORT"
 
-if [ "$TLS_MODE" = letsencrypt ] && port_busy 80 && ! docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
+if [ "$TLS_MODE" = letsencrypt ] && port_busy 80 && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$NAME"; then
   warn "Port 80 is used by another program — Let's Encrypt cannot validate, a temporary certificate will be used"
 fi
 
@@ -332,16 +390,71 @@ UPSTREAM_BACKEND=userspace
 RECONCILE_INTERVAL=10
 EOF
 umask 022
-mkdir -p "$DIR/data"; chmod 700 "$DIR/data"
+
+# ------------------------------------------------------------------ Docker
+step "Docker"
+if ! command -v docker >/dev/null; then
+  echo "  Installing Docker…"
+  apt_install docker.io || { tail -n 15 "$APT_LOG" 2>/dev/null; die "Failed to install Docker, see $APT_LOG"; }
+  HAVE_DOCKER=1
+fi
+ensure_daemon
+
+# Compose: the distro package when it is v2, otherwise the release from GitHub
+# (Ubuntu: docker-compose-v2; Docker's own repo: docker-compose-plugin; Debian 13: docker-compose 2.x;
+#  Debian 11/12 only have Compose v1, which cannot be used)
+if ! docker compose version >/dev/null 2>&1; then
+  echo "  Installing Docker Compose…"
+  for p in docker-compose-v2 docker-compose-plugin; do
+    apt_has "$p" && apt_install "$p" && docker compose version >/dev/null 2>&1 && break
+  done
+  if ! docker compose version >/dev/null 2>&1 \
+     && LC_ALL=C apt-cache policy docker-compose 2>/dev/null | grep -q 'Candidate: 2\.'; then
+    apt_install docker-compose || true
+  fi
+  if ! docker compose version >/dev/null 2>&1 && [ -n "$DC_ARCH" ]; then
+    tag="$(gh_latest docker/compose v5.6.1)"
+    gh_plugin docker/compose "$tag" "docker-compose-linux-$DC_ARCH" docker-compose || true
+  fi
+  docker compose version >/dev/null 2>&1 || die "Failed to install Docker Compose"
+fi
+
+# buildx: Compose 2.40.2+ refuses to build with buildx older than 0.17, and distros ship older ones
+# (Debian 13: 0.13). A missing or old one is replaced with the latest release from GitHub;
+# the distro package is only a fallback when GitHub is unreachable.
+BX_MIN=0.17.0
+bx="$(buildx_ver)"
+if [ -z "$bx" ] || ! ver_ge "$bx" "$BX_MIN"; then
+  echo "  Installing the latest Docker buildx${bx:+ (installed: $bx)}…"
+  if [ -n "$BX_ARCH" ]; then
+    tag="$(gh_latest docker/buildx v0.38.1)"
+    gh_plugin docker/buildx "$tag" "buildx-$tag.linux-$BX_ARCH" docker-buildx || true
+  fi
+  [ -n "$(buildx_ver)" ] || apt_install docker-buildx || apt_install docker-buildx-plugin || true
+  bx="$(buildx_ver)"
+  if [ -z "$bx" ]; then warn "Docker buildx is not available — the panel is built with the classic builder"
+  elif ! ver_ge "$bx" "$BX_MIN"; then
+    warn "Docker buildx $bx is old (an older copy in ~/.docker/cli-plugins?) — the panel is built without Compose"
+  fi
+fi
+ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), Compose $(docker compose version --short 2>/dev/null | sed 's/^v//')${bx:+, buildx $bx}"
 
 # ------------------------------------------------------------------ build
+# Images are built by "docker build" rather than "docker compose build": it does not depend on
+# the Compose/buildx version pairing. If BuildKit fails (very old engine), the classic builder is tried.
+build_image() { # $1 tag, $2 context dir, $3 log (the classic attempt goes to $3.classic)
+  docker build -t "$1" "$2" >"$3" 2>&1 && return 0
+  [ -n "$(buildx_ver)" ] || return 1          # it already was the classic builder
+  DOCKER_BUILDKIT=0 docker build -t "$1" "$2" >"$3.classic" 2>&1
+}
+
 step "Building the panel (first time takes 3–10 minutes)"
 LOG="$DIR/data/build.log"
-docker compose build >"$LOG" 2>&1 &
+build_image "$IMAGE" "$DIR" "$LOG" &
 BPID=$!
 spin='|/-\'; i=0
 while kill -0 "$BPID" 2>/dev/null; do printf '\r  %s ' "${spin:i++%4:1}"; sleep 0.5; done
-printf '\r'
+printf '\r    \r'
 wait "$BPID" || { tail -n 25 "$LOG"; die "Build failed, see $LOG"; }
 ok "Done"
 
@@ -352,7 +465,7 @@ if [ "$INSTALL_AWG" = container ]; then
   docker run --rm --network none -v "$SRV_DATA:/out" "$IMAGE" \
       python3 -m app.initserver --out /out --port "$AWG_PORT" >"$DIR/data/awg-init.log" 2>&1 \
     || { cat "$DIR/data/awg-init.log"; die "Failed to create the server config"; }
-  docker build -t "$SRV_NAME" "$DIR/awg-server" >"$DIR/data/awg-build.log" 2>&1 \
+  build_image "$SRV_NAME" "$DIR/awg-server" "$DIR/data/awg-build.log" \
     || { tail -n 20 "$DIR/data/awg-build.log"; die "Failed to build the AmneziaWG container"; }
   if docker ps -a --format '{{.Names}}' | grep -qx "$SRV_NAME"; then
     # an old container that would not start may still hold client configs — keep it, just rename
@@ -378,7 +491,7 @@ fi
 # ------------------------------------------------------------------ start
 step "Starting"
 rm -f "$DIR/data/status.json"
-docker compose up -d --force-recreate >"$DIR/data/up.log" 2>&1 || { cat "$DIR/data/up.log"; die "Failed to start"; }
+docker compose up -d --no-build --force-recreate >"$DIR/data/up.log" 2>&1 || { cat "$DIR/data/up.log"; die "Failed to start"; }
 echo "  Waiting for start-up and the certificate (up to 5 minutes)…"
 for _ in $(seq 1 300); do
   [ -f "$DIR/data/status.json" ] && break
