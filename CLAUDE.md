@@ -42,6 +42,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/lists.py` | Country / ASN / URL / manual network lists (ipverse → ipdeny / RIPEstat fallback) |
 | `app/tlsmgr.py` | Let's Encrypt via `lego` (profile `shortlived`, 6-day IP certs, renew ~3 days), self-signed fallback, hot reload |
 | `app/store.py` | `data/state.json` (routing, upstreams, lists, client policies, private keys, settings) |
+| `app/hostnet.py` | Host addresses without outside requests (panel runs in the host network): public IPv6 from `/proc/net/if_inet6`, IPv6 UDP listener on the AWG port from `/proc/net/udp6` |
 | `app/initserver.py` | CLI: create an Amnezia-layout server config (used by installer for a new container) |
 | `app/uninstall.py` | Removes nft table / ip rules from the target (used by `awg-router uninstall`) |
 | `app/static/` | SPA: `index.html`, `app.js` (tabs: overview, clients, exits, routing, lists, server, system), `app.css`, `i18n.js`, `qrcode.js` (MIT, Kazuhiko Arase) |
@@ -81,6 +82,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 - Restore (`clean_backup_state`, `clean_server_files`) re-validates every field like panel input:
   ids end up in nft set names, interface names and file names. Hooks (`PostUp` …) from a backup
   are replaced (`awgserver.safe_hooks`) — awg-quick runs them as root.
+- Client configs use `settings.client_host` (an IP picked on the Server tab, empty = `public_host`), never
+  `public_host` directly: `public_host` is also the panel URL and the Let's Encrypt name, and the panel
+  listens on IPv4 only. Restore keeps this server's `client_host`, as it does `public_host`. The tunnel
+  itself is IPv4 only (clients get `::/0` → IPv6 goes into the tunnel and is dropped, no leak).
 - Exit configs: `FwMark`/`ListenPort` are dropped (`awgconf.LOCAL_ONLY_KEYS`).
 - The counting table `awgr_acct` must **never** be rebuilt with the main `awgr` table (counters
   would reset): `engine._account` creates it only when it is missing or its rule comment marker

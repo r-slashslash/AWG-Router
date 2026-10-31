@@ -1215,6 +1215,7 @@ function viewServer() {
     <section class="section">
       <div class="section-head"><h2>${esc(t("srv.clients_title"))}</h2></div>
       <div class="panel panel-pad">
+        <label class="field"><span>${esc(t("srv.client_host"))}</span><select id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
         <label class="field"><span>DNS</span><input type="text" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
         <div class="row2">
           <label class="field"><span>MTU</span><input type="number" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
@@ -1243,10 +1244,28 @@ function sigTemplate(d) {
       <option value="" ${cur ? "" : "selected"} disabled>${esc(t("cps.custom"))}</option></select>
     <span class="hint">${esc(t("srv.cps_template_hint"))}</span></label>`;
 }
+/* Адрес сервера в конфигах клиентов: внешний адрес или найденный IPv4/IPv6 */
+function clientHostOptions() {
+  const A = SRV.addrs || {}, cur = SRV.client_host || "";
+  const opts = [["", t("srv.ch_main", { v: SRV.public_host || "—" })]];
+  if (A.v4 && A.v4 !== SRV.public_host) opts.push([A.v4, "IPv4 · " + A.v4]);
+  (A.v6 || []).forEach((ip) => { if (ip !== SRV.public_host) opts.push([ip, "IPv6 · " + ip]); });
+  if (cur && !opts.some(([v]) => v === cur)) opts.push([cur, (cur.includes(":") ? "IPv6 · " : "IPv4 · ") + cur]);
+  return opts.map(([v, label]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(label)}</option>`).join("");
+}
+function clientHostHint(val) {
+  const A = SRV.addrs || {}, v6 = A.v6 || [];
+  const host = val || SRV.public_host || "";
+  const out = [esc(t("srv.client_host_hint"))];
+  if (val && val.includes(":") && !v6.includes(val)) out.push(`<span class="warn-text">${esc(t("srv.client_host_gone"))}</span>`);
+  if (host.includes(":") && !A.v6_listen) out.push(`<span class="warn-text">${esc(t("srv.v6_not_listening", { port: SRV.port }))}</span>`);
+  if (!v6.length) out.push(esc(t("srv.no_v6")));
+  return out.join(" ");
+}
 function srvDirty() {
   if (!SRV || !srvDraft) return false;
   return Object.keys(SRV.params).some((k) => (srvDraft[k] || "") !== (SRV.params[k] || "")) ||
-    ["#s-host", "#s-dns", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
+    ["#s-host", "#s-ch", "#s-dns", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
 }
@@ -1269,7 +1288,7 @@ bind.server = () => {
   }
   if (!SRV || !SRV.exists) return;
   const showBar = () => { $("#s-bar").hidden = !srvDirty(); };
-  ["#s-host", "#s-dns", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
+  ["#s-host", "#s-ch", "#s-dns", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar;
   });
@@ -1287,6 +1306,8 @@ bind.server = () => {
     CPS_KEYS.forEach((k) => { srvDraft[k] = p.values[k] || ""; const el = $(`[data-p="${k}"]`); if (el) el.value = srvDraft[k]; });
     syncTpl(); showBar();
   };
+  const ch = $("#s-ch");
+  if (ch) ch.onchange = () => { $("#s-ch-hint").innerHTML = clientHostHint(ch.value); showBar(); };
   showBar();
   $("#s-gen").onclick = async () => {
     if (!confirm(t("srv.generate_confirm"))) return;
@@ -1303,7 +1324,7 @@ bind.server = () => {
     const port = +$("#s-port").value, addr = $("#s-addr").value.trim();
     const restart = serverSide || (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
     if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
-    const body = { public_host: $("#s-host").value.trim(), client_dns: $("#s-dns").value,
+    const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, client_dns: $("#s-dns").value,
       client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
     if (!SRV.port_locked) body.port = port;
@@ -1312,7 +1333,7 @@ bind.server = () => {
     try {
       const r = await api("PUT", "server", body);
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
-      if (r.server_side_changed) toast(t("toast.reimport"));
+      if (r.server_side_changed || r.host_changed) toast(t("toast.reimport"));
       SRV = null; srvDraft = null; await refresh(); loadServer();
     } catch (e) { toast(e.message, true); $("#s-save").disabled = false; }
   };

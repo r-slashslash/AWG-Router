@@ -3,6 +3,15 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.6.0 — 2026-10-31
+
+- **Server address in client configs: IPv4 or IPv6.** The Server tab finds the server's public
+  IPv4 and IPv6 addresses and lets you pick which one goes into client configs (Client settings →
+  Address in configs). It is separate from the public address, so the panel link and its
+  certificate stay as they are. If the server has no public IPv6, or its port does not seem to
+  accept IPv6 connections, the panel says so. Clients re-import their configs after a change.
+- README: "IPv4 only" now reads "inside the tunnel, IPv4 only; clients connect over IPv4 or IPv6".
+
 ## 1.5.0 — 2026-10-31
 
 - **Masking templates for I1–I5.** The Server tab gets a template picker for the signature

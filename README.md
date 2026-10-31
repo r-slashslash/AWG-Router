@@ -34,7 +34,7 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Every AmneziaWG parameter: Jc/Jmin/Jmax, S1–S4, H1–H4, I1–I5, HeaderProtectionKey, ContentPaddingAddition, AWG 3 timings, RandomTrailers and DisableCookies.
 - Ready-made masking for the signature packets I1–I5: STUN (calls, WebRTC), QUIC (HTTP/3), DNS query, SIP and a fixed DNS response for icloud.com (what AmneziaVPN puts in by default), with random parts so no two handshakes look alike. I1–I5 are checked strictly (only tags every AmneziaWG understands, packet size shown) and can be set per client: if a client's provider starts blocking, give that one client another masking.
 - Fresh parameters on demand, generated the same way as the AmneziaVPN installer does for AWG 3.1.
-- Port, subnet, client DNS/MTU/keepalive and public address.
+- Port, subnet, client DNS/MTU/keepalive, public address and the address in client configs (IPv4 or IPv6).
 - Adding or removing a client is applied live without dropping anyone. Server-side parameters restart the interface, which takes a few seconds.
 
 **Routing**
@@ -166,7 +166,7 @@ The panel effectively has root access to the server.
 
 ## Limitations
 
-- IPv4 only.
+- Inside the tunnel, IPv4 only. Clients connect to the server over IPv4 or IPv6.
 - Rules match IP networks, not domain names.
 - Country lists are built from registry data. For a specific service, an ASN list is more accurate.
 
