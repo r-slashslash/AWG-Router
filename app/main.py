@@ -795,10 +795,13 @@ def restore_backup(req):
 
     def fn(st):
         keep_host = st["settings"].get("public_host")
+        keep_client_host = st["settings"].get("client_host")
         st.clear()
         st.update(new)
         if keep_host:      # адрес этого сервера важнее адреса из копии (переезд)
             st["settings"]["public_host"] = keep_host
+        if keep_client_host:
+            st["settings"]["client_host"] = keep_client_host
     store.mutate(fn)
     engine.traffic.replace(b.get("traffic") or {})
     restarted = False

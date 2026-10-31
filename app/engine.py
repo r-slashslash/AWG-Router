@@ -75,6 +75,7 @@ class Engine:
         self._list_cache: dict[str, tuple[float, list[str]]] = {}
         self._parsed: dict[str, awgconf.UpstreamConf] = {}
         self._fake = system.DemoTarget() if config.DRY_RUN else None
+        self.public_v4: str | None = None      # внешний IPv4, найденный проверкой «напрямую»
         self.srv = ServerManager(self)
         self._runtime_checked = False
         self._last_start_try = 0.0
@@ -101,15 +102,18 @@ class Engine:
         threading.Thread(target=self._detect_host, name="public-ip", daemon=True).start()
 
     def _detect_host(self) -> None:
-        """Внешний IP сервера для клиентских конфигов, если его не задали."""
+        """Внешний IPv4 сервера: показывается на вкладке «Сервер» и становится внешним
+        адресом, если его не задали."""
         for _ in range(30):
-            if self.stop_ev.is_set() or self.srv.public_host(self.store.snapshot()):
+            if self.stop_ev.is_set():
                 return
             if self.target and self.target.exists:
                 try:
                     r = self.probe("direct")
                     if r.get("ok") and r.get("ip"):
-                        self.store.mutate(lambda st: st["settings"].setdefault("public_host", r["ip"]))
+                        self.public_v4 = r["ip"]
+                        if not self.srv.public_host(self.store.snapshot()):
+                            self.store.mutate(lambda st: st["settings"].setdefault("public_host", r["ip"]))
                         return
                 except Exception:  # noqa: BLE001
                     pass

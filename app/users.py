@@ -10,7 +10,7 @@ import ipaddress
 import logging
 import re
 
-from . import awgserver, config, cps, system
+from . import awgserver, config, cps, hostnet, system
 from .awgserver import ServerConf
 from .i18n import Msg, MsgError
 
@@ -53,11 +53,23 @@ class ServerManager:
     def public_host(self, st: dict) -> str:
         return st["settings"].get("public_host") or config.PUBLIC_HOST or ""
 
+    def client_host(self, st: dict) -> str:
+        """Адрес сервера в конфигах клиентов: выбранный IPv4/IPv6 или внешний адрес.
+        Отдельно от public_host — тот же адрес у панели и её сертификата."""
+        return st["settings"].get("client_host") or self.public_host(st)
+
+    def host_addrs(self, port: int) -> dict:
+        """Найденные адреса сервера для выбора на вкладке «Сервер»."""
+        if config.DRY_RUN:
+            return {"v4": self.e.public_v4 or "203.0.113.10", "v6": ["2001:db8:42::10"], "v6_listen": True}
+        return {"v4": self.e.public_v4, "v6": hostnet.global_ipv6(),
+                "v6_listen": hostnet.udp6_listening(port)}
+
     def profile(self, st: dict, sc: ServerConf) -> awgserver.ClientProfile:
         s = st["settings"]
         params = sc.params()
         return awgserver.ClientProfile(
-            host=self.public_host(st) or "SERVER_IP",
+            host=self.client_host(st) or "SERVER_IP",
             port=sc.port,
             server_pub=self.server_pub(sc),
             dns=s.get("client_dns") or DEFAULT_DNS,
@@ -188,7 +200,7 @@ class ServerManager:
         safe = re.sub(r"[^\w.-]+", "_", name, flags=re.UNICODE).strip("_")[:40] or "awg"
         return {"name": name, "conf": conf, "filename": f"{safe}.conf",
                 "link": awgserver.vpn_link(sc, prof, p, priv, conf, f"{name} · {prof.host}", override),
-                "warn_host": not self.public_host(st)}
+                "warn_host": not self.client_host(st)}
 
     @staticmethod
     def _name(rows: list[dict], pk: str) -> str:
@@ -218,6 +230,8 @@ class ServerManager:
             "cps_server": cps.match(params),
             "version": awgserver.protocol_version(params),
             "public_host": self.public_host(st),
+            "client_host": s.get("client_host") or "",
+            "addrs": self.host_addrs(sc.port),
             "client_dns": s.get("client_dns") or DEFAULT_DNS,
             "client_mtu": int(s.get("client_mtu") or DEFAULT_MTU),
             "client_keepalive": s.get("client_keepalive") or "",
@@ -226,7 +240,7 @@ class ServerManager:
         }
 
     def update_server(self, body: dict) -> dict:
-        """Сохраняет настройки. Возвращает {restarted, server_side_changed}."""
+        """Сохраняет настройки. Возвращает {restarted, server_side_changed, host_changed}."""
         with self.e.lock:
             t = self._target()
             sc, rows = self.load(t)
@@ -239,6 +253,14 @@ class ServerManager:
                 if h and not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]{1,253}", h):
                     raise UserError(Msg("srv.bad_host"))
                 settings_patch["public_host"] = h.strip("[]")
+            if "client_host" in body:
+                ch = str(body["client_host"] or "").strip().strip("[]")
+                if ch:
+                    try:
+                        ch = str(ipaddress.ip_address(ch))
+                    except ValueError:
+                        raise UserError(Msg("srv.bad_client_host"))
+                settings_patch["client_host"] = ch
             if "client_dns" in body:
                 dns = [d.strip() for d in re.split(r"[,\s]+", str(body["client_dns"] or "")) if d.strip()]
                 for d in dns:
@@ -293,15 +315,18 @@ class ServerManager:
                     raise UserError(Msg("srv.bad_subnet"))
                 sc.set("Address", str(i))
                 restart = True
+            host_before = self.client_host(self.e.store.snapshot())
             if settings_patch:
                 self.e.store.mutate(lambda st: st["settings"].update(settings_patch))
+            host_changed = self.client_host(self.e.store.snapshot()) != host_before
             changed_conf = sc.render() != (t.read_file(t.conf_path) or "")
             if changed_conf:
                 self._write(t, sc, None, restart=restart)
                 self.e.event("info" if not restart else "warn",
                              Msg("ev.server_restarted" if restart else "ev.server_updated"))
             return {"restarted": restart and changed_conf,
-                    "server_side_changed": awgserver.server_side_changed(old, sc.params())}
+                    "server_side_changed": awgserver.server_side_changed(old, sc.params()),
+                    "host_changed": host_changed}
 
     def regenerate_params(self) -> dict[str, str]:
         """Новые параметры обфускации (не применяет — возвращает для формы)."""
