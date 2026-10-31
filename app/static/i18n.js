@@ -1597,7 +1597,7 @@ Object.assign(I18N.fa, {
 
 // 1.5.0: маскировка I1–I5 — шаблоны, проверка, свои значения клиента
 Object.assign(I18N.ru, {
-  "cps.amnezia": "DNS-ответ (как в AmneziaVPN)",
+  "cps.amnezia": "DNS-ответ icloud.com (фиксированный)",
   "cps.stun": "STUN — звонки, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS-запрос",
@@ -1612,7 +1612,7 @@ Object.assign(I18N.ru, {
   "srv.cps_template": "Шаблон",
   "srv.cps_template_hint": "Заполняет I1–I5 готовой маскировкой. Попадёт в новые конфиги клиентов, у которых маскировка «как на сервере».",
   "cl.cps": "Маскировка",
-  "cl.cps_server": "Как на сервере ({name})",
+  "cl.cps_server": "Как на сервере: {name}",
   "cl.cps_hint": "Какой протокол изображают пакеты перед рукопожатием. Только для этого клиента; после смены отдайте ему новый QR-код или файл.",
   "cl.cps_apply": "Применить",
   "cl.cps_saved": "Маскировка изменена — отдайте клиенту новый конфиг",
@@ -1624,7 +1624,7 @@ Object.assign(I18N.ru, {
   "srv.cps_size": "{key}: пакет {size} байт, больше {max} — он будет фрагментирован",
 });
 Object.assign(I18N.en, {
-  "cps.amnezia": "DNS response (as in AmneziaVPN)",
+  "cps.amnezia": "DNS response icloud.com (fixed)",
   "cps.stun": "STUN — calls, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS query",
@@ -1639,7 +1639,7 @@ Object.assign(I18N.en, {
   "srv.cps_template": "Template",
   "srv.cps_template_hint": "Fills I1–I5 with a ready-made imitation. Goes into new configs of clients whose masking is “as on the server”.",
   "cl.cps": "Masking",
-  "cl.cps_server": "As on the server ({name})",
+  "cl.cps_server": "As on the server: {name}",
   "cl.cps_hint": "Which protocol the packets before the handshake imitate. For this client only; after a change, give them the new QR code or file.",
   "cl.cps_apply": "Apply",
   "cl.cps_saved": "Masking changed — give the client the new config",
@@ -1651,7 +1651,7 @@ Object.assign(I18N.en, {
   "srv.cps_size": "{key}: the packet is {size} bytes, over {max} — it would be fragmented",
 });
 Object.assign(I18N.zh, {
-  "cps.amnezia": "DNS 响应（同 AmneziaVPN）",
+  "cps.amnezia": "DNS 响应 icloud.com（固定）",
   "cps.stun": "STUN——通话、WebRTC",
   "cps.quic": "QUIC——HTTP/3",
   "cps.dns": "DNS 查询",
@@ -1666,7 +1666,7 @@ Object.assign(I18N.zh, {
   "srv.cps_template": "模板",
   "srv.cps_template_hint": "用现成的伪装填写 I1–I5，会写入伪装设置为「与服务器相同」的客户端的新配置。",
   "cl.cps": "伪装",
-  "cl.cps_server": "与服务器相同（{name}）",
+  "cl.cps_server": "与服务器相同：{name}",
   "cl.cps_hint": "握手前的数据包伪装成哪种协议。仅对此客户端生效；更改后请把新的二维码或文件发给对方。",
   "cl.cps_apply": "应用",
   "cl.cps_saved": "伪装已更改——请把新配置发给客户端",
@@ -1678,7 +1678,7 @@ Object.assign(I18N.zh, {
   "srv.cps_size": "{key}：数据包 {size} 字节，超过 {max}——会被分片",
 });
 Object.assign(I18N.fa, {
-  "cps.amnezia": "پاسخ DNS (مانند AmneziaVPN)",
+  "cps.amnezia": "پاسخ DNS ‏icloud.com (ثابت)",
   "cps.stun": "STUN — تماس‌ها، WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "درخواست DNS",
@@ -1693,7 +1693,7 @@ Object.assign(I18N.fa, {
   "srv.cps_template": "الگو",
   "srv.cps_template_hint": "I1 تا I5 را با یک پوشش آماده پر می‌کند و در پیکربندی‌های تازهٔ کلاینت‌هایی که پوششان «مانند سرور» است قرار می‌گیرد.",
   "cl.cps": "پوشش",
-  "cl.cps_server": "مانند سرور ({name})",
+  "cl.cps_server": "مانند سرور: {name}",
   "cl.cps_hint": "بسته‌های پیش از دست‌دهی شبیه کدام پروتکل باشند. فقط برای این کلاینت؛ پس از تغییر، کد QR یا فایل تازه را به او بدهید.",
   "cl.cps_apply": "اعمال",
   "cl.cps_saved": "پوشش تغییر کرد — پیکربندی تازه را به کلاینت بدهید",

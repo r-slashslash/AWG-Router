@@ -1108,7 +1108,7 @@ function editList(id, kind) {
 
 /* ===================================================== сигнатурные пакеты I1–I5 */
 const CPS_KEYS = ["I1", "I2", "I3", "I4", "I5"];
-const CPS_SHORT = { amnezia: "AmneziaVPN", stun: "STUN", quic: "QUIC", dns: "DNS", sip: "SIP" };
+const CPS_SHORT = { amnezia: "DNS icloud", stun: "STUN", quic: "QUIC", dns: "DNS", sip: "SIP" };
 /** размер пакета в байтах (как app/cps.py) или null, если теги неверные */
 function cpsSize(v) {
   v = (v || "").trim();
