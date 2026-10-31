@@ -3,6 +3,19 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.10.2 — 2026-11-01
+
+- **`/start` opens the whole menu.** The bot puts every item on the keyboard at the bottom of the
+  screen: Status, Clients, Exits, New client, Route, Backup. It stays there, so the bot works by
+  taps; the buttons are understood in all four languages.
+- **The bot answers instead of staying silent.** A command from a chat other than the one in
+  Chat ID is still not run, but in a private chat the bot now replies "No access" with that
+  chat's Chat ID, to put into the panel (at most once in 10 minutes per chat).
+- **A webhook on the bot no longer blocks commands.** If the bot was connected to another service
+  before, Telegram refused to hand commands to the panel; the panel now removes the webhook once
+  and carries on.
+- The panel no longer lists ignored commands (added in 1.10.1): the bot itself says what is wrong.
+
 ## 1.10.1 — 2026-11-01
 
 - **The bot no longer stays silent when the server's clock is off.** Commands older than

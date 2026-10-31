@@ -135,12 +135,15 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   sent itself are edited in place (`_panel_msgs`); a button under a notification opens a new message.
   A pending question (`/add` or `/route` without an argument) waits 15 min for a reply. An update started
   from the bot is remembered in `tgbot.json` and announced (done / failed) by the new panel.
-  The ☰ Menu reply keyboard is sent once per language (`kbd` in `tgbot.json`), its text is matched in all
-  four languages, and `_drop_commands` removes it when control is turned off.
+  `/start` (and `/help`) sends the whole menu as a persistent reply keyboard (`tgbot.MENU`); `menu_action`
+  maps a pressed button's text in any of the four languages (and the 1.10.0 "☰ Menu") to a command;
+  `_drop_commands` removes the keyboard when control is turned off. A command from another chat is not run;
+  in a private chat the bot answers "No access" with that chat's id (once per 10 min per chat). A webhook on
+  the token (409 on getUpdates) is removed once by `_drop_webhook`.
 - Bot message age (1.10.1) is measured by Telegram's clock: `notify.note_date` reads the `Date` header of
   every Telegram answer (direct, and `tgreq.py` returns it as `date`) into `notify.clock_skew`. Never compare
   Telegram `date` fields with the server clock directly — VPS clocks drift, and the bot then ignored every
-  command. Commands from another chat are kept in `Bot.ignored` and shown in the panel (`tg_bot.ignored`).
+  command.
 - First connection (1.10.0): `users.add_client` puts the client into `state.await_first` (pk → created);
   `limits.first_seen` (after each poll) fires `ev.client_first` on its first handshake and drops entries
   for deleted clients or after 90 days. Restore does not carry `await_first` (built from `DEFAULT_STATE`).

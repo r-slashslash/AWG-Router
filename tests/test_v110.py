@@ -20,6 +20,10 @@ from tests.test_v19 import FakeTG, button, cfg, msg  # noqa: E402
 
 
 class BotUiTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        main.engine.reconcile()
+
     def setUp(self):
         self.tg = FakeTG()
         p = mock.patch.object(notify, "_post", self.tg)
@@ -36,31 +40,40 @@ class BotUiTest(unittest.TestCase):
     def sent(self):
         return [p for m, p in self.tg.calls if m == "sendMessage"]
 
-    def test_menu_has_route(self):
-        self.run_updates(msg("/help"))
-        cbs = [b["callback_data"] for row in self.sent()[-1]["reply_markup"]["inline_keyboard"] for b in row]
-        self.assertIn("rt", cbs)
-        self.run_updates(button("rt", uid=2))
-        ask = self.sent()[-1]
-        self.assertTrue(ask["reply_markup"]["force_reply"])
-        self.run_updates(msg("192.168.0.5", uid=3, reply_to_message={"message_id": self.tg.next_id}))
-        self.assertIn("local address", self.sent()[-1]["text"])
+    def keyboard(self):
+        return next(p["reply_markup"]["keyboard"] for p in reversed(self.sent())
+                    if "keyboard" in (p.get("reply_markup") or {}))
 
-    def test_keyboard_once_per_language(self):
+    def test_start_opens_full_menu(self):
+        """/start — всё меню на клавиатуре внизу экрана."""
         self.run_updates(msg("/start"))
-        kbd = [p for p in self.sent() if "keyboard" in (p.get("reply_markup") or {})]
-        self.assertEqual(len(kbd), 1)
-        self.assertEqual(kbd[0]["reply_markup"]["keyboard"][0][0]["text"], "☰ Menu")
-        self.assertTrue(kbd[0]["reply_markup"]["is_persistent"])
-        self.run_updates(msg("/help", uid=2))
-        self.assertEqual(len([p for p in self.sent() if "keyboard" in (p.get("reply_markup") or {})]), 1)
-        self.c["lang"] = "ru"                       # сменили язык — новая надпись на кнопке
-        self.run_updates(msg("/help", uid=3))
-        self.assertEqual(self.sent()[-2]["reply_markup"]["keyboard"][0][0]["text"], "☰ Меню")
-
-    def test_menu_button_text_any_language(self):
-        self.run_updates(msg("☰ Меню"))           # кнопка осталась от русского, а язык уже английский
         self.assertIn("AWG Router remote", self.sent()[-1]["text"])
+        self.assertTrue(self.sent()[-1]["reply_markup"]["is_persistent"])
+        self.assertEqual([[b["text"] for b in row] for row in self.keyboard()],
+                         [["📊 Status", "👥 Clients"], ["🌐 Exits", "➕ New client"], ["🧭 Route", "💾 Backup"]])
+        self.c["lang"] = "ru"
+        self.run_updates(msg("/start", uid=2))
+        self.assertEqual(self.keyboard()[0][0]["text"], "📊 Состояние")
+
+    def test_keyboard_buttons(self):
+        self.run_updates(msg("👥 Clients"))
+        self.assertIn("Clients", self.sent()[-1]["text"])
+        self.run_updates(msg("📊 Состояние", uid=2))          # надпись на другом языке тоже понятна
+        self.assertIn("Panel version", self.sent()[-1]["text"])
+        self.run_updates(msg("🧭 Route", uid=3))
+        self.assertTrue(self.sent()[-1]["reply_markup"]["force_reply"])
+        self.run_updates(msg("192.168.0.5", uid=4, reply_to_message={"message_id": self.tg.next_id}))
+        self.assertIn("local address", self.sent()[-1]["text"])
+        self.assertIn("keyboard", self.sent()[-1]["reply_markup"])  # клавиатура снова на месте
+
+    def test_inline_route_button_still_works(self):
+        self.run_updates(button("rt"))
+        self.assertTrue(self.sent()[-1]["reply_markup"]["force_reply"])
+
+    def test_old_menu_button(self):
+        self.run_updates(msg("☰ Меню"))           # кнопка из 1.10.0
+        self.assertIn("AWG Router remote", self.sent()[-1]["text"])
+        self.assertIn("keyboard", self.sent()[-1]["reply_markup"])
 
     def test_menu_button_cancels_question(self):
         self.run_updates(msg("/add"))
