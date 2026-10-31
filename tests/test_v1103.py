@@ -79,5 +79,48 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
         self.assertIn("docker logs --tail 2000 awg-router 2>&1", line)
 
 
+class NoDuplicateMenuTest(unittest.TestCase):
+    """1.10.4: главное меню — только на клавиатуре внизу, под сообщениями — только их кнопки."""
+
+    def setUp(self):
+        main.engine.reconcile()
+        self.tg = FakeTG()
+        p = mock.patch.object(notify, "_post", self.tg)
+        p.start()
+        self.addCleanup(p.stop)
+        tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
+        self.bot = tgbot.Bot(main.store, main.bot_ops)
+
+    def inline(self, p):
+        return [b["callback_data"] for row in (p.get("reply_markup") or {}).get("inline_keyboard", []) for b in row]
+
+    def test_screens_have_only_their_buttons(self):
+        for i, cmd in enumerate(("/status", "/clients", "/exits")):
+            self.tg.updates = [msg(cmd, uid=i + 1)]
+            self.bot.poll_once(cfg(), timeout=0)
+            cbs = self.inline(self.tg.last("sendMessage"))
+            menu = {"m", "add", "rt", "bk", "cl:0"} | ({"ex"} if cmd != "/exits" else set())  # «ex» в выходах — «Обновить»
+            self.assertFalse(menu & set(cbs), (cmd, cbs))
+        self.tg.updates = [msg("/status", uid=9)]
+        self.bot.poll_once(cfg(), timeout=0)
+        self.assertEqual(self.inline(self.tg.last("sendMessage")), ["st"])
+
+    def test_start_is_short_help_is_full(self):
+        self.tg.updates = [msg("/start"), msg("/help", uid=2)]
+        self.bot.poll_once(cfg(), timeout=0)
+        start, full = [p for m, p in self.tg.calls if m == "sendMessage"][-2:]
+        self.assertNotIn("/clients", start["text"])
+        self.assertIn("/clients", full["text"])
+        for p in (start, full):
+            self.assertIn("keyboard", p["reply_markup"])
+            self.assertNotIn("inline_keyboard", p["reply_markup"])
+
+    def test_old_menu_button_shows_no_second_menu(self):
+        self.tg.updates = [{"update_id": 1, "callback_query": {"id": "q", "data": "m",
+                            "message": {"message_id": 5, "chat": {"id": int(CHAT)}}}}]
+        self.bot.poll_once(cfg(), timeout=0)
+        self.assertEqual(self.inline(self.tg.last("sendMessage")), [])
+
+
 if __name__ == "__main__":
     unittest.main()
