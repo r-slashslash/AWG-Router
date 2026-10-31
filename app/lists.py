@@ -55,6 +55,23 @@ def parse_cidrs(text: str) -> list[ipaddress.IPv4Network]:
     return list(ipaddress.collapse_addresses(nets))
 
 
+def count_ipv6(text: str) -> int:
+    """Сколько IPv6-адресов и подсетей в тексте: parse_cidrs их пропускает (в туннеле только
+    IPv4), а пользователю стоит знать, что часть его списка не используется."""
+    n = 0
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].split(";", 1)[0]
+        for tok in re.split(r"[,\s]+", line):
+            if ":" not in tok:
+                continue
+            try:
+                ipaddress.IPv6Network(tok.strip("[]"), strict=False)
+                n += 1
+            except ValueError:
+                continue
+    return n
+
+
 def path_for(list_id: str) -> str:
     return os.path.join(LISTS_DIR, f"{list_id}.txt")
 
@@ -90,10 +107,13 @@ def _fetch(url: str, timeout: int = 30) -> str:
         return r.read(64 * 1024 * 1024).decode("utf-8", errors="replace")
 
 
-def fetch_list(lst: dict) -> list[ipaddress.IPv4Network]:
-    """Скачивает/собирает список. Бросает исключение при неудаче."""
+def fetch_list(lst: dict, stats: dict | None = None) -> list[ipaddress.IPv4Network]:
+    """Скачивает/собирает список. Бросает исключение при неудаче.
+    stats["v6"] — сколько IPv6-строк пропущено (для ручных списков и списков по ссылке)."""
+    stats = stats if stats is not None else {}
     kind = lst["kind"]
     if kind == "manual":
+        stats["v6"] = count_ipv6(lst.get("source", ""))
         return parse_cidrs(lst.get("source", ""))
     if kind == "country":
         cc = lst["source"].lower()
@@ -118,8 +138,11 @@ def fetch_list(lst: dict) -> list[ipaddress.IPv4Network]:
         return nets
     if kind == "url":
         nets = []
+        stats["v6"] = 0
         for url in [u.strip() for u in lst["source"].split() if u.strip()]:
-            nets.extend(parse_cidrs(_fetch(url)))
+            text = _fetch(url)
+            stats["v6"] += count_ipv6(text)
+            nets.extend(parse_cidrs(text))
         nets = list(ipaddress.collapse_addresses(nets))
         if not nets:
             raise ListError(Msg("list.empty"))
@@ -167,8 +190,9 @@ class ListError(Exception):
 
 def refresh(lst: dict) -> dict:
     """Обновляет файл списка; возвращает поля для записи в состояние."""
+    stats: dict = {}
     try:
-        nets = fetch_list(lst)
+        nets = fetch_list(lst, stats)
     except ListError as e:
         return {"error": e.msg.to_json(), "checked": time.time()}
     except Exception as e:  # noqa: BLE001
@@ -176,7 +200,7 @@ def refresh(lst: dict) -> dict:
                 "checked": time.time()}
     save_cidrs(lst["id"], nets)
     total = sum(n.num_addresses for n in nets)
-    return {"error": None, "count": len(nets), "addresses": total,
+    return {"error": None, "count": len(nets), "addresses": total, "skipped_v6": stats.get("v6", 0),
             "updated": time.time(), "checked": time.time()}
 
 

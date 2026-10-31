@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import awgserver, hostnet  # noqa: E402
+from app import awgserver, hostnet, lists, users  # noqa: E402
 
 IF_INET6 = """\
 00000000000000000000000000000001 01 80 10 80       lo
@@ -63,6 +63,26 @@ class ClientConfHostTest(unittest.TestCase):
         conf = awgserver.client_conf(sc, prof, peer, "priv")
         self.assertIn("Endpoint = [2a01:4f8:c2c1:2345::2]:47823", conf)
         self.assertIn("Address = 10.8.1.2/32", conf)
+
+
+class Ipv4OnlyTest(unittest.TestCase):
+    """В туннеле только IPv4: IPv6 в DNS и списках не используется, но и не теряется молча."""
+
+    def test_count_ipv6(self):
+        text = "10.0.0.0/8\n2001:db8::/32  # комментарий\n1.1.1.1, 2606:4700::1111\n[2a00::1]\n# fd00::/8\nbad:::x\n"
+        self.assertEqual(lists.count_ipv6(text), 3)
+        self.assertEqual([str(n) for n in lists.parse_cidrs(text)], ["1.1.1.1/32", "10.0.0.0/8"])
+
+    def test_manual_stats(self):
+        st = {}
+        nets = lists.fetch_list({"id": "x", "kind": "manual", "source": "8.8.8.8\n2001:4860::8888"}, st)
+        self.assertEqual(len(nets), 1)
+        self.assertEqual(st["v6"], 1)
+
+    def test_client_dns(self):
+        self.assertEqual(users.client_dns({"client_dns": ["2606:4700::1111", "9.9.9.9"]}), ["9.9.9.9"])
+        self.assertEqual(users.client_dns({"client_dns": ["2606:4700::1111"]}), users.DEFAULT_DNS)
+        self.assertEqual(users.client_dns({}), users.DEFAULT_DNS)
 
 
 if __name__ == "__main__":

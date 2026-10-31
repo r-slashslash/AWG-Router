@@ -17,6 +17,13 @@ from .i18n import Msg, MsgError
 log = logging.getLogger("awgr.users")
 
 DEFAULT_DNS = ["1.1.1.1", "1.0.0.1"]
+
+
+def client_dns(s: dict) -> list[str]:
+    """DNS для клиентов. В туннеле только IPv4, поэтому IPv6-адреса (сохранённые до 1.6.0)
+    в конфиги не попадают: такой DNS у клиента не ответит."""
+    dns = [d for d in s.get("client_dns") or [] if ":" not in d]
+    return dns or DEFAULT_DNS
 DEFAULT_MTU = 1376
 NAME_MAX = 60
 
@@ -72,7 +79,7 @@ class ServerManager:
             host=self.client_host(st) or "SERVER_IP",
             port=sc.port,
             server_pub=self.server_pub(sc),
-            dns=s.get("client_dns") or DEFAULT_DNS,
+            dns=client_dns(s),
             mtu=int(s.get("client_mtu") or DEFAULT_MTU),
             keepalive=s.get("client_keepalive") or awgserver.default_keepalive(params),
         )
@@ -232,7 +239,7 @@ class ServerManager:
             "public_host": self.public_host(st),
             "client_host": s.get("client_host") or "",
             "addrs": self.host_addrs(sc.port),
-            "client_dns": s.get("client_dns") or DEFAULT_DNS,
+            "client_dns": client_dns(s),
             "client_mtu": int(s.get("client_mtu") or DEFAULT_MTU),
             "client_keepalive": s.get("client_keepalive") or "",
             "keepalive_auto": awgserver.default_keepalive(params),
@@ -265,9 +272,11 @@ class ServerManager:
                 dns = [d.strip() for d in re.split(r"[,\s]+", str(body["client_dns"] or "")) if d.strip()]
                 for d in dns:
                     try:
-                        ipaddress.ip_address(d)
+                        a = ipaddress.ip_address(d)
                     except ValueError:
                         raise UserError(Msg("srv.bad_dns", value=d))
+                    if a.version != 4:
+                        raise UserError(Msg("srv.dns_v6", value=d))
                 settings_patch["client_dns"] = dns[:4]
             if "client_mtu" in body:
                 try:

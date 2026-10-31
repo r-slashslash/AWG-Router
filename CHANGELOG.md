@@ -10,6 +10,12 @@ so every user-visible change gets a new version.
   Address in configs). It is separate from the public address, so the panel link and its
   certificate stay as they are. If the server has no public IPv6, or its port does not seem to
   accept IPv6 connections, the panel says so. Clients re-import their configs after a change.
+- **Client DNS is IPv4 only.** An IPv6 DNS server is refused with a clear message (it would not
+  answer: the tunnel is IPv4 only); IPv6 DNS saved earlier or found in a backup is left out of configs.
+- **Route check and IPv6.** An IPv6 address, or a domain with only an IPv6 address, now gets a plain
+  answer ("IPv6 is not routed inside the tunnel") instead of "enter an IP or a domain".
+- **Network lists say what they skip.** Manual lists and lists from URLs show how many IPv6 entries
+  were left out; a manual list with only IPv6 addresses is refused with its own message.
 - README: "IPv4 only" now reads "inside the tunnel, IPv4 only; clients connect over IPv4 or IPv6".
 
 ## 1.5.0 — 2026-10-31
