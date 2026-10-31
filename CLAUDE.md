@@ -141,9 +141,9 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   in a private chat the bot answers "No access" with that chat's id (once per 10 min per chat). A webhook on
   the token (409 on getUpdates) is removed once by `_drop_webhook`.
   Control does **not** depend on `enabled` (notifications): the loop needs `token`, `chat_id` and `control`
-  only, and the panel shows `tg_bot` whenever `control` is on (1.10.3 — with notifications off the bot was
-  silently off).
-- Bot message age (1.10.1) is measured by Telegram's clock: `notify.note_date` reads the `Date` header of
+  only, and the panel shows `tg_bot` whenever `control` is on (before 1.10.5, with notifications off
+  the bot was silently off).
+- Bot message age (1.10.5) is measured by Telegram's clock: `notify.note_date` reads the `Date` header of
   every Telegram answer (direct, and `tgreq.py` returns it as `date`) into `notify.clock_skew`. Never compare
   Telegram `date` fields with the server clock directly — VPS clocks drift, and the bot then ignored every
   command.

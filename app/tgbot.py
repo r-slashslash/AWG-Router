@@ -35,7 +35,6 @@ COMMANDS = ("status", "clients", "add", "exits", "route", "backup", "help")
 
 TEXTS = {
     "ru": {
-        "start": "🤖 <b>Пульт AWG Router</b>\nВсё меню — на кнопках внизу экрана. Список команд — /help.",
         "help": "🤖 <b>Пульт AWG Router</b>\n"
                 "/status — сервер, клиенты и выходы\n"
                 "/clients — клиенты: включить, выключить, QR, продлить\n"
@@ -108,7 +107,6 @@ TEXTS = {
         "unknown": "Не знаю такой команды. /help — что я умею.",
     },
     "en": {
-        "start": "🤖 <b>AWG Router remote</b>\nThe whole menu is on the buttons at the bottom of the screen. Commands — /help.",
         "help": "🤖 <b>AWG Router remote</b>\n"
                 "/status — server, clients and exits\n"
                 "/clients — clients: turn on or off, QR, extend\n"
@@ -181,7 +179,6 @@ TEXTS = {
         "unknown": "I don't know this command. /help — what I can do.",
     },
     "zh": {
-        "start": "🤖 <b>AWG Router 遥控</b>\n全部菜单都在屏幕底部的按钮上。命令列表——/help。",
         "help": "🤖 <b>AWG Router 遥控</b>\n"
                 "/status — 服务器、客户端和出口\n"
                 "/clients — 客户端：启用、停用、二维码、延期\n"
@@ -252,7 +249,6 @@ TEXTS = {
         "unknown": "不认识这个命令。/help — 我能做什么。",
     },
     "fa": {
-        "start": "🤖 <b>کنترل از راه دور AWG Router</b>\nهمهٔ منو روی دکمه‌های پایین صفحه است. فهرست دستورها — ‎/help.",
         "help": "🤖 <b>کنترل از راه دور AWG Router</b>\n"
                 "/status — سرور، کلاینت‌ها و خروجی‌ها\n"
                 "/clients — کلاینت‌ها: فعال و غیرفعال کردن، QR، تمدید\n"
@@ -679,9 +675,7 @@ class Bot:
         return str(e)[:300]
 
     def on_command(self, c: dict, cmd: str, arg: str) -> None:
-        if cmd in ("start", "menu"):
-            self._send(c, tr(c["lang"], "start"), self._keyboard(c))
-        elif cmd == "help":
+        if cmd in ("start", "help", "menu"):
             self._send(c, tr(c["lang"], "help"), self._keyboard(c))
         elif cmd == "status":
             self._guard(c, self.show_status, None)
@@ -714,8 +708,8 @@ class Bot:
         op, _, arg = data.partition(":")
         toast = ""
         try:
-            if op == "m":                      # «‹ Меню» в сообщениях до 1.10.4: меню теперь внизу
-                self._show(c, tr(L, "start"), None, msg)
+            if op == "m":                      # «‹ Меню» в старых сообщениях: меню теперь внизу
+                self._show(c, tr(L, "help"), None, msg)
             elif op == "st":
                 self.show_status(c, msg)
             elif op == "cl":
