@@ -15,8 +15,9 @@ import signal
 import socket
 import threading
 import time
+from types import SimpleNamespace
 
-from . import awgconf, awgserver, config, cps, limits, lists, notify, selfupdate, system, totp
+from . import awgconf, awgserver, config, cps, limits, lists, notify, selfupdate, system, tgbot, totp
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -142,6 +143,7 @@ store = Store()
 engine = Engine(store)
 tls = TLSManager(lambda: engine.srv.public_host(store.snapshot()))
 notifier = notify.Notifier(store, lambda st: tls.host() if tls.enabled else engine.srv.public_host(st))
+notifier.buttons_fn = tgbot.notify_buttons
 engine.notifier = notifier
 
 
@@ -346,6 +348,8 @@ def _tg_draft(body: dict) -> dict:
         c["events"] = {k: bool(body["events"].get(k, c["events"].get(k, True))) for k in notify.KINDS}
     if "enabled" in body:
         c["enabled"] = bool(body["enabled"])
+    if "control" in body:
+        c["control"] = bool(body["control"])
     if "backup" in body:
         if body["backup"] not in notify.BACKUP_PERIODS:
             bad("err.bad_value")
@@ -366,6 +370,7 @@ def put_telegram(req):
     if c["enabled"] and not (c["token"] and c["chat_id"]):
         bad("err.tg_incomplete")
     store.mutate(lambda st: st["settings"].__setitem__("telegram", c))
+    bot.wake.set()             # бот сразу видит новые настройки, не дожидаясь паузы
     return {"ok": True}
 
 
@@ -752,6 +757,7 @@ def clean_backup_state(new: dict) -> dict:
                  enabled=bool(tg.get("enabled")) and bool(tok and chat))
         ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
         c["events"] = {k: bool(ev.get(k, True)) for k in notify.KINDS}
+        c["control"] = bool(tg.get("control"))
         if tg.get("backup") in notify.BACKUP_PERIODS:
             c["backup"] = tg["backup"]
         if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:
@@ -877,6 +883,12 @@ def put_limits(req, pk):
     period = body.get("period") or "month"
     if period not in ("month", "total"):
         bad("err.bad_value")
+    return {"ok": True, "enabled": apply_limits(pk, exp, quota, period)}
+
+
+def apply_limits(pk: str, exp: int | None, quota: int | None, period: str) -> bool:
+    """Срок и лимит клиента (из панели и из Telegram). Если клиента отключили по сроку или
+    лимиту, а новые значения это снимают, — включает его. True — включили."""
     c = next((x for x in engine.clients if x["public_key"] == pk), None)
     if not c:
         bad("err.not_found", 404)
@@ -905,7 +917,7 @@ def put_limits(req, pk):
     if enable:
         _user_errors(lambda: engine.srv.update_client(pk, enabled=True))
     engine.reconcile_soon()
-    return {"ok": True, "enabled": enable}
+    return enable
 
 
 # ------------------------------------------------- личные ссылки клиентов
@@ -921,6 +933,11 @@ def share_url(token: str) -> str:
 @app.post("/api/shares/{pk:path}")
 def create_share(req, pk):
     _pk(pk)
+    return {"url": ensure_share(pk)}
+
+
+def ensure_share(pk: str) -> str:
+    """Личная ссылка клиента: существующая или новая."""
     if not any(c["public_key"] == pk for c in engine.clients):
         bad("err.not_found", 404)
 
@@ -931,7 +948,7 @@ def create_share(req, pk):
             tok = secrets.token_urlsafe(18)
             sh[tok] = {"pk": pk, "created": time.time()}
         return tok
-    return {"url": share_url(store.mutate(fn))}
+    return share_url(store.mutate(fn))
 
 
 @app.delete("/api/shares/{pk:path}")
@@ -1042,6 +1059,7 @@ def get_state(req):
         "version": {**updates.status(), "update": selfupdate.status()},
         "month": month_key(),
         "notify_error": notifier.last_error,
+        "tg_bot": bot.view(),
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
         "direct_traffic": engine.traffic.out_view("direct"),
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
@@ -1274,7 +1292,11 @@ def put_client_cps(req, pk):
 @app.post("/api/trace")
 def trace(req):
     body = req.json()
-    ip = str(body.get("ip", "")).strip()
+    return trace_target(body.get("client") or None, str(body.get("ip", "")).strip())
+
+
+def trace_target(client: str | None, ip: str) -> dict:
+    """Куда пойдёт трафик до IP или домена (из панели и из Telegram)."""
     if ":" in ip:
         try:
             ipaddress.IPv6Address(ip.strip("[]").split("/", 1)[0])
@@ -1291,12 +1313,12 @@ def trace(req):
             except Exception:  # noqa: BLE001
                 bad("err.ip_or_domain")
             bad(Msg("tr.ipv6_only", host=ip))   # у домена только AAAA
-        res = engine.trace(body.get("client") or None, resolved)
+        res = engine.trace(client, resolved)
         res["steps"].insert(0, Msg("tr.resolved", host=ip, ip=resolved))
         res["ip"] = resolved
         return res
     try:
-        res = engine.trace(body.get("client") or None, ip)
+        res = engine.trace(client, ip)
     except ValueError:
         bad("err.ip_or_domain")
     res["ip"] = ip
@@ -1493,17 +1515,26 @@ def add_user(req):
 @app.put("/api/users/{pk:path}")
 def edit_user(req, pk):
     body = req.json()
-    _user_errors(lambda: engine.srv.update_client(
-        _pk(pk), name=body.get("name"), enabled=body.get("enabled")))
+    _pk(pk)
+    if body.get("name") is not None:
+        _user_errors(lambda: engine.srv.update_client(pk, name=body.get("name")))
     if body.get("enabled") is not None:
-        # включили или выключили вручную — автоматическое отключение больше не наше
-        def fn(st):
-            L = st.get("limits", {}).get(pk)
-            if L and L.get("auto_off"):
-                L["auto_off"] = None
-        store.mutate(fn)
+        set_client_enabled(pk, bool(body["enabled"]))
     engine.reconcile_soon()
     return {"ok": True}
+
+
+def set_client_enabled(pk: str, on: bool) -> None:
+    """Включить или выключить клиента вручную (из панели и из Telegram)."""
+    _user_errors(lambda: engine.srv.update_client(pk, enabled=on))
+
+    # включили или выключили вручную — автоматическое отключение больше не наше
+    def fn(st):
+        L = st.get("limits", {}).get(pk)
+        if L and L.get("auto_off"):
+            L["auto_off"] = None
+    store.mutate(fn)
+    engine.reconcile_soon()
 
 
 @app.delete("/api/users/{pk:path}")
@@ -1558,6 +1589,70 @@ def tls_renew(req):
     return {"ok": ok, "tls": tls.status()}
 
 
+# --------------------------------------------------- управление из Telegram
+def set_default_outbound(out: str) -> None:
+    def fn(st):
+        st["routing"]["default"] = v_outbound(st, out)
+    store.mutate(fn)
+    engine.trigger()
+
+
+def _list_name(lid) -> str:
+    l = Store.lst(store.snapshot(), lid or "")
+    if not l:
+        return str(lid or "?")
+    return l["source"].upper() if l["kind"] == "country" else (l.get("name") or l["id"])
+
+
+def _bot_status() -> dict:
+    st = store.snapshot()
+    t = engine.target
+    ts = tls.status()
+    return {"host": notifier.host_fn(st), "server_ok": bool(t and t.exists and not engine.target_error),
+            "month_bytes": sum(engine.traffic.used(c["public_key"], "month") for c in engine.clients),
+            "version": updates.status(),
+            "cert_until": ts.get("expires") if ts.get("active") == "letsencrypt" else None}
+
+
+def _bot_backup(c: dict) -> None:
+    send_backup(c)
+    now = time.time()
+    store.mutate(lambda st: st["settings"].setdefault("telegram", notify.defaults())
+                 .update(backup_last=now, backup_error=None))
+
+
+# Действия для бота — те же функции, что за кнопками панели в браузере.
+bot_ops = SimpleNamespace(
+    version=VERSION,
+    snapshot=store.snapshot,
+    status=_bot_status,
+    clients=lambda: list(engine.clients),
+    refresh_clients=engine.reconcile_soon,
+    resolve=engine.resolve,
+    health=lambda uid: engine.health.get(uid, {}),
+    over_quota=engine.over_quota,
+    traffic_month=lambda pk: engine.traffic.used(pk, "month"),
+    traffic_view=engine.traffic.view,
+    used=engine.traffic.used,
+    client_out=lambda pk: engine.policy_for(store.snapshot(), pk)["default"],
+    set_enabled=set_client_enabled,
+    apply_limits=apply_limits,
+    add_client=lambda name: _user_errors(lambda: engine.srv.add_client(name)),
+    client_config=lambda pk: _user_errors(lambda: engine.srv.client_config(pk)),
+    share=ensure_share,
+    set_default=set_default_outbound,
+    probe=engine.probe,
+    trace=lambda target: trace_target(None, target),
+    list_name=_list_name,
+    backup=_bot_backup,
+    update_info=updates.status,
+    update_state=selfupdate.status,
+    start_update=lambda latest: selfupdate.start(VERSION, latest),
+    audit=lambda msg: engine.event("info", msg),
+)
+bot = tgbot.Bot(store, bot_ops, engine.stop_ev)
+
+
 # ---------------------------------------------------------------------- run
 def panel_url() -> str:
     if config.PANEL_HOST.startswith("127."):
@@ -1587,6 +1682,7 @@ def run():
     if not config.DRY_RUN:
         updates.start(engine.stop_ev)
         threading.Thread(target=_backup_loop, name="backup", daemon=True).start()
+    bot.start()
     if tls.enabled:
         # адрес для сертификата: из настроек или определённый автоматически
         for _ in range(30):

@@ -179,6 +179,8 @@ def defaults() -> dict:
             "events": {k: True for k in KINDS},
             # как ходить к api.telegram.org: direct | up:<id> (через выход, если Telegram заблокирован)
             "via": "direct",
+            # управление из Telegram: команды и кнопки (только из этого чата), см. tgbot.py
+            "control": False,
             # резервная копия в чат: off | daily | weekly; пароль — шифровать файл (пусто — нет)
             "backup": "off", "backup_pw": "", "backup_last": None, "backup_error": None}
 
@@ -260,22 +262,45 @@ def _call(token: str, method: str, payload: dict | None = None, timeout: float =
     return _post(token, method, json.dumps(payload or {}).encode(), "application/json", timeout, via)
 
 
-def send(token: str, chat_id: str, text: str, via: str = "direct") -> None:
-    _call(token, "sendMessage", {"chat_id": chat_id, "text": text,
-                                 "disable_web_page_preview": True}, via=via)
+def send(token: str, chat_id: str, text: str, via: str = "direct", markup: dict | None = None,
+         html: bool = False) -> dict:
+    """sendMessage. markup — кнопки под сообщением (reply_markup), html — разметка HTML."""
+    p = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if markup:
+        p["reply_markup"] = markup
+    if html:
+        p["parse_mode"] = "HTML"
+    return _call(token, "sendMessage", p, via=via)
+
+
+def _send_file(method: str, field: str, token: str, chat_id: str, filename: str, data: bytes,
+               caption: str, via: str, markup: dict | None = None, html: bool = False,
+               ctype: str = "application/octet-stream") -> None:
+    """Файл multipart/form-data (urllib сам этого не умеет)."""
+    boundary = "awgr" + uuid.uuid4().hex
+    fields = [("chat_id", chat_id), ("caption", caption[:1000])]
+    if markup:
+        fields.append(("reply_markup", json.dumps(markup, ensure_ascii=False)))
+    if html:
+        fields.append(("parse_mode", "HTML"))
+    parts = []
+    for k, v in fields:
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+                 f'Content-Type: {ctype}\r\n\r\n'.encode() + data + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    _post(token, method, b"".join(parts), f"multipart/form-data; boundary={boundary}", 120, via)
 
 
 def send_document(token: str, chat_id: str, filename: str, data: bytes, caption: str,
-                  via: str = "direct") -> None:
-    """sendDocument: файл multipart/form-data (urllib сам этого не умеет)."""
-    boundary = "awgr" + uuid.uuid4().hex
-    parts = []
-    for k, v in (("chat_id", chat_id), ("caption", caption[:1000])):
-        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
-    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{filename}"\r\n'
-                 f'Content-Type: application/octet-stream\r\n\r\n'.encode() + data + b"\r\n")
-    parts.append(f"--{boundary}--\r\n".encode())
-    _post(token, "sendDocument", b"".join(parts), f"multipart/form-data; boundary={boundary}", 120, via)
+                  via: str = "direct", markup: dict | None = None, html: bool = False) -> None:
+    _send_file("sendDocument", "document", token, chat_id, filename, data, caption, via, markup, html)
+
+
+def send_photo(token: str, chat_id: str, png: bytes, caption: str, via: str = "direct",
+               html: bool = False) -> None:
+    _send_file("sendPhoto", "photo", token, chat_id, "qr.png", png, caption, via, html=html,
+               ctype="image/png")
 
 
 # Шифрование копии: openssl есть в образе, а AES в стандартной библиотеке Python нет.
@@ -324,9 +349,13 @@ class Notifier:
         self._sent: dict[str, float] = {}
         self.last_error: str | None = None
         self._target_lost = False
+        # кнопки под уведомлением (tgbot.notify_buttons): (ключ текста, ссылки, язык) → reply_markup
+        self.buttons_fn = None
         threading.Thread(target=self._worker, name="notify", daemon=True).start()
 
-    def event(self, kind: str, key: str, cooldown: float | None = None, **params) -> None:
+    def event(self, kind: str, key: str, cooldown: float | None = None, refs: dict | None = None,
+              **params) -> None:
+        """refs — к чему относится событие ({"pk": …} или {"uid": …}): для кнопок под ним."""
         st = self.store.snapshot()
         c = cfg_of(st)
         if not (c["enabled"] and c["token"] and c["chat_id"] and c["events"].get(kind)):
@@ -340,8 +369,15 @@ class Notifier:
             host = self.host_fn(st)
         except Exception:  # noqa: BLE001
             host = ""
+        markup = None
+        if c["control"] and self.buttons_fn:
+            try:
+                markup = self.buttons_fn(key, {**params, **(refs or {})}, c["lang"])
+            except Exception:  # noqa: BLE001  — без кнопок уведомление всё равно нужно
+                log.exception("notify buttons")
         try:
-            self.q.put_nowait((c["token"], c["chat_id"], render(c["lang"], key, host, **params), c["via"]))
+            self.q.put_nowait((c["token"], c["chat_id"], render(c["lang"], key, host, **params),
+                               c["via"], markup))
         except queue.Full:
             log.warning("notify queue is full, message dropped")
 
@@ -353,7 +389,8 @@ class Notifier:
             self._target_lost = True
         m = ENGINE_EVENTS.get(msg.key)
         if m:
-            self.event(m[0], m[1], **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days")})
+            self.event(m[0], m[1], refs={k: v for k, v in msg.p.items() if k in ("pk", "uid")},
+                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days")})
 
     def target_ok(self) -> None:
         if self._target_lost:
@@ -362,10 +399,10 @@ class Notifier:
 
     def _worker(self) -> None:
         while True:
-            token, chat, text, via = self.q.get()
+            token, chat, text, via, markup = self.q.get()
             for attempt in range(3):
                 try:
-                    send(token, chat, text, via)
+                    send(token, chat, text, via, markup)
                     self.last_error = None
                     break
                 except NotifyError as e:

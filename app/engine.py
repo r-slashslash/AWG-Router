@@ -331,7 +331,8 @@ class Engine:
             prev = self.health.get(uid, {}).get("healthy")
             if prev is not None and prev != healthy:
                 self.event("info" if healthy else "warn",
-                           Msg("ev.upstream_ok" if healthy else "ev.upstream_failed", name=u["name"]))
+                           Msg("ev.upstream_ok" if healthy else "ev.upstream_failed",
+                               name=u["name"], uid=uid))
             self.health[uid] = {
                 "state": "up" if healthy else ("connecting" if now - r.started < 30 and not hs else "stale"),
                 "healthy": healthy, "handshake_age": age, "iface": r.iface,
@@ -416,20 +417,20 @@ class Engine:
             if used >= q and u.get("quota_hit") != mk:
                 p["quota_hit"] = p["quota_warned"] = mk
                 if to is None:
-                    self.event("warn", Msg("ev.upstream_quota_notify", name=u["name"], gb=gb))
+                    self.event("warn", Msg("ev.upstream_quota_notify", name=u["name"], gb=gb, uid=u["id"]))
                 elif to in ("direct", "block"):
-                    self.event("warn", Msg(f"ev.upstream_quota_{to}", name=u["name"], gb=gb))
+                    self.event("warn", Msg(f"ev.upstream_quota_{to}", name=u["name"], gb=gb, uid=u["id"]))
                 else:
                     t = Store.upstream(st, to[3:])
-                    self.event("warn", Msg("ev.upstream_quota", name=u["name"], gb=gb,
+                    self.event("warn", Msg("ev.upstream_quota", name=u["name"], gb=gb, uid=u["id"],
                                            to=t["name"] if t else "?"))
             elif q * 0.9 <= used < q and u.get("quota_warned") != mk:
                 p["quota_warned"] = mk
-                self.event("warn", Msg("ev.upstream_quota_warn", name=u["name"], gb=gb))
+                self.event("warn", Msg("ev.upstream_quota_warn", name=u["name"], gb=gb, uid=u["id"]))
             if u.get("quota_hit") and u["quota_hit"] != mk and used < q and "quota_hit" not in p:
                 p["quota_hit"] = None
                 if fb:
-                    self.event("info", Msg("ev.upstream_quota_reset", name=u["name"]))
+                    self.event("info", Msg("ev.upstream_quota_reset", name=u["name"], uid=u["id"]))
             if p:
                 patches[u["id"]] = p
         if patches:
