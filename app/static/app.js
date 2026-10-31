@@ -962,13 +962,36 @@ bind.exits = () => {
     try { await api("PUT", "upstreams/" + i.dataset.toggle, { enabled: i.checked }); refresh(); }
     catch (err) { toast(err.message, true); i.checked = !i.checked; }
   });
-  $$("[data-del]").forEach((b) => b.onclick = async () => {
-    const u = upstreamById(b.dataset.del);
+  $$("[data-del]").forEach((b) => b.onclick = () => deleteUpstream(upstreamById(b.dataset.del)));
+};
+
+/** удаление выхода: если он где-то используется — выбрать, что встанет на его место */
+async function deleteUpstream(u) {
+  if (!u.refs.length) {
     if (!confirm(t("ex.delete_confirm", { name: u.name }))) return;
     try { await api("DELETE", "upstreams/" + u.id); toast(t("toast.exit_deleted")); refresh(); }
-    catch (err) { toast(err.message, true); }
-  });
-};
+    catch (err) { if (!(err instanceof AuthError)) toast(err.message, true); }
+    return;
+  }
+  // по умолчанию — его резервный выход: туда трафик и так ушёл бы, если бы выход перестал работать
+  const self = "up:" + u.id;
+  const fb = u.fallback && u.fallback !== self && (u.fallback === "direct" || u.fallback === "block"
+    || upstreamById(u.fallback.slice(3))) ? u.fallback : "direct";
+  openModal(t("ex.delete_title", { name: u.name }), `
+    <p style="margin-top:0">${esc(t("ex.delete_used"))}</p>
+    <ul class="small" style="margin:0 0 12px;padding-inline-start:20px">${u.refs.map((r) => `<li><bdi>${esc(tm(r))}</bdi></li>`).join("")}</ul>
+    <label class="field"><span>${esc(t("ex.delete_replace"))}</span>
+      <select id="del-repl">${outOptions(fb, { exclude: self })}</select>
+      <span class="hint">${esc(t("ex.delete_hint"))}</span></label>`,
+  `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn danger" id="del-go">${esc(t("btn.delete"))}</button>`);
+  $("#del-go").onclick = async () => {
+    $("#del-go").disabled = true;
+    try {
+      await api("DELETE", "upstreams/" + u.id, { replace: $("#del-repl").value });
+      closeModal(); toast(t("toast.exit_deleted")); refresh();
+    } catch (err) { if (!(err instanceof AuthError)) toast(err.message, true); $("#del-go").disabled = false; }
+  };
+}
 
 async function editUpstream(id) {
   const u = id ? upstreamById(id) : null;
@@ -1550,6 +1573,11 @@ function viewTelegram() {
       <label class="field"><span>${esc(t("tg.lang"))}</span>
         <select id="tg-lang" style="max-width:220px">${Object.entries(LANGS).map(([k, v]) =>
           `<option value="${k}" ${k === (c.enabled || c.token_set ? c.lang : LANG) ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
+      <label class="field"><span>${esc(t("tg.via"))}</span>
+        <select id="tg-via" style="max-width:320px">${[["direct", t("out.direct")],
+          ...S.upstreams.map((u) => ["up:" + u.id, t("out.via", { name: u.name })])].map(([v, l]) =>
+          `<option value="${esc(v)}" ${v === (c.via || "direct") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        <span class="hint">${esc(t("tg.via_hint"))}</span></label>
       </div><div class="field"><span>${esc(t("tg.events"))}</span>
         ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div></div>
       <fieldset class="pgroup" style="margin-top:4px"><legend>${esc(t("tg.backup"))}</legend>
@@ -1563,12 +1591,12 @@ function viewTelegram() {
           ${c.backup_pw_set ? `<label class="check"><input type="checkbox" id="tg-bk-clear"><span>${esc(t("tg.backup_pw_clear"))}</span></label>` : ""}
         </div><div>
           <p class="small muted" style="margin-top:0">${esc(t("tg.backup_hint"))}</p>
-          ${c.backup_error ? `<p class="err small">${esc(t("tg.backup_failed", { error: c.backup_error }))}</p>`
+          ${c.backup_error ? `<p class="err small">${esc(t("tg.backup_failed", { error: tm(c.backup_error) }))}</p>`
             : c.backup_last ? `<p class="small">${esc(t("tg.backup_last", { time: fmtDay(c.backup_last) + ", " + fmtTime(c.backup_last) }))}</p>` : ""}
           <button type="button" class="btn sm" id="tg-bk-send">${esc(t("tg.backup_send"))}</button>
         </div></div>
       </fieldset>
-      ${c.enabled && S.notify_error ? `<p class="err small">${esc(t("tg.last_error"))}: <bdi>${esc(S.notify_error)}</bdi></p>` : ""}
+      ${c.enabled && S.notify_error ? `<p class="err small">${esc(t("tg.last_error"))}: <bdi>${esc(tm(S.notify_error))}</bdi></p>` : ""}
       <div class="actions"><button class="btn sm primary" id="tg-save">${esc(t("btn.save"))}</button><button class="btn sm" id="tg-test">${esc(t("tg.test"))}</button></div>
     </div>
   </section>`;
@@ -1578,7 +1606,7 @@ function bindTelegram() {
     const events = {};
     TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });
     return { enabled: $("#tg-on").checked, token: $("#tg-token").value.trim(),
-      chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, events,
+      chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, via: $("#tg-via").value, events,
       backup: $("#tg-bk").value, backup_pw: $("#tg-bk-pw").value,
       backup_pw_clear: !!($("#tg-bk-clear") && $("#tg-bk-clear").checked) };
   };
@@ -1602,7 +1630,7 @@ function bindTelegram() {
     refresh();
   });
   $("#tg-detect").onclick = busy("#tg-detect", async () => {
-    const r = await api("POST", "telegram/detect", { token: $("#tg-token").value.trim() });
+    const r = await api("POST", "telegram/detect", { token: $("#tg-token").value.trim(), via: $("#tg-via").value });
     $("#tg-chat").value = r.id;
     toast(t("tg.found", { name: r.title || r.id }));
   });

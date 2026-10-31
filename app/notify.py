@@ -10,6 +10,7 @@ import logging
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -21,6 +22,10 @@ from .i18n import Msg
 log = logging.getLogger("awgr.notify")
 
 API = "https://api.telegram.org"
+TGREQ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tgreq.py")
+# Путь запросов: via ("direct" | "up:<id>") → None (напрямую из панели) или (PID, fwmark) —
+# через туннель выхода в сети сервера AWG. Задаёт main.py; может бросить NotifyError.
+router = None
 LANGS = ("ru", "en", "zh", "fa")
 # категории событий, которые можно включать по отдельности
 KINDS = ("exit", "server", "clients", "login", "tls", "update")
@@ -158,7 +163,12 @@ ENGINE_EVENTS = {
 
 
 class NotifyError(Exception):
-    pass
+    """Ошибка отправки. msg — Msg для интерфейса (переводит браузер), если она наша,
+    а не техническая строка от сети или Telegram."""
+
+    def __init__(self, text: str, msg: Msg | None = None):
+        super().__init__(text)
+        self.msg = msg
 
 
 BACKUP_PERIODS = {"off": 0, "daily": 86400, "weekly": 7 * 86400}
@@ -167,6 +177,8 @@ BACKUP_PERIODS = {"off": 0, "daily": 86400, "weekly": 7 * 86400}
 def defaults() -> dict:
     return {"enabled": False, "token": "", "chat_id": "", "lang": "en",
             "events": {k: True for k in KINDS},
+            # как ходить к api.telegram.org: direct | up:<id> (через выход, если Telegram заблокирован)
+            "via": "direct",
             # резервная копия в чат: off | daily | weekly; пароль — шифровать файл (пусто — нет)
             "backup": "off", "backup_pw": "", "backup_last": None, "backup_error": None}
 
@@ -194,32 +206,67 @@ def render(lang: str, key: str, host: str = "", **params) -> str:
     return (f"AWG Router · {host}\n" if host else "AWG Router\n") + body
 
 
-def _call(token: str, method: str, payload: dict | None = None, timeout: float = 15) -> dict:
-    url = f"{API}/bot{token}/{method}"
-    data = json.dumps(payload or {}).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+def _post_direct(url: str, data: bytes, ctype: str, timeout: float) -> tuple[int, bytes]:
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": ctype})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            res = json.loads(r.read().decode() or "{}")
+            return getattr(r, "status", 200), r.read()
     except urllib.error.HTTPError as e:
-        try:
-            res = json.loads(e.read().decode() or "{}")
-        except ValueError:
-            raise NotifyError(f"HTTP {e.code}") from None
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        reason = getattr(e, "reason", e)
-        raise NotifyError(f"api.telegram.org: {reason}"[:300]) from None
+        return e.code, e.read()
+
+
+def _post_via(route: tuple[int, int], url: str, data: bytes, ctype: str,
+              timeout: float) -> tuple[int, bytes]:
+    """Запрос из сети сервера AWG через туннель выхода (метка fwmark, как у probe.py)."""
+    pid, mark = route
+    head = json.dumps({"url": url, "ctype": ctype, "timeout": timeout}).encode()
+    try:
+        p = subprocess.run(["nsenter", "-t", str(pid), "-n", "--", sys.executable, TGREQ, str(mark)],
+                           input=head + b"\n" + data, capture_output=True, timeout=timeout * 2 + 15)
+    except subprocess.TimeoutExpired:
+        raise OSError("timed out") from None
+    try:
+        res = json.loads(p.stdout.decode(errors="replace"))
+    except ValueError:
+        raise OSError((p.stderr or p.stdout).decode(errors="replace").strip()[:200] or "no answer") from None
+    if res.get("err"):
+        raise OSError(res["err"])
+    return int(res.get("status") or 0), str(res.get("body") or "").encode()
+
+
+def _post(token: str, method: str, data: bytes, ctype: str, timeout: float, via: str) -> dict:
+    url = f"{API}/bot{token}/{method}"
+    route = router(via) if router and via and via != "direct" else None
+    try:
+        if route is None:
+            code, raw = _post_direct(url, data, ctype, timeout)
+        else:
+            code, raw = _post_via(route, url, data, ctype, timeout)
+    except (urllib.error.URLError, OSError) as e:
+        raise NotifyError(f"api.telegram.org: {getattr(e, 'reason', e)}"[:300]) from None
+    try:
+        res = json.loads(raw.decode(errors="replace") or "{}")
+    except ValueError:
+        res = None
+    if not isinstance(res, dict):
+        raise NotifyError(f"api.telegram.org: HTTP {code}")
     if not res.get("ok"):
         raise NotifyError(str(res.get("description") or "Telegram error")[:300])
     return res.get("result") or {}
 
 
-def send(token: str, chat_id: str, text: str) -> None:
+def _call(token: str, method: str, payload: dict | None = None, timeout: float = 15,
+          via: str = "direct") -> dict:
+    return _post(token, method, json.dumps(payload or {}).encode(), "application/json", timeout, via)
+
+
+def send(token: str, chat_id: str, text: str, via: str = "direct") -> None:
     _call(token, "sendMessage", {"chat_id": chat_id, "text": text,
-                                 "disable_web_page_preview": True})
+                                 "disable_web_page_preview": True}, via=via)
 
 
-def send_document(token: str, chat_id: str, filename: str, data: bytes, caption: str) -> None:
+def send_document(token: str, chat_id: str, filename: str, data: bytes, caption: str,
+                  via: str = "direct") -> None:
     """sendDocument: файл multipart/form-data (urllib сам этого не умеет)."""
     boundary = "awgr" + uuid.uuid4().hex
     parts = []
@@ -228,20 +275,7 @@ def send_document(token: str, chat_id: str, filename: str, data: bytes, caption:
     parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{filename}"\r\n'
                  f'Content-Type: application/octet-stream\r\n\r\n'.encode() + data + b"\r\n")
     parts.append(f"--{boundary}--\r\n".encode())
-    req = urllib.request.Request(f"{API}/bot{token}/sendDocument", data=b"".join(parts),
-                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            res = json.loads(r.read().decode() or "{}")
-    except urllib.error.HTTPError as e:
-        try:
-            res = json.loads(e.read().decode() or "{}")
-        except ValueError:
-            raise NotifyError(f"HTTP {e.code}") from None
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        raise NotifyError(f"api.telegram.org: {getattr(e, 'reason', e)}"[:300]) from None
-    if not res.get("ok"):
-        raise NotifyError(str(res.get("description") or "Telegram error")[:300])
+    _post(token, "sendDocument", b"".join(parts), f"multipart/form-data; boundary={boundary}", 120, via)
 
 
 # Шифрование копии: openssl есть в образе, а AES в стандартной библиотеке Python нет.
@@ -265,9 +299,9 @@ def decrypt(data: bytes, password: str) -> bytes | None:
     return p.stdout if p.returncode == 0 else None
 
 
-def detect_chat(token: str) -> dict | None:
+def detect_chat(token: str, via: str = "direct") -> dict | None:
     """Чат, из которого боту писали последним (чтобы не искать chat id вручную)."""
-    upd = _call(token, "getUpdates", {"limit": 50, "timeout": 0})
+    upd = _call(token, "getUpdates", {"limit": 50, "timeout": 0}, via=via)
     for u in reversed(upd if isinstance(upd, list) else []):
         m = u.get("message") or u.get("channel_post") or u.get("my_chat_member") or {}
         ch = m.get("chat")
@@ -307,7 +341,7 @@ class Notifier:
         except Exception:  # noqa: BLE001
             host = ""
         try:
-            self.q.put_nowait((c["token"], c["chat_id"], render(c["lang"], key, host, **params)))
+            self.q.put_nowait((c["token"], c["chat_id"], render(c["lang"], key, host, **params), c["via"]))
         except queue.Full:
             log.warning("notify queue is full, message dropped")
 
@@ -328,13 +362,13 @@ class Notifier:
 
     def _worker(self) -> None:
         while True:
-            token, chat, text = self.q.get()
+            token, chat, text, via = self.q.get()
             for attempt in range(3):
                 try:
-                    send(token, chat, text)
+                    send(token, chat, text, via)
                     self.last_error = None
                     break
                 except NotifyError as e:
-                    self.last_error = str(e)
+                    self.last_error = e.msg or str(e)
                     log.warning("telegram: %s", e)
                     time.sleep(5 * (attempt + 1))
