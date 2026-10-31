@@ -34,7 +34,7 @@
 - 全部 AmneziaWG 参数：Jc/Jmin/Jmax、S1–S4、H1–H4、I1–I5、HeaderProtectionKey、ContentPaddingAddition、AWG 3 计时参数、RandomTrailers 和 DisableCookies。
 - 为签名数据包 I1–I5 提供现成的伪装：STUN（通话、WebRTC）、QUIC（HTTP/3）、DNS 查询、SIP 以及固定的 icloud.com DNS 响应（AmneziaVPN 的默认值），并带随机部分，使每次握手都不相同。I1–I5 会被严格检查（只允许所有 AmneziaWG 都支持的标签，并显示数据包大小），还可按客户端单独设置：如果某个客户端的运营商开始封锁，只给它换一种伪装即可。
 - 一键生成新参数，生成方式与 AmneziaVPN 安装程序为 AWG 3.1 所用的相同。
-- 端口、子网、客户端 DNS/MTU/keepalive 以及公网地址。
+- 端口、子网、客户端 DNS/MTU/keepalive、公网地址以及客户端配置中的地址（IPv4 或 IPv6）。
 - 添加或删除客户端即时生效，不会断开其他人。服务器端参数通过重启接口生效，只需几秒钟。
 
 **路由**
@@ -166,7 +166,7 @@ Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配�
 
 ## 限制
 
-- 仅支持 IPv4。
+- 隧道内仅支持 IPv4。客户端可通过 IPv4 或 IPv6 连接服务器。
 - 规则按 IP 网络匹配，不按域名匹配。
 - 国家列表基于注册数据生成。针对特定服务，ASN 列表更准确。
 
