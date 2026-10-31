@@ -12,11 +12,20 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   Keep `{placeholders}` identical across languages; wrap mixed-direction text in `<bdi>`.
 - Code comments and docstrings are in Russian; README exists in en / ru / zh / fa — keep all four in sync.
 - The installer (`install.sh`) speaks English only.
-- Commits end with `Co-Authored-By: Claude …` only (no session links). Push to `main`;
-  users update with `awg-router update`, which downloads the `main` tarball from GitHub.
+- Commits end with `Co-Authored-By: Claude …` only (no session links). Push to `main`, then tag.
+  Users get code only from **releases**: `install.sh` (also `awg-router update` and the panel's
+  update button) downloads `releases/latest/download/awg-router.tar.gz`, falling back to the `main`
+  tarball only if that fails; GitHub counts the asset's downloads (≈ installs + updates).
 - **Bump `VERSION` in `app/version.py`** with every user-visible change: panels compare it with
-  `main` on GitHub (every 6 h) to show "update available". A fix after a release is a new version,
-  never the same number again; add it to `CHANGELOG.md`; tag `vX.Y.Z` and never move a tag.
+  the latest release tag (every 6 h; `version.py` on the branch only if there is no release) to show
+  "update available". A fix after a release is a new version, never the same number again; add it
+  to `CHANGELOG.md`; tag `vX.Y.Z` (must equal `VERSION`) and never move a tag.
+- **Release = tag push.** `.github/workflows/release.yml` builds `awg-router.tar.gz` (`git archive
+  --prefix=awg-router/`) + `.sha256`, creates the release with notes from the CHANGELOG section (or
+  attaches to a release that already exists). Check the asset is there:
+  `gh api repos/r-slashslash/AWG-Router/releases/latest --jq '.assets[].name'`. If Actions did not
+  run, build the same archive locally and `gh release upload vX.Y.Z awg-router.tar.gz* --clobber`.
+  Downloads: `gh api repos/r-slashslash/AWG-Router/releases --jq '.[]|[.tag_name,(.assets[]|select(.name=="awg-router.tar.gz").download_count)]'`.
 - No requests to third-party hosts from the browser: fonts and scripts are served by the panel
   (`app/static/fonts`, OFL). Google and CDNs are blocked in CN/IR and leak who opens the panel.
 
@@ -27,7 +36,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/totp.py` | Optional 2FA (RFC 6238): secret in `data/totp.json` (re-read by mtime; `awg-router 2fa-off` deletes it), replay-protected codes; enabling/disabling changes the session tag → other sessions end |
 | `app/traffic.py` | Per-client traffic totals and months (`data/traffic.json`, `{"_v": 2, "clients": …, "outs": …, "acct": …}`), deltas between polls survive counter resets; the first sight of a peer is only a baseline. `outs` — totals per exit (`direct` or upstream id, used by exit quotas); `by_out` in a client — month split by exit; `acct` — last values of the nft counters |
 | `app/limits.py` | Client end date / traffic quota (`state.limits`): auto-off (`auto_off`: `exp` / `quota:<month>`), monthly auto-on; called after each poll |
-| `app/updates.py` / `app/version.py` | Panel version and the update check |
+| `app/updates.py` / `app/version.py` | Panel version and the update check (`HEAD /releases/latest` → redirect to `/releases/tag/vX.Y.Z`; `AWGR_BRANCH` ≠ main → `version.py` of that branch) |
 | `app/cps.py` | Signature packets I1–I5: strict tag check (`b r rc rd t` only — `<c>` is kernel-only, `<d>/<ds>/<dz>` go-only), byte size (≤ 1400), RFC-based presets (STUN, QUIC Initial 1200 B, DNS+EDNS 128 B, SIP, AmneziaVPN default, none) with random fields; per-client override in `state.cps[pk]` = `{preset}` or `{preset: custom, values}`, applied in `users.client_config` (conf and vpn://) |
 | `app/selfupdate.py` | Update from the panel: `install.sh --update` on the host via `nsenter -t 1` + `systemd-run --unit awg-router-update` (outside the panel container's cgroup, survives its recreation); output in `data/update.log` ending with `exit=N`, state in `data/update.json`; host install dir from the Compose label `com.docker.compose.project.working_dir` (or the `/data` mount source) |
 | `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/<whitelisted file>` — **outside the secret path, no login** (token in `state.shares`; unknown tokens → 404) |
@@ -51,7 +60,8 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/static/` | SPA: `index.html`, `app.js` (tabs: overview, clients, exits, routing, lists, server, system), `app.css`, `i18n.js`, `qrcode.js` (MIT, Kazuhiko Arase) |
 | `awg-server/` | Dockerfile + start.sh for an Amnezia-compatible `amnezia-awg2` container the installer can create |
 | `Dockerfile` | Builds amneziawg-go + static awg/awg-quick (Go), copies lego; Python 3.13 alpine runtime |
-| `install.sh` | Installer/updater; works via `curl … | bash` (bootstraps code into `/opt/awg-router`) |
+| `install.sh` | Installer/updater; works via `curl … | bash` (bootstraps code into `/opt/awg-router` from the latest release archive) |
+| `.github/workflows/release.yml` | On a `vX.Y.Z` tag: release with `awg-router.tar.gz` (the archive the installer downloads) |
 | `tests/` | `test_core.py`, `test_api.py` (unittest; `test_api` imports `main` in demo mode), `netns_e2e.py` (routing in netns, needs root + pyroute2), `awg_real_e2e.py` (real AWG tunnels) |
 
 ## How it works (essentials)

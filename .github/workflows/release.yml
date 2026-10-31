@@ -1,0 +1,61 @@
+# Каждому тегу vX.Y.Z — релиз с архивом кода awg-router.tar.gz.
+# install.sh скачивает именно его (releases/latest/download/awg-router.tar.gz), поэтому у файла
+# растёт счётчик скачиваний: установки и обновления панелей. Если релиз уже создан вручную,
+# архив просто прикладывается к нему (или заменяет прежний).
+name: Release archive
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag (vX.Y.Z) to build the archive for"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Build the archive
+        run: |
+          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "Not a version tag: $TAG"; exit 1 ;; esac
+          ver=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/version.py)
+          [ "v$ver" = "$TAG" ] || { echo "app/version.py says $ver, tag is $TAG"; exit 1; }
+          git archive --format=tar.gz --prefix=awg-router/ -o awg-router.tar.gz HEAD
+          tar -tzf awg-router.tar.gz awg-router/install.sh awg-router/docker-compose.yml >/dev/null
+          sha256sum awg-router.tar.gz > awg-router.tar.gz.sha256
+          ls -l awg-router.tar.gz*
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="${TAG#v}" '
+            /^## / { if (on) exit; on = (index($0, "## " v " ") == 1 || $0 == "## " v) ; next }
+            on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+
+      - name: Create the release or attach to it
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md \
+              awg-router.tar.gz awg-router.tar.gz.sha256 && exit 0
+            gh release view "$TAG" >/dev/null   # создан параллельно — тогда прикладываем ниже
+          fi
+          gh release upload "$TAG" awg-router.tar.gz awg-router.tar.gz.sha256 --clobber
