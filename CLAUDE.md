@@ -31,7 +31,9 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/cps.py` | Signature packets I1–I5: strict tag check (`b r rc rd t` only — `<c>` is kernel-only, `<d>/<ds>/<dz>` go-only), byte size (≤ 1400), RFC-based presets (STUN, QUIC Initial 1200 B, DNS+EDNS 128 B, SIP, AmneziaVPN default, none) with random fields; per-client override in `state.cps[pk]` = `{preset}` or `{preset: custom, values}`, applied in `users.client_config` (conf and vpn://) |
 | `app/selfupdate.py` | Update from the panel: `install.sh --update` on the host via `nsenter -t 1` + `systemd-run --unit awg-router-update` (outside the panel container's cgroup, survives its recreation); output in `data/update.log` ending with `exit=N`, state in `data/update.json`; host install dir from the Compose label `com.docker.compose.project.working_dir` (or the `/data` mount source) |
 | `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/<whitelisted file>` — **outside the secret path, no login** (token in `state.shares`; unknown tokens → 404) |
-| `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
+| `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. Server-side texts (`TEXTS`, 4 languages) live here and in `tgbot.py` only, because those messages go to Telegram, not the browser |
+| `app/tgbot.py` | Control from Telegram (`settings.telegram.control`): getUpdates long polling on the same path as notifications (direct / through an exit), commands and inline buttons, buttons under notifications (`notify_buttons`, engine events carry `pk` / `uid`). Obeys only `chat_id`; offset saved in `data/tgbot.json` **before** handling (a restart never repeats a command); messages older than 10 min are skipped. Calls panel actions through `main.bot_ops` (same functions as the API: `apply_limits`, `set_client_enabled`, `ensure_share`, `trace_target`, `set_default_outbound`); nothing destructive. Actions go to the event log as `tg.act_*` |
+| `app/qr.py` | QR code → PNG in pure Python (byte mode, ECC M then L, like `static/qrcode.js`): config QR for Telegram. Verified module-for-module against `qrcode.js` for versions 1–40 |
 | `app/tgreq.py` | Telegram request through an exit: run as `nsenter -t PID -n -- python3 tgreq.py <fwmark>` (like `probe.py`); request on stdin, JSON answer on stdout; A record looked up through the tunnel (UDP DNS to 1.1.1.1 / 8.8.8.8) because local DNS spoofs blocked names |
 | `app/web.py` | HTTP server: routing, JSON, static (ETag/304), TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, strict `Content-Length`, body draining, ≤ 128 connections (≤ 24 per IP), 60 s idle timeout |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |
@@ -129,6 +131,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   `Store.replace_outbound(st, target, new, spare=its fallback)` over every place `outbound_refs`
   knows (plus client rules in "inherit" mode); without `replace` an exit in use is refused as
   before. A new place that can point to an exit must be added to **both** functions.
+- Telegram bot (1.9.0): callback data ≤ 64 bytes (`off:<pk>` is 48). Menu, list and card messages the bot
+  sent itself are edited in place (`_panel_msgs`); a button under a notification opens a new message.
+  A pending question (`/add` or `/route` without an argument) waits 15 min for a reply. An update started
+  from the bot is remembered in `tgbot.json` and announced (done / failed) by the new panel.
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 

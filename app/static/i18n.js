@@ -1857,6 +1857,76 @@ function _pick(v, n) {
 }
 function fmtNum(n) { return Number(n).toLocaleString(LANG); }
 
+// управление из Telegram (1.9.0)
+Object.assign(I18N.ru, {
+  "tg.control_title": "Управление из Telegram",
+  "tg.control": "Принимать команды и кнопки",
+  "tg.control_hint": "Бот станет пультом: /status, список клиентов с кнопками «Включить», «Выключить», «QR и файл», «+30 дней», новый клиент командой /add, смена основного выхода, резервная копия и обновление панели. Кнопки появятся и под уведомлениями. Команды принимаются только из чата, указанного выше; в группе их может отправить любой участник, поэтому лучше личный чат. Удалить что-либо из бота нельзя.",
+  "tg.bot_ok": "Бот слушает команды — напишите ему /help",
+  "tg.bot_error": "Бот не получает команды",
+  "tg.act_on": "Telegram: клиент «{name}» включён",
+  "tg.act_off": "Telegram: клиент «{name}» выключен",
+  "tg.act_days": "Telegram: клиент «{name}» продлён до {date}",
+  "tg.act_gb": "Telegram: лимит клиента «{name}» — {gb} ГБ",
+  "tg.act_config": "Telegram: отправлен конфиг клиента «{name}»",
+  "tg.act_share": "Telegram: отправлена личная ссылка клиента «{name}»",
+  "tg.act_default": "Telegram: основной выход — «{name}»",
+  "tg.act_default_direct": "Telegram: основной выход — напрямую",
+  "tg.act_backup": "Telegram: резервная копия отправлена по команде",
+  "tg.act_update": "Telegram: запущено обновление до {version}",
+});
+Object.assign(I18N.en, {
+  "tg.control_title": "Control from Telegram",
+  "tg.control": "Accept commands and buttons",
+  "tg.control_hint": "The bot becomes a remote: /status, a client list with Turn on, Turn off, QR and file and +30 days buttons, a new client with /add, changing the default exit, a backup and a panel update. Buttons also appear under notifications. Commands are accepted only from the chat above; in a group any member can send them, so a private chat is better. Nothing can be deleted from the bot.",
+  "tg.bot_ok": "The bot is listening — send it /help",
+  "tg.bot_error": "The bot doesn't receive commands",
+  "tg.act_on": "Telegram: client “{name}” turned on",
+  "tg.act_off": "Telegram: client “{name}” turned off",
+  "tg.act_days": "Telegram: client “{name}” extended until {date}",
+  "tg.act_gb": "Telegram: client “{name}” limit set to {gb} GB",
+  "tg.act_config": "Telegram: config of client “{name}” sent",
+  "tg.act_share": "Telegram: personal link of client “{name}” sent",
+  "tg.act_default": "Telegram: default exit is now “{name}”",
+  "tg.act_default_direct": "Telegram: default exit is now direct",
+  "tg.act_backup": "Telegram: backup sent on request",
+  "tg.act_update": "Telegram: update to {version} started",
+});
+Object.assign(I18N.zh, {
+  "tg.control_title": "通过 Telegram 控制",
+  "tg.control": "接受命令和按钮",
+  "tg.control_hint": "机器人将成为遥控器：/status、带“启用”“停用”“二维码和文件”“+30 天”按钮的客户端列表、用 /add 新建客户端、更换默认出口、备份和更新面板。通知下方也会出现按钮。只接受上面所填聊天中的命令；在群组中任何成员都能发送命令，因此最好使用私聊。无法通过机器人删除任何内容。",
+  "tg.bot_ok": "机器人正在接收命令——给它发送 /help",
+  "tg.bot_error": "机器人收不到命令",
+  "tg.act_on": "Telegram：客户端“{name}”已启用",
+  "tg.act_off": "Telegram：客户端“{name}”已停用",
+  "tg.act_days": "Telegram：客户端“{name}”已延期至 {date}",
+  "tg.act_gb": "Telegram：客户端“{name}”的限额改为 {gb} GB",
+  "tg.act_config": "Telegram：已发送客户端“{name}”的配置",
+  "tg.act_share": "Telegram：已发送客户端“{name}”的个人链接",
+  "tg.act_default": "Telegram：默认出口改为“{name}”",
+  "tg.act_default_direct": "Telegram：默认出口改为直连",
+  "tg.act_backup": "Telegram：已按命令发送备份",
+  "tg.act_update": "Telegram：已开始更新到 {version}",
+});
+Object.assign(I18N.fa, {
+  "tg.control_title": "کنترل از تلگرام",
+  "tg.control": "پذیرفتن دستورها و دکمه‌ها",
+  "tg.control_hint": "ربات به کنترل از راه دور تبدیل می‌شود: ‎/status، فهرست کلاینت‌ها با دکمه‌های «فعال کردن»، «غیرفعال کردن»، «QR و فایل» و «+۳۰ روز»، ساخت کلاینت با ‎/add، تغییر خروجی اصلی، پشتیبان‌گیری و به‌روزرسانی پنل. زیر اعلان‌ها هم دکمه نمایش داده می‌شود. دستورها فقط از چتی که بالا وارد شده پذیرفته می‌شوند؛ در گروه هر عضوی می‌تواند دستور بفرستد، پس چت خصوصی بهتر است. از ربات نمی‌توان چیزی را حذف کرد.",
+  "tg.bot_ok": "ربات دستورها را می‌پذیرد — به آن ‎/help بفرستید",
+  "tg.bot_error": "ربات دستورها را دریافت نمی‌کند",
+  "tg.act_on": "تلگرام: کلاینت «{name}» فعال شد",
+  "tg.act_off": "تلگرام: کلاینت «{name}» غیرفعال شد",
+  "tg.act_days": "تلگرام: اعتبار کلاینت «{name}» تا {date} تمدید شد",
+  "tg.act_gb": "تلگرام: سقف کلاینت «{name}» {gb} گیگابایت شد",
+  "tg.act_config": "تلگرام: پیکربندی کلاینت «{name}» فرستاده شد",
+  "tg.act_share": "تلگرام: پیوند شخصی کلاینت «{name}» فرستاده شد",
+  "tg.act_default": "تلگرام: خروجی اصلی اکنون «{name}» است",
+  "tg.act_default_direct": "تلگرام: خروجی اصلی اکنون مستقیم است",
+  "tg.act_backup": "تلگرام: پشتیبان به درخواست فرستاده شد",
+  "tg.act_update": "تلگرام: به‌روزرسانی به {version} آغاز شد",
+});
+
 /* Разделители: перечисление, фразы, ссылки */
 const SEP = {
   list: { zh: "、", fa: "، " }, phrase: { zh: "，", fa: "، " }, refs: { zh: "；", fa: "؛ " },

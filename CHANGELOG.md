@@ -3,6 +3,26 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.9.0 — 2026-11-01
+
+- **Control from Telegram.** System → Telegram notifications → **Accept commands and buttons**
+  turns the bot into a remote. `/status` shows the server, clients online, this month's traffic,
+  the default exit and every exit; `/clients` lists clients with buttons: turn on or off, **QR and
+  file** (the QR code as a picture, the `.conf` file and the `vpn://` key for AmneziaVPN),
+  personal link, **+30 days** and **+10 GB** for clients with an end date or a limit. `/add Name`
+  (or `/add` and then the name) creates a client and sends its QR code at once. `/exits` checks an
+  exit and makes it the default; `/route address` shows where traffic to an IP or domain goes;
+  `/backup` sends a backup now. A panel update can be started from the bot, and it writes when
+  the panel is back.
+- **Buttons under notifications** when control is on: +30 days under "access period ended" or
+  "ends soon", +10 GB under "limit used up", Check under "exit stopped working", Update under
+  "new version".
+- Only the chat set in the panel is obeyed; other chats are ignored. Nothing can be deleted from
+  the bot and server parameters can't be changed there. Commands are taken through the same path
+  as notifications, so they work through an exit where Telegram is blocked. Everything done from
+  the bot appears in the panel's event log as "Telegram: …".
+- The panel shows whether the bot is receiving commands, or why not.
+
 ## 1.8.0 — 2026-11-01
 
 - **Telegram through an exit.** Where api.telegram.org is blocked (Russia, China, Iran), the

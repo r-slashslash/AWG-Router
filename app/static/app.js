@@ -1580,6 +1580,13 @@ function viewTelegram() {
         <span class="hint">${esc(t("tg.via_hint"))}</span></label>
       </div><div class="field"><span>${esc(t("tg.events"))}</span>
         ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div></div>
+      <fieldset class="pgroup" style="margin:4px 0 12px"><legend>${esc(t("tg.control_title"))}</legend>
+        <label class="check"><input type="checkbox" id="tg-control" ${c.control ? "checked" : ""}><span><b>${esc(t("tg.control"))}</b></span></label>
+        <p class="small muted" style="margin:6px 0 0">${esc(t("tg.control_hint"))}</p>
+        ${c.enabled && c.control && S.tg_bot ? (S.tg_bot.state === "error"
+          ? `<p class="err small">${esc(t("tg.bot_error"))}: <bdi>${esc(tm(S.tg_bot.error))}</bdi></p>`
+          : S.tg_bot.state === "ok" ? `<p class="small"><span class="dot ok"></span> ${esc(t("tg.bot_ok"))}</p>` : "") : ""}
+      </fieldset>
       <fieldset class="pgroup" style="margin-top:4px"><legend>${esc(t("tg.backup"))}</legend>
         <div class="tg-cols"><div>
           <label class="field"><span>${esc(t("tg.backup_when"))}</span>
@@ -1607,6 +1614,7 @@ function bindTelegram() {
     TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });
     return { enabled: $("#tg-on").checked, token: $("#tg-token").value.trim(),
       chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, via: $("#tg-via").value, events,
+      control: $("#tg-control").checked,
       backup: $("#tg-bk").value, backup_pw: $("#tg-bk-pw").value,
       backup_pw_clear: !!($("#tg-bk-clear") && $("#tg-bk-clear").checked) };
   };

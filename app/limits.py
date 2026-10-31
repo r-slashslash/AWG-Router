@@ -62,11 +62,11 @@ def enforce(engine, now: float | None = None) -> None:
             p["exp_done"] = exp
             if c["enabled"] and _set_enabled(engine, pk, False):
                 p["auto_off"] = "exp"
-                engine.event("warn", Msg("ev.client_expired", name=_name(c)))
+                engine.event("warn", Msg("ev.client_expired", name=_name(c), pk=pk))
         if exp and not expired and c["enabled"] and exp - now <= WARN_DAYS * 86400 \
                 and L.get("exp_warned") != exp:
             p["exp_warned"] = exp
-            engine.event("warn", Msg("ev.client_expiring", name=_name(c),
+            engine.event("warn", Msg("ev.client_expiring", name=_name(c), pk=pk,
                                      date=time.strftime("%Y-%m-%d", time.gmtime(exp)),
                                      days=max(1, math.ceil((exp - now) / 86400))))
         q = L.get("quota")
@@ -74,17 +74,17 @@ def enforce(engine, now: float | None = None) -> None:
         if q and not expired and c["enabled"] and L.get("quota_warned") != key \
                 and q * WARN_SHARE <= engine.traffic.used(pk, period) < q:
             p["quota_warned"] = key
-            engine.event("warn", Msg("ev.client_quota_warn", name=_name(c), gb=round(q / GB, 2)))
+            engine.event("warn", Msg("ev.client_quota_warn", name=_name(c), pk=pk, gb=round(q / GB, 2)))
         if q and not expired and engine.traffic.used(pk, period) >= q and L.get("quota_done") != key:
             p["quota_done"] = key
             if c["enabled"] and _set_enabled(engine, pk, False):
                 p["auto_off"] = "quota:" + key
-                engine.event("warn", Msg("ev.client_quota", name=_name(c), gb=round(q / GB, 2)))
+                engine.event("warn", Msg("ev.client_quota", name=_name(c), pk=pk, gb=round(q / GB, 2)))
         if ao and ao.startswith("quota:") and ao != "quota:" + key and period == "month" \
                 and not expired and not c["enabled"]:
             if _set_enabled(engine, pk, True):
                 p["auto_off"] = None
-                engine.event("info", Msg("ev.client_quota_reset", name=_name(c)))
+                engine.event("info", Msg("ev.client_quota_reset", name=_name(c), pk=pk))
         if p:
             patches[pk] = p
     if patches:
