@@ -3,6 +3,19 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.10.0 — 2026-11-01
+
+- **A new client's first connection.** When a client created in the panel or the bot connects
+  for the first time, Telegram gets "Client … connected for the first time — the config works"
+  (with a button to open the client when control is on). Handy after sending a friend a QR code.
+  It is part of the client notifications and shows in the panel's event log. Clients created
+  in the AmneziaVPN app are not tracked; a client that never connects is forgotten after 90 days.
+- **Bot: Route in the menu.** Checking where traffic to an address goes no longer needs the
+  `/route` command: press Route and send the address.
+- **Bot: a Menu button at the bottom of the screen.** After `/help` the bot sets a ☰ Menu
+  button in place of the keyboard, so the menu is one tap away even when it has scrolled up.
+  It is removed when control is turned off in the panel.
+
 ## 1.9.0 — 2026-11-01
 
 - **Control from Telegram.** System → Telegram notifications → **Accept commands and buttons**

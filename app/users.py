@@ -9,6 +9,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
+import time
 
 from . import awgserver, config, cps, hostnet, system
 from .awgserver import ServerConf
@@ -137,6 +138,8 @@ class ServerManager:
 
             def keep(st):
                 st.setdefault("keys", {})[pub] = priv
+                # сообщить, когда клиент подключится впервые (limits.first_seen)
+                st.setdefault("await_first", {})[pub] = time.time()
             self.e.store.mutate(keep)
             try:
                 self._write(t, sc, rows)
@@ -185,6 +188,7 @@ class ServerManager:
                 st["clients"].pop(pk, None)
                 st.get("limits", {}).pop(pk, None)
                 st.get("cps", {}).pop(pk, None)
+                st.get("await_first", {}).pop(pk, None)
                 st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
             self.e.store.mutate(forget)
             self.e.event("info", Msg("ev.user_deleted", name=name))

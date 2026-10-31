@@ -46,6 +46,9 @@ TEXTS = {
         "cmd_exits": "Выходы", "cmd_route": "Куда пойдёт трафик до адреса",
         "cmd_backup": "Резервная копия сейчас", "cmd_help": "Что умеет бот",
         "b_status": "📊 Состояние", "b_clients": "👥 Клиенты", "b_exits": "🌐 Выходы",
+        "b_route": "🧭 Маршрут", "kbd_menu": "☰ Меню",
+        "kbd_on": "Кнопка «☰ Меню» теперь всегда внизу экрана.",
+        "kbd_off": "Управление из Telegram выключено в панели.",
         "b_add": "➕ Новый клиент", "b_backup": "💾 Копия", "b_menu": "‹ Меню", "b_list": "‹ Клиенты",
         "b_refresh": "🔄 Обновить", "b_on": "▶️ Включить", "b_off": "⏸ Выключить",
         "b_config": "📱 QR и файл", "b_share": "🔗 Личная ссылка", "b_days": "+30 дней",
@@ -115,6 +118,9 @@ TEXTS = {
         "cmd_exits": "Exits", "cmd_route": "Where traffic to an address goes",
         "cmd_backup": "Backup now", "cmd_help": "What the bot can do",
         "b_status": "📊 Status", "b_clients": "👥 Clients", "b_exits": "🌐 Exits",
+        "b_route": "🧭 Route", "kbd_menu": "☰ Menu",
+        "kbd_on": "The ☰ Menu button now stays at the bottom of the screen.",
+        "kbd_off": "Control from Telegram is turned off in the panel.",
         "b_add": "➕ New client", "b_backup": "💾 Backup", "b_menu": "‹ Menu", "b_list": "‹ Clients",
         "b_refresh": "🔄 Refresh", "b_on": "▶️ Turn on", "b_off": "⏸ Turn off",
         "b_config": "📱 QR and file", "b_share": "🔗 Personal link", "b_days": "+30 days",
@@ -184,6 +190,9 @@ TEXTS = {
         "cmd_exits": "出口", "cmd_route": "访问某地址的流量走哪里",
         "cmd_backup": "立即备份", "cmd_help": "机器人能做什么",
         "b_status": "📊 状态", "b_clients": "👥 客户端", "b_exits": "🌐 出口",
+        "b_route": "🧭 路由", "kbd_menu": "☰ 菜单",
+        "kbd_on": "“☰ 菜单”按钮现在常驻屏幕底部。",
+        "kbd_off": "已在面板中关闭通过 Telegram 控制。",
         "b_add": "➕ 新建客户端", "b_backup": "💾 备份", "b_menu": "‹ 菜单", "b_list": "‹ 客户端",
         "b_refresh": "🔄 刷新", "b_on": "▶️ 启用", "b_off": "⏸ 停用",
         "b_config": "📱 二维码和文件", "b_share": "🔗 个人链接", "b_days": "+30 天",
@@ -251,6 +260,9 @@ TEXTS = {
         "cmd_exits": "خروجی‌ها", "cmd_route": "ترافیک به یک نشانی از کجا می‌رود",
         "cmd_backup": "پشتیبان‌گیری همین حالا", "cmd_help": "ربات چه کارهایی می‌کند",
         "b_status": "📊 وضعیت", "b_clients": "👥 کلاینت‌ها", "b_exits": "🌐 خروجی‌ها",
+        "b_route": "🧭 مسیر", "kbd_menu": "☰ منو",
+        "kbd_on": "دکمهٔ «☰ منو» اکنون همیشه پایین صفحه است.",
+        "kbd_off": "کنترل از تلگرام در پنل خاموش شد.",
         "b_add": "➕ کلاینت تازه", "b_backup": "💾 پشتیبان", "b_menu": "منو ›", "b_list": "کلاینت‌ها ›",
         "b_refresh": "🔄 تازه‌سازی", "b_on": "▶️ فعال کردن", "b_off": "⏸ غیرفعال کردن",
         "b_config": "📱 QR و فایل", "b_share": "🔗 پیوند شخصی", "b_days": "+۳۰ روز",
@@ -349,6 +361,11 @@ def fmt_date(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
+def menu_texts() -> set[str]:
+    """Надпись кнопки «Меню» внизу экрана на всех языках: язык могли сменить после её отправки."""
+    return {tx["kbd_menu"] for tx in TEXTS.values()}
+
+
 def kb(*rows) -> dict:
     """Кнопки: строки из пар (текст, данные). Пустые строки пропускаются."""
     return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows if row]}
@@ -366,7 +383,7 @@ def notify_buttons(key: str, p: dict, lang: str) -> dict | None:
         return kb([(tr(lang, "b_days"), "d30:" + pk), (tr(lang, "b_client"), "c:" + pk)])
     if key in ("client_quota", "client_quota_warn") and pk:
         return kb([(tr(lang, "b_gb"), "g10:" + pk), (tr(lang, "b_client"), "c:" + pk)])
-    if key == "client_quota_reset" and pk:
+    if key in ("client_quota_reset", "client_first") and pk:
         return kb([(tr(lang, "b_client"), "c:" + pk)])
     if key == "update_available" and p.get("version"):
         return kb([(tr(lang, "b_update", False, version=p["version"]), "up")])
@@ -472,14 +489,17 @@ class Bot:
         self._save()
 
     def _drop_commands(self, c: dict) -> None:
-        """Управление выключили — убираем меню команд, чтобы бот не обещал лишнего."""
-        if not self._st.get("cmds") or not c["token"]:
+        """Управление выключили — убираем меню команд и кнопку «Меню», чтобы бот не обещал лишнего."""
+        if not (self._st.get("cmds") or self._st.get("kbd")) or not c["token"]:
             return
         try:
             notify._call(c["token"], "deleteMyCommands", {}, via=c["via"])
+            if self._st.get("kbd") and c["chat_id"]:
+                self._send(c, tr(c["lang"], "kbd_off"), {"remove_keyboard": True})
         except notify.NotifyError as e:
-            log.info("deleteMyCommands: %s", e)
+            log.info("telegram: %s", e)
         self._st.pop("cmds", None)
+        self._st.pop("kbd", None)
         self._save()
 
     def _announce_update(self, c: dict) -> None:
@@ -554,6 +574,10 @@ class Bot:
         if not text:
             return
         self.last_cmd = time.time()
+        if text in menu_texts():
+            self._ask = None
+            self.on_command(c, "menu", "")
+            return
         if text.startswith("/"):
             cmd, _, arg = text[1:].partition(" ")
             self._ask = None
@@ -590,6 +614,7 @@ class Bot:
 
     def on_command(self, c: dict, cmd: str, arg: str) -> None:
         if cmd in ("start", "help", "menu"):
+            self._ensure_keyboard(c)
             self._send(c, tr(c["lang"], "help"), self._menu(c), panel=True)
         elif cmd == "status":
             self._guard(c, self.show_status, None)
@@ -650,6 +675,8 @@ class Bot:
                 self.do_share(c, arg)
             elif op == "add":
                 self.ask(c, "add")
+            elif op == "rt":
+                self.ask(c, "route")
             elif op == "ex":
                 self.show_exits(c, msg)
             elif op == "pr":
@@ -686,7 +713,17 @@ class Bot:
         L = c["lang"]
         return kb([(tr(L, "b_status"), "st"), (tr(L, "b_clients"), "cl:0")],
                   [(tr(L, "b_exits"), "ex"), (tr(L, "b_add"), "add")],
-                  [(tr(L, "b_backup"), "bk")])
+                  [(tr(L, "b_route"), "rt"), (tr(L, "b_backup"), "bk")])
+
+    def _ensure_keyboard(self, c: dict) -> None:
+        """Постоянная кнопка «☰ Меню» внизу экрана (обычная клавиатура Telegram, не под сообщением).
+        Отправляется один раз на язык: Telegram помнит клавиатуру сам."""
+        if self._st.get("kbd") == c["lang"]:
+            return
+        self._send(c, tr(c["lang"], "kbd_on"), {"keyboard": [[{"text": tr(c["lang"], "kbd_menu")}]],
+                                                 "resize_keyboard": True, "is_persistent": True})
+        self._st["kbd"] = c["lang"]
+        self._save()
 
     def out_label(self, c: dict, out, st: dict) -> str:
         """Выход из настроек ('direct' | 'block' | 'up:<id>') или фактический (номер туннеля)."""

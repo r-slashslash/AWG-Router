@@ -1193,7 +1193,7 @@ Object.assign(I18N.ru, {
   "ev.client_quota_reset": "Клиент «{name}» снова включён: новый месяц",
   "ev.restored": "Настройки восстановлены из резервной копии",
   "ev.restored_server": "Настройки и сервер AmneziaWG восстановлены из резервной копии",
-  "tg.ev_clients": "Срок или лимит клиента скоро закончится, клиент отключён по сроку или лимиту и включён снова", "tg.ev_update": "Вышла новая версия панели",
+  "tg.ev_clients": "Новый клиент подключился впервые; срок или лимит клиента скоро закончится, клиент отключён по сроку или лимиту и включён снова", "tg.ev_update": "Вышла новая версия панели",
 });
 
 Object.assign(I18N.en, {
@@ -1246,7 +1246,7 @@ Object.assign(I18N.en, {
   "ev.client_quota_reset": "Client “{name}” is on again: new month",
   "ev.restored": "Settings restored from a backup",
   "ev.restored_server": "Settings and the AmneziaWG server restored from a backup",
-  "tg.ev_clients": "A client's end date or limit is close, or the client is turned off by it or back on", "tg.ev_update": "A new panel version is out",
+  "tg.ev_clients": "A new client connects for the first time; a client's end date or limit is close, or the client is turned off by it or back on", "tg.ev_update": "A new panel version is out",
 });
 
 Object.assign(I18N.zh, {
@@ -1299,7 +1299,7 @@ Object.assign(I18N.zh, {
   "ev.client_quota_reset": "客户端“{name}”已重新启用：新的月份",
   "ev.restored": "已从备份恢复设置",
   "ev.restored_server": "已从备份恢复设置和 AmneziaWG 服务器",
-  "tg.ev_clients": "客户端期限或限额即将到期，或因此停用、重新启用", "tg.ev_update": "面板发布新版本",
+  "tg.ev_clients": "新客户端首次连接；客户端期限或限额即将到期，或因此停用、重新启用", "tg.ev_update": "面板发布新版本",
 });
 
 Object.assign(I18N.fa, {
@@ -1352,7 +1352,7 @@ Object.assign(I18N.fa, {
   "ev.client_quota_reset": "کلاینت «{name}» دوباره فعال شد: ماه تازه",
   "ev.restored": "تنظیمات از پشتیبان بازیابی شد",
   "ev.restored_server": "تنظیمات و سرور AmneziaWG از پشتیبان بازیابی شدند",
-  "tg.ev_clients": "انقضا یا سقف کلاینتی نزدیک شود، یا کلاینت به‌خاطر آن غیرفعال یا دوباره فعال شود", "tg.ev_update": "نسخهٔ تازهٔ پنل منتشر شود",
+  "tg.ev_clients": "کلاینت تازه برای نخستین بار وصل شود؛ انقضا یا سقف کلاینتی نزدیک شود، یا کلاینت به‌خاطر آن غیرفعال یا دوباره فعال شود", "tg.ev_update": "نسخهٔ تازهٔ پنل منتشر شود",
 });
 
 /* ========== трафик по выходам и квоты выходов */
@@ -1873,6 +1873,7 @@ Object.assign(I18N.ru, {
   "tg.act_default": "Telegram: основной выход — «{name}»",
   "tg.act_default_direct": "Telegram: основной выход — напрямую",
   "tg.act_backup": "Telegram: резервная копия отправлена по команде",
+  "ev.client_first": "Клиент «{name}» подключился впервые",
   "tg.act_update": "Telegram: запущено обновление до {version}",
 });
 Object.assign(I18N.en, {
@@ -1890,6 +1891,7 @@ Object.assign(I18N.en, {
   "tg.act_default": "Telegram: default exit is now “{name}”",
   "tg.act_default_direct": "Telegram: default exit is now direct",
   "tg.act_backup": "Telegram: backup sent on request",
+  "ev.client_first": "Client “{name}” connected for the first time",
   "tg.act_update": "Telegram: update to {version} started",
 });
 Object.assign(I18N.zh, {
@@ -1907,6 +1909,7 @@ Object.assign(I18N.zh, {
   "tg.act_default": "Telegram：默认出口改为“{name}”",
   "tg.act_default_direct": "Telegram：默认出口改为直连",
   "tg.act_backup": "Telegram：已按命令发送备份",
+  "ev.client_first": "客户端“{name}”首次连接",
   "tg.act_update": "Telegram：已开始更新到 {version}",
 });
 Object.assign(I18N.fa, {
@@ -1924,6 +1927,7 @@ Object.assign(I18N.fa, {
   "tg.act_default": "تلگرام: خروجی اصلی اکنون «{name}» است",
   "tg.act_default_direct": "تلگرام: خروجی اصلی اکنون مستقیم است",
   "tg.act_backup": "تلگرام: پشتیبان به درخواست فرستاده شد",
+  "ev.client_first": "کلاینت «{name}» برای نخستین بار وصل شد",
   "tg.act_update": "تلگرام: به‌روزرسانی به {version} آغاز شد",
 });
 

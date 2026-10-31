@@ -594,6 +594,7 @@ class Engine:
                 try:
                     self.traffic.update(self.clients)
                     limits.enforce(self)
+                    limits.first_seen(self)
                 except Exception:  # noqa: BLE001
                     log.exception("traffic/limits")
             try:
