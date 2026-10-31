@@ -248,6 +248,13 @@ function renderStatus() {
        <span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>
        <span>${esc(t("status.applied", { time: fmtTime(S.engine.last_apply) }))}</span>`
     : `<span class="state"><span class="dot bad"></span>${esc(t("status.no_target"))}</span>`;
+  // новая версия: метка в строке состояния (видна и на телефоне) и точка на вкладке «Система»
+  const v = S.version || {};
+  const chip = updatingTo ? t("status.updating") : v.available ? t("status.update", { version: v.latest }) : "";
+  if (chip) $("#status").insertAdjacentHTML("beforeend", `<button type="button" class="upd-chip" id="upd-chip">${esc(chip)}</button>`);
+  const uc = $("#upd-chip");
+  if (uc) uc.onclick = () => goTab("system");
+  $("#tabs [data-tab=system]").classList.toggle("has-news", !!v.available && !updatingTo);
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
 }
 

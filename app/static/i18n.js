@@ -1705,6 +1705,24 @@ Object.assign(I18N.fa, {
   "srv.cps_size": "{key}: بسته {size} بایت است، بیش از {max} — تکه‌تکه می‌شود",
 });
 
+// метка новой версии в строке состояния
+Object.assign(I18N.ru, {
+  "status.update": "доступна {version}",
+  "status.updating": "обновляется…",
+});
+Object.assign(I18N.en, {
+  "status.update": "{version} available",
+  "status.updating": "updating…",
+});
+Object.assign(I18N.zh, {
+  "status.update": "可更新到 {version}",
+  "status.updating": "正在更新…",
+});
+Object.assign(I18N.fa, {
+  "status.update": "نسخهٔ {version} آماده است",
+  "status.updating": "در حال به‌روزرسانی…",
+});
+
 /* ======================================================================= API */
 /* Язык: по языку браузера/системы. Запоминается только ручной выбор,
    и только если он отличается от языка браузера — иначе панель следует за браузером. */
