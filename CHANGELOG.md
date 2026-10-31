@@ -3,6 +3,16 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.10.3 — 2026-11-01
+
+- **Control from Telegram works without notifications.** The bot listened to commands only when
+  both **Accept commands and buttons** and **Send notifications** were on. With notifications
+  off it stayed silent, Telegram kept the messages, and the panel showed nothing about the bot,
+  while **Send a test** still worked. Control now needs only the token, the Chat ID and its own
+  checkbox, and the panel shows the bot's state whenever control is on.
+- `awg-router logs` no longer hangs when its output goes into a pipe (`| grep …`): it follows
+  the log only in a terminal and otherwise prints the last 2000 lines.
+
 ## 1.10.2 — 2026-11-01
 
 - **`/start` opens the whole menu.** The bot puts every item on the keyboard at the bottom of the

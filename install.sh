@@ -513,7 +513,7 @@ DIR="$DIR"
 case "\${1:-info}" in
   info)        bash "\$DIR/install.sh" --info ;;
   restart)     cd "\$DIR" && docker compose restart && bash "\$DIR/install.sh" --info ;;
-  logs)        docker logs --tail 100 -f awg-router ;;
+  logs)        if [ -t 1 ]; then docker logs --tail 100 -f awg-router; else docker logs --tail 2000 awg-router 2>&1; fi ;;
   update)      bash "\$DIR/install.sh" --update ;;
   reconfigure) bash "\$DIR/install.sh" --reconfigure ;;
   password)    P=\$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)
