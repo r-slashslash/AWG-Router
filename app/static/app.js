@@ -1583,7 +1583,7 @@ function viewTelegram() {
       <fieldset class="pgroup" style="margin:4px 0 12px"><legend>${esc(t("tg.control_title"))}</legend>
         <label class="check"><input type="checkbox" id="tg-control" ${c.control ? "checked" : ""}><span><b>${esc(t("tg.control"))}</b></span></label>
         <p class="small muted" style="margin:6px 0 0">${esc(t("tg.control_hint"))}</p>
-        ${c.enabled && c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
+        ${c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
       </fieldset>
       <fieldset class="pgroup" style="margin-top:4px"><legend>${esc(t("tg.backup"))}</legend>
         <div class="tg-cols"><div>

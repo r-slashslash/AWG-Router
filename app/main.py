@@ -367,7 +367,7 @@ def _tg_draft(body: dict) -> dict:
 @app.put("/api/telegram")
 def put_telegram(req):
     c = _tg_draft(req.json())
-    if c["enabled"] and not (c["token"] and c["chat_id"]):
+    if (c["enabled"] or c["control"]) and not (c["token"] and c["chat_id"]):
         bad("err.tg_incomplete")
     store.mutate(lambda st: st["settings"].__setitem__("telegram", c))
     bot.wake.set()             # бот сразу видит новые настройки, не дожидаясь паузы
@@ -757,7 +757,7 @@ def clean_backup_state(new: dict) -> dict:
                  enabled=bool(tg.get("enabled")) and bool(tok and chat))
         ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
         c["events"] = {k: bool(ev.get(k, True)) for k in notify.KINDS}
-        c["control"] = bool(tg.get("control"))
+        c["control"] = bool(tg.get("control")) and bool(tok and chat)
         if tg.get("backup") in notify.BACKUP_PERIODS:
             c["backup"] = tg["backup"]
         if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:

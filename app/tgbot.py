@@ -477,7 +477,8 @@ class Bot:
     def _loop(self) -> None:
         while not self.stop_ev.is_set():
             c = notify.cfg_of(self.store.snapshot())
-            if not (c["enabled"] and c["token"] and c["chat_id"] and c["control"]):
+            # управление не зависит от уведомлений: можно командовать ботом и без них
+            if not (c["token"] and c["chat_id"] and c["control"]):
                 self.state, self.error = "off", None
                 self._drop_commands(c)
                 self.wake.wait(10)
