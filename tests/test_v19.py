@@ -179,10 +179,14 @@ class BotTest(unittest.TestCase):
         self.tg.updates = list(ups)
         self.bot.poll_once(self.c, timeout=0)
 
-    def test_other_chat_ignored(self):
+    def test_other_chat_not_run(self):
+        """Команды из чужого чата не выполняются; в личный чат бот отвечает «нет доступа»."""
         self.run_updates(msg("/status", chat="777"), button("off:" + self.pk, chat="777", uid=2))
-        self.assertNotIn("sendMessage", self.tg.methods())
-        self.assertNotIn("answerCallbackQuery", self.tg.methods())
+        sent = [p for m, p in self.tg.calls if m == "sendMessage"]
+        self.assertEqual([p["chat_id"] for p in sent], ["777"])
+        self.assertIn("No access", sent[0]["text"])
+        self.assertIn("<code>777</code>", sent[0]["text"])
+        self.assertIn("No access", self.tg.last("answerCallbackQuery")["text"])
         self.assertEqual(self.bot._st["offset"], 3)
         self.assertTrue(any(c["public_key"] == self.pk and c["enabled"] for c in main.engine.clients))
 
@@ -250,7 +254,7 @@ class BotTest(unittest.TestCase):
         self.assertIn("no longer exists", self.tg.last("answerCallbackQuery")["text"])
 
     def test_panel_message_edited_in_place(self):
-        self.run_updates(msg("/help"))
+        self.run_updates(msg("/clients"))
         mid = self.tg.next_id
         self.run_updates(button("cl:0", uid=2, mid=mid))
         self.assertEqual(self.tg.last("editMessageText")["message_id"], mid)

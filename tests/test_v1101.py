@@ -1,4 +1,4 @@
-"""1.10.1: бот молчал на команды при сбитых часах сервера; панель показывает команды из чужого чата.
+"""1.10.1–1.10.2: бот молчал на команды при сбитых часах сервера; «нет доступа» в чужом чате; webhook.
 
 python3 -m unittest discover tests
 """
@@ -90,38 +90,50 @@ class BotTest(unittest.TestCase):
         self.assertNotIn("sendMessage", self.tg.methods())
         self.assertIsNone(self.bot.view()["skew"])
 
-    def test_foreign_chat_reported(self):
-        u = msg("/status", chat="777")
-        u["message"]["chat"].update(type="private", first_name="Ivan")
-        self.run_updates(u)
-        self.assertNotIn("sendMessage", self.tg.methods())
-        ign = self.bot.view()["ignored"]
-        self.assertEqual((ign["chat"], ign["title"]), ("777", "Ivan"))
+    def test_deny_once_in_private_only(self):
+        self.run_updates(msg("/status", chat="777"), msg("/clients", chat="777", uid=2))
+        to777 = [p for m, p in self.tg.calls if m == "sendMessage" and p["chat_id"] == "777"]
+        self.assertEqual(len(to777), 1)                       # не чаще раза в 10 минут
+        self.assertTrue(to777[0]["reply_markup"]["remove_keyboard"])
+        g = msg("/status", chat="-1009", uid=3)
+        g["message"]["chat"]["type"] = "supergroup"
+        self.run_updates(g)                                   # в группе — молча
+        self.assertFalse(any(p["chat_id"] == "-1009" for m, p in self.tg.calls if m == "sendMessage"))
+        self.run_updates(msg("hello", chat="778", uid=4))     # не команда — не отвечаем
+        self.assertFalse(any(p["chat_id"] == "778" for m, p in self.tg.calls if m == "sendMessage"))
 
-    def test_foreign_button_and_chatter(self):
-        self.run_updates(msg("hello", chat="778"))           # просто текст — не команда, не отмечаем
-        self.assertIsNone(self.bot.view()["ignored"])
-        self.run_updates(button("st", chat="779", uid=2))
-        self.assertEqual(self.bot.view()["ignored"]["chat"], "779")
+    def test_webhook_removed_once(self):
+        self.assertTrue(self.bot._drop_webhook(cfg()))
+        self.assertFalse(self.bot._drop_webhook(cfg()))
+        self.assertEqual(self.tg.methods().count("deleteWebhook"), 1)
 
-    def test_old_ignored_entry_expires(self):
-        self.bot.ignored = {"t": time.time() - 2 * 86400, "chat": "1", "title": "", "type": "private"}
-        self.assertIsNone(self.bot.view()["ignored"])
+    def test_loop_drops_webhook_and_polls(self):
+        """getUpdates отвечает «webhook is active» — бот снимает webhook и опрашивает снова."""
+        calls = {"n": 0}
+
+        def post(token, method, data, ctype, timeout, via):
+            if method == "getUpdates":
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise notify.NotifyError("Conflict: can't use getUpdates method while webhook is active")
+                self.bot.stop_ev.set()
+            return self.tg(token, method, data, ctype, timeout, via)
+        main.store.mutate(lambda st: st["settings"].__setitem__("telegram", cfg()))
+        with mock.patch.object(notify, "_post", post):
+            self.bot._loop()
+        self.assertIn("deleteWebhook", self.tg.methods())
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(self.bot.state, "ok")
 
 
 class PanelTest(unittest.TestCase):
-    def test_switch_chat_keeps_other_settings(self):
-        main.store.mutate(lambda st: st["settings"].__setitem__("telegram", {
-            **notify.defaults(), "enabled": True, "token": "123456789:" + "A" * 35, "chat_id": "-100",
-            "control": True, "lang": "ru"}))
-        c = main._tg_draft({"chat_id": CHAT})
-        self.assertEqual((c["chat_id"], c["control"], c["lang"], c["enabled"]), (CHAT, True, "ru", True))
-
     def test_i18n(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "i18n.js"), encoding="utf-8") as f:
             src = f.read()
-        for key in ("tg.bot_last", "tg.bot_foreign", "tg.bot_use_chat", "tg.bot_use_chat_done", "tg.bot_skew"):
+        for key in ("tg.bot_last", "tg.bot_skew"):
             self.assertEqual(src.count(f'"{key}":'), 4, key)
+        for key in ("tg.bot_foreign", "tg.bot_use_chat"):       # подсказки о чужом чате убраны из панели
+            self.assertNotIn(f'"{key}":', src)
 
 
 if __name__ == "__main__":

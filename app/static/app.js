@@ -1606,17 +1606,12 @@ function viewTelegram() {
     </div>
   </section>`;
 }
-/* Состояние бота-пульта: слушает ли, когда была команда, что пропущено и почему */
+/* Состояние бота-пульта: слушает ли и когда была последняя команда */
 function viewBotState(b) {
   const out = [];
   if (b.state === "error") out.push(`<p class="err small">${esc(t("tg.bot_error"))}: <bdi>${esc(tm(b.error))}</bdi></p>`);
   else if (b.state === "ok") out.push(`<p class="small"><span class="dot ok"></span> ${esc(t("tg.bot_ok"))}</p>`);
   if (b.last) out.push(`<p class="small muted">${esc(t("tg.bot_last", { time: fmtDay(b.last) + ", " + fmtTime(b.last) }))}</p>`);
-  if (b.ignored) {
-    const who = b.ignored.title ? `${b.ignored.chat} (${b.ignored.title})` : b.ignored.chat;
-    out.push(`<p class="err small">${esc(t("tg.bot_foreign", { chat: who }))}</p>
-      <button type="button" class="btn sm" id="tg-use-chat" data-chat="${esc(b.ignored.chat)}">${esc(t("tg.bot_use_chat", { chat: b.ignored.chat }))}</button>`);
-  }
   if (b.skew) out.push(`<p class="small muted">${esc(t("tg.bot_skew", { n: Math.round(Math.abs(b.skew) / 60) || 1 }))}</p>`);
   return out.join("");
 }
@@ -1647,11 +1642,6 @@ function bindTelegram() {
   $("#tg-bk-send").onclick = busy("#tg-bk-send", async () => {
     await api("POST", "telegram/backup", body());
     toast(t("tg.backup_sent"));
-    refresh();
-  });
-  if ($("#tg-use-chat")) $("#tg-use-chat").onclick = busy("#tg-use-chat", async () => {
-    await api("PUT", "telegram", { chat_id: $("#tg-use-chat").dataset.chat });
-    toast(t("tg.bot_use_chat_done"));
     refresh();
   });
   $("#tg-detect").onclick = busy("#tg-detect", async () => {

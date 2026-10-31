@@ -47,7 +47,6 @@ TEXTS = {
         "cmd_backup": "Резервная копия сейчас", "cmd_help": "Что умеет бот",
         "b_status": "📊 Состояние", "b_clients": "👥 Клиенты", "b_exits": "🌐 Выходы",
         "b_route": "🧭 Маршрут", "kbd_menu": "☰ Меню",
-        "kbd_on": "Кнопка «☰ Меню» теперь всегда внизу экрана.",
         "kbd_off": "Управление из Telegram выключено в панели.",
         "b_add": "➕ Новый клиент", "b_backup": "💾 Копия", "b_menu": "‹ Меню", "b_list": "‹ Клиенты",
         "b_refresh": "🔄 Обновить", "b_on": "▶️ Включить", "b_off": "⏸ Выключить",
@@ -102,6 +101,7 @@ TEXTS = {
         "up_started": "⬆️ Обновляю до {version}…", "up_none": "Новой версии нет: {version} — последняя.",
         "up_done": "✅ Панель обновлена до {version}.",
         "up_failed": "⚠️ Обновление не удалось, работает версия {version}. Подробности — в панели, «Система».",
+        "deny": "⛔ Нет доступа: бот выполняет команды только из чата, указанного в его панели.\nChat ID этого чата: <code>{chat}</code>. Если бот ваш, впишите этот номер в панели: «Система» → «Уведомления в Telegram» → Chat ID.", "deny_toast": "⛔ Нет доступа",
         "gone": "Такого клиента больше нет.", "gone_exit": "Такого выхода больше нет.",
         "fail": "⚠️ Не получилось: {error}", "cancelled": "Отменено.",
         "unknown": "Не знаю такой команды. /help — что я умею.",
@@ -119,7 +119,6 @@ TEXTS = {
         "cmd_backup": "Backup now", "cmd_help": "What the bot can do",
         "b_status": "📊 Status", "b_clients": "👥 Clients", "b_exits": "🌐 Exits",
         "b_route": "🧭 Route", "kbd_menu": "☰ Menu",
-        "kbd_on": "The ☰ Menu button now stays at the bottom of the screen.",
         "kbd_off": "Control from Telegram is turned off in the panel.",
         "b_add": "➕ New client", "b_backup": "💾 Backup", "b_menu": "‹ Menu", "b_list": "‹ Clients",
         "b_refresh": "🔄 Refresh", "b_on": "▶️ Turn on", "b_off": "⏸ Turn off",
@@ -174,6 +173,7 @@ TEXTS = {
         "up_started": "⬆️ Updating to {version}…", "up_none": "No new version: {version} is the latest.",
         "up_done": "✅ The panel is updated to {version}.",
         "up_failed": "⚠️ The update failed; version {version} keeps running. Details are in the panel, System.",
+        "deny": "⛔ No access: the bot runs commands only from the chat set in its panel.\nThis chat's Chat ID: <code>{chat}</code>. If the bot is yours, put this number in the panel: System → Telegram notifications → Chat ID.", "deny_toast": "⛔ No access",
         "gone": "This client no longer exists.", "gone_exit": "This exit no longer exists.",
         "fail": "⚠️ That didn't work: {error}", "cancelled": "Cancelled.",
         "unknown": "I don't know this command. /help — what I can do.",
@@ -191,7 +191,6 @@ TEXTS = {
         "cmd_backup": "立即备份", "cmd_help": "机器人能做什么",
         "b_status": "📊 状态", "b_clients": "👥 客户端", "b_exits": "🌐 出口",
         "b_route": "🧭 路由", "kbd_menu": "☰ 菜单",
-        "kbd_on": "“☰ 菜单”按钮现在常驻屏幕底部。",
         "kbd_off": "已在面板中关闭通过 Telegram 控制。",
         "b_add": "➕ 新建客户端", "b_backup": "💾 备份", "b_menu": "‹ 菜单", "b_list": "‹ 客户端",
         "b_refresh": "🔄 刷新", "b_on": "▶️ 启用", "b_off": "⏸ 停用",
@@ -244,6 +243,7 @@ TEXTS = {
         "up_started": "⬆️ 正在更新到 {version}…", "up_none": "没有新版本：{version} 已是最新。",
         "up_done": "✅ 面板已更新到 {version}。",
         "up_failed": "⚠️ 更新失败，仍在运行 {version} 版本。详情见面板的“系统”。",
+        "deny": "⛔ 无权访问：机器人只执行其面板中所设置聊天的命令。\n此聊天的 Chat ID：<code>{chat}</code>。如果这是你的机器人，请在面板中填写该号码：系统 → Telegram 通知 → Chat ID。", "deny_toast": "⛔ 无权访问",
         "gone": "该客户端已不存在。", "gone_exit": "该出口已不存在。",
         "fail": "⚠️ 操作失败：{error}", "cancelled": "已取消。",
         "unknown": "不认识这个命令。/help — 我能做什么。",
@@ -261,7 +261,6 @@ TEXTS = {
         "cmd_backup": "پشتیبان‌گیری همین حالا", "cmd_help": "ربات چه کارهایی می‌کند",
         "b_status": "📊 وضعیت", "b_clients": "👥 کلاینت‌ها", "b_exits": "🌐 خروجی‌ها",
         "b_route": "🧭 مسیر", "kbd_menu": "☰ منو",
-        "kbd_on": "دکمهٔ «☰ منو» اکنون همیشه پایین صفحه است.",
         "kbd_off": "کنترل از تلگرام در پنل خاموش شد.",
         "b_add": "➕ کلاینت تازه", "b_backup": "💾 پشتیبان", "b_menu": "منو ›", "b_list": "کلاینت‌ها ›",
         "b_refresh": "🔄 تازه‌سازی", "b_on": "▶️ فعال کردن", "b_off": "⏸ غیرفعال کردن",
@@ -316,6 +315,7 @@ TEXTS = {
         "up_started": "⬆️ در حال به‌روزرسانی به {version}…", "up_none": "نسخهٔ تازه‌ای نیست: {version} آخرین نسخه است.",
         "up_done": "✅ پنل به {version} به‌روزرسانی شد.",
         "up_failed": "⚠️ به‌روزرسانی انجام نشد؛ نسخهٔ {version} همچنان کار می‌کند. جزئیات در پنل، بخش سیستم.",
+        "deny": "⛔ دسترسی ندارید: ربات فقط از چتی که در پنلش تعیین شده فرمان می‌برد.\nChat ID این چت: <code>{chat}</code>. اگر ربات مال شماست، این عدد را در پنل وارد کنید: سیستم ← اعلان‌های تلگرام ← Chat ID.", "deny_toast": "⛔ دسترسی ندارید",
         "gone": "این کلاینت دیگر وجود ندارد.", "gone_exit": "این خروجی دیگر وجود ندارد.",
         "fail": "⚠️ انجام نشد: {error}", "cancelled": "لغو شد.",
         "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
@@ -361,9 +361,22 @@ def fmt_date(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
-def menu_texts() -> set[str]:
-    """Надпись кнопки «Меню» внизу экрана на всех языках: язык могли сменить после её отправки."""
-    return {tx["kbd_menu"] for tx in TEXTS.values()}
+# Клавиатура внизу экрана после /start: (текст, команда). Нажатие присылает текст кнопки.
+MENU = (("b_status", "status"), ("b_clients", "clients"), ("b_exits", "exits"), ("b_add", "add"),
+        ("b_route", "route"), ("b_backup", "backup"))
+DENY_EVERY = 600          # «нет доступа» в один и тот же чужой чат — не чаще раза в 10 минут
+
+
+def menu_action(text: str) -> str | None:
+    """Кнопка клавиатуры → команда. Надписи на всех языках: язык могли сменить после её отправки;
+    «☰ Меню» — кнопка из 1.10.0."""
+    for tx in TEXTS.values():
+        if text == tx["kbd_menu"]:
+            return "menu"
+        for key, cmd in MENU:
+            if text == tx[key]:
+                return cmd
+    return None
 
 
 def kb(*rows) -> dict:
@@ -414,8 +427,8 @@ class Bot:
         self.last_cmd: float | None = None
         self._ask: dict | None = None          # ждём ответа: {"kind": add|route, "msg": id, "t": …}
         self._panel_msgs: list[int] = []       # сообщения меню/списков: их можно редактировать
-        # последняя пропущенная команда: из чужого чата — чтобы панель подсказала, в чём дело
-        self.ignored: dict | None = None
+        self._denied: dict[str, float] = {}       # чужой чат → когда ответили «нет доступа»
+        self._webhook_dropped = False
         self._st = self._load()
 
     # ------------------------------------------------------------- состояние
@@ -436,20 +449,26 @@ class Bot:
             log.warning("tgbot state: %s", e)
 
     def view(self) -> dict:
-        ign = self.ignored if self.ignored and time.time() - self.ignored["t"] < DAY else None
         skew = notify.clock_skew
-        return {"state": self.state, "error": self.error, "last": self.last_cmd, "ignored": ign,
+        return {"state": self.state, "error": self.error, "last": self.last_cmd,
                 # часы сервера сбиты: на это стоит обратить внимание (вход по коду тоже от них зависит)
                 "skew": round(skew) if abs(skew) >= 120 else None}
 
-    def _foreign(self, chat: dict, c: dict) -> None:
-        """Команда из чата, которого нет в настройках: не выполняем, но запоминаем для панели."""
-        title = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) \
-            or chat.get("username") or ""
-        self.ignored = {"t": time.time(), "chat": str(chat.get("id", "")), "title": title[:60],
-                        "type": chat.get("type") or ""}
-        log.info("telegram: a command from chat %s (%s) is ignored: the panel listens to chat %s",
-                 self.ignored["chat"], title, c.get("chat_id"))
+    def _foreign(self, chat: dict, c: dict, qid: str = "") -> None:
+        """Команда из чата, которого нет в настройках: не выполняем. В личном чате отвечаем
+        «нет доступа» и номером этого чата — чтобы владелец сразу видел, что вписать в панель."""
+        cid = str(chat.get("id", ""))
+        log.info("telegram: a command from chat %s is not run: the panel listens to chat %s", cid, c.get("chat_id"))
+        if qid:
+            self._toast(c, qid, tr(c["lang"], "deny_toast", False))
+        if chat.get("type") != "private" or time.time() - self._denied.get(cid, 0) < DENY_EVERY:
+            return
+        self._denied[cid] = time.time()
+        try:
+            notify.send(c["token"], cid, tr(c["lang"], "deny", chat=cid), c["via"],
+                        {"remove_keyboard": True}, html=True)
+        except notify.NotifyError as e:
+            log.info("telegram: %s", e)
 
     def start(self) -> None:
         threading.Thread(target=self._loop, name="tgbot", daemon=True).start()
@@ -468,6 +487,8 @@ class Bot:
                 self.poll_once(c)
                 self.state, self.error = "ok", None
             except notify.NotifyError as e:
+                if "webhook" in str(e).lower() and self._drop_webhook(c):
+                    continue
                 self.state, self.error = "error", e.msg or str(e)
                 log.warning("telegram bot: %s", e)
                 self.wake.wait(30)
@@ -493,6 +514,21 @@ class Bot:
                 self.handle(u, c)
             except Exception:  # noqa: BLE001
                 log.exception("telegram update")
+
+    def _drop_webhook(self, c: dict) -> bool:
+        """На токене висит webhook (бота раньше подключали к другому сервису): пока он есть,
+        Telegram не отдаёт команды через getUpdates. Управление включили в панели — значит,
+        бот теперь её: снимаем webhook один раз. True — сняли, можно опрашивать снова."""
+        if self._webhook_dropped:
+            return False
+        self._webhook_dropped = True
+        try:
+            notify._call(c["token"], "deleteWebhook", {"drop_pending_updates": False}, via=c["via"])
+        except notify.NotifyError as e:
+            log.warning("telegram: deleteWebhook: %s", e)
+            return False
+        log.warning("telegram: the bot had a webhook set by another service; removed it to receive commands")
+        return True
 
     def _set_commands(self, c: dict) -> None:
         sig = f'{c["token"][:12]}|{c["lang"]}'
@@ -577,7 +613,7 @@ class Bot:
             msg = q.get("message") or {}
             if not self.allowed(msg.get("chat") or {}, c):
                 if msg.get("chat"):
-                    self._foreign(msg["chat"], c)
+                    self._foreign(msg["chat"], c, q.get("id", ""))
                 return
             self.last_cmd = time.time()
             self.on_button(c, str(q.get("data") or ""), q.get("id", ""), msg)
@@ -586,7 +622,7 @@ class Bot:
         if (m.get("from") or {}).get("is_bot") or not m.get("chat"):
             return
         if not self.allowed(m["chat"], c):
-            if (m.get("text") or "").startswith("/") or (m.get("text") or "") in menu_texts():
+            if (m.get("text") or "").startswith("/") or menu_action((m.get("text") or "").strip()):
                 self._foreign(m["chat"], c)
             return
         # возраст — по часам Telegram (Date его ответа), а не сервера: те бывают сбиты
@@ -598,9 +634,10 @@ class Bot:
         if not text:
             return
         self.last_cmd = time.time()
-        if text in menu_texts():
+        action = menu_action(text)
+        if action:
             self._ask = None
-            self.on_command(c, "menu", "")
+            self.on_command(c, action, "")
             return
         if text.startswith("/"):
             cmd, _, arg = text[1:].partition(" ")
@@ -638,8 +675,7 @@ class Bot:
 
     def on_command(self, c: dict, cmd: str, arg: str) -> None:
         if cmd in ("start", "help", "menu"):
-            self._ensure_keyboard(c)
-            self._send(c, tr(c["lang"], "help"), self._menu(c), panel=True)
+            self._send(c, tr(c["lang"], "help"), self._keyboard(c))
         elif cmd == "status":
             self._guard(c, self.show_status, None)
         elif cmd == "clients":
@@ -659,7 +695,7 @@ class Bot:
         elif cmd == "backup":
             self._guard(c, self.do_backup)
         else:
-            self._send(c, tr(c["lang"], "unknown"), self._menu(c), panel=True)
+            self._send(c, tr(c["lang"], "unknown"), self._keyboard(c))
 
     def ask(self, c: dict, kind: str) -> None:
         r = notify.send(c["token"], c["chat_id"], tr(c["lang"], "add_ask" if kind == "add" else "rt_ask"),
@@ -739,15 +775,14 @@ class Bot:
                   [(tr(L, "b_exits"), "ex"), (tr(L, "b_add"), "add")],
                   [(tr(L, "b_route"), "rt"), (tr(L, "b_backup"), "bk")])
 
-    def _ensure_keyboard(self, c: dict) -> None:
-        """Постоянная кнопка «☰ Меню» внизу экрана (обычная клавиатура Telegram, не под сообщением).
-        Отправляется один раз на язык: Telegram помнит клавиатуру сам."""
-        if self._st.get("kbd") == c["lang"]:
-            return
-        self._send(c, tr(c["lang"], "kbd_on"), {"keyboard": [[{"text": tr(c["lang"], "kbd_menu")}]],
-                                                 "resize_keyboard": True, "is_persistent": True})
-        self._st["kbd"] = c["lang"]
+    def _keyboard(self, c: dict) -> dict:
+        """Всё меню на клавиатуре внизу экрана: остаётся там, пока его не уберут."""
+        L = c["lang"]
+        names = [tr(L, key) for key, _ in MENU]
+        self._st["kbd"] = L
         self._save()
+        return {"keyboard": [[{"text": n} for n in names[i:i + 2]] for i in range(0, len(names), 2)],
+                "resize_keyboard": True, "is_persistent": True}
 
     def out_label(self, c: dict, out, st: dict) -> str:
         """Выход из настроек ('direct' | 'block' | 'up:<id>') или фактический (номер туннеля)."""
@@ -1044,7 +1079,7 @@ class Bot:
         eff, res = r.get("effective"), r.get("result")
         if res and res.startswith("up:") and _tunnel_num(st, res) != eff:
             lines.append(tr(L, "rt_now", out=self.out_label(c, eff, st)))
-        self._send(c, "\n".join(lines))
+        self._send(c, "\n".join(lines), self._keyboard(c))
 
     def do_backup(self, c: dict) -> None:
         try:
