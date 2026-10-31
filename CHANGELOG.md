@@ -15,6 +15,9 @@ so every user-visible change gets a new version.
 - **Strict I1–I5 check.** Only the tags every AmneziaWG understands (`<b 0x…>`, `<r>`, `<rc>`,
   `<rd>`, `<t>`); `<c>`, `<d>`, text outside tags, odd hex and packets over 1400 bytes are refused
   with a clear message. The size of each packet is shown under its field.
+- **New version in sight.** The status line at the top shows "1.x.y available" (opens System
+  with the Update button), and the System tab gets a dot — before, the notice was only on the
+  System tab, which is off-screen on phones.
 
 ## 1.4.0 — 2026-10-31
 
