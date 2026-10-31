@@ -19,9 +19,6 @@ so every user-visible change gets a new version.
 - **Home screen.** The panel can be added to a phone's home screen and opens like an app
   (web app manifest, icons). Chrome on Android shows an **Install as an app** button in System.
 - The installer shows its progress spinner only on a terminal.
-
-## 1.3.1 — 2026-10-31
-
 - Clients tab: search, sorting and "Add client" stay on one line on a wide screen (the button
   used to drop under the search box or squeeze its text into two lines).
 - README: new screenshots, including the Exits tab; the exit limit is described as it works
