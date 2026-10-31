@@ -3,6 +3,19 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.5.0 — 2026-10-31
+
+- **Masking templates for I1–I5.** The Server tab gets a template picker for the signature
+  packets: STUN Binding Request (calls, WebRTC), QUIC Initial (HTTP/3, 1200 bytes as a real one),
+  DNS query with EDNS padding, SIP INVITE, the AmneziaVPN default and "no signature". Headers
+  follow the RFCs; IDs, names and keys are random, so no two handshakes carry the same bytes.
+- **Per-client masking.** In the client window, Connect → Masking: as on the server, any template
+  or custom I1–I5 for this client only. The client list shows a tag for such clients. Useful when
+  one provider starts blocking: change only that client and hand out the new QR code.
+- **Strict I1–I5 check.** Only the tags every AmneziaWG understands (`<b 0x…>`, `<r>`, `<rc>`,
+  `<rd>`, `<t>`); `<c>`, `<d>`, text outside tags, odd hex and packets over 1400 bytes are refused
+  with a clear message. The size of each packet is shown under its field.
+
 ## 1.4.0 — 2026-10-31
 
 - **Update from the panel.** When a new version is out, System shows an **Update** button: the
