@@ -19,6 +19,7 @@ import time
 import zlib
 from dataclasses import dataclass, field
 
+from . import cps
 from .i18n import Msg, MsgError
 
 QUICK_ONLY = {"address", "dns", "mtu", "table", "preup", "postup", "predown", "postdown",
@@ -51,8 +52,7 @@ _CANON = {k.lower(): k for k in list(AWG_PARAMS) + [
 KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")
 DISABLED_MARK = "#awgr:disabled"
 
-DEFAULT_I1 = ("<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c0001000100"
-              "00105a00044d583737>")
+DEFAULT_I1 = cps.AMNEZIA_I1        # как у AmneziaVPN
 
 
 class ServerConfError(MsgError, ValueError):
@@ -345,8 +345,13 @@ def validate_params(p: dict[str, str]) -> dict[str, str]:
             if not re.fullmatch(r"[A-Za-z0-9+/]{43}=", v):
                 raise ServerConfError(Msg("srv.bad_key", key=k))
         elif kind == "text":
-            if "\n" in v or len(v) > 4000 or not re.fullmatch(r"(<[^<>]{1,2000}>\s*)+", v):
+            if "\n" in v or len(v) > 8000:
                 raise ServerConfError(Msg("srv.bad_junk", key=k))
+            v = " ".join(v.split())
+            try:
+                cps.size(v, k)          # только переносимые теги, чётный hex, не больше MTU
+            except cps.CPSError as e:
+                raise ServerConfError(e.msg) from None
         out[k] = v
     # связи между параметрами
     jmin, jmax = out.get("Jmin"), out.get("Jmax")
@@ -396,8 +401,10 @@ class ClientProfile:
     keepalive: str = "25"
 
 
-def client_conf(sc: ServerConf, prof: ClientProfile, peer: Peer, priv: str) -> str:
-    params = sc.params()
+def client_conf(sc: ServerConf, prof: ClientProfile, peer: Peer, priv: str,
+                override: dict[str, str] | None = None) -> str:
+    """override — свои параметры клиента поверх серверных (I1–I5; пустое значение — убрать)."""
+    params = {**sc.params(), **(override or {})}
     lines = ["[Interface]", f"Address = {peer.ip}/32"]
     if prof.dns:
         lines.append("DNS = " + ", ".join(prof.dns))
@@ -421,9 +428,9 @@ def default_keepalive(params: dict[str, str]) -> str:
 
 
 def vpn_link(sc: ServerConf, prof: ClientProfile, peer: Peer, priv: str, conf: str,
-             description: str) -> str:
+             description: str, override: dict[str, str] | None = None) -> str:
     """Ссылка vpn:// для импорта в приложение AmneziaVPN."""
-    params = sc.params()
+    params = {k: v for k, v in {**sc.params(), **(override or {})}.items() if v}
     net = sc.network
     client = {
         "config": conf, "hostName": prof.host, "port": prof.port, "client_ip": peer.ip,

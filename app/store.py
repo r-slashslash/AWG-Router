@@ -33,6 +33,7 @@ DEFAULT_STATE = {
     "keys": {},
     "limits": {},     # срок и лимит трафика клиентов (limits.py)
     "shares": {},     # личные ссылки клиентов: токен → {pk, created}
+    "cps": {},        # свои I1–I5 клиента: pk → {preset: имя шаблона | "custom", values}
     "settings": {"list_update_hours": 24},
 }
 
