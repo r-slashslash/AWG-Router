@@ -15,11 +15,24 @@ BRANCH="${AWGR_BRANCH:-main}"
 INSTALL_DIR="${AWGR_DIR:-/opt/awg-router}"
 
 # Downloads the code from GitHub into $1 (settings in .env and data/ are kept).
+# Branch main: the archive attached to the latest release (GitHub counts its downloads),
+# then the branch archive if the release has none. Another branch or AWGR_SRC_URL: just that.
 fetch_code() {
-  local tmp
+  local tmp url ok=0 urls=()
   tmp="$(mktemp -d)" || return 1
-  local url="${AWGR_SRC_URL:-https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH}"
-  if ! curl -fsSL --retry 3 "$url" -o "$tmp/src.tgz"; then
+  if [ -n "${AWGR_SRC_URL:-}" ]; then
+    urls=("$AWGR_SRC_URL")
+  else
+    [ "$BRANCH" = main ] && urls+=("https://github.com/$REPO/releases/latest/download/awg-router.tar.gz")
+    urls+=("https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH")
+  fi
+  for url in "${urls[@]}"; do
+    if curl -fsSL --retry 3 --max-time 300 "$url" -o "$tmp/src.tgz" 2>/dev/null \
+       && tar -tzf "$tmp/src.tgz" >/dev/null 2>&1; then
+      ok=1; break
+    fi
+  done
+  if [ "$ok" != 1 ]; then
     rm -rf "$tmp"; echo "Could not download https://github.com/$REPO" >&2; return 1
   fi
   mkdir -p "$1" && tar -xzf "$tmp/src.tgz" --strip-components=1 -C "$1"

@@ -1,7 +1,18 @@
 # Changelog
 
-Panels compare `app/version.py` with GitHub and show "update available" when it grows,
-so every user-visible change gets a new version.
+Panels compare their version with the latest GitHub release and show "update available" when
+it grows, so every user-visible change gets a new version.
+
+## 1.10.6 — 2026-11-01
+
+- **Install and update from releases.** The installer, `awg-router update` and the panel's update
+  button now download `awg-router.tar.gz` attached to the latest release instead of the `main`
+  branch archive, so you always get a released version, never a commit in between. If a release
+  has no archive, the branch archive is used as before. Settings are kept.
+- **"Update available" follows releases too**: the panel takes the version from the latest
+  release, so it never offers a version whose archive is not out yet.
+- Nothing is sent about your server: GitHub only counts how many times the release archive was
+  downloaded, which shows the author roughly how many panels install and update.
 
 ## 1.10.5 — 2026-11-01
 
