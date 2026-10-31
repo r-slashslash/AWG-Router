@@ -28,6 +28,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/traffic.py` | Per-client traffic totals and months (`data/traffic.json`, `{"_v": 2, "clients": …, "outs": …, "acct": …}`), deltas between polls survive counter resets; the first sight of a peer is only a baseline. `outs` — totals per exit (`direct` or upstream id, used by exit quotas); `by_out` in a client — month split by exit; `acct` — last values of the nft counters |
 | `app/limits.py` | Client end date / traffic quota (`state.limits`): auto-off (`auto_off`: `exp` / `quota:<month>`), monthly auto-on; called after each poll |
 | `app/updates.py` / `app/version.py` | Panel version and the update check |
+| `app/selfupdate.py` | Update from the panel: `install.sh --update` on the host via `nsenter -t 1` + `systemd-run --unit awg-router-update` (outside the panel container's cgroup, survives its recreation); output in `data/update.log` ending with `exit=N`, state in `data/update.json`; host install dir from the Compose label `com.docker.compose.project.working_dir` (or the `/data` mount source) |
 | `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/<whitelisted file>` — **outside the secret path, no login** (token in `state.shares`; unknown tokens → 404) |
 | `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
 | `app/web.py` | HTTP server: routing, JSON, static (ETag/304), TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, strict `Content-Length`, body draining, ≤ 128 connections (≤ 24 per IP), 60 s idle timeout |
@@ -99,6 +100,15 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   into `/usr/local/lib/docker/cli-plugins`, sha256-checked); apt packages are only the fallback (Debian
   11/12 have only Compose v1). Docker is installed
   after the questions; an installed but stopped daemon is started first (needed to find Amnezia).
+- Telegram backups (`settings.telegram.backup` off/daily/weekly, `backup_pw`, `backup_last`, `backup_error`):
+  `main.backup_tick` every 15 min, a failure retries after 1 h. Encryption is `openssl enc -aes-256-cbc
+  -pbkdf2 -iter 200000` (no AES in the stdlib); `POST /api/backup/decrypt` turns such a file back into
+  JSON for the normal restore. `backup_pw` is never sent to the browser (`notify.public_view`).
+- Client early warnings in `limits.enforce`: `exp_warned` (the end date warned about) and
+  `quota_warned` (month or `total`), 3 days / 90 %; the browser's "Ending soon" filter uses the same rule.
+- Web app manifest: `static/manifest.webmanifest` with `start_url`/`scope` `../` (relative to the
+  manifest, so it stays under the secret path); `web.py` registers the `.webmanifest` MIME type.
+  No service worker on purpose: nothing to cache, no extra code with the panel's cookies.
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 

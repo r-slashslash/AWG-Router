@@ -198,9 +198,12 @@ async function refresh(auto = false) {
   try {
     S = await api("GET", "state");
   } catch (e) {
-    if (!(e instanceof AuthError)) toast(t("panel.offline", { e: e.message }), true);
+    if (e instanceof AuthError) return;
+    if (updatingTo) { setUpdLine(t("sy.updating_restart")); return; }   // панель перезапускается
+    toast(t("panel.offline", { e: e.message }), true);
     return;
   }
+  if (followUpdate()) return;
   renderStatus();
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;
@@ -216,6 +219,10 @@ async function boot() {
   $("#login").hidden = true;
   await refresh();
   if (!S) return;
+  try {
+    const done = sessionStorage.getItem("awgr.updated");
+    if (done) { sessionStorage.removeItem("awgr.updated"); toast(t("sy.update_done", { version: done })); }
+  } catch { /* нет хранилища */ }
   $("#app").hidden = false;
   clearInterval(pollTimer);
   pollTimer = setInterval(() => { if (!document.hidden) refresh(true); }, 5000);
@@ -258,6 +265,7 @@ function render() {
 function banners() {
   let h = "";
   const code = (s) => `<span class="mono">${esc(s)}</span>`;
+  if (updatingTo) h += `<div class="banner info"><b>${esc(t("sy.updating", { version: updatingTo }))}</b> <span id="upd-line" class="small">${esc(updLine || t("sy.updating_wait"))}</span></div>`;
   if (S.demo) h += `<div class="banner info"><b>${esc(t("banner.demo_title"))}</b> ${th("banner.demo", { flag: code("DRY_RUN=1") })}</div>`;
   if (!S.target) h += `<div class="banner bad"><b>${esc(t("banner.no_target_title"))}</b> ${esc(tm(S.target_error))}<br><span class="small">${th("banner.no_target_hint", { a: code("pid: host"), b: code("privileged: true") })}</span></div>`;
   else if (serverMissing() && tab !== "server") h += `<div class="banner info"><b>${esc(t("srv.missing"))}</b> <button class="btn sm" data-goto="server">${esc(t("srv.create_title"))}</button></div>`;
@@ -395,7 +403,7 @@ function viewClients() {
     const wanted = p.outbound !== "inherit" ? p.outbound : S.routing.default;
     const activity = !c.enabled ? `<span class="muted">—</span>`
       : `<span class="state"><span class="dot ${online ? "ok" : ""}"></span>${esc(online ? t("cl.online") : fmtAge(age))}</span>`;
-    return `<tr class="click ${c.enabled ? "" : "row-off"}" data-pk="${esc(c.public_key)}" data-q="${esc((c.name + " " + c.ip + " " + p.note).toLowerCase())}">
+    return `<tr class="click ${c.enabled ? "" : "row-off"}" ${endingSoon(c) ? 'data-soon="1"' : ""} data-pk="${esc(c.public_key)}" data-q="${esc((c.name + " " + c.ip + " " + p.note).toLowerCase())}">
       <td><span class="client-name"><bdi>${esc(c.name || t("cl.unnamed"))}</bdi></span>${tags}</td>
       <td data-m="sub" class="nowrap"><bdi>${esc(c.ip || "—")}</bdi></td>
       <td data-m="sub">${activity}</td>
@@ -403,8 +411,11 @@ function viewClients() {
       <td data-m="right">${effChip(c.effective, wanted)}${p.outbound === "inherit" ? "" : `<div class="small muted" style="margin-top:3px">${esc(t("cl.manual"))}</div>`}</td>
     </tr>`;
   }).join("");
+  const nSoon = S.clients.filter(endingSoon).length;
+  if (!nSoon) clientSoon = false;
+  const soon = nSoon ? `<div class="soon-bar"><button type="button" class="btn sm" id="client-soon" aria-pressed="${clientSoon}">⏳ ${esc(t("cl.soon", { n: nSoon }))}</button></div>` : "";
   return `
-  <section class="section">${head}
+  <section class="section">${head}${soon}
     <div class="panel"><table class="table responsive">
       <thead><tr><th>${esc(t("cl.col_name"))}</th><th>${esc(t("cl.col_ip"))}</th><th>${esc(t("cl.col_activity"))}</th><th>${esc(t("cl.col_month"))}</th><th>${esc(t("cl.col_exit"))}</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -478,11 +489,24 @@ function byExitHtml(c) {
 }
 function filterClients() {
   const q = ($("#client-search").value || "").toLowerCase().trim();
-  $$("tr[data-q]").forEach((tr) => tr.hidden = q && !tr.dataset.q.includes(q));
+  $$("tr[data-q]").forEach((tr) => tr.hidden = !!(q && !tr.dataset.q.includes(q)) || (clientSoon && !tr.dataset.soon));
+}
+/** срок кончается через 3 дня или меньше, или израсходовано 90 % лимита (как предупреждения в Telegram) */
+let clientSoon = false;
+function endingSoon(c) {
+  const L = c.limits || {};
+  if (!c.enabled) return false;
+  if (L.expires && L.expires > S.now && L.expires - S.now <= 3 * 86400) return true;
+  if (!L.quota) return false;
+  const used = L.period === "total" ? totalBytes(c) : monthBytes(c);
+  return used >= L.quota * 0.9 && used < L.quota;
 }
 bind.clients = () => {
   const s = $("#client-search");
   if (s) s.oninput = filterClients;
+  const soon = $("#client-soon");
+  if (soon) soon.onclick = () => { clientSoon = !clientSoon; soon.setAttribute("aria-pressed", clientSoon); filterClients(); };
+  if (clientSoon && s) filterClients();
   const so = $("#client-sort");
   if (so) so.onchange = () => {
     clientSort = so.value;
@@ -1191,9 +1215,14 @@ function viewSystem() {
         <div><span>${esc(t("sy.cert"))}</span><b>${esc(tlsLine)}</b></div>
         <div><span>${esc(t("sy.version"))}</span><b>${esc((S.version || {}).current || "—")}</b></div>
       </div>
-      ${S.version && S.version.available ? `<div class="notice" style="margin:14px 0 0">${th("sy.update_available", { version: `<b>${esc(S.version.latest)}</b>`, cmd: `<bdi class="mono">awg-router update</bdi>` })}</div>` : ""}
+      ${updateNotice()}
       ${T.error && T.active !== "letsencrypt" && P.access !== "ssh" ? `<p class="err small" style="margin-bottom:0">${esc(t("sy.tls_error"))}: ${esc(T.error)}</p>` : ""}
-      ${T.mode === "letsencrypt" ? `<div class="actions" style="margin-top:12px"><button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button></div>` : ""}
+      <div class="actions" style="margin-top:12px">
+        ${T.mode === "letsencrypt" ? `<button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button>` : ""}
+        <button class="btn sm" id="upd-check">${esc(t("sy.check_updates"))}</button>
+        ${installPrompt ? `<button class="btn sm" id="app-install">${esc(t("sy.install"))}</button>` : ""}
+      </div>
+      ${!installPrompt && !standalone() && matchMedia("(pointer: coarse)").matches ? `<p class="small muted" style="margin:10px 0 0">${esc(t("sy.install_hint"))}</p>` : ""}
     </div>
   </section>
   <div class="grid2 pair even">
@@ -1235,6 +1264,7 @@ function viewSystem() {
 }
 bind.system = () => {
   bindLang("lang-sys");
+  bindUpdate();
   let onStop = S.settings.on_stop || "keep";
   const seg = () => $$("#s-stop button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === onStop));
   $$("#s-stop button").forEach((b) => b.onclick = () => { onStop = b.dataset.v; seg(); });
@@ -1267,6 +1297,93 @@ bind.system = () => {
   };
 };
 
+/* ============================================ иконка на главный экран телефона */
+let installPrompt = null;   // Chrome/Edge: событие, которое показывает системное окно установки
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; if (S && tab === "system") render(); });
+window.addEventListener("appinstalled", () => { installPrompt = null; if (S && tab === "system") render(); });
+function standalone() { return matchMedia("(display-mode: standalone)").matches || navigator.standalone === true; }
+
+/* ===================================================== обновление панели */
+// версия, до которой идёт обновление (переживает перезагрузку страницы и перезапуск панели)
+let updatingTo = (() => { try { return sessionStorage.getItem("awgr.updating") || ""; } catch { return ""; } })();
+let updLine = "", updLog = [];
+function setUpdating(v) {
+  updatingTo = v || ""; updLine = "";
+  try { if (v) sessionStorage.setItem("awgr.updating", v); else sessionStorage.removeItem("awgr.updating"); } catch { /* нет хранилища */ }
+}
+function setUpdLine(text) { updLine = text; const el = $("#upd-line"); if (el) el.textContent = text; }
+function updState() { return (S && S.version && S.version.update) || { state: "idle" }; }
+/** после ответа /api/state: обновление закончилось — перезагрузить страницу (новые скрипты) */
+function followUpdate() {
+  const u = updState(), v = S.version || {};
+  if (!updatingTo && u.state === "running") setUpdating(u.to || v.latest || "…");   // начато в другом окне
+  if (!updatingTo) return false;
+  if (u.state === "done" || (v.current && v.current === updatingTo)) {
+    try { sessionStorage.setItem("awgr.updated", v.current || updatingTo); } catch { /* нет хранилища */ }
+    setUpdating("");
+    location.reload();
+    return true;
+  }
+  if (u.state === "failed") { setUpdating(""); loadUpdateLog(); return false; }
+  api("GET", "update/status").then((r) => {
+    const last = (r.log || []).filter((l) => !/^(exit=|Update from the panel)/.test(l)).slice(-1)[0];
+    if (last) setUpdLine(last.trim());
+  }).catch(() => {});
+  return false;
+}
+async function loadUpdateLog() {
+  try { updLog = (await api("GET", "update/status")).log || []; if (tab === "system") render(); } catch { /* панель недоступна */ }
+}
+function updateNotice() {
+  const v = S.version || {}, u = updState();
+  if (updatingTo) return "";
+  const news = v.latest ? `<a href="https://github.com/r-slashslash/AWG-Router/releases/tag/v${esc(v.latest)}" target="_blank" rel="noopener noreferrer">${esc(t("sy.whats_new"))}</a>` : "";
+  if (u.state === "failed" && v.available) {
+    const log = updLog.length ? updLog : [];
+    return `<div class="notice warn" style="margin:14px 0 0">
+      <p style="margin:0 0 8px">${esc(t("sy.update_failed", { version: u.to || v.latest }))}</p>
+      ${log.length ? `<details><summary>${esc(t("sy.update_log"))}</summary><pre class="code" dir="ltr">${esc(log.join("\n"))}</pre></details>` : ""}
+      <div class="actions" style="margin-top:10px"><button class="btn sm primary" data-update>${esc(t("sy.update_retry"))}</button>
+        <span class="small muted">${th("sy.update_cli", { cmd: `<bdi class="mono">awg-router update</bdi>` })}</span></div></div>`;
+  }
+  if (!v.available) return "";
+  return `<div class="notice" style="margin:14px 0 0">
+    <p style="margin:0 0 10px">${th("sy.update_available", { version: `<b>${esc(v.latest)}</b>` })} ${news}</p>
+    <div class="actions"><button class="btn sm primary" data-update>${esc(t("sy.update_btn"))}</button>
+      <span class="small muted">${th("sy.update_cli", { cmd: `<bdi class="mono">awg-router update</bdi>` })}</span></div></div>`;
+}
+function bindUpdate() {
+  const inst = $("#app-install");
+  if (inst) inst.onclick = async () => {
+    installPrompt.prompt();
+    try { await installPrompt.userChoice; } catch { /* окно закрыли */ }
+    installPrompt = null; render();
+  };
+  if (updState().state === "failed" && !updLog.length && (S.version || {}).available) loadUpdateLog();
+  $("#upd-check").onclick = async () => {
+    const b = $("#upd-check"); b.disabled = true;
+    try {
+      const r = await api("POST", "update/check", {});
+      S.version = { ...S.version, ...r };
+      if (r.error) toast(t("sy.check_failed", { error: r.error }), true);
+      else if (!r.available) toast(t("sy.up_to_date"));
+      render();
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); b.disabled = false; }
+  };
+  $$("[data-update]").forEach((b) => b.onclick = async () => {
+    const v = S.version || {};
+    const stop = (S.settings.on_stop || "keep") === "restore" ? "sy.update_confirm_restore" : "sy.update_confirm_keep";
+    if (!confirm(t(stop, { version: v.latest || "?", setting: t("sy.on_stop") }))) return;
+    b.disabled = true;
+    try {
+      const r = await api("POST", "update/run", {});
+      updLog = [];
+      setUpdating(r.to || v.latest || "…");
+      render();
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); b.disabled = false; }
+  });
+}
+
 /* ===================================================== уведомления в Telegram */
 const TG_KINDS = ["exit", "server", "clients", "login", "tls", "update"];
 function viewTelegram() {
@@ -1291,6 +1408,22 @@ function viewTelegram() {
           `<option value="${k}" ${k === (c.enabled || c.token_set ? c.lang : LANG) ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
       </div><div class="field"><span>${esc(t("tg.events"))}</span>
         ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div></div>
+      <fieldset class="pgroup" style="margin-top:4px"><legend>${esc(t("tg.backup"))}</legend>
+        <div class="tg-cols"><div>
+          <label class="field"><span>${esc(t("tg.backup_when"))}</span>
+            <select id="tg-bk" style="max-width:220px">${["off", "daily", "weekly"].map((k) =>
+              `<option value="${k}" ${(c.backup || "off") === k ? "selected" : ""}>${esc(t("tg.backup_" + k))}</option>`).join("")}</select></label>
+          <label class="field"><span>${esc(t("tg.backup_pw"))}</span>
+            <input type="password" id="tg-bk-pw" autocomplete="new-password" maxlength="128" dir="ltr"
+              placeholder="${esc(t(c.backup_pw_set ? "tg.backup_pw_set" : "tg.backup_pw_none"))}"></label>
+          ${c.backup_pw_set ? `<label class="check"><input type="checkbox" id="tg-bk-clear"><span>${esc(t("tg.backup_pw_clear"))}</span></label>` : ""}
+        </div><div>
+          <p class="small muted" style="margin-top:0">${esc(t("tg.backup_hint"))}</p>
+          ${c.backup_error ? `<p class="err small">${esc(t("tg.backup_failed", { error: c.backup_error }))}</p>`
+            : c.backup_last ? `<p class="small">${esc(t("tg.backup_last", { time: fmtDay(c.backup_last) + ", " + fmtTime(c.backup_last) }))}</p>` : ""}
+          <button type="button" class="btn sm" id="tg-bk-send">${esc(t("tg.backup_send"))}</button>
+        </div></div>
+      </fieldset>
       ${c.enabled && S.notify_error ? `<p class="err small">${esc(t("tg.last_error"))}: <bdi>${esc(S.notify_error)}</bdi></p>` : ""}
       <div class="actions"><button class="btn sm primary" id="tg-save">${esc(t("btn.save"))}</button><button class="btn sm" id="tg-test">${esc(t("tg.test"))}</button></div>
     </div>
@@ -1301,7 +1434,9 @@ function bindTelegram() {
     const events = {};
     TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });
     return { enabled: $("#tg-on").checked, token: $("#tg-token").value.trim(),
-      chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, events };
+      chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, events,
+      backup: $("#tg-bk").value, backup_pw: $("#tg-bk-pw").value,
+      backup_pw_clear: !!($("#tg-bk-clear") && $("#tg-bk-clear").checked) };
   };
   const busy = (id, fn) => async () => {
     const b = $(id); b.disabled = true;
@@ -1316,6 +1451,11 @@ function bindTelegram() {
   $("#tg-test").onclick = busy("#tg-test", async () => {
     await api("POST", "telegram/test", body());
     toast(t("tg.test_ok"));
+  });
+  $("#tg-bk-send").onclick = busy("#tg-bk-send", async () => {
+    await api("POST", "telegram/backup", body());
+    toast(t("tg.backup_sent"));
+    refresh();
   });
   $("#tg-detect").onclick = busy("#tg-detect", async () => {
     const r = await api("POST", "telegram/detect", { token: $("#tg-token").value.trim() });
@@ -1404,32 +1544,57 @@ function bindBackup() {
     const file = ev.target.files[0];
     ev.target.value = "";
     if (!file) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (String.fromCharCode(...bytes.slice(0, 8)) === "Salted__") { decryptBackup(bytes); return; }
     let b;
-    try { b = JSON.parse(await file.text()); } catch { toast(t("err.backup_format"), true); return; }
-    if (!b || b.format !== "awg-router-backup") { toast(t("err.backup_format"), true); return; }
-    const st = b.state || {};
-    const srv = b.server && b.server.files ? b.server : null;
-    const sameKind = srv && S.target && srv.kind === S.target.kind;
-    const nClients = srv ? ((srv.files.clientsTable || "").match(/"clientId"/g) || []).length : 0;
-    openModal(t("bk.restore_title"), `
-      <div class="kv" style="margin-bottom:14px">
-        <div><span>${esc(t("bk.created"))}</span><b>${esc(b.created ? fmtDay(b.created) + ", " + new Date(b.created * 1000).toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" }) : "—")}</b></div>
-        <div><span>${esc(t("bk.from"))}</span><b><bdi>${esc(b.host || "—")}</bdi></b></div>
-        <div><span>${esc(t("tab.exits"))}</span><b>${esc(fmtNum((st.upstreams || []).length))}</b></div>
-        <div><span>${esc(t("tab.lists"))}</span><b>${esc(fmtNum((st.lists || []).length))}</b></div>
-      </div>
-      <p style="margin-top:0">${esc(t("bk.restore_what"))}</p>
-      <label class="check"><input type="checkbox" id="bk-srv" ${sameKind ? "checked" : "disabled"}>
-        <span>${esc(t("bk.restore_server", { n: nClients }))}<br><span class="small muted">${esc(t(!srv ? "bk.no_server" : sameKind ? "bk.restore_server_hint" : "bk.kind_differs"))}</span></span></label>
-      <div class="notice warn" style="margin:12px 0 0">${esc(t("bk.warn"))}</div>`,
-    `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="bk-go">${esc(t("bk.restore_btn"))}</button>`);
-    $("#bk-go").onclick = async () => {
-      $("#bk-go").disabled = true;
-      try {
-        const r = await api("POST", "restore", { backup: b, server: $("#bk-srv").checked });
-        closeModal(); toast(t(r.restarted ? "bk.done_server" : "bk.done")); setTimeout(refresh, 1500);
-      } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); $("#bk-go").disabled = false; }
-    };
+    try { b = JSON.parse(new TextDecoder().decode(bytes)); } catch { toast(t("err.backup_format"), true); return; }
+    showRestore(b);
+  };
+}
+/** копия, зашифрованная паролем (из Telegram): пароль → сервер расшифровывает → обычное восстановление */
+function decryptBackup(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const data = btoa(bin);
+  openModal(t("bk.enc_title"), `
+    <p style="margin-top:0">${esc(t("bk.enc_hint"))}</p>
+    <label class="field"><span>${esc(t("tg.backup_pw"))}</span><input type="password" id="bk-pw" autocomplete="off" maxlength="128" dir="ltr"></label>`,
+  `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="bk-open">${esc(t("bk.open"))}</button>`);
+  $("#bk-pw").focus();
+  const go = async () => {
+    $("#bk-open").disabled = true;
+    try {
+      const r = await api("POST", "backup/decrypt", { data, password: $("#bk-pw").value });
+      closeModal(); showRestore(r.backup);
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); $("#bk-open").disabled = false; $("#bk-pw").select(); }
+  };
+  $("#bk-open").onclick = go;
+  $("#bk-pw").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
+}
+function showRestore(b) {
+  if (!b || b.format !== "awg-router-backup") { toast(t("err.backup_format"), true); return; }
+  const st = b.state || {};
+  const srv = b.server && b.server.files ? b.server : null;
+  const sameKind = srv && S.target && srv.kind === S.target.kind;
+  const nClients = srv ? ((srv.files.clientsTable || "").match(/"clientId"/g) || []).length : 0;
+  openModal(t("bk.restore_title"), `
+    <div class="kv" style="margin-bottom:14px">
+      <div><span>${esc(t("bk.created"))}</span><b>${esc(b.created ? fmtDay(b.created) + ", " + new Date(b.created * 1000).toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" }) : "—")}</b></div>
+      <div><span>${esc(t("bk.from"))}</span><b><bdi>${esc(b.host || "—")}</bdi></b></div>
+      <div><span>${esc(t("tab.exits"))}</span><b>${esc(fmtNum((st.upstreams || []).length))}</b></div>
+      <div><span>${esc(t("tab.lists"))}</span><b>${esc(fmtNum((st.lists || []).length))}</b></div>
+    </div>
+    <p style="margin-top:0">${esc(t("bk.restore_what"))}</p>
+    <label class="check"><input type="checkbox" id="bk-srv" ${sameKind ? "checked" : "disabled"}>
+      <span>${esc(t("bk.restore_server", { n: nClients }))}<br><span class="small muted">${esc(t(!srv ? "bk.no_server" : sameKind ? "bk.restore_server_hint" : "bk.kind_differs"))}</span></span></label>
+    <div class="notice warn" style="margin:12px 0 0">${esc(t("bk.warn"))}</div>`,
+  `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="bk-go">${esc(t("bk.restore_btn"))}</button>`);
+  $("#bk-go").onclick = async () => {
+    $("#bk-go").disabled = true;
+    try {
+      const r = await api("POST", "restore", { backup: b, server: $("#bk-srv").checked });
+      closeModal(); toast(t(r.restarted ? "bk.done_server" : "bk.done")); setTimeout(refresh, 1500);
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); $("#bk-go").disabled = false; }
   };
 }
 function modalAction(btnId, inputId, fn) {

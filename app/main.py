@@ -1,6 +1,8 @@
 """Веб-панель AWG Router: API + статика (только стандартная библиотека Python)."""
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import ipaddress
@@ -14,7 +16,7 @@ import socket
 import threading
 import time
 
-from . import awgconf, awgserver, config, limits, lists, notify, system, totp
+from . import awgconf, awgserver, config, limits, lists, notify, selfupdate, system, totp
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -328,6 +330,17 @@ def _tg_draft(body: dict) -> dict:
         c["events"] = {k: bool(body["events"].get(k, c["events"].get(k, True))) for k in notify.KINDS}
     if "enabled" in body:
         c["enabled"] = bool(body["enabled"])
+    if "backup" in body:
+        if body["backup"] not in notify.BACKUP_PERIODS:
+            bad("err.bad_value")
+        c["backup"] = body["backup"]
+    pw = str(body.get("backup_pw") or "")
+    if pw:
+        if not 8 <= len(pw) <= 128:
+            bad("err.backup_pw")
+        c["backup_pw"] = pw
+    if body.get("backup_pw_clear"):
+        c["backup_pw"] = ""
     return c
 
 
@@ -352,6 +365,22 @@ def telegram_test(req):
     return {"ok": True}
 
 
+@app.post("/api/telegram/backup")
+def telegram_backup(req):
+    """Отправить резервную копию в чат сейчас (с настройками из формы)."""
+    c = _tg_draft(req.json())
+    if not (c["token"] and c["chat_id"]):
+        bad("err.tg_incomplete")
+    try:
+        send_backup(c)
+    except notify.NotifyError as e:
+        bad(Msg("err.tg_failed", error=str(e)), 502)
+    now = time.time()
+    store.mutate(lambda st: st["settings"].setdefault("telegram", notify.defaults())
+                 .update(backup_last=now, backup_error=None))
+    return {"ok": True, "encrypted": bool(c["backup_pw"])}
+
+
 @app.post("/api/telegram/detect")
 def telegram_detect(req):
     c = _tg_draft(req.json())
@@ -364,6 +393,36 @@ def telegram_detect(req):
     if not chat:
         bad("err.tg_no_chat", 404)
     return chat
+
+
+# ------------------------------------------------------- обновление панели
+_last_check = 0.0
+
+
+@app.post("/api/update/check")
+def update_check(req):
+    """Проверить новую версию сейчас, не дожидаясь проверки раз в 6 часов."""
+    global _last_check
+    if time.time() - _last_check > 10:
+        _last_check = time.time()
+        updates.check()
+    return updates.status()
+
+
+@app.post("/api/update/run")
+def update_run(req):
+    st = updates.status()
+    if not st["available"] and not config.DRY_RUN:
+        bad("err.update_none")
+    try:
+        return selfupdate.start(VERSION, st["latest"])
+    except MsgError as e:
+        bad(e.msg)
+
+
+@app.get("/api/update/status")
+def update_status(req):
+    return {**selfupdate.status(), "current": VERSION, "log": selfupdate.log_lines(20)}
 
 
 # ------------------------------------------------------------- смена пароля
@@ -393,6 +452,10 @@ SERVER_FILES = ("clientsTable", "wireguard_psk.key", "wireguard_server_public_ke
 
 @app.get("/api/backup")
 def get_backup(req):
+    return make_backup()
+
+
+def make_backup() -> dict:
     st = store.snapshot()
     srv = None
     t = engine.target
@@ -407,6 +470,76 @@ def get_backup(req):
     return {"format": BACKUP_FORMAT, "version": 1, "panel_version": VERSION, "created": time.time(),
             "host": engine.srv.public_host(st), "state": st, "traffic": engine.traffic.export(),
             "server": srv}
+
+
+def send_backup(c: dict) -> None:
+    """Копия в Telegram: тот же JSON, что «Скачать копию»; с паролем — зашифрованный openssl."""
+    b = make_backup()
+    data = json.dumps(b, ensure_ascii=False, indent=1).encode()
+    host = re.sub(r"[^\w.-]+", "_", str(b.get("host") or "server"))
+    name = f"awg-router-backup-{host}-{time.strftime('%Y-%m-%d')}.json"
+    key = "backup"
+    if c.get("backup_pw"):
+        data, name, key = notify.encrypt(data, c["backup_pw"]), name + ".enc", "backup_enc"
+    notify.send_document(c["token"], c["chat_id"], name, data,
+                         notify.render(c["lang"], key, notifier.host_fn(store.snapshot())))
+
+
+_backup_try = 0.0
+
+
+def backup_tick(now: float | None = None) -> bool:
+    """Плановая копия, если пора. Неудача — повтор не раньше чем через час. True — отправлено."""
+    global _backup_try
+    now = time.time() if now is None else now
+    c = notify.cfg_of(store.snapshot())
+    period = notify.BACKUP_PERIODS.get(c["backup"], 0)
+    if not (period and c["enabled"] and c["token"] and c["chat_id"]):
+        return False
+    # запас 10 минут: проверка раз в 15 минут не должна сдвигать расписание на сутки вперёд
+    last = c.get("backup_last")
+    if (last and now - last < period - 600) or now - _backup_try < 3600:
+        return False
+    _backup_try = now
+    err = None
+    try:
+        send_backup(c)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)[:300]
+        log.warning("telegram backup: %s", err)
+    store.mutate(lambda st: st["settings"].setdefault("telegram", notify.defaults()).update(
+        {"backup_error": err} if err else {"backup_last": now, "backup_error": None}))
+    return err is None
+
+
+def _backup_loop() -> None:
+    engine.stop_ev.wait(120)
+    while not engine.stop_ev.is_set():
+        try:
+            backup_tick()
+        except Exception:  # noqa: BLE001
+            log.exception("backup")
+        engine.stop_ev.wait(900)
+
+
+@app.post("/api/backup/decrypt")
+def decrypt_backup(req):
+    """Зашифрованная копия из Telegram → JSON для обычного восстановления."""
+    body = req.json()
+    try:
+        data = base64.b64decode(str(body.get("data") or ""), validate=True)
+    except (ValueError, binascii.Error):
+        bad("err.backup_format")
+    if not data.startswith(notify.ENC_MAGIC):
+        bad("err.backup_format")
+    plain = notify.decrypt(data, str(body.get("password") or ""))
+    try:
+        b = json.loads(plain) if plain is not None else None
+    except ValueError:
+        b = None
+    if not isinstance(b, dict):
+        bad("err.backup_password")
+    return {"backup": b}
 
 
 def _num(v) -> bool:
@@ -527,14 +660,16 @@ def clean_backup_state(new: dict) -> dict:
         if not awgconf.KEY_RE.match(pk) or not isinstance(L, dict):
             fail(f"limits.{pk[:12]}")
         ao = L.get("auto_off")
-        qd = L.get("quota_done")
+        qd, qw = L.get("quota_done"), L.get("quota_warned")
         st["limits"][pk] = {
             "expires": _int_or_none(L.get("expires")), "quota": _int_or_none(L.get("quota")),
             "period": L.get("period") if L.get("period") in ("month", "total") else "month",
             "auto_off": ao if ao == "exp" or (isinstance(ao, str) and ao.startswith("quota:")
                                               and QUOTA_KEY_RE.match(ao[6:])) else None,
             "exp_done": _int_or_none(L.get("exp_done")),
-            "quota_done": qd if isinstance(qd, str) and QUOTA_KEY_RE.match(qd) else None}
+            "quota_done": qd if isinstance(qd, str) and QUOTA_KEY_RE.match(qd) else None,
+            "exp_warned": _int_or_none(L.get("exp_warned")),
+            "quota_warned": qw if isinstance(qw, str) and QUOTA_KEY_RE.match(qw) else None}
 
     # личные ссылки
     for tok, sh in obj("shares").items():
@@ -585,6 +720,10 @@ def clean_backup_state(new: dict) -> dict:
                  enabled=bool(tg.get("enabled")) and bool(tok and chat))
         ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
         c["events"] = {k: bool(ev.get(k, True)) for k in notify.KINDS}
+        if tg.get("backup") in notify.BACKUP_PERIODS:
+            c["backup"] = tg["backup"]
+        if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:
+            c["backup_pw"] = tg["backup_pw"]
         out["telegram"] = c
     return st
 
@@ -707,7 +846,7 @@ def put_limits(req, pk):
         nonlocal enable
         L = st.setdefault("limits", {}).get(pk) or {}
         if quota != L.get("quota") or period != L.get("period", "month"):
-            L["quota_done"] = None
+            L["quota_done"] = L["quota_warned"] = None
         ao = L.get("auto_off") or ""
         if not c["enabled"] and ao == "exp" and (exp is None or exp > now):
             enable = True
@@ -858,7 +997,7 @@ def get_state(req):
         "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},
         "security": {"totp": bool(totp.load()), "session_hours": SESSION_TTL // 3600,
                      "password_custom": bool(custom_password())},
-        "version": updates.status(),
+        "version": {**updates.status(), "update": selfupdate.status()},
         "month": month_key(),
         "notify_error": notifier.last_error,
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
@@ -1334,6 +1473,7 @@ def run():
     engine.start()
     if not config.DRY_RUN:
         updates.start(engine.stop_ev)
+        threading.Thread(target=_backup_loop, name="backup", daemon=True).start()
     if tls.enabled:
         # адрес для сертификата: из настроек или определённый автоматически
         for _ in range(30):

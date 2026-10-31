@@ -17,6 +17,8 @@ from urllib.parse import unquote, urlsplit
 
 from .i18n import Msg, to_json
 
+mimetypes.add_type("application/manifest+json", ".webmanifest")   # иконка на главный экран
+
 log = logging.getLogger("awgr.web")
 MAX_BODY = 4 * 1024 * 1024
 MAX_CONNECTIONS = 128      # одновременных соединений; лишние закрываются сразу

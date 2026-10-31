@@ -457,8 +457,10 @@ LOG="$DIR/data/build.log"
 build_image "$IMAGE" "$DIR" "$LOG" &
 BPID=$!
 spin='|/-\'; i=0
-while kill -0 "$BPID" 2>/dev/null; do printf '\r  %s ' "${spin:i++%4:1}"; sleep 0.5; done
-printf '\r    \r'
+if [ -t 1 ]; then   # spinner only on a terminal: an update from the panel writes to a log
+  while kill -0 "$BPID" 2>/dev/null; do printf '\r  %s ' "${spin:i++%4:1}"; sleep 0.5; done
+  printf '\r    \r'
+fi
 wait "$BPID" || { tail -n 25 "$LOG"; die "Build failed, see $LOG"; }
 ok "Done"
 
