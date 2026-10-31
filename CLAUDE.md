@@ -22,7 +22,11 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   to `CHANGELOG.md`; tag `vX.Y.Z` (must equal `VERSION`) and never move a tag.
 - **Release = tag push.** `.github/workflows/release.yml` builds `awg-router.tar.gz` (`git archive
   --prefix=awg-router/`) + `.sha256`, creates the release with notes from the CHANGELOG section (or
-  attaches to a release that already exists). Check the asset is there:
+  attaches to a release that already exists). Claude Code cloud sessions cannot push tags or create
+  releases (the proxy refuses): push `main`, then ask the owner to publish the release in the GitHub
+  UI (Releases → Draft a new release → new tag `vX.Y.Z` on `main` → Publish); the workflow then
+  attaches the archive. Until then panels see no update and the installer falls back to `main`, so an
+  unreleased push breaks nothing. Check the asset is there:
   `gh api repos/r-slashslash/AWG-Router/releases/latest --jq '.assets[].name'`. If Actions did not
   run, build the same archive locally and `gh release upload vX.Y.Z awg-router.tar.gz* --clobber`.
   Downloads: `gh api repos/r-slashslash/AWG-Router/releases --jq '.[]|[.tag_name,(.assets[]|select(.name=="awg-router.tar.gz").download_count)]'`.
