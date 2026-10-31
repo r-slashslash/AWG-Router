@@ -7,7 +7,7 @@ so every user-visible change gets a new version.
 
 - **Masking templates for I1–I5.** The Server tab gets a template picker for the signature
   packets: STUN Binding Request (calls, WebRTC), QUIC Initial (HTTP/3, 1200 bytes as a real one),
-  DNS query with EDNS padding, SIP INVITE, the AmneziaVPN default and "no signature". Headers
+  DNS query with EDNS padding, SIP INVITE, a fixed DNS response for icloud.com (the AmneziaVPN default) and "no signature". Headers
   follow the RFCs; IDs, names and keys are random, so no two handshakes carry the same bytes.
 - **Per-client masking.** In the client window, Connect → Masking: as on the server, any template
   or custom I1–I5 for this client only. The client list shows a tag for such clients. Useful when
