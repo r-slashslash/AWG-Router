@@ -56,6 +56,7 @@ TEXTS = {
         "backup_enc": "💾 Резервная копия панели, зашифрована паролем копии. Восстановить: «Система» → «Резервная копия» → «Восстановить из файла».",
         "client_expiring": "⏳ Клиент «{name}»: срок действия закончится {date} (через {days} дн.).",
         "client_quota_warn": "⚠️ Клиент «{name}»: израсходовано 90% лимита {gb} ГБ.",
+        "client_first": "🎉 Клиент «{name}» подключился впервые — конфиг работает.",
         "pw_changed": "🔑 Пароль панели изменён (с адреса {ip}).",
     },
     "en": {
@@ -83,6 +84,7 @@ TEXTS = {
         "backup_enc": "💾 Panel backup, encrypted with the backup password. To restore: System → Backup → Restore from file.",
         "client_expiring": "⏳ Client “{name}” ends on {date} (in {days} d).",
         "client_quota_warn": "⚠️ Client “{name}”: 90% of the {gb} GB limit is used.",
+        "client_first": "🎉 Client “{name}” connected for the first time — the config works.",
         "pw_changed": "🔑 The panel password was changed (from {ip}).",
     },
     "zh": {
@@ -110,6 +112,7 @@ TEXTS = {
         "backup_enc": "💾 面板备份，已用备份密码加密。恢复方法：系统 → 备份 → 从文件恢复。",
         "client_expiring": "⏳ 客户端“{name}”将于 {date} 到期（还剩 {days} 天）。",
         "client_quota_warn": "⚠️ 客户端“{name}”：{gb} GB 限额已用掉 90%。",
+        "client_first": "🎉 客户端“{name}”首次连接成功——配置可用。",
         "pw_changed": "🔑 面板密码已更改（来自 {ip}）。",
     },
     "fa": {
@@ -137,6 +140,7 @@ TEXTS = {
         "backup_enc": "💾 پشتیبان پنل، رمزگذاری‌شده با رمز پشتیبان. بازیابی: سیستم ← پشتیبان ← بازیابی از فایل.",
         "client_expiring": "⏳ کلاینت «{name}»: اعتبار در {date} تمام می‌شود ({days} روز دیگر).",
         "client_quota_warn": "⚠️ کلاینت «{name}»: ۹۰٪ سقف {gb} گیگابایت مصرف شد.",
+        "client_first": "🎉 کلاینت «{name}» برای نخستین بار وصل شد — پیکربندی کار می‌کند.",
         "pw_changed": "🔑 رمز پنل تغییر کرد (از نشانی {ip}).",
     },
 }
@@ -159,6 +163,7 @@ ENGINE_EVENTS = {
     "ev.client_quota_reset": ("clients", "client_quota_reset"),
     "ev.client_expiring": ("clients", "client_expiring"),
     "ev.client_quota_warn": ("clients", "client_quota_warn"),
+    "ev.client_first": ("clients", "client_first"),
 }
 
 

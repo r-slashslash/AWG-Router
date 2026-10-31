@@ -95,6 +95,33 @@ def enforce(engine, now: float | None = None) -> None:
         engine.store.mutate(fn)
 
 
+FIRST_WAIT = 90 * 86400    # столько ждём первого подключения нового клиента
+
+
+def first_seen(engine, now: float | None = None) -> None:
+    """Клиент, созданный в панели или боте, впервые подключился (state["await_first"][pk] —
+    когда создан): событие ev.client_first, по нему — уведомление «конфиг работает»."""
+    st = engine.store.snapshot()
+    wait = st.get("await_first") or {}
+    if not wait or not engine.clients:
+        return
+    now = time.time() if now is None else now
+    present = {c["public_key"]: c for c in engine.clients}
+    drop = []
+    for pk, since in wait.items():
+        c = present.get(pk)
+        if c is None or now - (since or 0) > FIRST_WAIT:
+            drop.append(pk)                   # удалён мимо панели или так и не подключился
+        elif c["enabled"] and (c.get("live") or {}).get("handshake"):
+            drop.append(pk)
+            engine.event("info", Msg("ev.client_first", name=_name(c), pk=pk))
+    if drop:
+        def fn(s):
+            for pk in drop:
+                s.get("await_first", {}).pop(pk, None)
+        engine.store.mutate(fn)
+
+
 def view(L: dict | None) -> dict:
     L = L or {}
     return {"expires": L.get("expires"), "quota": L.get("quota"),

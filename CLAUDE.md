@@ -135,6 +135,11 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   sent itself are edited in place (`_panel_msgs`); a button under a notification opens a new message.
   A pending question (`/add` or `/route` without an argument) waits 15 min for a reply. An update started
   from the bot is remembered in `tgbot.json` and announced (done / failed) by the new panel.
+  The ☰ Menu reply keyboard is sent once per language (`kbd` in `tgbot.json`), its text is matched in all
+  four languages, and `_drop_commands` removes it when control is turned off.
+- First connection (1.10.0): `users.add_client` puts the client into `state.await_first` (pk → created);
+  `limits.first_seen` (after each poll) fires `ev.client_first` on its first handshake and drops entries
+  for deleted clients or after 90 days. Restore does not carry `await_first` (built from `DEFAULT_STATE`).
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 
