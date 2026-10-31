@@ -711,7 +711,8 @@ def clean_backup_state(new: dict) -> dict:
                 ipaddress.ip_address(str(d))
             except ValueError:
                 fail("settings.client_dns")
-        out["client_dns"] = [str(d) for d in dns]
+        # IPv6 DNS из старых копий не берём: в туннеле только IPv4
+        out["client_dns"] = [str(d) for d in dns if ":" not in str(d)]
     mtu = s.get("client_mtu")
     if mtu not in (None, ""):
         if not isinstance(mtu, int) or isinstance(mtu, bool) or not 1100 <= mtu <= 1500:
@@ -1240,12 +1241,22 @@ def put_client_cps(req, pk):
 def trace(req):
     body = req.json()
     ip = str(body.get("ip", "")).strip()
+    if ":" in ip:
+        try:
+            ipaddress.IPv6Address(ip.strip("[]").split("/", 1)[0])
+        except ValueError:
+            bad("err.ip_or_domain")
+        bad("tr.ipv6")           # в туннеле только IPv4: такой трафик отбрасывается
     if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
         try:
             infos = socket.getaddrinfo(ip, None, socket.AF_INET)
             resolved = infos[0][4][0]
         except Exception:  # noqa: BLE001
-            bad("err.ip_or_domain")
+            try:
+                socket.getaddrinfo(ip, None, socket.AF_INET6)
+            except Exception:  # noqa: BLE001
+                bad("err.ip_or_domain")
+            bad(Msg("tr.ipv6_only", host=ip))   # у домена только AAAA
         res = engine.trace(body.get("client") or None, resolved)
         res["steps"].insert(0, Msg("tr.resolved", host=ip, ip=resolved))
         res["ip"] = resolved
@@ -1300,7 +1311,7 @@ def _list_body(st: dict, body: dict, existing: dict | None = None) -> dict:
         if len(src) > 2_000_000:
             bad("err.list_too_big")
         if not lists.parse_cidrs(src):
-            bad("err.no_cidr")
+            bad("err.only_v6" if lists.count_ipv6(src) else "err.no_cidr")
         name = body.get("name")
     return {"kind": kind, "source": src, "name": v_name(name)}
 
