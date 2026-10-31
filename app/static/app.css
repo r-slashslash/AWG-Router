@@ -95,6 +95,10 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 }
 .tabs button:hover { color: var(--ink); }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs button.has-news::after { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--primary); margin-inline-start: 6px; vertical-align: 2px; }
+.upd-chip { font: inherit; font-size: .85em; line-height: 1.5; padding: 0 9px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); }
+.upd-chip:hover { background: color-mix(in srgb, var(--primary) 18%, var(--surface)); }
 main { max-width: 1180px; margin: 0 auto; padding: 22px 16px 80px; }
 .section { margin-bottom: 30px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
