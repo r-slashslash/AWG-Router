@@ -169,5 +169,41 @@ class TrafficRestoreTest(unittest.TestCase):
         self.assertEqual(tr.data["a"]["months"], {"2026-10": [1, 2]})
 
 
+class TraceIpv6Test(unittest.TestCase):
+    """Трассировка: IPv6 в туннеле не маршрутизируется — говорим об этом прямо."""
+
+    class Req:
+        def __init__(self, ip):
+            self.ip = ip
+
+        def json(self):
+            return {"ip": self.ip}
+
+    def detail(self, ip, resolver=None):
+        import contextlib
+        from unittest import mock
+        patch = mock.patch.object(main.socket, "getaddrinfo", resolver) if resolver else contextlib.nullcontext()
+        with patch, self.assertRaises(web.HTTPError) as cm:
+            main.trace(self.Req(ip))
+        return cm.exception.detail.key
+
+    def test_ipv6_literal(self):
+        self.assertEqual(self.detail("2606:4700::1111"), "tr.ipv6")
+        self.assertEqual(self.detail("zz:qq"), "err.ip_or_domain")
+
+    def test_aaaa_only_domain(self):
+        import socket
+
+        def only_v6(host, port, family=0, *a, **kw):
+            if family == socket.AF_INET6:
+                return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 0, 0, 0))]
+            raise socket.gaierror(-2, "no A")
+        self.assertEqual(self.detail("v6only.example", only_v6), "tr.ipv6_only")
+
+        def none(*a, **kw):
+            raise socket.gaierror(-2, "nothing")
+        self.assertEqual(self.detail("nothing.example", none), "err.ip_or_domain")
+
+
 if __name__ == "__main__":
     unittest.main()

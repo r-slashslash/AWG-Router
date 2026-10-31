@@ -1022,7 +1022,7 @@ function viewLists() {
     return `
     <tr>
       <td>${badge}<b><bdi>${esc(listName(l.id))}</bdi></b><div class="list-row-src">${src}</div></td>
-      <td data-m="sub">${l.count ? `${esc(t("n.networks", { n: l.count }))}<div class="small muted">${esc(t("n.addresses", { n: l.addresses, nText: fmtCompact(l.addresses) }))}</div>` : `<span class="muted">${esc(t("ls.not_loaded"))}</span>`}
+      <td data-m="sub">${l.count ? `${esc(t("n.networks", { n: l.count }))}<div class="small muted">${esc(t("n.addresses", { n: l.addresses, nText: fmtCompact(l.addresses) }))}</div>` : `<span class="muted">${esc(t("ls.not_loaded"))}</span>`}${l.skipped_v6 ? `<div class="small warn-text">${esc(t("ls.skipped_v6", { n: l.skipped_v6 }))}</div>` : ""}
         ${l.error ? `<div class="err small">${esc(tm(l.error))}</div>` : ""}</td>
       <td data-m="hide" class="small muted">${l.updated ? esc(t("ls.updated", { time: fmtTime(l.updated) })) : "—"}${l.refs.length ? `<div>${esc(t("n.in_rules", { n: l.refs.length }))}</div>` : ""}</td>
       <td data-m="right" class="nowrap acts">
@@ -1101,7 +1101,10 @@ function editList(id, kind) {
       closeModal();
       await refresh();
       if (r && r.error) toast(t("ls.saved_failed", { e: tm(r.error) }), true);
-      else toast(t("ls.saved", { name: listName(r.id), count: t("n.networks", { n: r.count || 0 }) }));
+      else {
+        toast(t("ls.saved", { name: listName(r.id), count: t("n.networks", { n: r.count || 0 }) }));
+        if (r.skipped_v6) toast(t("ls.skipped_v6", { n: r.skipped_v6 }));
+      }
     } catch (err) { toast(err.message, true); e.target.disabled = false; e.target.textContent = label; }
   };
 }
