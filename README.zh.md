@@ -32,6 +32,7 @@
 
 **服务器**
 - 全部 AmneziaWG 参数：Jc/Jmin/Jmax、S1–S4、H1–H4、I1–I5、HeaderProtectionKey、ContentPaddingAddition、AWG 3 计时参数、RandomTrailers 和 DisableCookies。
+- 为签名数据包 I1–I5 提供现成的伪装：STUN（通话、WebRTC）、QUIC（HTTP/3）、DNS 查询、SIP 以及 AmneziaVPN 默认值，并带随机部分，使每次握手都不相同。I1–I5 会被严格检查（只允许所有 AmneziaWG 都支持的标签，并显示数据包大小），还可按客户端单独设置：如果某个客户端的运营商开始封锁，只给它换一种伪装即可。
 - 一键生成新参数，生成方式与 AmneziaVPN 安装程序为 AWG 3.1 所用的相同。
 - 端口、子网、客户端 DNS/MTU/keepalive 以及公网地址。
 - 添加或删除客户端即时生效，不会断开其他人。服务器端参数通过重启接口生效，只需几秒钟。

@@ -10,7 +10,7 @@ import ipaddress
 import logging
 import re
 
-from . import awgserver, config, system
+from . import awgserver, config, cps, system
 from .awgserver import ServerConf
 from .i18n import Msg, MsgError
 
@@ -165,6 +165,7 @@ class ServerManager:
                 st.get("keys", {}).pop(pk, None)
                 st["clients"].pop(pk, None)
                 st.get("limits", {}).pop(pk, None)
+                st.get("cps", {}).pop(pk, None)
                 st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
             self.e.store.mutate(forget)
             self.e.event("info", Msg("ev.user_deleted", name=name))
@@ -181,11 +182,12 @@ class ServerManager:
         if not priv:
             raise UserError(Msg("usr.no_key"))
         prof = self.profile(st, sc)
-        conf = awgserver.client_conf(sc, prof, p, priv)
+        override = cps.for_client(st.get("cps", {}).get(pk))      # свои I1–I5 клиента
+        conf = awgserver.client_conf(sc, prof, p, priv, override)
         name = self._name(rows, pk) or p.ip
         safe = re.sub(r"[^\w.-]+", "_", name, flags=re.UNICODE).strip("_")[:40] or "awg"
         return {"name": name, "conf": conf, "filename": f"{safe}.conf",
-                "link": awgserver.vpn_link(sc, prof, p, priv, conf, f"{name} · {prof.host}"),
+                "link": awgserver.vpn_link(sc, prof, p, priv, conf, f"{name} · {prof.host}", override),
                 "warn_host": not self.public_host(st)}
 
     @staticmethod
@@ -212,6 +214,8 @@ class ServerManager:
             "port_locked": t.kind != "host",
             "params": {k: sc.get(k) for k in awgserver.PARAM_ORDER},
             "param_meta": {k: {"type": v[0], "side": v[1]} for k, v in awgserver.AWG_PARAMS.items()},
+            "cps_presets": cps.catalog(),
+            "cps_server": cps.match(params),
             "version": awgserver.protocol_version(params),
             "public_host": self.public_host(st),
             "client_dns": s.get("client_dns") or DEFAULT_DNS,

@@ -399,7 +399,8 @@ function viewClients() {
     const p = c.policy;
     const tags = (!c.enabled ? `<span class="tag tag-off">${esc(t("cl.disabled_tag"))}</span>` : "") +
       (p.rules_mode === "custom" ? `<span class="tag">${esc(t("cl.custom_tag"))}</span>` : "") +
-      (p.note ? `<span class="tag"><bdi>${esc(p.note)}</bdi></span>` : "") + limitTags(c);
+      (p.note ? `<span class="tag"><bdi>${esc(p.note)}</bdi></span>` : "") +
+      (c.cps ? `<span class="tag" title="${esc(t("cl.cps"))}">${esc(cpsTag(c.cps))}</span>` : "") + limitTags(c);
     const wanted = p.outbound !== "inherit" ? p.outbound : S.routing.default;
     const activity = !c.enabled ? `<span class="muted">—</span>`
       : `<span class="state"><span class="dot ${online ? "ok" : ""}"></span>${esc(online ? t("cl.online") : fmtAge(age))}</span>`;
@@ -591,7 +592,7 @@ function editClient(pk, section = null) {
       <button type="button" data-v="route">${esc(t("cl.v_route"))}</button>
       <button type="button" data-v="manage">${esc(t("cl.v_manage"))}</button>
     </div>
-    <div id="c-pane-connect" class="c-pane"></div>
+    <div id="c-pane-connect" class="c-pane"><div id="c-cps-box"></div><div id="c-conn"></div></div>
     <div id="c-pane-route" class="c-pane">
       <label class="field"><span>${esc(t("cl.default_exit"))}</span>
         <select id="c-out">${outOptions(draft.outbound, { inherit: t("out.inherit_now", { exit: exitName(S.routing.default) }) })}</select>
@@ -637,8 +638,49 @@ function editClient(pk, section = null) {
     </div>
   `, `<button class="btn" data-close>${esc(t("btn.close"))}</button><button class="btn primary" id="c-save">${esc(t("btn.save"))}</button>`);
 
+  const loadCps = async () => {
+    const box = $("#c-cps-box");
+    let info;
+    try { info = await api("GET", "cps"); } catch { return; }
+    const cur = c.cps ? c.cps.preset : "server";
+    const srvName = cpsName(info.server_match);
+    box.innerHTML = `
+      <label class="field"><span>${esc(t("cl.cps"))}</span>
+        <select id="c-cps"><option value="server" ${cur === "server" ? "selected" : ""}>${esc(t("cl.cps_server", { name: srvName }))}</option>
+          ${info.presets.map((p) => `<option value="${p.id}" ${cur === p.id ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
+          <option value="custom" ${cur === "custom" ? "selected" : ""}>${esc(t("cps.custom"))}</option></select>
+        <span class="hint">${esc(t("cl.cps_hint"))}</span></label>
+      <div id="c-cps-custom" hidden></div>`;
+    const sel = $("#c-cps"), custom = $("#c-cps-custom");
+    const save = async (body) => {
+      sel.disabled = true;
+      try {
+        const r = await api("PUT", "cps/" + encodeURIComponent(pk), body);
+        c.cps = r.cps; toast(t("cl.cps_saved")); loadConnect(); refresh();
+      } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+      sel.disabled = false;
+    };
+    const showCustom = () => {
+      const start = c.cps && c.cps.preset === "custom" ? c.cps.values
+        : c.cps ? (info.presets.find((p) => p.id === c.cps.preset) || {}).values || {} : info.server;
+      custom.hidden = false;
+      custom.innerHTML = cpsFields("cc", start) + `<div class="actions" style="margin:-4px 0 14px"><button class="btn sm primary" id="c-cps-apply">${esc(t("cl.cps_apply"))}</button></div>`;
+      bindCpsSizes("cc");
+      $("#c-cps-apply").onclick = () => {
+        const values = {};
+        CPS_KEYS.forEach((k) => { values[k] = $("#cc-" + k).value.trim(); });
+        save({ preset: "custom", values });
+      };
+    };
+    if (cur === "custom") showCustom();
+    sel.onchange = () => {
+      if (sel.value === "custom") { showCustom(); return; }
+      custom.hidden = true;
+      save({ preset: sel.value });
+    };
+  };
   const loadConnect = async () => {
-    const box = $("#c-pane-connect");
+    const box = $("#c-conn");
     if (!c.has_config) {
       box.innerHTML = `<div class="notice">${esc(t("cl.no_config"))}</div>`;
       return;
@@ -667,7 +709,11 @@ function editClient(pk, section = null) {
     $$("#c-view button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === view));
     $$(".c-pane").forEach((el) => el.hidden = el.id !== "c-pane-" + view);
     $("#c-save").hidden = view === "connect";
-    if (view === "connect" && !$("#c-pane-connect").dataset.loaded) { $("#c-pane-connect").dataset.loaded = 1; loadConnect(); }
+    if (view === "connect" && !$("#c-pane-connect").dataset.loaded) {
+      $("#c-pane-connect").dataset.loaded = 1;
+      if (c.has_config) loadCps();
+      loadConnect();
+    }
   };
   $$("#c-view button").forEach((b) => b.onclick = () => { view = b.dataset.v; showView(); });
 
@@ -1053,6 +1099,50 @@ function editList(id, kind) {
   };
 }
 
+/* ===================================================== сигнатурные пакеты I1–I5 */
+const CPS_KEYS = ["I1", "I2", "I3", "I4", "I5"];
+const CPS_SHORT = { amnezia: "AmneziaVPN", stun: "STUN", quic: "QUIC", dns: "DNS", sip: "SIP" };
+/** размер пакета в байтах (как app/cps.py) или null, если теги неверные */
+function cpsSize(v) {
+  v = (v || "").trim();
+  if (!v) return 0;
+  let n = 0;
+  for (const tok of v.match(/<[^<>]*>|[^<>\s]+|[<>]/g) || []) {
+    if (!(tok.startsWith("<") && tok.endsWith(">") && tok.length > 2)) return null;
+    const [name, ...rest] = tok.slice(1, -1).trim().split(/\s+/);
+    const arg = rest.join(" "), nm = name.toLowerCase();
+    if (nm === "b") { const m = /^0x((?:[0-9a-fA-F]{2})+)$/.exec(arg); if (!m) return null; n += m[1].length / 2; }
+    else if (nm === "t") { if (arg) return null; n += 4; }
+    else if (["r", "rc", "rd"].includes(nm)) { if (!/^\d+$/.test(arg) || +arg < 1 || +arg > 1400) return null; n += +arg; }
+    else return null;
+  }
+  return n;
+}
+function cpsSizeHtml(v) {
+  const n = cpsSize(v);
+  if (n === null) return `<span class="err">${esc(t("cps.bad"))}</span>`;
+  if (!n) return "";
+  return n > 1200 ? `<span class="warn-text">${esc(t("cps.big", { n }))}</span>` : esc(t("cps.bytes", { n }));
+}
+function cpsNorm(v) { return (v || "").split(/\s+/).filter(Boolean).join(" "); }
+/** какой шаблон совпадает со значениями I1–I5 (или null — свои) */
+function cpsMatch(presets, values) {
+  const p = (presets || []).find((x) => CPS_KEYS.every((k) => cpsNorm(x.values[k]) === cpsNorm(values[k])));
+  return p ? p.id : null;
+}
+function cpsName(id) { return id ? t("cps." + id) : t("cps.custom"); }
+function cpsTag(cps) { return cps ? (CPS_SHORT[cps.preset] || t("cps.s_" + cps.preset)) : ""; }
+/** поля I1–I5 с размером под каждым (для своих значений клиента) */
+function cpsFields(prefix, values) {
+  return `<div class="pgrid" style="--cols:1">${CPS_KEYS.map((k) => `
+    <label class="field param param-wide"><span><span class="pname">${k}</span></span>
+      <textarea id="${prefix}-${k}" data-cps="${k}" dir="ltr" rows="2" spellcheck="false" placeholder="<b 0x…> <r 16>">${esc(values[k] || "")}</textarea>
+      <span class="hint" id="${prefix}-${k}-size">${cpsSizeHtml(values[k])}</span></label>`).join("")}</div>`;
+}
+function bindCpsSizes(prefix) {
+  CPS_KEYS.forEach((k) => { const el = $(`#${prefix}-${k}`); if (el) el.addEventListener("input", () => { $(`#${prefix}-${k}-size`).innerHTML = cpsSizeHtml(el.value); }); });
+}
+
 /* ================================================================ сервер */
 const PARAM_GROUPS = [
   ["srv.g_junk", ["Jc", "Jmin", "Jmax"]],
@@ -1094,7 +1184,9 @@ function viewServer() {
     } else {
       input = `<input type="text" data-p="${k}" dir="ltr" value="${esc(d[k] || "")}" ${meta.type === "key" ? 'class="mono"' : ""}>`;
     }
-    return `<label class="field param ${meta.type === "text" || meta.type === "key" ? "param-wide" : ""}"><span><span class="pname" title="${esc(k)}">${esc(k)}</span>${side}</span>${input}<span class="hint">${esc(t("p." + k))}</span></label>`;
+    const size = meta.type === "text" ? `<span class="hint" id="sz-${k}">${cpsSizeHtml(d[k])}</span>` : "";
+    const hint = t("p." + k) ? `<span class="hint">${esc(t("p." + k))}</span>` : "";
+    return `<label class="field param ${meta.type === "text" || meta.type === "key" ? "param-wide" : ""}"><span><span class="pname" title="${esc(k)}">${esc(k)}</span>${side}</span>${input}${hint}${size}</label>`;
   };
   return `
   <div class="grid2 pair">
@@ -1130,11 +1222,19 @@ function viewServer() {
       <button class="btn" id="s-gen">${esc(t("srv.generate"))}</button>
     </div>
     <div class="panel panel-pad">
-      ${PARAM_GROUPS.map(([g, keys]) => `<fieldset class="pgroup"><legend>${esc(t(g))}</legend><div class="pgrid" style="--cols:${Math.min(keys.length, 4)}">${keys.map(param).join("")}</div></fieldset>`).join("")}
+      ${PARAM_GROUPS.map(([g, keys]) => `<fieldset class="pgroup"><legend>${esc(t(g))}</legend>${g === "srv.g_sig" ? sigTemplate(d) : ""}<div class="pgrid" style="--cols:${Math.min(keys.length, 4)}">${keys.map(param).join("")}</div></fieldset>`).join("")}
     </div>
     <div class="savebar" id="s-bar" ${srvDirty() ? "" : "hidden"}><span id="s-bar-text">${esc(t("srv.save_hint"))}</span>
       <span class="actions"><button class="btn sm" id="s-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="s-save">${esc(t("btn.save"))}</button></span></div>
   </section>`;
+}
+function sigTemplate(d) {
+  const presets = SRV.cps_presets || [];
+  const cur = cpsMatch(presets, d);
+  return `<label class="field" style="max-width:420px"><span>${esc(t("srv.cps_template"))}</span>
+    <select id="s-cps">${presets.map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
+      <option value="" ${cur ? "" : "selected"} disabled>${esc(t("cps.custom"))}</option></select>
+    <span class="hint">${esc(t("srv.cps_template_hint"))}</span></label>`;
 }
 function srvDirty() {
   if (!SRV || !srvDraft) return false;
@@ -1166,7 +1266,20 @@ bind.server = () => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar;
   });
-  $$("[data-p]").forEach((el) => el.oninput = el.onchange = () => { srvDraft[el.dataset.p] = el.value.trim(); showBar(); });
+  const syncTpl = () => {
+    const sel = $("#s-cps"); if (!sel) return;
+    const m = cpsMatch(SRV.cps_presets, srvDraft);
+    sel.value = m || "";
+    CPS_KEYS.forEach((k) => { const el = $("#sz-" + k); if (el) el.innerHTML = cpsSizeHtml(srvDraft[k]); });
+  };
+  $$("[data-p]").forEach((el) => el.oninput = el.onchange = () => { srvDraft[el.dataset.p] = el.value.trim(); showBar(); if (/^I[1-5]$/.test(el.dataset.p)) syncTpl(); });
+  const tpl = $("#s-cps");
+  if (tpl) tpl.onchange = () => {
+    const p = (SRV.cps_presets || []).find((x) => x.id === tpl.value);
+    if (!p) return;
+    CPS_KEYS.forEach((k) => { srvDraft[k] = p.values[k] || ""; const el = $(`[data-p="${k}"]`); if (el) el.value = srvDraft[k]; });
+    syncTpl(); showBar();
+  };
   showBar();
   $("#s-gen").onclick = async () => {
     if (!confirm(t("srv.generate_confirm"))) return;

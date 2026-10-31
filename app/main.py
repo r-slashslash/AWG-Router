@@ -16,7 +16,7 @@ import socket
 import threading
 import time
 
-from . import awgconf, awgserver, config, limits, lists, notify, selfupdate, system, totp
+from . import awgconf, awgserver, config, cps, limits, lists, notify, selfupdate, system, totp
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -671,6 +671,20 @@ def clean_backup_state(new: dict) -> dict:
             "exp_warned": _int_or_none(L.get("exp_warned")),
             "quota_warned": qw if isinstance(qw, str) and QUOTA_KEY_RE.match(qw) else None}
 
+    # свои I1–I5 клиентов
+    for pk, e in obj("cps").items():
+        if not awgconf.KEY_RE.match(pk) or not isinstance(e, dict):
+            fail(f"cps.{pk[:12]}")
+        if e.get("preset") in cps.PRESETS:
+            st["cps"][pk] = {"preset": e["preset"]}
+        elif e.get("preset") == "custom":
+            try:
+                st["cps"][pk] = {"preset": "custom", "values": cps.validate(e.get("values") or {})}
+            except cps.CPSError:
+                fail(f"cps.{pk[:12]}")
+        else:
+            fail(f"cps.{pk[:12]}")
+
     # личные ссылки
     for tok, sh in obj("shares").items():
         if not TOKEN_RE.match(tok) or not isinstance(sh, dict) or not awgconf.KEY_RE.match(str(sh.get("pk"))):
@@ -974,6 +988,7 @@ def get_state(req):
             "limits": limits.view(st.get("limits", {}).get(c["public_key"])),
             "share_url": next((share_url(k) for k, v in st.get("shares", {}).items()
                                if v.get("pk") == c["public_key"]), None),
+            "cps": cps_view(st.get("cps", {}).get(c["public_key"])),
             "policy": {"outbound": cp.get("outbound", "inherit"),
                        "rules_mode": cp.get("rules_mode", "inherit"),
                        "rules": cp.get("rules") or [], "note": cp.get("note", "")},
@@ -1166,6 +1181,56 @@ def put_client(req, pk):
     store.mutate(fn)
     engine.trigger()
     return {"ok": True}
+
+
+# ------------------------------------------- свои сигнатурные пакеты I1–I5 клиента
+def cps_view(entry) -> dict | None:
+    if not isinstance(entry, dict) or entry.get("preset") not in (*cps.PRESETS, "custom"):
+        return None
+    return {"preset": entry["preset"],
+            "values": cps.for_client(entry) if entry["preset"] == "custom" else None}
+
+
+@app.get("/api/cps")
+def get_cps(req):
+    """Шаблоны и текущие I1–I5 сервера — для выбора маскировки в окне клиента."""
+    try:
+        sv = engine.srv.server_view()
+    except Exception:  # noqa: BLE001  — сервер недоступен: шаблоны всё равно нужны
+        sv = {}
+    params = sv.get("params") or {}
+    return {"presets": cps.catalog(), "server": {k: params.get(k) or "" for k in cps.KEYS},
+            "server_match": sv.get("cps_server")}
+
+
+@app.put("/api/cps/{pk:path}")
+def put_client_cps(req, pk):
+    """preset: "server" (как на сервере) | имя шаблона | "custom" + values {I1..I5}."""
+    if not awgconf.KEY_RE.match(pk) and not (config.DRY_RUN and pk.startswith("DEMO")):
+        bad("err.bad_client_key")
+    if not any(c["public_key"] == pk for c in engine.clients):
+        bad("err.not_found", 404)
+    body = req.json()
+    p = body.get("preset") or "server"
+    if p not in (*cps.PRESETS, "custom", "server"):
+        bad("err.bad_value")
+    entry = None
+    if p == "custom":
+        try:
+            entry = {"preset": "custom", "values": cps.validate(body.get("values") or {})}
+        except cps.CPSError as e:
+            bad(e.msg)
+    elif p != "server":
+        entry = {"preset": p}
+
+    def fn(st):
+        m = st.setdefault("cps", {})
+        if entry:
+            m[pk] = entry
+        else:
+            m.pop(pk, None)
+    store.mutate(fn)
+    return {"ok": True, "cps": cps_view(entry)}
 
 
 @app.post("/api/trace")
