@@ -1583,9 +1583,7 @@ function viewTelegram() {
       <fieldset class="pgroup" style="margin:4px 0 12px"><legend>${esc(t("tg.control_title"))}</legend>
         <label class="check"><input type="checkbox" id="tg-control" ${c.control ? "checked" : ""}><span><b>${esc(t("tg.control"))}</b></span></label>
         <p class="small muted" style="margin:6px 0 0">${esc(t("tg.control_hint"))}</p>
-        ${c.enabled && c.control && S.tg_bot ? (S.tg_bot.state === "error"
-          ? `<p class="err small">${esc(t("tg.bot_error"))}: <bdi>${esc(tm(S.tg_bot.error))}</bdi></p>`
-          : S.tg_bot.state === "ok" ? `<p class="small"><span class="dot ok"></span> ${esc(t("tg.bot_ok"))}</p>` : "") : ""}
+        ${c.enabled && c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
       </fieldset>
       <fieldset class="pgroup" style="margin-top:4px"><legend>${esc(t("tg.backup"))}</legend>
         <div class="tg-cols"><div>
@@ -1607,6 +1605,20 @@ function viewTelegram() {
       <div class="actions"><button class="btn sm primary" id="tg-save">${esc(t("btn.save"))}</button><button class="btn sm" id="tg-test">${esc(t("tg.test"))}</button></div>
     </div>
   </section>`;
+}
+/* Состояние бота-пульта: слушает ли, когда была команда, что пропущено и почему */
+function viewBotState(b) {
+  const out = [];
+  if (b.state === "error") out.push(`<p class="err small">${esc(t("tg.bot_error"))}: <bdi>${esc(tm(b.error))}</bdi></p>`);
+  else if (b.state === "ok") out.push(`<p class="small"><span class="dot ok"></span> ${esc(t("tg.bot_ok"))}</p>`);
+  if (b.last) out.push(`<p class="small muted">${esc(t("tg.bot_last", { time: fmtDay(b.last) + ", " + fmtTime(b.last) }))}</p>`);
+  if (b.ignored) {
+    const who = b.ignored.title ? `${b.ignored.chat} (${b.ignored.title})` : b.ignored.chat;
+    out.push(`<p class="err small">${esc(t("tg.bot_foreign", { chat: who }))}</p>
+      <button type="button" class="btn sm" id="tg-use-chat" data-chat="${esc(b.ignored.chat)}">${esc(t("tg.bot_use_chat", { chat: b.ignored.chat }))}</button>`);
+  }
+  if (b.skew) out.push(`<p class="small muted">${esc(t("tg.bot_skew", { n: Math.round(Math.abs(b.skew) / 60) || 1 }))}</p>`);
+  return out.join("");
 }
 function bindTelegram() {
   const body = () => {
@@ -1635,6 +1647,11 @@ function bindTelegram() {
   $("#tg-bk-send").onclick = busy("#tg-bk-send", async () => {
     await api("POST", "telegram/backup", body());
     toast(t("tg.backup_sent"));
+    refresh();
+  });
+  if ($("#tg-use-chat")) $("#tg-use-chat").onclick = busy("#tg-use-chat", async () => {
+    await api("PUT", "telegram", { chat_id: $("#tg-use-chat").dataset.chat });
+    toast(t("tg.bot_use_chat_done"));
     refresh();
   });
   $("#tg-detect").onclick = busy("#tg-detect", async () => {

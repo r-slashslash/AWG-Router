@@ -137,6 +137,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   from the bot is remembered in `tgbot.json` and announced (done / failed) by the new panel.
   The ☰ Menu reply keyboard is sent once per language (`kbd` in `tgbot.json`), its text is matched in all
   four languages, and `_drop_commands` removes it when control is turned off.
+- Bot message age (1.10.1) is measured by Telegram's clock: `notify.note_date` reads the `Date` header of
+  every Telegram answer (direct, and `tgreq.py` returns it as `date`) into `notify.clock_skew`. Never compare
+  Telegram `date` fields with the server clock directly — VPS clocks drift, and the bot then ignored every
+  command. Commands from another chat are kept in `Bot.ignored` and shown in the panel (`tg_bot.ignored`).
 - First connection (1.10.0): `users.add_client` puts the client into `state.await_first` (pk → created);
   `limits.first_seen` (after each poll) fires `ev.client_first` on its first handshake and drops entries
   for deleted clients or after 90 days. Restore does not carry `await_first` (built from `DEFAULT_STATE`).

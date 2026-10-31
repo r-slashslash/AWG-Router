@@ -3,6 +3,19 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.10.1 — 2026-11-01
+
+- **The bot no longer stays silent when the server's clock is off.** Commands older than
+  10 minutes are skipped (they were sent while the panel was off), and that age was measured by
+  the server's clock. On a server whose clock runs more than 10 minutes ahead every command looked
+  old, and the bot silently ignored all of them. The age is now measured by Telegram's own time
+  (the Date header of its answers, also through an exit).
+- **The panel says why a command was not run.** Under **Accept commands and buttons**: the time
+  of the last command; a command that came from another chat than the one in Chat ID, with a
+  **Listen to chat …** button that switches to it; and a note when the server's clock is off by
+  two minutes or more (the authenticator-code sign-in depends on it too).
+- Such commands are also written to the panel log (`awg-router logs`).
+
 ## 1.10.0 — 2026-11-01
 
 - **A new client's first connection.** When a client created in the panel or the bot connects

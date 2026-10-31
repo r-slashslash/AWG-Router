@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import email.utils
 import json
 import logging
 import os
@@ -213,12 +214,29 @@ def render(lang: str, key: str, host: str = "", **params) -> str:
     return (f"AWG Router · {host}\n" if host else "AWG Router\n") + body
 
 
+# Насколько часы сервера впереди часов Telegram (по заголовку Date его ответов), в секундах.
+# Часы VPS бывают сбиты на минуты и часы: бот сверяет «старые» команды по времени Telegram.
+clock_skew = 0.0
+
+
+def note_date(value: str | None, now: float | None = None) -> None:
+    global clock_skew
+    try:
+        tg = email.utils.parsedate_to_datetime(value).timestamp() if value else None
+    except (TypeError, ValueError, IndexError):
+        tg = None
+    if tg:
+        clock_skew = (time.time() if now is None else now) - tg
+
+
 def _post_direct(url: str, data: bytes, ctype: str, timeout: float) -> tuple[int, bytes]:
     req = urllib.request.Request(url, data=data, headers={"Content-Type": ctype})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
+            note_date((getattr(r, "headers", None) or {}).get("Date"))
             return getattr(r, "status", 200), r.read()
     except urllib.error.HTTPError as e:
+        note_date((getattr(e, "headers", None) or {}).get("Date"))
         return e.code, e.read()
 
 
@@ -238,6 +256,7 @@ def _post_via(route: tuple[int, int], url: str, data: bytes, ctype: str,
         raise OSError((p.stderr or p.stdout).decode(errors="replace").strip()[:200] or "no answer") from None
     if res.get("err"):
         raise OSError(res["err"])
+    note_date(res.get("date"))
     return int(res.get("status") or 0), str(res.get("body") or "").encode()
 
 
