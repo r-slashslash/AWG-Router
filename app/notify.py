@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
+import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 from .i18n import Msg
 
@@ -43,7 +46,11 @@ TEXTS = {
         "client_expired": "⏰ Клиент «{name}» отключён: истёк срок действия.",
         "client_quota": "📦 Клиент «{name}» отключён: исчерпан лимит трафика {gb} ГБ.",
         "client_quota_reset": "✅ Клиент «{name}» снова включён: начался новый месяц.",
-        "update_available": "🆕 Доступна новая версия панели {version}. Обновить на сервере: awg-router update",
+        "update_available": "🆕 Доступна новая версия панели {version}. Обновить можно в панели («Система») или на сервере: awg-router update",
+        "backup": "💾 Резервная копия панели. Восстановить: «Система» → «Резервная копия» → «Восстановить из файла».",
+        "backup_enc": "💾 Резервная копия панели, зашифрована паролем копии. Восстановить: «Система» → «Резервная копия» → «Восстановить из файла».",
+        "client_expiring": "⏳ Клиент «{name}»: срок действия закончится {date} (через {days} дн.).",
+        "client_quota_warn": "⚠️ Клиент «{name}»: израсходовано 90% лимита {gb} ГБ.",
         "pw_changed": "🔑 Пароль панели изменён (с адреса {ip}).",
     },
     "en": {
@@ -66,7 +73,11 @@ TEXTS = {
         "client_expired": "⏰ Client “{name}” was turned off: its access period ended.",
         "client_quota": "📦 Client “{name}” was turned off: the {gb} GB traffic limit is used up.",
         "client_quota_reset": "✅ Client “{name}” is on again: a new month has started.",
-        "update_available": "🆕 Panel version {version} is available. Update on the server: awg-router update",
+        "update_available": "🆕 Panel version {version} is available. Update in the panel (System) or on the server: awg-router update",
+        "backup": "💾 Panel backup. To restore: System → Backup → Restore from file.",
+        "backup_enc": "💾 Panel backup, encrypted with the backup password. To restore: System → Backup → Restore from file.",
+        "client_expiring": "⏳ Client “{name}” ends on {date} (in {days} d).",
+        "client_quota_warn": "⚠️ Client “{name}”: 90% of the {gb} GB limit is used.",
         "pw_changed": "🔑 The panel password was changed (from {ip}).",
     },
     "zh": {
@@ -89,7 +100,11 @@ TEXTS = {
         "client_expired": "⏰ 客户端“{name}”已停用：使用期限已到。",
         "client_quota": "📦 客户端“{name}”已停用：{gb} GB 流量限额已用完。",
         "client_quota_reset": "✅ 客户端“{name}”已重新启用：新的月份开始了。",
-        "update_available": "🆕 面板新版本 {version} 可用。在服务器上更新：awg-router update",
+        "update_available": "🆕 面板新版本 {version} 可用。可在面板（系统）中更新，或在服务器上运行：awg-router update",
+        "backup": "💾 面板备份。恢复方法：系统 → 备份 → 从文件恢复。",
+        "backup_enc": "💾 面板备份，已用备份密码加密。恢复方法：系统 → 备份 → 从文件恢复。",
+        "client_expiring": "⏳ 客户端“{name}”将于 {date} 到期（还剩 {days} 天）。",
+        "client_quota_warn": "⚠️ 客户端“{name}”：{gb} GB 限额已用掉 90%。",
         "pw_changed": "🔑 面板密码已更改（来自 {ip}）。",
     },
     "fa": {
@@ -112,7 +127,11 @@ TEXTS = {
         "client_expired": "⏰ کلاینت «{name}» غیرفعال شد: مدت اعتبارش تمام شد.",
         "client_quota": "📦 کلاینت «{name}» غیرفعال شد: سقف ترافیک {gb} گیگابایت تمام شد.",
         "client_quota_reset": "✅ کلاینت «{name}» دوباره فعال شد: ماه تازه شروع شد.",
-        "update_available": "🆕 نسخهٔ تازهٔ پنل {version} آماده است. به‌روزرسانی روی سرور: awg-router update",
+        "update_available": "🆕 نسخهٔ تازهٔ پنل {version} آماده است. در پنل (سیستم) یا روی سرور به‌روزرسانی کنید: awg-router update",
+        "backup": "💾 پشتیبان پنل. بازیابی: سیستم ← پشتیبان ← بازیابی از فایل.",
+        "backup_enc": "💾 پشتیبان پنل، رمزگذاری‌شده با رمز پشتیبان. بازیابی: سیستم ← پشتیبان ← بازیابی از فایل.",
+        "client_expiring": "⏳ کلاینت «{name}»: اعتبار در {date} تمام می‌شود ({days} روز دیگر).",
+        "client_quota_warn": "⚠️ کلاینت «{name}»: ۹۰٪ سقف {gb} گیگابایت مصرف شد.",
         "pw_changed": "🔑 رمز پنل تغییر کرد (از نشانی {ip}).",
     },
 }
@@ -133,6 +152,8 @@ ENGINE_EVENTS = {
     "ev.client_expired": ("clients", "client_expired"),
     "ev.client_quota": ("clients", "client_quota"),
     "ev.client_quota_reset": ("clients", "client_quota_reset"),
+    "ev.client_expiring": ("clients", "client_expiring"),
+    "ev.client_quota_warn": ("clients", "client_quota_warn"),
 }
 
 
@@ -140,9 +161,14 @@ class NotifyError(Exception):
     pass
 
 
+BACKUP_PERIODS = {"off": 0, "daily": 86400, "weekly": 7 * 86400}
+
+
 def defaults() -> dict:
     return {"enabled": False, "token": "", "chat_id": "", "lang": "en",
-            "events": {k: True for k in KINDS}}
+            "events": {k: True for k in KINDS},
+            # резервная копия в чат: off | daily | weekly; пароль — шифровать файл (пусто — нет)
+            "backup": "off", "backup_pw": "", "backup_last": None, "backup_error": None}
 
 
 def cfg_of(st: dict) -> dict:
@@ -155,8 +181,9 @@ def cfg_of(st: dict) -> dict:
 def public_view(c: dict) -> dict:
     """Настройки для браузера: токен целиком не отдаём."""
     tok = c.get("token") or ""
-    return {**{k: v for k, v in c.items() if k != "token"},
-            "token_set": bool(tok), "token_hint": (tok.split(":")[0] + ":…" + tok[-4:]) if tok else ""}
+    return {**{k: v for k, v in c.items() if k not in ("token", "backup_pw")},
+            "token_set": bool(tok), "token_hint": (tok.split(":")[0] + ":…" + tok[-4:]) if tok else "",
+            "backup_pw_set": bool(c.get("backup_pw"))}
 
 
 def render(lang: str, key: str, host: str = "", **params) -> str:
@@ -190,6 +217,52 @@ def _call(token: str, method: str, payload: dict | None = None, timeout: float =
 def send(token: str, chat_id: str, text: str) -> None:
     _call(token, "sendMessage", {"chat_id": chat_id, "text": text,
                                  "disable_web_page_preview": True})
+
+
+def send_document(token: str, chat_id: str, filename: str, data: bytes, caption: str) -> None:
+    """sendDocument: файл multipart/form-data (urllib сам этого не умеет)."""
+    boundary = "awgr" + uuid.uuid4().hex
+    parts = []
+    for k, v in (("chat_id", chat_id), ("caption", caption[:1000])):
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{filename}"\r\n'
+                 f'Content-Type: application/octet-stream\r\n\r\n'.encode() + data + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    req = urllib.request.Request(f"{API}/bot{token}/sendDocument", data=b"".join(parts),
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            res = json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            res = json.loads(e.read().decode() or "{}")
+        except ValueError:
+            raise NotifyError(f"HTTP {e.code}") from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise NotifyError(f"api.telegram.org: {getattr(e, 'reason', e)}"[:300]) from None
+    if not res.get("ok"):
+        raise NotifyError(str(res.get("description") or "Telegram error")[:300])
+
+
+# Шифрование копии: openssl есть в образе, а AES в стандартной библиотеке Python нет.
+# Расшифровать вручную: openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in файл -out копия.json
+ENC = ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-salt", "-pass", "env:AWGR_BACKUP_PW"]
+ENC_MAGIC = b"Salted__"
+
+
+def encrypt(data: bytes, password: str) -> bytes:
+    p = subprocess.run(ENC, input=data, capture_output=True, timeout=60,
+                       env={**os.environ, "AWGR_BACKUP_PW": password})
+    if p.returncode != 0 or not p.stdout.startswith(ENC_MAGIC):
+        raise NotifyError("openssl: " + p.stderr.decode(errors="replace").strip()[:200])
+    return p.stdout
+
+
+def decrypt(data: bytes, password: str) -> bytes | None:
+    """None — неверный пароль или повреждённый файл."""
+    p = subprocess.run(ENC[:3] + ["-d"] + ENC[3:], input=data, capture_output=True, timeout=60,
+                       env={**os.environ, "AWGR_BACKUP_PW": password})
+    return p.stdout if p.returncode == 0 else None
 
 
 def detect_chat(token: str) -> dict | None:
@@ -246,7 +319,7 @@ class Notifier:
             self._target_lost = True
         m = ENGINE_EVENTS.get(msg.key)
         if m:
-            self.event(m[0], m[1], **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to")})
+            self.event(m[0], m[1], **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days")})
 
     def target_ok(self) -> None:
         if self._target_lost:

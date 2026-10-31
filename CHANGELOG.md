@@ -3,6 +3,23 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.4.0 — 2026-10-31
+
+- **Update from the panel.** When a new version is out, System shows an **Update** button: the
+  panel runs `install.sh --update` on the server as a separate systemd task (so it survives the
+  panel's own restart), shows the progress and reloads the page with the new version. If the
+  build fails, the previous version keeps running and the log is shown. **Check for updates**
+  checks GitHub right away instead of waiting up to 6 hours. Servers without systemd keep using
+  `awg-router update`.
+- **Backups to Telegram.** The bot can send a backup every day or week, or right away. With a
+  backup password the file is encrypted (AES-256, `openssl enc`); restoring such a file in the
+  panel asks for the password.
+- **Early warnings for clients:** 3 days before the end date and at 90 % of the traffic limit —
+  in the log and in Telegram, once each. The client list gets an **Ending soon** filter.
+- **Home screen.** The panel can be added to a phone's home screen and opens like an app
+  (web app manifest, icons). Chrome on Android shows an **Install as an app** button in System.
+- The installer shows its progress spinner only on a terminal.
+
 ## 1.3.1 — 2026-10-31
 
 - Clients tab: search, sorting and "Add client" stay on one line on a wide screen (the button

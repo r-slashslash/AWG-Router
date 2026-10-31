@@ -132,7 +132,8 @@ class RestoreStateTest(unittest.TestCase):
         s["settings"]["unknown"] = "x"
         st = main.clean_backup_state(s)
         self.assertEqual(st["limits"][PUB], {"expires": 1900000000, "quota": None, "period": "month",
-                                             "auto_off": None, "exp_done": None, "quota_done": "2026-10"})
+                                             "auto_off": None, "exp_done": None, "quota_done": "2026-10",
+                                            "exp_warned": None, "quota_warned": None})
         self.assertNotIn("unknown", st["settings"])
 
 

@@ -27,7 +27,7 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Clients created in the AmneziaVPN app show up and can be managed too. The panel can't show their config, because the private key exists only on the device.
 - A disabled client stays in the config as a comment, so nobody else takes its address.
 - Traffic per client for the month and all time; it survives restarts. Sort by name, address, traffic or activity.
-- An end date and a traffic limit (per month or in total). When they run out, the client turns off by itself; a monthly limit resets on the 1st and the client turns back on.
+- An end date and a traffic limit (per month or in total). When they run out, the client turns off by itself; a monthly limit resets on the 1st and the client turns back on. Three days before the end date and at 90% of the limit you get a warning, and **Ending soon** in the client list shows who is close.
 - A personal link: the person opens it, downloads their config or scans the QR code, and sees their traffic and end date — no panel sign-in.
 
 **Server**
@@ -52,10 +52,11 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Alternatively, the panel can be reachable only through an SSH tunnel.
 - The address uses a random port and a secret path, and login is password-protected with brute-force protection. A sign-in lasts 4 hours.
 - Optional second factor: a 6-digit code from an authenticator app (Google Authenticator, Aegis, 2FAS…). Turned on in **System**.
-- Optional Telegram notifications: an exit stops or recovers or nears its limit, the AmneziaWG server is unreachable or restarted, a client hits its end date or limit, panel sign-ins, a certificate that can't be renewed, a new panel version. Set up in **System**.
+- Optional Telegram notifications: an exit stops or recovers or nears its limit, the AmneziaWG server is unreachable or restarted, a client nears or hits its end date or limit, panel sign-ins, a certificate that can't be renewed, a new panel version. Set up in **System**.
 - The password can be changed right in the panel.
-- Backup and restore in one file: panel settings, exits, rules, client keys and the AmneziaWG server config — handy for moving to another server.
-- The panel shows its version and tells you when an update is out.
+- Backup and restore in one file: panel settings, exits, rules, client keys and the AmneziaWG server config — handy for moving to another server. The bot can also send a backup to Telegram every day or week, encrypted with a password if you set one.
+- The panel shows its version, tells you when an update is out and updates itself with one button (or `awg-router update` on the server).
+- Can be added to a phone's home screen and opens like an app.
 - Languages: English, Russian, Chinese and Persian. The language follows the browser or system setting, and a manual choice is remembered.
 
 <p align="center">
