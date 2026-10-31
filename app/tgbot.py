@@ -35,6 +35,7 @@ COMMANDS = ("status", "clients", "add", "exits", "route", "backup", "help")
 
 TEXTS = {
     "ru": {
+        "start": "🤖 <b>Пульт AWG Router</b>\nВсё меню — на кнопках внизу экрана. Список команд — /help.",
         "help": "🤖 <b>Пульт AWG Router</b>\n"
                 "/status — сервер, клиенты и выходы\n"
                 "/clients — клиенты: включить, выключить, QR, продлить\n"
@@ -48,7 +49,7 @@ TEXTS = {
         "b_status": "📊 Состояние", "b_clients": "👥 Клиенты", "b_exits": "🌐 Выходы",
         "b_route": "🧭 Маршрут", "kbd_menu": "☰ Меню",
         "kbd_off": "Управление из Telegram выключено в панели.",
-        "b_add": "➕ Новый клиент", "b_backup": "💾 Копия", "b_menu": "‹ Меню", "b_list": "‹ Клиенты",
+        "b_add": "➕ Новый клиент", "b_backup": "💾 Копия", "b_list": "‹ Клиенты",
         "b_refresh": "🔄 Обновить", "b_on": "▶️ Включить", "b_off": "⏸ Выключить",
         "b_config": "📱 QR и файл", "b_share": "🔗 Личная ссылка", "b_days": "+30 дней",
         "b_gb": "+10 ГБ", "b_client": "👤 Клиент", "b_check": "🔍 Проверить «{name}»",
@@ -107,6 +108,7 @@ TEXTS = {
         "unknown": "Не знаю такой команды. /help — что я умею.",
     },
     "en": {
+        "start": "🤖 <b>AWG Router remote</b>\nThe whole menu is on the buttons at the bottom of the screen. Commands — /help.",
         "help": "🤖 <b>AWG Router remote</b>\n"
                 "/status — server, clients and exits\n"
                 "/clients — clients: turn on or off, QR, extend\n"
@@ -120,7 +122,7 @@ TEXTS = {
         "b_status": "📊 Status", "b_clients": "👥 Clients", "b_exits": "🌐 Exits",
         "b_route": "🧭 Route", "kbd_menu": "☰ Menu",
         "kbd_off": "Control from Telegram is turned off in the panel.",
-        "b_add": "➕ New client", "b_backup": "💾 Backup", "b_menu": "‹ Menu", "b_list": "‹ Clients",
+        "b_add": "➕ New client", "b_backup": "💾 Backup", "b_list": "‹ Clients",
         "b_refresh": "🔄 Refresh", "b_on": "▶️ Turn on", "b_off": "⏸ Turn off",
         "b_config": "📱 QR and file", "b_share": "🔗 Personal link", "b_days": "+30 days",
         "b_gb": "+10 GB", "b_client": "👤 Client", "b_check": "🔍 Check “{name}”",
@@ -179,6 +181,7 @@ TEXTS = {
         "unknown": "I don't know this command. /help — what I can do.",
     },
     "zh": {
+        "start": "🤖 <b>AWG Router 遥控</b>\n全部菜单都在屏幕底部的按钮上。命令列表——/help。",
         "help": "🤖 <b>AWG Router 遥控</b>\n"
                 "/status — 服务器、客户端和出口\n"
                 "/clients — 客户端：启用、停用、二维码、延期\n"
@@ -192,7 +195,7 @@ TEXTS = {
         "b_status": "📊 状态", "b_clients": "👥 客户端", "b_exits": "🌐 出口",
         "b_route": "🧭 路由", "kbd_menu": "☰ 菜单",
         "kbd_off": "已在面板中关闭通过 Telegram 控制。",
-        "b_add": "➕ 新建客户端", "b_backup": "💾 备份", "b_menu": "‹ 菜单", "b_list": "‹ 客户端",
+        "b_add": "➕ 新建客户端", "b_backup": "💾 备份", "b_list": "‹ 客户端",
         "b_refresh": "🔄 刷新", "b_on": "▶️ 启用", "b_off": "⏸ 停用",
         "b_config": "📱 二维码和文件", "b_share": "🔗 个人链接", "b_days": "+30 天",
         "b_gb": "+10 GB", "b_client": "👤 客户端", "b_check": "🔍 检查“{name}”",
@@ -249,6 +252,7 @@ TEXTS = {
         "unknown": "不认识这个命令。/help — 我能做什么。",
     },
     "fa": {
+        "start": "🤖 <b>کنترل از راه دور AWG Router</b>\nهمهٔ منو روی دکمه‌های پایین صفحه است. فهرست دستورها — ‎/help.",
         "help": "🤖 <b>کنترل از راه دور AWG Router</b>\n"
                 "/status — سرور، کلاینت‌ها و خروجی‌ها\n"
                 "/clients — کلاینت‌ها: فعال و غیرفعال کردن، QR، تمدید\n"
@@ -262,7 +266,7 @@ TEXTS = {
         "b_status": "📊 وضعیت", "b_clients": "👥 کلاینت‌ها", "b_exits": "🌐 خروجی‌ها",
         "b_route": "🧭 مسیر", "kbd_menu": "☰ منو",
         "kbd_off": "کنترل از تلگرام در پنل خاموش شد.",
-        "b_add": "➕ کلاینت تازه", "b_backup": "💾 پشتیبان", "b_menu": "منو ›", "b_list": "کلاینت‌ها ›",
+        "b_add": "➕ کلاینت تازه", "b_backup": "💾 پشتیبان", "b_list": "کلاینت‌ها ›",
         "b_refresh": "🔄 تازه‌سازی", "b_on": "▶️ فعال کردن", "b_off": "⏸ غیرفعال کردن",
         "b_config": "📱 QR و فایل", "b_share": "🔗 پیوند شخصی", "b_days": "+۳۰ روز",
         "b_gb": "+۱۰ گیگابایت", "b_client": "👤 کلاینت", "b_check": "🔍 بررسی «{name}»",
@@ -675,7 +679,9 @@ class Bot:
         return str(e)[:300]
 
     def on_command(self, c: dict, cmd: str, arg: str) -> None:
-        if cmd in ("start", "help", "menu"):
+        if cmd in ("start", "menu"):
+            self._send(c, tr(c["lang"], "start"), self._keyboard(c))
+        elif cmd == "help":
             self._send(c, tr(c["lang"], "help"), self._keyboard(c))
         elif cmd == "status":
             self._guard(c, self.show_status, None)
@@ -708,8 +714,8 @@ class Bot:
         op, _, arg = data.partition(":")
         toast = ""
         try:
-            if op == "m":
-                self._show(c, tr(L, "help"), self._menu(c), msg)
+            if op == "m":                      # «‹ Меню» в сообщениях до 1.10.4: меню теперь внизу
+                self._show(c, tr(L, "start"), None, msg)
             elif op == "st":
                 self.show_status(c, msg)
             elif op == "cl":
@@ -770,12 +776,6 @@ class Bot:
             self._toast(c, qid, toast)
 
     # ------------------------------------------------------------- экраны
-    def _menu(self, c: dict) -> dict:
-        L = c["lang"]
-        return kb([(tr(L, "b_status"), "st"), (tr(L, "b_clients"), "cl:0")],
-                  [(tr(L, "b_exits"), "ex"), (tr(L, "b_add"), "add")],
-                  [(tr(L, "b_route"), "rt"), (tr(L, "b_backup"), "bk")])
-
     def _keyboard(self, c: dict) -> dict:
         """Всё меню на клавиатуре внизу экрана: остаётся там, пока его не уберут."""
         L = c["lang"]
@@ -827,10 +827,10 @@ class Bot:
             lines.append(tr(L, "st_version", version=v.get("current", self.ops.version)))
         if s.get("cert_until"):
             lines.append(tr(L, "st_cert", date=fmt_date(s["cert_until"])))
-        rows = [[(tr(L, "b_clients"), "cl:0"), (tr(L, "b_exits"), "ex")]]
+        # меню — на клавиатуре внизу; здесь только то, что относится к этому сообщению
+        rows = [[(tr(L, "b_refresh"), "st")]]
         if v.get("available") and v.get("latest"):
             rows.append([(tr(L, "b_update", False, version=v["latest"]), "up")])
-        rows.append([(tr(L, "b_refresh"), "st"), (tr(L, "b_menu"), "m")])
         self._show(c, "\n".join(lines), kb(*rows), msg)
 
     def _exit_line(self, c: dict, u: dict, st: dict) -> str:
@@ -864,7 +864,7 @@ class Bot:
         L = c["lang"]
         clients = sorted(self.ops.clients(), key=lambda x: self._name(x).casefold())
         if not clients:
-            self._show(c, tr(L, "cl_empty"), kb([(tr(L, "b_add"), "add")], [(tr(L, "b_menu"), "m")]), msg)
+            self._show(c, tr(L, "cl_empty"), None, msg)
             return
         pages = max(1, math.ceil(len(clients) / PAGE))
         page = min(max(0, page), pages - 1)
@@ -882,7 +882,6 @@ class Bot:
             if page < pages - 1:
                 nav.append(("›", f"cl:{page + 1}"))
             rows.append(nav)
-        rows.append([(tr(L, "b_add"), "add"), (tr(L, "b_menu"), "m")])
         text = tr(L, "cl_title", n=len(clients)) + "\n" + tr(L, "cl_legend")
         self._show(c, text, kb(*rows), msg)
 
@@ -938,7 +937,7 @@ class Bot:
         st = self.ops.snapshot()
         ups = st.get("upstreams") or []
         if not ups:
-            self._show(c, tr(L, "ex_title") + "\n\n" + tr(L, "ex_none"), kb([(tr(L, "b_menu"), "m")]), msg)
+            self._show(c, tr(L, "ex_title") + "\n\n" + tr(L, "ex_none"), None, msg)
             return
         d = st["routing"]["default"]
         lines = [tr(L, "ex_title"), tr(L, "st_default", out=self.out_label(c, d, st)), ""]
@@ -952,7 +951,7 @@ class Bot:
             rows.append(row)
         if d != "direct":
             rows.append([(tr(L, "b_direct"), "df:direct")])
-        rows.append([(tr(L, "b_refresh"), "ex"), (tr(L, "b_menu"), "m")])
+        rows.append([(tr(L, "b_refresh"), "ex")])
         self._show(c, "\n".join(lines), kb(*rows), msg)
 
     # ------------------------------------------------------------- действия
@@ -1038,7 +1037,7 @@ class Bot:
         else:
             err = r.get("error")
             text = tr(L, "pr_fail", name=name, error=self._err(err) if isinstance(err, Msg) else (err or "?"))
-        self._send(c, text.replace("  ", " "), kb([(tr(L, "b_exits"), "ex")]))
+        self._send(c, text.replace("  ", " "))
 
     def do_default(self, c: dict, out: str) -> str:
         st = self.ops.snapshot()

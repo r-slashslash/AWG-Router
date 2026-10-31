@@ -3,6 +3,14 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.10.4 — 2026-11-01
+
+- **No more buttons in two places.** The main menu lives only on the keyboard at the bottom of
+  the screen. Under messages there are only their own buttons: Refresh (and Update to … when a
+  new version is out) under the status; client actions and ‹ Clients in a client's card;
+  Check and ⭐ under exits. Clients, Exits, New client and ‹ Menu are no longer repeated there.
+- `/start` answers with a short greeting; the full list of commands is in `/help`.
+
 ## 1.10.3 — 2026-11-01
 
 - **Control from Telegram works without notifications.** The bot listened to commands only when
