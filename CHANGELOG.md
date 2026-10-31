@@ -3,49 +3,28 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
-## 1.10.4 — 2026-11-01
-
-- **No more buttons in two places.** The main menu lives only on the keyboard at the bottom of
-  the screen. Under messages there are only their own buttons: Refresh (and Update to … when a
-  new version is out) under the status; client actions and ‹ Clients in a client's card;
-  Check and ⭐ under exits. Clients, Exits, New client and ‹ Menu are no longer repeated there.
-- `/start` answers with a short greeting; the full list of commands is in `/help`.
-
-## 1.10.3 — 2026-11-01
-
-- **Control from Telegram works without notifications.** The bot listened to commands only when
-  both **Accept commands and buttons** and **Send notifications** were on. With notifications
-  off it stayed silent, Telegram kept the messages, and the panel showed nothing about the bot,
-  while **Send a test** still worked. Control now needs only the token, the Chat ID and its own
-  checkbox, and the panel shows the bot's state whenever control is on.
-- `awg-router logs` no longer hangs when its output goes into a pipe (`| grep …`): it follows
-  the log only in a terminal and otherwise prints the last 2000 lines.
-
-## 1.10.2 — 2026-11-01
+## 1.10.5 — 2026-11-01
 
 - **`/start` opens the whole menu.** The bot puts every item on the keyboard at the bottom of the
   screen: Status, Clients, Exits, New client, Route, Backup. It stays there, so the bot works by
-  taps; the buttons are understood in all four languages.
-- **The bot answers instead of staying silent.** A command from a chat other than the one in
-  Chat ID is still not run, but in a private chat the bot now replies "No access" with that
-  chat's Chat ID, to put into the panel (at most once in 10 minutes per chat).
-- **A webhook on the bot no longer blocks commands.** If the bot was connected to another service
-  before, Telegram refused to hand commands to the panel; the panel now removes the webhook once
-  and carries on.
-- The panel no longer lists ignored commands (added in 1.10.1): the bot itself says what is wrong.
-
-## 1.10.1 — 2026-11-01
-
-- **The bot no longer stays silent when the server's clock is off.** Commands older than
-  10 minutes are skipped (they were sent while the panel was off), and that age was measured by
-  the server's clock. On a server whose clock runs more than 10 minutes ahead every command looked
-  old, and the bot silently ignored all of them. The age is now measured by Telegram's own time
-  (the Date header of its answers, also through an exit).
-- **The panel says why a command was not run.** Under **Accept commands and buttons**: the time
-  of the last command; a command that came from another chat than the one in Chat ID, with a
-  **Listen to chat …** button that switches to it; and a note when the server's clock is off by
-  two minutes or more (the authenticator-code sign-in depends on it too).
-- Such commands are also written to the panel log (`awg-router logs`).
+  taps; the buttons are understood in all four languages. It replaces the ☰ Menu button of 1.10.0.
+- **Only their own buttons under messages.** Refresh (and Update to … when a new version is out)
+  under the status, client actions and ‹ Clients in a client's card, Check and ⭐ under exits;
+  the main menu is not repeated there.
+- **Control from Telegram works without notifications.** It needs only the token, the Chat ID and
+  **Accept commands and buttons**; before, the bot also required **Send notifications** and stayed
+  silent without it, while **Send a test** still worked.
+- **The bot no longer stays silent:**
+  - command age is measured by Telegram's clock, not the server's: on a server whose clock ran
+    ahead, every command looked older than 10 minutes and was skipped;
+  - a command from a chat other than the one in Chat ID is still not run, but in a private chat
+    the bot answers "No access" with that chat's Chat ID, to put into the panel;
+  - a webhook left on the bot by another service is removed once, so commands reach the panel.
+- **In the panel**, under Accept commands and buttons: the bot's state, the time of the last
+  command and a note when the server's clock is off by two minutes or more (the authenticator-code
+  sign-in depends on it too).
+- `awg-router logs` no longer hangs in a pipe (`awg-router logs | grep …`): it follows the log only
+  in a terminal and otherwise prints the last 2000 lines.
 
 ## 1.10.0 — 2026-11-01
 
