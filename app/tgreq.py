@@ -3,7 +3,7 @@
 Сокеты помечены fwmark'ом выхода, поэтому идут через его туннель, как трафик клиентов.
 
 stdin: первая строка — JSON {"url", "ctype", "timeout"}, дальше — тело запроса.
-stdout: JSON {"status": код, "body": ответ} или {"err": причина}.
+stdout: JSON {"status": код, "body": ответ, "date": заголовок Date} или {"err": причина}.
 
 Имя хоста тоже узнаём через туннель (DNS-запрос к 1.1.1.1 / 8.8.8.8 с той же меткой):
 там, где Telegram заблокирован, местный DNS часто отвечает подменённым адресом."""
@@ -120,7 +120,7 @@ def request(mark, url, body, ctype, timeout):
         c.request("POST", u.path + ("?" + u.query if u.query else ""), body=body,
                   headers={"Content-Type": ctype, "User-Agent": "awg-router"})
         r = c.getresponse()
-        return r.status, r.read()
+        return r.status, r.read(), r.getheader("Date") or ""
     finally:
         c.close()
 
@@ -131,9 +131,9 @@ def main():
     head, _, body = raw.partition(b"\n")
     try:
         h = json.loads(head)
-        status, data = request(mark, h["url"], body, h.get("ctype", "application/json"),
-                               float(h.get("timeout", 15)))
-        print(json.dumps({"status": status, "body": data.decode(errors="replace")}))
+        status, data, date = request(mark, h["url"], body, h.get("ctype", "application/json"),
+                                     float(h.get("timeout", 15)))
+        print(json.dumps({"status": status, "body": data.decode(errors="replace"), "date": date}))
     except Exception as e:  # noqa: BLE001
         print(json.dumps({"err": str(e) or type(e).__name__}))
 

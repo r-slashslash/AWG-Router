@@ -1931,6 +1931,36 @@ Object.assign(I18N.fa, {
   "tg.act_update": "تلگرام: به‌روزرسانی به {version} آغاز شد",
 });
 
+// бот-пульт: пропущенные команды и часы (1.10.1)
+Object.assign(I18N.ru, {
+  "tg.bot_last": "Последняя команда: {time}",
+  "tg.bot_foreign": "Команда пришла из чата {chat}, а бот слушает только чат из поля Chat ID выше — она не выполнена.",
+  "tg.bot_use_chat": "Слушать чат {chat}",
+  "tg.bot_use_chat_done": "Chat ID изменён: команды и уведомления — в этом чате",
+  "tg.bot_skew": "Часы сервера расходятся с Telegram примерно на {n} мин. Бот это учитывает, но вход по коду из приложения зависит от часов — стоит включить синхронизацию времени (timedatectl set-ntp true).",
+});
+Object.assign(I18N.en, {
+  "tg.bot_last": "Last command: {time}",
+  "tg.bot_foreign": "A command came from chat {chat}, but the bot listens only to the chat in the Chat ID field above — it was not run.",
+  "tg.bot_use_chat": "Listen to chat {chat}",
+  "tg.bot_use_chat_done": "Chat ID changed: commands and notifications are in this chat now",
+  "tg.bot_skew": "The server's clock is about {n} min off Telegram's. The bot allows for it, but authenticator-code sign-in depends on the clock — turn on time sync (timedatectl set-ntp true).",
+});
+Object.assign(I18N.zh, {
+  "tg.bot_last": "上次命令：{time}",
+  "tg.bot_foreign": "命令来自聊天 {chat}，但机器人只听从上方 Chat ID 中的聊天——该命令未执行。",
+  "tg.bot_use_chat": "改为聊天 {chat}",
+  "tg.bot_use_chat_done": "Chat ID 已更改：命令和通知现在都在这个聊天中",
+  "tg.bot_skew": "服务器时钟与 Telegram 相差约 {n} 分钟。机器人已考虑这一点，但使用验证器代码登录依赖时钟——请开启时间同步（timedatectl set-ntp true）。",
+});
+Object.assign(I18N.fa, {
+  "tg.bot_last": "آخرین دستور: {time}",
+  "tg.bot_foreign": "دستوری از چت {chat} آمد، اما ربات فقط از چتی که در فیلد Chat ID بالا است فرمان می‌برد — اجرا نشد.",
+  "tg.bot_use_chat": "پذیرفتن از چت {chat}",
+  "tg.bot_use_chat_done": "Chat ID تغییر کرد: دستورها و اعلان‌ها اکنون در این چت هستند",
+  "tg.bot_skew": "ساعت سرور حدود {n} دقیقه با تلگرام اختلاف دارد. ربات این را در نظر می‌گیرد، اما ورود با کد برنامهٔ احراز هویت به ساعت وابسته است — همگام‌سازی زمان را روشن کنید (timedatectl set-ntp true).",
+});
+
 /* Разделители: перечисление, фразы, ссылки */
 const SEP = {
   list: { zh: "、", fa: "، " }, phrase: { zh: "，", fa: "، " }, refs: { zh: "；", fa: "؛ " },

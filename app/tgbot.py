@@ -414,6 +414,8 @@ class Bot:
         self.last_cmd: float | None = None
         self._ask: dict | None = None          # ждём ответа: {"kind": add|route, "msg": id, "t": …}
         self._panel_msgs: list[int] = []       # сообщения меню/списков: их можно редактировать
+        # последняя пропущенная команда: из чужого чата — чтобы панель подсказала, в чём дело
+        self.ignored: dict | None = None
         self._st = self._load()
 
     # ------------------------------------------------------------- состояние
@@ -434,7 +436,20 @@ class Bot:
             log.warning("tgbot state: %s", e)
 
     def view(self) -> dict:
-        return {"state": self.state, "error": self.error, "last": self.last_cmd}
+        ign = self.ignored if self.ignored and time.time() - self.ignored["t"] < DAY else None
+        skew = notify.clock_skew
+        return {"state": self.state, "error": self.error, "last": self.last_cmd, "ignored": ign,
+                # часы сервера сбиты: на это стоит обратить внимание (вход по коду тоже от них зависит)
+                "skew": round(skew) if abs(skew) >= 120 else None}
+
+    def _foreign(self, chat: dict, c: dict) -> None:
+        """Команда из чата, которого нет в настройках: не выполняем, но запоминаем для панели."""
+        title = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) \
+            or chat.get("username") or ""
+        self.ignored = {"t": time.time(), "chat": str(chat.get("id", "")), "title": title[:60],
+                        "type": chat.get("type") or ""}
+        log.info("telegram: a command from chat %s (%s) is ignored: the panel listens to chat %s",
+                 self.ignored["chat"], title, c.get("chat_id"))
 
     def start(self) -> None:
         threading.Thread(target=self._loop, name="tgbot", daemon=True).start()
@@ -561,14 +576,23 @@ class Bot:
             q = u["callback_query"]
             msg = q.get("message") or {}
             if not self.allowed(msg.get("chat") or {}, c):
+                if msg.get("chat"):
+                    self._foreign(msg["chat"], c)
                 return
             self.last_cmd = time.time()
             self.on_button(c, str(q.get("data") or ""), q.get("id", ""), msg)
             return
         m = u.get("message") or {}
-        if not self.allowed(m.get("chat") or {}, c) or (m.get("from") or {}).get("is_bot"):
+        if (m.get("from") or {}).get("is_bot") or not m.get("chat"):
             return
-        if m.get("date") and time.time() - m["date"] > OLD:
+        if not self.allowed(m["chat"], c):
+            if (m.get("text") or "").startswith("/") or (m.get("text") or "") in menu_texts():
+                self._foreign(m["chat"], c)
+            return
+        # возраст — по часам Telegram (Date его ответа), а не сервера: те бывают сбиты
+        age = time.time() - notify.clock_skew - (m.get("date") or 0)
+        if m.get("date") and age > OLD:
+            log.info("telegram: a message from %d s ago is skipped (sent while the panel was off)", int(age))
             return
         text = (m.get("text") or "").strip()
         if not text:
