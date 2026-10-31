@@ -53,7 +53,7 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Alternatively, the panel can be reachable only through an SSH tunnel.
 - The address uses a random port and a secret path, and login is password-protected with brute-force protection. A sign-in lasts 4 hours.
 - Optional second factor: a 6-digit code from an authenticator app (Google Authenticator, Aegis, 2FAS…). Turned on in **System**.
-- Optional Telegram notifications: an exit stops or recovers or nears its limit, the AmneziaWG server is unreachable or restarted, a client nears or hits its end date or limit, panel sign-ins, a certificate that can't be renewed, a new panel version. Set up in **System**.
+- Optional Telegram notifications: an exit stops or recovers or nears its limit, the AmneziaWG server is unreachable or restarted, a client nears or hits its end date or limit, panel sign-ins, a certificate that can't be renewed, a new panel version. Set up in **System**. Where Telegram is blocked (Russia, China, Iran), the bot can send through one of your exits.
 - The password can be changed right in the panel.
 - Backup and restore in one file: panel settings, exits, rules, client keys and the AmneziaWG server config — handy for moving to another server. The bot can also send a backup to Telegram every day or week, encrypted with a password if you set one.
 - The panel shows its version, tells you when an update is out and updates itself with one button (or `awg-router update` on the server).

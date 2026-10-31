@@ -3,6 +3,24 @@
 Panels compare `app/version.py` with GitHub and show "update available" when it grows,
 so every user-visible change gets a new version.
 
+## 1.8.0 — 2026-11-01
+
+- **Telegram through an exit.** Where api.telegram.org is blocked (Russia, China, Iran), the
+  panel's requests to the bot used to time out ("api.telegram.org: timed out", #3).
+  System → Telegram notifications → **Send through** picks an exit: messages, backups and
+  "Find" for the chat ID then go through its tunnel, the same way as clients' traffic. The name
+  is looked up through the tunnel too (DNS to 1.1.1.1 / 8.8.8.8), so a spoofed local answer does
+  not get in the way. If the exit is down, its fallback is used; if the fallback blocks traffic,
+  the error says so.
+- Errors of Telegram backups and notifications are shown in the panel's language.
+- **Deleting an exit that is in use.** Before, the panel refused and listed where the exit was
+  used, so you had to change every rule, client and fallback by hand. Now **Delete** shows that
+  list and asks what to put in its place (the exit's own fallback is picked by default). The
+  default exit, rules, clients (including their own rules), other exits' fallbacks and limits,
+  and Telegram notifications all switch to it, then the exit is deleted. Where the choice can't
+  be used — an exit's fallback pointing to itself, "Block" for Telegram — the deleted exit's
+  fallback or "Direct" is used, and an exit's limit becomes "Notify only".
+
 ## 1.6.0 — 2026-10-31
 
 - **Server address in client configs: IPv4 or IPv6.** The Server tab finds the server's public
