@@ -21,7 +21,7 @@ from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
 from .engine import Engine
-from .i18n import Msg, MsgError
+from .i18n import Msg, MsgError, msg_of, to_json
 from .store import DEFAULT_STATE, ID_RE, Store, new_id
 from .tlsmgr import TLSManager
 from .users import UserError
@@ -143,6 +143,17 @@ engine = Engine(store)
 tls = TLSManager(lambda: engine.srv.public_host(store.snapshot()))
 notifier = notify.Notifier(store, lambda st: tls.host() if tls.enabled else engine.srv.public_host(st))
 engine.notifier = notifier
+
+
+def _tg_route(via: str):
+    """Путь к api.telegram.org: напрямую или через туннель выбранного выхода."""
+    try:
+        return engine.own_route(via)
+    except MsgError as e:
+        raise notify.NotifyError(str(e.msg), e.msg) from None
+
+
+notify.router = _tg_route
 tls.on_fail = lambda exp: notifier.event(
     "tls", "tls_fail", cooldown=12 * 3600,
     date=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp or 0)))
@@ -326,6 +337,11 @@ def _tg_draft(body: dict) -> dict:
         if body["lang"] not in notify.LANGS:
             bad("err.bad_value")
         c["lang"] = body["lang"]
+    if "via" in body:
+        via = v_outbound(store.snapshot(), body["via"])
+        if via == "block":
+            bad("err.bad_value")
+        c["via"] = via
     if isinstance(body.get("events"), dict):
         c["events"] = {k: bool(body["events"].get(k, c["events"].get(k, True))) for k in notify.KINDS}
     if "enabled" in body:
@@ -359,9 +375,10 @@ def telegram_test(req):
     if not (c["token"] and c["chat_id"]):
         bad("err.tg_incomplete")
     try:
-        notify.send(c["token"], c["chat_id"], notify.render(c["lang"], "test", notifier.host_fn(store.snapshot())))
+        notify.send(c["token"], c["chat_id"], notify.render(c["lang"], "test", notifier.host_fn(store.snapshot())),
+                    c["via"])
     except notify.NotifyError as e:
-        bad(Msg("err.tg_failed", error=str(e)), 502)
+        bad(Msg("err.tg_failed", error=msg_of(e)), 502)
     return {"ok": True}
 
 
@@ -374,7 +391,7 @@ def telegram_backup(req):
     try:
         send_backup(c)
     except notify.NotifyError as e:
-        bad(Msg("err.tg_failed", error=str(e)), 502)
+        bad(Msg("err.tg_failed", error=msg_of(e)), 502)
     now = time.time()
     store.mutate(lambda st: st["settings"].setdefault("telegram", notify.defaults())
                  .update(backup_last=now, backup_error=None))
@@ -387,9 +404,9 @@ def telegram_detect(req):
     if not c["token"]:
         bad("err.tg_token")
     try:
-        chat = notify.detect_chat(c["token"])
+        chat = notify.detect_chat(c["token"], c["via"])
     except notify.NotifyError as e:
-        bad(Msg("err.tg_failed", error=str(e)), 502)
+        bad(Msg("err.tg_failed", error=msg_of(e)), 502)
     if not chat:
         bad("err.tg_no_chat", 404)
     return chat
@@ -482,7 +499,7 @@ def send_backup(c: dict) -> None:
     if c.get("backup_pw"):
         data, name, key = notify.encrypt(data, c["backup_pw"]), name + ".enc", "backup_enc"
     notify.send_document(c["token"], c["chat_id"], name, data,
-                         notify.render(c["lang"], key, notifier.host_fn(store.snapshot())))
+                         notify.render(c["lang"], key, notifier.host_fn(store.snapshot())), c.get("via", "direct"))
 
 
 _backup_try = 0.0
@@ -505,8 +522,8 @@ def backup_tick(now: float | None = None) -> bool:
     try:
         send_backup(c)
     except Exception as e:  # noqa: BLE001
-        err = str(e)[:300]
-        log.warning("telegram backup: %s", err)
+        err = to_json(msg_of(e))       # Msg — в виде {"$t": …}: переведёт браузер
+        log.warning("telegram backup: %s", e)
     store.mutate(lambda st: st["settings"].setdefault("telegram", notify.defaults()).update(
         {"backup_error": err} if err else {"backup_last": now, "backup_error": None}))
     return err is None
@@ -739,6 +756,12 @@ def clean_backup_state(new: dict) -> dict:
             c["backup"] = tg["backup"]
         if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:
             c["backup_pw"] = tg["backup_pw"]
+        via = tg.get("via") or "direct"
+        if via != "direct":
+            via = check("settings.telegram.via", lambda: v_outbound(st, via))
+            if via == "block":
+                fail("settings.telegram.via")
+        c["via"] = via
         out["telegram"] = c
     return st
 
@@ -1125,13 +1148,24 @@ def edit_upstream(req, uid):
 
 @app.delete("/api/upstreams/{uid}")
 def del_upstream(req, uid):
+    """Удаление выхода. Если он где-то используется, нужен replace — выход, который
+    встанет на его место во всех ссылках (без него — ошибка со списком ссылок)."""
+    repl = (req.json() if req else {}).get("replace")
+
     def fn(st):
-        if not Store.upstream(st, uid):
+        u = Store.upstream(st, uid)
+        if not u:
             bad("err.not_found", 404)
-        refs = Store.outbound_refs(st, "up:" + uid)
-        if refs:
+        target = "up:" + uid
+        refs = Store.outbound_refs(st, target)
+        if refs and repl is None:
             bad(Msg("err.upstream_in_use", refs=refs[:6]))
-        st["upstreams"] = [u for u in st["upstreams"] if u["id"] != uid]
+        if repl is not None:
+            new = v_outbound(st, repl)
+            if new == target:
+                bad("err.bad_outbound")
+            Store.replace_outbound(st, target, new, u.get("fallback"))
+        st["upstreams"] = [x for x in st["upstreams"] if x["id"] != uid]
     store.mutate(fn)
     engine.traffic.forget_out(uid)
     engine.trigger()

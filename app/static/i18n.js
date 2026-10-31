@@ -1763,6 +1763,62 @@ Object.assign(I18N.fa, {
   "status.updating": "در حال به‌روزرسانی…",
 });
 
+/* 1.8.0: Telegram через выход */
+Object.assign(I18N.ru, {
+  "tg.via": "Отправлять через",
+  "tg.via_hint": "Если в стране сервера Telegram заблокирован, выберите выход за границей: запросы к боту пойдут через его туннель.",
+  "tg.via_blocked": "выход «{name}» не работает, а его резервный выход блокирует трафик",
+  "tg.via_down": "туннель выхода «{name}» не запущен",
+  "ref.telegram": "уведомления в Telegram",
+});
+Object.assign(I18N.en, {
+  "tg.via": "Send through",
+  "tg.via_hint": "If Telegram is blocked in the server's country, pick an exit abroad: requests to the bot will go through its tunnel.",
+  "tg.via_blocked": "exit “{name}” is not working and its fallback blocks traffic",
+  "tg.via_down": "the tunnel of exit “{name}” is not running",
+  "ref.telegram": "Telegram notifications",
+});
+Object.assign(I18N.zh, {
+  "tg.via": "发送途径",
+  "tg.via_hint": "如果服务器所在国家屏蔽了 Telegram，请选择国外的出口：发往机器人的请求将经由其隧道。",
+  "tg.via_blocked": "出口「{name}」无法工作，且其备用出口会阻止流量",
+  "tg.via_down": "出口「{name}」的隧道未运行",
+  "ref.telegram": "Telegram 通知",
+});
+Object.assign(I18N.fa, {
+  "tg.via": "ارسال از طریق",
+  "tg.via_hint": "اگر تلگرام در کشور سرور مسدود است، یک خروجی در خارج از کشور انتخاب کنید: درخواست‌ها به ربات از تونل آن می‌روند.",
+  "tg.via_blocked": "خروجی «{name}» کار نمی‌کند و خروجی پشتیبان آن ترافیک را مسدود می‌کند",
+  "tg.via_down": "تونل خروجی «{name}» اجرا نمی‌شود",
+  "ref.telegram": "اعلان‌های تلگرام",
+});
+
+/* 1.8.0: удаление используемого выхода с заменой */
+Object.assign(I18N.ru, {
+  "ex.delete_title": "Удалить выход «{name}»",
+  "ex.delete_used": "Выход используется:",
+  "ex.delete_replace": "Что поставить вместо него",
+  "ex.delete_hint": "Всё перечисленное переключится на выбранный вариант. Где он не подходит (резерв выхода на самого себя, «Блокировать» для Telegram), встанет резерв удаляемого выхода или «Напрямую», а лимит выхода — «Только уведомить».",
+});
+Object.assign(I18N.en, {
+  "ex.delete_title": "Delete exit “{name}”",
+  "ex.delete_used": "This exit is used by:",
+  "ex.delete_replace": "Replace it with",
+  "ex.delete_hint": "Everything listed switches to the chosen option. Where it doesn't fit (an exit's fallback pointing to itself, “Block” for Telegram), the deleted exit's fallback or “Direct” is used, and an exit's limit becomes “Notify only”.",
+});
+Object.assign(I18N.zh, {
+  "ex.delete_title": "删除出口「{name}」",
+  "ex.delete_used": "该出口正被以下各处使用：",
+  "ex.delete_replace": "替换为",
+  "ex.delete_hint": "以上各处都会切换到所选项。不适用的地方（出口的备用指向自身、Telegram 选择「阻止」）将改用被删除出口的备用出口或「直连」，出口限额则改为「仅通知」。",
+});
+Object.assign(I18N.fa, {
+  "ex.delete_title": "حذف خروجی «{name}»",
+  "ex.delete_used": "این خروجی در این جاها استفاده می‌شود:",
+  "ex.delete_replace": "جایگزین با",
+  "ex.delete_hint": "همهٔ موارد بالا به گزینهٔ انتخاب‌شده منتقل می‌شوند. جایی که مناسب نیست (پشتیبان یک خروجی به خودش، «مسدود» برای تلگرام)، پشتیبان خروجی حذف‌شده یا «مستقیم» قرار می‌گیرد و سقف خروجی «فقط اعلان» می‌شود.",
+});
+
 /* ======================================================================= API */
 /* Язык: по языку браузера/системы. Запоминается только ручной выбор,
    и только если он отличается от языка браузера — иначе панель следует за браузером. */

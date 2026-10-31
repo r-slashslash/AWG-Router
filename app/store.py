@@ -119,6 +119,8 @@ class Store:
                 refs.append(Msg("ref.fallback", name=u["name"]))
             if u.get("quota_action") == target:
                 refs.append(Msg("ref.quota", name=u["name"]))
+        if (state.get("settings", {}).get("telegram") or {}).get("via") == target:
+            refs.append(Msg("ref.telegram"))
         for pk, c in state["clients"].items():
             name = c.get("name") or pk[:8]
             if c.get("outbound") == target:
@@ -128,6 +130,41 @@ class Store:
                     if rule["outbound"] == target:
                         refs.append(Store._rule_ref(rule, i, name))
         return refs
+
+    @staticmethod
+    def replace_outbound(state: dict, target: str, new: str, spare: str | None = None) -> None:
+        """Все ссылки на выход target (как в outbound_refs) → new. Там, где new не подходит
+        (резерв самого выхода new; Telegram и «блок»), берётся spare, затем «напрямую»;
+        лимит выхода, который указал бы на сам выход, становится «только сообщить».
+        Правила клиентов меняются и в режиме «как у всех»: иначе при переключении на свои
+        правила в них всплыл бы удалённый выход."""
+        def pick(own: str | None = None, allow_block: bool = True, last: str = "direct") -> str:
+            for c in (new, spare, last):
+                if c and c != target and c != own and (allow_block or c != "block"):
+                    return c
+            return last
+
+        r = state["routing"]
+        if r["default"] == target:
+            r["default"] = pick()
+        for rule in r["rules"]:
+            if rule["outbound"] == target:
+                rule["outbound"] = pick()
+        for u in state["upstreams"]:
+            own = "up:" + u["id"]
+            if u.get("fallback") == target:
+                u["fallback"] = pick(own)
+            if u.get("quota_action") == target:
+                u["quota_action"] = "notify" if new == own else pick(own, last="notify")
+        for c in state["clients"].values():
+            if c.get("outbound") == target:
+                c["outbound"] = pick()
+            for rule in c.get("rules") or []:
+                if rule.get("outbound") == target:
+                    rule["outbound"] = pick()
+        tg = state.get("settings", {}).get("telegram") or {}
+        if tg.get("via") == target:
+            tg["via"] = pick(allow_block=False)
 
     @staticmethod
     def list_refs(state: dict, lid: str) -> list[Msg]:

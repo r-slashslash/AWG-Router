@@ -655,6 +655,24 @@ class Engine:
                 self._stop_all()
 
     # ---------------------------------------------------------------- tools
+    def own_route(self, out: str) -> tuple[int, int] | None:
+        """Путь для собственных запросов панели (Telegram): None — напрямую из панели,
+        (PID, fwmark) — через туннель выхода в сети сервера AWG. Выход выбирается так же,
+        как для клиентов: не работает — его резервный выход."""
+        if out == "direct" or config.DRY_RUN:
+            return None
+        name = (Store.upstream(self.store.snapshot(), out[3:]) or {}).get("name", out) \
+            if out.startswith("up:") else out
+        eff = self.resolve(out, self.store.snapshot())
+        if eff == "direct":
+            return None
+        if eff == "block":
+            raise system.SysError(Msg("tg.via_blocked", name=name))
+        t = self.target
+        if not t or eff not in {r.num for r in self.rt.values()}:
+            raise system.SysError(Msg("tg.via_down", name=name))
+        return t.pid, nftgen.mark_for(eff)
+
     def probe(self, out: str) -> dict:
         """Проверка выхода: внешний IP, страна, задержка."""
         t = self.target

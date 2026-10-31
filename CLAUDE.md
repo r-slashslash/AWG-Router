@@ -32,6 +32,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/selfupdate.py` | Update from the panel: `install.sh --update` on the host via `nsenter -t 1` + `systemd-run --unit awg-router-update` (outside the panel container's cgroup, survives its recreation); output in `data/update.log` ending with `exit=N`, state in `data/update.json`; host install dir from the Compose label `com.docker.compose.project.working_dir` (or the `/data` mount source) |
 | `app/static/share.html`, `share.js` | Public personal page of a client: `/s/<token>` + `/s/api/<token>` + `/s/assets/<whitelisted file>` — **outside the secret path, no login** (token in `state.shares`; unknown tokens → 404) |
 | `app/notify.py` | Optional Telegram notifications (`settings.telegram`, token never sent to the browser): engine events, sign-ins, TLS renewal failure; queue + 5-min dedupe. **Only place with server-side texts** (`TEXTS`, 4 languages) because messages go to Telegram, not the browser |
+| `app/tgreq.py` | Telegram request through an exit: run as `nsenter -t PID -n -- python3 tgreq.py <fwmark>` (like `probe.py`); request on stdin, JSON answer on stdout; A record looked up through the tunnel (UDP DNS to 1.1.1.1 / 8.8.8.8) because local DNS spoofs blocked names |
 | `app/web.py` | HTTP server: routing, JSON, static (ETag/304), TLS + plain-HTTP→HTTPS redirect, 4 MB body limit, strict `Content-Length`, body draining, ≤ 128 connections (≤ 24 per IP), 60 s idle timeout |
 | `app/engine.py` | Reconcile loop: discover target, start exit tunnels `awgrN`, build/apply nftables, ip rules, health |
 | `app/nftgen.py` | nftables ruleset generator (table `ip awgr`, chains `c_prerouting`/`c_forward`/`c_postrouting`); `acct_ruleset` — separate counting table `ip awgr_acct` (dynamic sets `up`/`down` keyed `client ip . ifname`, forward hook at priority filter+10) |
@@ -119,6 +120,15 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   only a new client config. A preset is stored by name, so fixing a preset reaches clients with
   their next config. Per-client data lives in `state.cps` (not `state.clients`, which `put_client`
   rebuilds); deleting a client drops it.
+- Telegram path (`settings.telegram.via`: `direct` | `up:<id>`, never `block`): `notify.router` (set in
+  `main.py`) → `engine.own_route` → `None` (urllib from the panel) or `(pid, fwmark)` → `tgreq.py`
+  in the AWG server's network. Follows `resolve()` (dead exit → its fallback); the exit counts as a
+  reference (`ref.telegram`). `NotifyError.msg` carries a `Msg` for errors of our own, so
+  `notify_error` / `backup_error` may be `{"$t": …}` — render them with `tm()`.
+- Deleting an exit: `DELETE /api/upstreams/<id>` with `{"replace": out}` runs
+  `Store.replace_outbound(st, target, new, spare=its fallback)` over every place `outbound_refs`
+  knows (plus client rules in "inherit" mode); without `replace` an exit in use is refused as
+  before. A new place that can point to an exit must be added to **both** functions.
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 
