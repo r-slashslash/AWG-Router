@@ -177,36 +177,37 @@ select { appearance: none; padding-inline-end: 30px; cursor: pointer;
 .line .sub { font-weight: 400; color: var(--muted); }
 
 /* ---------- route map ---------- */
-.map { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 18px; align-items: stretch; }
-.map-hub {
-  writing-mode: vertical-rl; transform: rotate(180deg); text-align: center; font-weight: 600;
-  padding: 14px 8px; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: .9rem;
-  display: flex; align-items: center; justify-content: center; gap: 8px; letter-spacing: .01em;
-}
 .map-lines { display: grid; gap: 10px; min-width: 0; }
+/* выход на «Обзоре»: карточка с цветной полосой у начала (как на вкладке «Выходы») */
 .track {
   --c: var(--direct);
-  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px;
-  padding-block: 12px; padding-inline: 0 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--rule);
-  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 12px 14px; padding-inline-start: 20px; border-radius: 10px; background: var(--surface); border: 1px solid var(--rule);
+  position: relative; overflow: hidden;
 }
-.track-rail { height: 6px; background: var(--c); border-start-end-radius: 3px; border-end-end-radius: 3px; position: relative; }
-.track-rail::after { content: ""; position: absolute; inset-inline-end: -8px; top: -5px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); border: 4px solid var(--c); box-sizing: border-box; }
-.track.dead .track-rail { background: repeating-linear-gradient(90deg, var(--c) 0 6px, transparent 6px 11px); }
-.track.direct .track-rail { height: 2px; }
+.track::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 0; width: 5px; background: var(--c); }
+.track.dead::before { background: repeating-linear-gradient(180deg, var(--c) 0 6px, transparent 6px 11px); }
 .track-body { min-width: 0; }
 .track-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .track-title h3 { font-size: 1.02rem; }
-.track-meta { font-size: .85rem; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-top: 2px; }
+.track-meta { font-size: .85rem; color: var(--muted); display: flex; gap: 4px 12px; flex-wrap: wrap; margin-top: 2px; }
 .track-side { text-align: end; display: grid; gap: 4px; justify-items: end; }
 .track-count { font-size: 1.35rem; font-weight: 650; line-height: 1; }
 .track-count small { display: block; font-size: .75rem; color: var(--muted); font-weight: 400; margin-top: 3px; }
+/* «Обзор»: заголовки обеих колонок — в одной строке сетки, поэтому карточки начинаются на одной линии;
+   кнопка всегда справа от заголовка */
+.ov-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "h1 h2" "c1 c2"; gap: 0 20px; align-items: start; margin-bottom: 28px; }
+.ov-h1 { grid-area: h1; } .ov-h2 { grid-area: h2; } .ov-c1 { grid-area: c1; } .ov-c2 { grid-area: c2; min-width: 0; }
+.ov-head { flex-wrap: nowrap; align-items: flex-start; }
+.ov-head > div { min-width: 0; flex: 1; }
+.ov-head > .btn { flex: none; }
+@media (max-width: 860px) {
+  .ov-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "h1" "c1" "h2" "c2"; }
+  .ov-c1 { margin-bottom: 24px; }
+}
 .probe-res { font-size: .84rem; color: var(--ink-2); }
 @media (max-width: 560px) {
-  .map { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .map-hub { writing-mode: horizontal-tb; transform: none; padding: 10px; }
-  .track { grid-template-columns: 22px minmax(0, 1fr); }
-  .track-side { grid-column: 2; display: flex; flex-wrap: wrap; text-align: start; align-items: center; justify-content: flex-start; gap: 6px 12px; min-width: 0; }
+  .track-side { grid-column: 1 / -1; display: flex; flex-wrap: wrap; text-align: start; align-items: center; justify-content: flex-start; gap: 6px 12px; min-width: 0; }
 }
 
 /* ---------- state dot ---------- */
@@ -334,8 +335,6 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 
 /* ---------- справа налево ---------- */
 [dir="rtl"] select { background-position: left 11px center; }
-[dir="rtl"] .map-hub { transform: none; writing-mode: vertical-rl; }
-@media (max-width: 560px) { [dir="rtl"] .map-hub { writing-mode: horizontal-tb; } }
 [dir="rtl"] .brand-mark { transform: scaleX(-1); }
 :lang(fa) body, :lang(fa) button, :lang(fa) input, :lang(fa) select { line-height: 1.6; }
 :lang(zh) .muted, :lang(fa) .muted { letter-spacing: 0; }
