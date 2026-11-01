@@ -1466,8 +1466,6 @@ Object.assign(I18N.ru, {
   "sy.update_log": "Журнал обновления",
   "sy.update_retry": "Попробовать снова",
   "sy.update_done": "Панель обновлена до версии {version}",
-  "sy.install": "Установить как приложение",
-  "sy.install_hint": "Панель можно добавить на главный экран телефона: меню браузера → «Добавить на главный экран» (в Safari — «Поделиться» → «На экран „Домой“»).",
   "err.update_running": "Обновление уже идёт",
   "err.update_none": "Новой версии нет",
   "err.update_dir": "Не найден каталог установки панели — обновите на сервере командой awg-router update",
@@ -1512,8 +1510,6 @@ Object.assign(I18N.en, {
   "sy.update_log": "Update log",
   "sy.update_retry": "Try again",
   "sy.update_done": "The panel is updated to version {version}",
-  "sy.install": "Install as an app",
-  "sy.install_hint": "You can add the panel to your phone's home screen: browser menu → “Add to Home screen” (in Safari: Share → “Add to Home Screen”).",
   "err.update_running": "An update is already running",
   "err.update_none": "There is no new version",
   "err.update_dir": "The panel's install folder was not found — update on the server with awg-router update",
@@ -1558,8 +1554,6 @@ Object.assign(I18N.zh, {
   "sy.update_log": "更新日志",
   "sy.update_retry": "重试",
   "sy.update_done": "面板已更新到版本 {version}",
-  "sy.install": "安装为应用",
-  "sy.install_hint": "可以把面板添加到手机主屏幕：浏览器菜单 →「添加到主屏幕」（Safari 中为「分享」→「添加到主屏幕」）。",
   "err.update_running": "更新已在进行中",
   "err.update_none": "没有新版本",
   "err.update_dir": "找不到面板的安装目录——请在服务器上运行 awg-router update 更新",
@@ -1604,8 +1598,6 @@ Object.assign(I18N.fa, {
   "sy.update_log": "گزارش به‌روزرسانی",
   "sy.update_retry": "دوباره امتحان کنید",
   "sy.update_done": "پنل به نسخهٔ {version} به‌روز شد",
-  "sy.install": "نصب به‌صورت برنامه",
-  "sy.install_hint": "می‌توانید پنل را به صفحهٔ اصلی گوشی اضافه کنید: منوی مرورگر ← «افزودن به صفحهٔ اصلی» (در Safari: اشتراک‌گذاری ← «افزودن به صفحهٔ اصلی»).",
   "err.update_running": "به‌روزرسانی در حال انجام است",
   "err.update_none": "نسخهٔ تازه‌ای نیست",
   "err.update_dir": "پوشهٔ نصب پنل پیدا نشد — روی سرور با awg-router update به‌روزرسانی کنید",
@@ -1875,6 +1867,7 @@ Object.assign(I18N.ru, {
   "tg.act_backup": "Telegram: резервная копия отправлена по команде",
   "ev.client_first": "Клиент «{name}» подключился впервые",
   "tg.act_update": "Telegram: запущено обновление до {version}",
+  "tg.act_delete": "Telegram: клиент «{name}» удалён",
 });
 Object.assign(I18N.en, {
   "tg.control_title": "Control from Telegram",
@@ -1893,6 +1886,7 @@ Object.assign(I18N.en, {
   "tg.act_backup": "Telegram: backup sent on request",
   "ev.client_first": "Client “{name}” connected for the first time",
   "tg.act_update": "Telegram: update to {version} started",
+  "tg.act_delete": "Telegram: client “{name}” deleted",
 });
 Object.assign(I18N.zh, {
   "tg.control_title": "通过 Telegram 控制",
@@ -1911,6 +1905,7 @@ Object.assign(I18N.zh, {
   "tg.act_backup": "Telegram：已按命令发送备份",
   "ev.client_first": "客户端“{name}”首次连接",
   "tg.act_update": "Telegram：已开始更新到 {version}",
+  "tg.act_delete": "Telegram：客户端“{name}”已删除",
 });
 Object.assign(I18N.fa, {
   "tg.control_title": "کنترل از تلگرام",
@@ -1929,6 +1924,7 @@ Object.assign(I18N.fa, {
   "tg.act_backup": "تلگرام: پشتیبان به درخواست فرستاده شد",
   "ev.client_first": "کلاینت «{name}» برای نخستین بار وصل شد",
   "tg.act_update": "تلگرام: به‌روزرسانی به {version} آغاز شد",
+  "tg.act_delete": "تلگرام: کلاینت «{name}» حذف شد",
 });
 
 // бот-пульт: последняя команда и часы (1.10.5)
@@ -1947,6 +1943,72 @@ Object.assign(I18N.zh, {
 Object.assign(I18N.fa, {
   "tg.bot_last": "آخرین دستور: {time}",
   "tg.bot_skew": "ساعت سرور حدود {n} دقیقه با تلگرام اختلاف دارد. ربات این را در نظر می‌گیرد، اما ورود با کد برنامهٔ احراز هویت به ساعت وابسته است — همگام‌سازی زمان را روشن کنید (timedatectl set-ntp true).",
+});
+
+/* 1.11.0: резервная копия с паролем, приложение на телефоне */
+Object.assign(I18N.ru, {
+  "bk.pw": "Пароль (необязательно)", "bk.pw_repeat": "Повторите пароль",
+  "bk.pw_hint": "С паролем файл будет зашифрован: открыть его можно только с этим паролем, в том числе вам — запишите его. Без пароля скачается обычный файл.",
+  "bk.pw_rules": "Не короче 8 символов.",
+  "bk.pw_short": "Пароль короче 8 символов", "bk.pw_mismatch": "Пароли не совпадают",
+  "bk.saved_enc": "Зашифрованная копия скачана",
+  "app.btn": "📱 Установить на телефон", "app.title": "Приложение на телефоне",
+  "app.what": "Панель появится на главном экране с иконкой и будет открываться отдельным окном, без адресной строки, как обычное приложение. Вход — по тому же паролю.",
+  "app.scan": "Отсканируйте QR-код камерой телефона, войдите в панель и добавьте её на главный экран:",
+  "app.how": "Добавьте панель на главный экран:",
+  "app.android": "Android, Chrome: меню ⋮ → «Добавить на главный экран» или «Установить приложение».",
+  "app.ios": "iPhone и iPad, Safari: «Поделиться» → «На экран „Домой“».",
+  "app.install": "Установить",
+  "app.ssh": "Панель открывается только через SSH-туннель, поэтому на телефоне её не открыть без SSH-клиента с пробросом порта.",
+  "app.selfsigned": "Сертификат панели самоподписанный: телефон предупредит о нём и может не дать установить приложение. С сертификатом Let's Encrypt этого нет.",
+});
+Object.assign(I18N.en, {
+  "bk.pw": "Password (optional)", "bk.pw_repeat": "Repeat the password",
+  "bk.pw_hint": "With a password the file is encrypted: it opens only with this password, for you too — write it down. Without one you get a plain file.",
+  "bk.pw_rules": "At least 8 characters.",
+  "bk.pw_short": "The password is shorter than 8 characters", "bk.pw_mismatch": "The passwords do not match",
+  "bk.saved_enc": "Encrypted backup downloaded",
+  "app.btn": "📱 Install on a phone", "app.title": "App on a phone",
+  "app.what": "The panel gets an icon on the home screen and opens in its own window, without the address bar, like a normal app. Sign-in uses the same password.",
+  "app.scan": "Scan the QR code with the phone's camera, sign in and add the panel to the home screen:",
+  "app.how": "Add the panel to the home screen:",
+  "app.android": "Android, Chrome: menu ⋮ → “Add to Home screen” or “Install app”.",
+  "app.ios": "iPhone and iPad, Safari: Share → “Add to Home Screen”.",
+  "app.install": "Install",
+  "app.ssh": "The panel opens only through an SSH tunnel, so a phone cannot open it without an SSH client with port forwarding.",
+  "app.selfsigned": "The panel's certificate is self-signed: the phone warns about it and may refuse to install the app. A Let's Encrypt certificate does not have this problem.",
+});
+Object.assign(I18N.zh, {
+  "bk.pw": "密码（可选）", "bk.pw_repeat": "再次输入密码",
+  "bk.pw_hint": "设置密码后文件会被加密：只有用这个密码才能打开，您自己也一样——请记下密码。不设密码则下载普通文件。",
+  "bk.pw_rules": "至少 8 个字符。",
+  "bk.pw_short": "密码少于 8 个字符", "bk.pw_mismatch": "两次输入的密码不一致",
+  "bk.saved_enc": "加密备份已下载",
+  "app.btn": "📱 安装到手机", "app.title": "手机上的应用",
+  "app.what": "面板会以图标出现在主屏幕上，并在独立窗口中打开，没有地址栏，就像普通应用一样。登录使用同一个密码。",
+  "app.scan": "用手机相机扫描二维码，登录面板，然后把它添加到主屏幕：",
+  "app.how": "把面板添加到主屏幕：",
+  "app.android": "Android，Chrome：菜单 ⋮ →「添加到主屏幕」或「安装应用」。",
+  "app.ios": "iPhone 和 iPad，Safari：「分享」→「添加到主屏幕」。",
+  "app.install": "安装",
+  "app.ssh": "面板只能通过 SSH 隧道打开，因此手机上没有支持端口转发的 SSH 客户端就无法打开。",
+  "app.selfsigned": "面板证书是自签名的：手机会对此发出警告，并可能不允许安装应用。使用 Let's Encrypt 证书则没有这个问题。",
+});
+Object.assign(I18N.fa, {
+  "bk.pw": "رمز (اختیاری)", "bk.pw_repeat": "تکرار رمز",
+  "bk.pw_hint": "با رمز، فایل رمزگذاری می‌شود: فقط با همین رمز باز می‌شود، برای خودتان هم — آن را یادداشت کنید. بدون رمز، فایل معمولی دانلود می‌شود.",
+  "bk.pw_rules": "دست‌کم ۸ نویسه.",
+  "bk.pw_short": "رمز کوتاه‌تر از ۸ نویسه است", "bk.pw_mismatch": "رمزها یکسان نیستند",
+  "bk.saved_enc": "پشتیبان رمزگذاری‌شده دانلود شد",
+  "app.btn": "📱 نصب روی گوشی", "app.title": "برنامه روی گوشی",
+  "app.what": "پنل با یک نماد روی صفحهٔ اصلی قرار می‌گیرد و در پنجرهٔ جداگانه، بدون نوار نشانی، مثل یک برنامهٔ معمولی باز می‌شود. ورود با همان رمز است.",
+  "app.scan": "کد QR را با دوربین گوشی اسکن کنید، وارد پنل شوید و آن را به صفحهٔ اصلی اضافه کنید:",
+  "app.how": "پنل را به صفحهٔ اصلی اضافه کنید:",
+  "app.android": "اندروید، Chrome: منوی ⋮ ← «افزودن به صفحهٔ اصلی» یا «نصب برنامه».",
+  "app.ios": "آیفون و آیپد، Safari: اشتراک‌گذاری ← «افزودن به صفحهٔ اصلی».",
+  "app.install": "نصب",
+  "app.ssh": "پنل فقط از طریق تونل SSH باز می‌شود، بنابراین گوشی بدون برنامهٔ SSH با هدایت پورت نمی‌تواند آن را باز کند.",
+  "app.selfsigned": "گواهی پنل خودامضا است: گوشی دربارهٔ آن هشدار می‌دهد و ممکن است اجازهٔ نصب برنامه را ندهد. گواهی Let's Encrypt این مشکل را ندارد.",
 });
 
 /* Разделители: перечисление, фразы, ссылки */

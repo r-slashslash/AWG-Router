@@ -1378,7 +1378,8 @@ function viewSystem() {
     <div class="panel panel-pad">
       <div class="kv">
         <div><span>${esc(t("sy.url"))}</span><b><bdi>${esc(P.url || "—")}</bdi></b></div>
-        <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b></div>
+        <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b>
+          ${standalone() ? "" : `<div style="margin-top:6px"><button type="button" class="btn sm" id="app-phone">${esc(t("app.btn"))}</button></div>`}</div>
         <div><span>${esc(t("sy.cert"))}</span><b>${esc(tlsLine)}</b></div>
         <div><span>${esc(t("sy.version"))}</span><b>${esc((S.version || {}).current || "—")}</b></div>
       </div>
@@ -1387,9 +1388,7 @@ function viewSystem() {
       <div class="actions" style="margin-top:12px">
         ${T.mode === "letsencrypt" ? `<button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button>` : ""}
         <button class="btn sm" id="upd-check">${esc(t("sy.check_updates"))}</button>
-        ${installPrompt ? `<button class="btn sm" id="app-install">${esc(t("sy.install"))}</button>` : ""}
       </div>
-      ${!installPrompt && !standalone() && matchMedia("(pointer: coarse)").matches ? `<p class="small muted" style="margin:10px 0 0">${esc(t("sy.install_hint"))}</p>` : ""}
     </div>
   </section>
   <div class="grid2 pair even">
@@ -1469,6 +1468,40 @@ let installPrompt = null;   // Chrome/Edge: событие, которое по�
 window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; if (S && tab === "system") render(); });
 window.addEventListener("appinstalled", () => { installPrompt = null; if (S && tab === "system") render(); });
 function standalone() { return matchMedia("(display-mode: standalone)").matches || navigator.standalone === true; }
+/** «Установить на телефон»: на телефоне — системное окно установки (Chrome) или как добавить вручную;
+ *  на компьютере — QR-код адреса панели, чтобы открыть её на телефоне. */
+function installApp() {
+  const P = S.panel || {};
+  const phone = matchMedia("(pointer: coarse)").matches;
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const steps = `<ul class="small" style="margin:0 0 10px;padding-inline-start:20px">
+      ${!phone || !ios ? `<li>${esc(t("app.android"))}</li>` : ""}
+      ${!phone || ios ? `<li>${esc(t("app.ios"))}</li>` : ""}</ul>`;
+  let body;
+  if (P.access === "ssh") {
+    body = `<p style="margin-top:0">${esc(t("app.ssh"))}</p>`;
+  } else if (phone) {
+    body = `<p style="margin-top:0">${esc(t("app.what"))}</p>
+      ${installPrompt ? "" : `<p class="small" style="margin:0 0 6px">${esc(t("app.how"))}</p>${steps}`}`;
+  } else {
+    body = `<p style="margin-top:0">${esc(t("app.what"))}</p>
+      <div class="connect">
+        <div class="qr-box">${qrSvg(P.url || location.href)}</div>
+        <div><p class="small" style="margin:0 0 6px">${esc(t("app.scan"))}</p>${steps}</div>
+      </div>`;
+  }
+  if (P.access !== "ssh" && (P.tls || {}).active === "selfsigned") body += `<p class="muted small" style="margin:10px 0 0">${esc(t("app.selfsigned"))}</p>`;
+  const go = phone && installPrompt && P.access !== "ssh";
+  openModal(t("app.title"), body,
+    go ? `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="app-install">${esc(t("app.install"))}</button>`
+       : `<button class="btn primary" data-close>${esc(t("btn.close"))}</button>`);
+  if (go) $("#app-install").onclick = async () => {
+    closeModal();
+    installPrompt.prompt();
+    try { await installPrompt.userChoice; } catch { /* окно закрыли */ }
+    installPrompt = null; render();
+  };
+}
 
 /* ===================================================== обновление панели */
 // версия, до которой идёт обновление (переживает перезагрузку страницы и перезапуск панели)
@@ -1520,12 +1553,8 @@ function updateNotice() {
       <span class="small muted">${th("sy.update_cli", { cmd: `<bdi class="mono">awg-router update</bdi>` })}</span></div></div>`;
 }
 function bindUpdate() {
-  const inst = $("#app-install");
-  if (inst) inst.onclick = async () => {
-    installPrompt.prompt();
-    try { await installPrompt.userChoice; } catch { /* окно закрыли */ }
-    installPrompt = null; render();
-  };
+  const ph = $("#app-phone");
+  if (ph) ph.onclick = installApp;
   if (updState().state === "failed" && !updLog.length && (S.version || {}).available) loadUpdateLog();
   $("#upd-check").onclick = async () => {
     const b = $("#upd-check"); b.disabled = true;
@@ -1711,22 +1740,14 @@ function viewBackup() {
       <div class="actions">
         <button class="btn sm primary" id="bk-save">${esc(t("bk.download"))}</button>
         <label class="btn sm" for="bk-file">${esc(t("bk.restore"))}</label>
-        <input type="file" id="bk-file" accept=".json,application/json" hidden>
+        <input type="file" id="bk-file" accept=".json,.enc,application/json" hidden>
       </div>
       <p class="muted small" style="margin:12px 0 0">${esc(t("bk.secret"))}</p>
     </div>
   </section>`;
 }
 function bindBackup() {
-  $("#bk-save").onclick = async () => {
-    try {
-      const b = await api("GET", "backup");
-      const d = new Date();
-      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      download(`awg-router-backup-${(b.host || "server").replace(/[^\w.-]+/g, "_")}-${day}.json`, JSON.stringify(b, null, 1));
-      toast(t("bk.saved"));
-    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
-  };
+  $("#bk-save").onclick = saveBackup;
   $("#bk-file").onchange = async (ev) => {
     const file = ev.target.files[0];
     ev.target.value = "";
@@ -1738,7 +1759,44 @@ function bindBackup() {
     showRestore(b);
   };
 }
-/** копия, зашифрованная паролем (из Telegram): пароль → сервер расшифровывает → обычное восстановление */
+/** «Скачать копию»: пароль необязателен; с ним файл шифруется на сервере (как копии в Telegram) */
+function saveBackup() {
+  const f = (id, key) => `<label class="field"><span>${esc(t(key))}</span><input type="password" id="${id}" autocomplete="new-password" maxlength="128" dir="ltr"></label>`;
+  openModal(t("bk.download"), `
+    <p style="margin-top:0">${esc(t("bk.pw_hint"))}</p>
+    ${f("bk-pw1", "bk.pw")}
+    ${f("bk-pw2", "bk.pw_repeat")}
+    <p class="muted small" style="margin:0">${esc(t("bk.pw_rules"))}</p>`,
+  `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="bk-go">${esc(t("bk.download"))}</button>`);
+  $("#bk-pw1").focus();
+  const go = async () => {
+    const pw = $("#bk-pw1").value;
+    if (pw && pw.length < 8) { toast(t("bk.pw_short"), true); $("#bk-pw1").focus(); return; }
+    if (pw !== $("#bk-pw2").value) { toast(t("bk.pw_mismatch"), true); $("#bk-pw2").select(); return; }
+    $("#bk-go").disabled = true;
+    try {
+      const host = (S.panel && S.panel.host) || "";
+      const d = new Date();
+      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const name = (h) => `awg-router-backup-${(h || "server").replace(/[^\w.-]+/g, "_")}-${day}.json`;
+      if (pw) {
+        const r = await api("POST", "backup/encrypted", { password: pw });
+        const bin = atob(r.data), bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        download(name(r.host || host) + ".enc", bytes);
+        toast(t("bk.saved_enc"));
+      } else {
+        const b = await api("GET", "backup");
+        download(name(b.host), JSON.stringify(b, null, 1));
+        toast(t("bk.saved"));
+      }
+      closeModal();
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); $("#bk-go").disabled = false; }
+  };
+  $("#bk-go").onclick = go;
+  $$("#bk-pw1, #bk-pw2").forEach((el) => el.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+}
+/** копия, зашифрованная паролем (из Telegram или скачанная с паролем): пароль → сервер расшифровывает → обычное восстановление */
 function decryptBackup(bytes) {
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));

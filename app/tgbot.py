@@ -31,17 +31,18 @@ OLD = 600                 # сообщения старше (например, �
 ASK_TTL = 900             # сколько ждём ответа на «как назвать клиента?»
 DAY = 86400
 GB = 1024 ** 3
-COMMANDS = ("status", "clients", "add", "exits", "route", "backup", "help")
+COMMANDS = ("status", "clients", "add", "exits", "route", "backup", "panel", "help")
 
 TEXTS = {
     "ru": {
         "help": "🤖 <b>Пульт AWG Router</b>\n"
                 "/status — сервер, клиенты и выходы\n"
-                "/clients — клиенты: включить, выключить, QR, продлить\n"
+                "/clients — клиенты: включить, выключить, QR, продлить, удалить\n"
                 "/add — новый клиент\n"
                 "/exits — выходы: проверить, сменить основной\n"
                 "/route — куда пойдёт трафик до адреса или домена\n"
-                "/backup — резервная копия сейчас",
+                "/backup — резервная копия сейчас\n"
+                "/panel — ссылка на панель",
         "cmd_status": "Сервер, клиенты и выходы", "cmd_clients": "Клиенты", "cmd_add": "Новый клиент",
         "cmd_exits": "Выходы", "cmd_route": "Куда пойдёт трафик до адреса",
         "cmd_backup": "Резервная копия сейчас", "cmd_help": "Что умеет бот",
@@ -105,15 +106,25 @@ TEXTS = {
         "gone": "Такого клиента больше нет.", "gone_exit": "Такого выхода больше нет.",
         "fail": "⚠️ Не получилось: {error}", "cancelled": "Отменено.",
         "unknown": "Не знаю такой команды. /help — что я умею.",
+        "start": "🤖 <b>Пульт AWG Router</b>\n/help — команды",
+        "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
+        "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
+        "pn_ssh": "🖥 Панель открывается только через SSH-туннель. Запустите на своём компьютере\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\nи откройте {url}",
+        "b_delete": "🗑 Удалить", "b_delete_go": "🗑 Да, удалить",
+        "del_ask": "Удалить клиента <b>{name}</b>?\nЕго конфиг перестанет работать, срок, лимиты и личная "
+                   "ссылка будут удалены. Отменить это нельзя.",
+        "ok_deleted": "🗑 «{name}» удалён",
     },
     "en": {
         "help": "🤖 <b>AWG Router remote</b>\n"
                 "/status — server, clients and exits\n"
-                "/clients — clients: turn on or off, QR, extend\n"
+                "/clients — clients: turn on or off, QR, extend, delete\n"
                 "/add — new client\n"
                 "/exits — exits: check, change the default\n"
                 "/route — where traffic to an address or domain goes\n"
-                "/backup — backup now",
+                "/backup — backup now\n"
+                "/panel — link to the panel",
         "cmd_status": "Server, clients and exits", "cmd_clients": "Clients", "cmd_add": "New client",
         "cmd_exits": "Exits", "cmd_route": "Where traffic to an address goes",
         "cmd_backup": "Backup now", "cmd_help": "What the bot can do",
@@ -177,15 +188,25 @@ TEXTS = {
         "gone": "This client no longer exists.", "gone_exit": "This exit no longer exists.",
         "fail": "⚠️ That didn't work: {error}", "cancelled": "Cancelled.",
         "unknown": "I don't know this command. /help — what I can do.",
+        "start": "🤖 <b>AWG Router remote</b>\n/help — commands",
+        "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
+        "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
+        "pn_ssh": "🖥 The panel opens only through an SSH tunnel. Run on your computer\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\nand open {url}",
+        "b_delete": "🗑 Delete", "b_delete_go": "🗑 Yes, delete",
+        "del_ask": "Delete client <b>{name}</b>?\nIts config stops working; its end date, limits and personal "
+                   "link are removed. This cannot be undone.",
+        "ok_deleted": "🗑 “{name}” deleted",
     },
     "zh": {
         "help": "🤖 <b>AWG Router 遥控</b>\n"
                 "/status — 服务器、客户端和出口\n"
-                "/clients — 客户端：启用、停用、二维码、延期\n"
+                "/clients — 客户端：启用、停用、二维码、延期、删除\n"
                 "/add — 新建客户端\n"
                 "/exits — 出口：检查、更换默认出口\n"
                 "/route — 访问某地址或域名的流量走哪里\n"
-                "/backup — 立即备份",
+                "/backup — 立即备份\n"
+                "/panel — 面板链接",
         "cmd_status": "服务器、客户端和出口", "cmd_clients": "客户端", "cmd_add": "新建客户端",
         "cmd_exits": "出口", "cmd_route": "访问某地址的流量走哪里",
         "cmd_backup": "立即备份", "cmd_help": "机器人能做什么",
@@ -247,15 +268,24 @@ TEXTS = {
         "gone": "该客户端已不存在。", "gone_exit": "该出口已不存在。",
         "fail": "⚠️ 操作失败：{error}", "cancelled": "已取消。",
         "unknown": "不认识这个命令。/help — 我能做什么。",
+        "start": "🤖 <b>AWG Router 遥控</b>\n/help — 命令",
+        "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
+        "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
+        "pn_ssh": "🖥 面板只能通过 SSH 隧道打开。请在您的电脑上运行\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\n然后打开 {url}",
+        "b_delete": "🗑 删除", "b_delete_go": "🗑 是的，删除",
+        "del_ask": "删除客户端 <b>{name}</b>？\n其配置将失效，有效期、限额和个人链接也会被删除。此操作无法撤销。",
+        "ok_deleted": "🗑 “{name}”已删除",
     },
     "fa": {
         "help": "🤖 <b>کنترل از راه دور AWG Router</b>\n"
                 "/status — سرور، کلاینت‌ها و خروجی‌ها\n"
-                "/clients — کلاینت‌ها: فعال و غیرفعال کردن، QR، تمدید\n"
+                "/clients — کلاینت‌ها: فعال و غیرفعال کردن، QR، تمدید، حذف\n"
                 "/add — کلاینت تازه\n"
                 "/exits — خروجی‌ها: بررسی، تغییر خروجی اصلی\n"
                 "/route — ترافیک به یک نشانی یا دامنه از کجا می‌رود\n"
-                "/backup — پشتیبان‌گیری همین حالا",
+                "/backup — پشتیبان‌گیری همین حالا\n"
+                "/panel — پیوند پنل",
         "cmd_status": "سرور، کلاینت‌ها و خروجی‌ها", "cmd_clients": "کلاینت‌ها", "cmd_add": "کلاینت تازه",
         "cmd_exits": "خروجی‌ها", "cmd_route": "ترافیک به یک نشانی از کجا می‌رود",
         "cmd_backup": "پشتیبان‌گیری همین حالا", "cmd_help": "ربات چه کارهایی می‌کند",
@@ -319,6 +349,15 @@ TEXTS = {
         "gone": "این کلاینت دیگر وجود ندارد.", "gone_exit": "این خروجی دیگر وجود ندارد.",
         "fail": "⚠️ انجام نشد: {error}", "cancelled": "لغو شد.",
         "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
+        "start": "🤖 <b>کنترل از راه دور AWG Router</b>\n‎/help — دستورها",
+        "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
+        "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
+        "pn_ssh": "🖥 پنل فقط از طریق تونل SSH باز می‌شود. روی رایانهٔ خود اجرا کنید\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\nو {url} را باز کنید",
+        "b_delete": "🗑 حذف", "b_delete_go": "🗑 بله، حذف کن",
+        "del_ask": "کلاینت <b>{name}</b> حذف شود؟\nکانفیگ آن دیگر کار نمی‌کند و تاریخ پایان، سقف‌ها و پیوند "
+                   "شخصی آن حذف می‌شوند. این کار برگشت‌پذیر نیست.",
+        "ok_deleted": "🗑 «{name}» حذف شد",
     },
 }
 
@@ -361,19 +400,19 @@ def fmt_date(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
-# Клавиатура внизу экрана после /start: (текст, команда). Нажатие присылает текст кнопки.
+# Клавиатура внизу экрана после /start: (текст, команда), по две в ряд. Нажатие присылает текст кнопки.
 MENU = (("b_status", "status"), ("b_clients", "clients"), ("b_exits", "exits"), ("b_add", "add"),
-        ("b_route", "route"), ("b_backup", "backup"))
+        ("b_panel", "panel"), ("b_backup", "backup"))
+# Кнопки прежних клавиатур: у людей они остаются на экране до следующего /start
+OLD_MENU = (("kbd_menu", "menu"), ("b_route", "route"))
 DENY_EVERY = 600          # «нет доступа» в один и тот же чужой чат — не чаще раза в 10 минут
 
 
 def menu_action(text: str) -> str | None:
     """Кнопка клавиатуры → команда. Надписи на всех языках: язык могли сменить после её отправки;
-    «☰ Меню» — кнопка из 1.10.0."""
+    «☰ Меню» — кнопка из 1.10.0, «🧭 Маршрут» — из 1.10.5."""
     for tx in TEXTS.values():
-        if text == tx["kbd_menu"]:
-            return "menu"
-        for key, cmd in MENU:
+        for key, cmd in MENU + OLD_MENU:
             if text == tx[key]:
                 return cmd
     return None
@@ -675,8 +714,12 @@ class Bot:
         return str(e)[:300]
 
     def on_command(self, c: dict, cmd: str, arg: str) -> None:
-        if cmd in ("start", "help", "menu"):
+        if cmd in ("start", "menu"):
+            self._send(c, tr(c["lang"], "start"), self._keyboard(c))
+        elif cmd == "help":
             self._send(c, tr(c["lang"], "help"), self._keyboard(c))
+        elif cmd == "panel":
+            self._guard(c, self.send_panel)
         elif cmd == "status":
             self._guard(c, self.show_status, None)
         elif cmd == "clients":
@@ -734,6 +777,11 @@ class Bot:
                 self.send_config(c, arg)
             elif op == "sh":
                 self.do_share(c, arg)
+            elif op == "dl":
+                self.ask_delete(c, arg, msg)
+            elif op == "dlgo":
+                toast = self.do_delete(c, arg)
+                self.show_clients(c, 0, msg)
             elif op == "add":
                 self.ask(c, "add")
             elif op == "rt":
@@ -918,7 +966,7 @@ class Bot:
         row1 = [(tr(L, "b_off"), "off:" + pk) if x.get("enabled") else (tr(L, "b_on"), "on:" + pk)]
         if x.get("has_config"):
             row1.append((tr(L, "b_config"), "cfg:" + pk))
-        row2 = [(tr(L, "b_share"), "sh:" + pk)]
+        row2 = [(tr(L, "b_share"), "sh:" + pk), (tr(L, "b_delete"), "dl:" + pk)]
         row3 = []
         if lim.get("expires"):
             row3.append((tr(L, "b_days"), "d30:" + pk))
@@ -1013,6 +1061,39 @@ class Bot:
         url = self.ops.share(pk)
         self._send(c, tr(c["lang"], "share", name=self._name(x), url=url))
         self.ops.audit(Msg("tg.act_share", name=self._name(x)))
+
+    def ask_delete(self, c: dict, pk: str, msg: dict | None) -> None:
+        """Удаление — только после подтверждения; «Отмена» возвращает карточку клиента."""
+        L = c["lang"]
+        x = self._client(pk)
+        self._show(c, tr(L, "del_ask", name=self._name(x)),
+                   kb([(tr(L, "b_delete_go"), "dlgo:" + pk), (tr(L, "b_cancel"), "c:" + pk)]), msg)
+
+    def do_delete(self, c: dict, pk: str) -> str:
+        x = self._client(pk)
+        self.ops.delete_client(pk)
+        self.ops.audit(Msg("tg.act_delete", name=self._name(x)))
+        for _ in range(20):           # список клиентов движка обновится после следующего опроса сервера
+            if not any(y["public_key"] == pk for y in self.ops.clients()):
+                break
+            self.ops.refresh_clients()
+            time.sleep(0.5)
+        return tr(c["lang"], "ok_deleted", False, name=self._name(x))
+
+    def send_panel(self, c: dict) -> None:
+        """Ссылка на панель. Предпросмотр ссылки выключен (notify.send): иначе Telegram
+        сам зашёл бы по секретному адресу."""
+        L = c["lang"]
+        p = self.ops.panel()
+        if p.get("ssh"):
+            self._send(c, tr(L, "pn_ssh", url=p["url"], port=p["port"], host=p.get("host") or "SERVER_IP"))
+            return
+        text = tr(L, "pn_text", url=p["url"])
+        try:
+            self._send(c, text, {"inline_keyboard": [[{"text": tr(L, "b_open", False), "url": p["url"]}]]})
+        except notify.NotifyError as e:
+            log.info("telegram: panel button refused (%s), sending the link only", e)
+            self._send(c, text)
 
     def _exit_name(self, uid: str) -> str:
         u = next((u for u in self.ops.snapshot().get("upstreams", []) if u["id"] == uid), None)
