@@ -381,5 +381,114 @@ class PanelTest(unittest.TestCase):
             e.sni = old
 
 
+# ------------------------------------------------------------------ бот: всё в одном сообщении
+class BotMenuTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        main.engine.reconcile()
+        if not any(c.get("has_config") for c in main.engine.clients):
+            main.bot_ops.add_client("Menu test")             # клиент с конфигом (QR и файл)
+            main.engine.reconcile()
+
+    def setUp(self):
+        from app import notify, tgbot
+        from tests.test_v19 import FakeTG, cfg
+        self.notify, self.tgbot = notify, tgbot
+        self.tg = FakeTG()
+        p = mock.patch.object(notify, "_post", self.tg)
+        p.start()
+        self.addCleanup(p.stop)
+        tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
+        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.c = cfg()
+        self.pk = next(c["public_key"] for c in main.engine.clients if c.get("has_config"))
+
+    def run_updates(self, *ups):
+        self.tg.updates = list(ups)
+        self.bot.poll_once(self.c, timeout=0)
+
+    def menu_id(self):
+        self.assertEqual(len(self.bot._panel_msgs), 1)
+        return self.bot._panel_msgs[0]
+
+    def press(self, data, uid=1):
+        from tests.test_v19 import button
+        self.run_updates(button(data, uid=uid, mid=self.menu_id()))
+
+    def last_screen(self):
+        return next(p for m, p in reversed(self.tg.calls) if m in ("sendMessage", "editMessageText"))
+
+    def test_navigation_edits_one_message(self):
+        from tests.test_v19 import msg
+        self.run_updates(msg("/start"))
+        mid = self.menu_id()
+        n_sent = self.tg.methods().count("sendMessage")
+        for i, data in enumerate(("cl:0", "c:" + self.pk, "cl:0", "m", "st", "m", "ex", "m")):
+            self.press(data, uid=i + 2)
+            self.assertEqual(self.tg.last("editMessageText")["message_id"], mid, data)
+        self.assertEqual(self.tg.methods().count("sendMessage"), n_sent)    # ни одного нового сообщения
+        self.assertEqual(self.menu_id(), mid)
+
+    def test_back_buttons(self):
+        from tests.test_v19 import msg
+        self.run_updates(msg("/start"))
+        for i, data in enumerate(("st", "cl:0", "ex", "pn", "up")):
+            self.press(data, uid=i + 2)
+            kb = self.last_screen()["reply_markup"]["inline_keyboard"]
+            cbs = [b.get("callback_data") for row in kb for b in row]
+            self.assertTrue("m" in cbs, (data, cbs))
+        self.press("c:" + self.pk, uid=9)
+        cbs = [b.get("callback_data") for row in self.last_screen()["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertIn("cl:0", cbs)
+        self.assertIn("m", cbs)
+
+    def test_new_menu_replaces_old(self):
+        from tests.test_v19 import msg
+        self.run_updates(msg("/start"))
+        old = self.menu_id()
+        self.run_updates(msg("/clients", uid=2))
+        self.assertNotEqual(self.menu_id(), old)
+        self.assertEqual(self.tg.last("deleteMessage")["message_id"], old)
+        # меню помнит себя после перезапуска панели
+        bot2 = self.tgbot.Bot(main.store, main.bot_ops)
+        self.assertEqual(bot2._panel_msgs, self.bot._panel_msgs)
+
+    def test_share_and_probe_stay_in_message(self):
+        from tests.test_v19 import msg
+        self.run_updates(msg("/start"))
+        mid = self.menu_id()
+        self.press("sh:" + self.pk, uid=2)
+        e = self.tg.last("editMessageText")
+        self.assertEqual(e["message_id"], mid)
+        self.assertIn("/s/", e["text"])                                  # личная ссылка — в карточке
+        uid = main.store.snapshot()["upstreams"][0]["id"] if main.store.snapshot()["upstreams"] else None
+        if uid:
+            self.press("pr:" + uid, uid=3)
+            e = self.tg.last("editMessageText")
+            self.assertEqual(e["message_id"], mid)
+            self.assertIn("🔍", e["text"])
+
+    def test_files_then_menu_below(self):
+        from tests.test_v19 import msg
+        self.run_updates(msg("/start"))
+        old = self.menu_id()
+        self.press("cfg:" + self.pk, uid=2)
+        m = self.tg.methods()
+        self.assertLess(m.index("sendDocument"), len(m) - 1 - m[::-1].index("sendMessage"))  # карточка — после файла
+        self.assertNotEqual(self.menu_id(), old)
+        self.assertIn(old, [p["message_id"] for x, p in self.tg.calls if x == "deleteMessage"])
+        self.assertIn("QR", self.tg.last("sendMessage")["text"])
+
+    def test_add_question_removed(self):
+        from tests.test_v19 import msg
+        self.run_updates(msg("/start"))
+        self.press("add", uid=2)
+        ask_id = self.tg.next_id
+        self.run_updates(msg("Menu friend", uid=3, reply_to_message={"message_id": ask_id}))
+        self.assertIn(ask_id, [p["message_id"] for x, p in self.tg.calls if x == "deleteMessage"])
+        self.assertTrue(any(c["name"] == "Menu friend" for c in main.engine.clients))
+        self.assertIn("Menu friend", self.tg.last("sendMessage")["text"])   # карточка нового клиента внизу
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,23 +40,33 @@ class BotUiTest(unittest.TestCase):
     def sent(self):
         return [p for m, p in self.tg.calls if m == "sendMessage"]
 
-    def keyboard(self):
-        return next(p["reply_markup"]["keyboard"] for p in reversed(self.sent())
-                    if "keyboard" in (p.get("reply_markup") or {}))
+    def menu(self):
+        """Кнопки меню из последнего сообщения: [[(текст, данные или ссылка)]]."""
+        p = self.sent()[-1]
+        return [[(b["text"], b.get("callback_data") or b.get("url")) for b in row]
+                for row in p["reply_markup"]["inline_keyboard"]]
 
     def test_start_opens_full_menu(self):
-        """/start — всё меню на клавиатуре внизу экрана."""
+        """/start — меню кнопками в одном сообщении (1.12.0), без клавиатуры внизу экрана."""
         self.run_updates(msg("/start"))
         self.assertIn("AWG Router remote", self.sent()[-1]["text"])
-        self.assertTrue(self.sent()[-1]["reply_markup"]["is_persistent"])
-        self.assertEqual([[b["text"] for b in row] for row in self.keyboard()],
+        self.assertNotIn("keyboard", self.sent()[-1]["reply_markup"])
+        m = self.menu()
+        self.assertEqual([[t for t, _ in row] for row in m],
                          [["📊 Status", "👥 Clients"], ["🌐 Exits", "➕ New client"], ["🖥 Panel", "💾 Backup"]])
+        self.assertEqual(m[2][0][1], main.panel_url())          # «Панель» — сразу ссылка
         self.c["lang"] = "ru"
         self.run_updates(msg("/start", uid=2))
-        self.assertEqual(self.keyboard()[0][0]["text"], "📊 Состояние")
+        self.assertEqual(self.menu()[0][0][0], "📊 Состояние")
 
     def test_keyboard_buttons(self):
+        """Надписи старой клавиатуры (1.10–1.11) понятны, а сама клавиатура убирается один раз."""
+        self.bot._st["kbd"] = "en"
         self.run_updates(msg("👥 Clients"))
+        removed = [p for m, p in self.tg.calls if m == "sendMessage" and (p.get("reply_markup") or {}).get("remove_keyboard")]
+        self.assertEqual(len(removed), 1)
+        self.assertIn("deleteMessage", self.tg.methods())       # служебное сообщение сразу удалено
+        self.assertNotIn("kbd", self.bot._st)
         self.assertIn("Clients", self.sent()[-1]["text"])
         self.run_updates(msg("📊 Состояние", uid=2))          # надпись на другом языке тоже понятна
         self.assertIn("Panel version", self.sent()[-1]["text"])
@@ -64,7 +74,8 @@ class BotUiTest(unittest.TestCase):
         self.assertTrue(self.sent()[-1]["reply_markup"]["force_reply"])
         self.run_updates(msg("192.168.0.5", uid=4, reply_to_message={"message_id": self.tg.next_id}))
         self.assertIn("local address", self.sent()[-1]["text"])
-        self.assertIn("keyboard", self.sent()[-1]["reply_markup"])  # клавиатура снова на месте
+        n = len([p for m, p in self.tg.calls if m == "sendMessage" and (p.get("reply_markup") or {}).get("remove_keyboard")])
+        self.assertEqual(n, 1)
 
     def test_inline_route_button_still_works(self):
         self.run_updates(button("rt"))
@@ -73,7 +84,7 @@ class BotUiTest(unittest.TestCase):
     def test_old_menu_button(self):
         self.run_updates(msg("☰ Меню"))           # кнопка из 1.10.0
         self.assertIn("AWG Router remote", self.sent()[-1]["text"])
-        self.assertIn("keyboard", self.sent()[-1]["reply_markup"])
+        self.assertIn("inline_keyboard", self.sent()[-1]["reply_markup"])
 
     def test_menu_button_cancels_question(self):
         self.run_updates(msg("/add"))
@@ -85,7 +96,7 @@ class BotUiTest(unittest.TestCase):
 
     def test_keyboard_removed_when_control_off(self):
         self.run_updates(msg("/help"))
-        self.assertEqual(self.bot._st.get("kbd"), "en")
+        self.bot._st["kbd"] = "en"                  # клавиатура осталась от 1.11.0
         self.bot._drop_commands(cfg(control=False))
         self.assertIn("deleteMyCommands", self.tg.methods())
         self.assertTrue(self.sent()[-1]["reply_markup"]["remove_keyboard"])
@@ -93,7 +104,6 @@ class BotUiTest(unittest.TestCase):
         n = len(self.tg.calls)
         self.bot._drop_commands(cfg(control=False))  # второй раз — ничего не шлёт
         self.assertEqual(len(self.tg.calls), n)
-
 
 class FirstSeenTest(unittest.TestCase):
     def setUp(self):

@@ -2013,6 +2013,7 @@ Object.assign(I18N.fa, {
 
 /* 1.12.0: выходы SOCKS5 и правила по доменам для них (sniproxy.py) */
 Object.assign(I18N.ru, {
+  "ov.policy_sub": "Для клиентов без своих правил",
   "re.then_sites": "трафик к этим сайтам",
   "ov.socks_ms": "SOCKS5 · ответ {ms} мс",
   "ls.add_domains": "Домены", "ls.kind.domains": "Домены", "ls.new.domains": "Список доменов",
@@ -2055,6 +2056,7 @@ Object.assign(I18N.ru, {
   "ev.sni_failed": "Обработчик правил по доменам не запустился: {detail}",
 });
 Object.assign(I18N.en, {
+  "ov.policy_sub": "For clients without their own rules",
   "re.then_sites": "traffic to these sites",
   "ov.socks_ms": "SOCKS5 · answers in {ms} ms",
   "ls.add_domains": "Domains", "ls.kind.domains": "Domains", "ls.new.domains": "Domain list",
@@ -2097,6 +2099,7 @@ Object.assign(I18N.en, {
   "ev.sni_failed": "The domain rule handler did not start: {detail}",
 });
 Object.assign(I18N.zh, {
+  "ov.policy_sub": "适用于没有专属规则的客户端",
   "re.then_sites": "访问这些网站的流量",
   "ov.socks_ms": "SOCKS5 · 响应 {ms} 毫秒",
   "ls.add_domains": "域名", "ls.kind.domains": "域名", "ls.new.domains": "域名列表",
@@ -2139,6 +2142,7 @@ Object.assign(I18N.zh, {
   "ev.sni_failed": "域名规则处理程序未能启动：{detail}",
 });
 Object.assign(I18N.fa, {
+  "ov.policy_sub": "برای کلاینت‌هایی که قانون خودشان را ندارند",
   "re.then_sites": "ترافیک به این سایت‌ها",
   "ov.socks_ms": "SOCKS5 · پاسخ {ms} میلی‌ثانیه",
   "ls.add_domains": "دامنه‌ها", "ls.kind.domains": "دامنه‌ها", "ls.new.domains": "فهرست دامنه‌ها",

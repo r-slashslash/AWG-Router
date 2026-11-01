@@ -154,14 +154,17 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   before. A new place that can point to an exit must be added to **both** functions.
 - Telegram bot (1.9.0): callback data ≤ 64 bytes (`off:<pk>` is 48). Menu, list and card messages the bot
   sent itself are edited in place (`_panel_msgs`); a button under a notification opens a new message.
-  A pending question (`/add` or `/route` without an argument) waits 15 min for a reply. An update started
+  A pending question (`/add` or `/route` without an argument) waits 15 min for a reply; the question is deleted after it. An update started
   from the bot is remembered in `tgbot.json` and announced (done / failed) by the new panel.
-  `/start` sends a two-line greeting, `/help` the command list; both send the menu as a persistent reply keyboard
-  (`tgbot.MENU`, two per row: status|clients, exits|add, panel|backup). `menu_action` maps a pressed button's text
-  in any of the four languages to a command, also buttons of older keyboards (`OLD_MENU`: 1.10.0 "☰ Menu",
-  1.10.5 "🧭 Route" — `/route` stays as a command). `/panel` sends `panel_url()` with a URL button (falls back
-  to plain text if Telegram refuses the button; SSH-only mode sends the `ssh -N -L` command instead). Link
-  previews stay off (`notify.send`), or Telegram itself would open the secret path;
+  **One control message (1.12.0):** `/start` → `show_menu` = inline buttons (status|clients, exits|add,
+  panel|backup; Panel is a URL button to `panel_url()`, or the `pn` screen if Telegram refuses the URL / SSH
+  mode). Every screen is edited into that message (`_show`) and has **‹ Menu** (`m`); the card also ‹ Clients.
+  `_send(panel=True)` deletes older menu messages, so there is one; their ids live in `tgbot.json["panel"]`
+  (survive restarts). After files (QR/config, backup) the menu is re-sent below (`_move` / `show_*(msg=None)`).
+  Share link and exit probe go into the screen text (`note`). The old reply keyboard (1.10–1.11, `_st["kbd"]`)
+  is removed on the next command by sending a `remove_keyboard` message and deleting it; its button texts are
+  still understood (`menu_action`, `MENU` + `OLD_MENU`). `/route` stays as a command. Link previews stay off
+  (`notify.send`), or Telegram itself would open the secret path;
   `_drop_commands` removes the keyboard when control is turned off. A command from another chat is not run;
   in a private chat the bot answers "No access" with that chat's id (once per 10 min per chat). A webhook on
   the token (409 on getUpdates) is removed once by `_drop_webhook`.

@@ -206,7 +206,8 @@ class BotTest(unittest.TestCase):
         cbs = [b["callback_data"] for row in self.tg.last("sendMessage")["reply_markup"]["inline_keyboard"]
                for b in row]
         self.assertTrue(any(d.startswith("c:") for d in cbs))
-        self.assertFalse({"m", "add", "ex"} & set(cbs))    # главное меню — только внизу экрана
+        self.assertIn("m", cbs)                           # 1.12.0: «‹ Меню» — назад в меню
+        self.assertFalse({"add", "ex"} & set(cbs))
 
     def test_turn_off_and_on(self):
         self.run_updates(button("off:" + self.pk))

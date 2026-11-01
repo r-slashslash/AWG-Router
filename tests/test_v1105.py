@@ -209,37 +209,36 @@ class NoDuplicateMenuTest(unittest.TestCase):
         self.bot = tgbot.Bot(main.store, main.bot_ops)
 
     def inline(self, p):
-        return [b["callback_data"] for row in (p.get("reply_markup") or {}).get("inline_keyboard", []) for b in row]
+        return [b.get("callback_data") or b.get("url") for row in (p.get("reply_markup") or {}).get("inline_keyboard", []) for b in row]
 
     def test_screens_have_only_their_buttons(self):
+        """Экран — только свои кнопки и «‹ Меню» (1.12.0: всё управление в одном сообщении)."""
         for i, cmd in enumerate(("/status", "/clients", "/exits")):
             self.tg.updates = [msg(cmd, uid=i + 1)]
             self.bot.poll_once(cfg(), timeout=0)
             cbs = self.inline(self.tg.last("sendMessage"))
-            menu = {"m", "add", "rt", "bk", "cl:0"} | ({"ex"} if cmd != "/exits" else set())  # «ex» в выходах — «Обновить»
+            menu = {"add", "rt", "bk"} | ({"ex"} if cmd != "/exits" else set())  # «ex» в выходах — «Обновить»
             self.assertFalse(menu & set(cbs), (cmd, cbs))
+            self.assertEqual(cbs[-1], "m")
         self.tg.updates = [msg("/status", uid=9)]
         self.bot.poll_once(cfg(), timeout=0)
-        self.assertEqual(self.inline(self.tg.last("sendMessage")), ["st"])
+        self.assertEqual(self.inline(self.tg.last("sendMessage")), ["st", "m"])
 
     def test_start_and_help_list_commands(self):
-        """/start и /help — список команд и клавиатура, без строки «меню на кнопках внизу»."""
+        """/start — меню кнопками в сообщении, /help — список команд и «‹ Меню»; клавиатуры внизу нет."""
         self.tg.updates = [msg("/start"), msg("/help", uid=2)]
         self.bot.poll_once(cfg(), timeout=0)
         start, full = [p for m, p in self.tg.calls if m == "sendMessage"][-2:]
-        self.assertIn("/help", start["text"])           # 1.11.0: /start — коротко, /help — все команды
+        self.assertIn("/help", start["text"])
         self.assertIn("/clients", full["text"])
-        self.assertNotIn("bottom of the screen", full["text"])
         for p in (start, full):
-            self.assertIn("keyboard", p["reply_markup"])
-            self.assertNotIn("inline_keyboard", p["reply_markup"])
+            self.assertNotIn("keyboard", p["reply_markup"])
+            self.assertIn("inline_keyboard", p["reply_markup"])
+        self.assertEqual(self.inline(full), ["m"])
 
-    def test_old_menu_button_shows_no_second_menu(self):
+    def test_old_menu_button_opens_menu(self):
+        """«‹ Меню» в сообщении, которое уже не меню (например, после перезапуска), — новое меню."""
         self.tg.updates = [{"update_id": 1, "callback_query": {"id": "q", "data": "m",
                             "message": {"message_id": 5, "chat": {"id": int(CHAT)}}}}]
         self.bot.poll_once(cfg(), timeout=0)
-        self.assertEqual(self.inline(self.tg.last("sendMessage")), [])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertIn("st", self.inline(self.tg.last("sendMessage")))

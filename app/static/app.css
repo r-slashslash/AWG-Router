@@ -297,6 +297,8 @@ select { appearance: none; padding-inline-end: 30px; cursor: pointer;
 
 /* ---------- events ---------- */
 .events { list-style: none; margin: 0; padding: 0; }
+/* обзор: правая колонка — заголовки вне карточек, как слева, чтобы карточки начинались на одной линии */
+.ov-log { max-height: 520px; overflow-y: auto; padding-top: 8px; padding-bottom: 8px; }
 .events li { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: .88rem; }
 .events li:last-child { border-bottom: 0; }
 .events time { color: var(--muted); }
