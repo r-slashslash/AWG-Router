@@ -1,61 +1,117 @@
-# Каждому тегу vX.Y.Z — релиз с архивом кода awg-router.tar.gz.
-# install.sh скачивает именно его (releases/latest/download/awg-router.tar.gz), поэтому у файла
-# растёт счётчик скачиваний: установки и обновления панелей. Если релиз уже создан вручную,
-# архив просто прикладывается к нему (или заменяет прежний).
-name: Release archive
+# Релизы без ручного ввода тега.
+#
+# Каждый push в main: тесты, затем, если версия в app/version.py ещё не выпущена, — черновик
+# релиза v<VERSION> с архивом кода awg-router.tar.gz, его .sha256 и текстом из CHANGELOG.md.
+# Новые коммиты с той же версией обновляют этот черновик (архив, текст, коммит тега).
+# Владелец открывает Releases и нажимает Publish: тег создаётся при публикации, вводить его не нужно.
+#
+# install.sh скачивает именно этот архив (releases/latest/download/awg-router.tar.gz), поэтому у
+# файла растёт счётчик скачиваний: установки и обновления панелей.
+# Релиз, опубликованный вручную, проверяется: тег должен совпадать с VERSION, архив прикладывается,
+# если его нет.
+name: Release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag (vX.Y.Z) to build the archive for"
-        required: true
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+  group: release
   cancel-in-progress: false
 
 jobs:
-  archive:
+  draft:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          ref: refs/tags/${{ env.TAG }}
+          python-version: "3.13"
+
+      - name: Tests
+        run: python3 -m unittest discover tests
+
+      - name: Version
+        id: v
+        run: |
+          ver=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/version.py)
+          [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::app/version.py: bad VERSION '$ver'"; exit 1; }
+          tag="v$ver"
+          state=$(gh release view "$tag" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo none)
+          latest=$(gh release view --json tagName --jq .tagName 2>/dev/null || echo "")
+          if [ "$state" = published ]; then
+            echo "$tag is already released, nothing to do"
+          elif [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "${latest#v}" "$ver" | sort -V | tail -1)" != "$ver" ]; then
+            echo "::error::VERSION $ver is not newer than the latest release $latest"; exit 1
+          fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
 
       - name: Build the archive
+        if: steps.v.outputs.state != 'published'
         run: |
-          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "Not a version tag: $TAG"; exit 1 ;; esac
-          ver=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/version.py)
-          [ "v$ver" = "$TAG" ] || { echo "app/version.py says $ver, tag is $TAG"; exit 1; }
           git archive --format=tar.gz --prefix=awg-router/ -o awg-router.tar.gz HEAD
           tar -tzf awg-router.tar.gz awg-router/install.sh awg-router/docker-compose.yml >/dev/null
           sha256sum awg-router.tar.gz > awg-router.tar.gz.sha256
           ls -l awg-router.tar.gz*
 
       - name: Release notes from CHANGELOG.md
+        if: steps.v.outputs.state != 'published'
         run: |
-          awk -v v="${TAG#v}" '
-            /^## / { if (on) exit; on = (index($0, "## " v " ") == 1 || $0 == "## " v) ; next }
+          awk -v v="${{ steps.v.outputs.ver }}" '
+            /^## / { if (on) exit; on = (index($0, "## " v " ") == 1 || $0 == "## " v); next }
             on' CHANGELOG.md > notes.md
-          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no section for ${{ steps.v.outputs.ver }}"; exit 1; }
 
-      - name: Create the release or attach to it
+      - name: Create or refresh the draft
+        if: steps.v.outputs.state != 'published'
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
         run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md \
-              awg-router.tar.gz awg-router.tar.gz.sha256 && exit 0
-            gh release view "$TAG" >/dev/null   # создан параллельно — тогда прикладываем ниже
+          if [ "${{ steps.v.outputs.state }}" = draft ]; then
+            gh release edit "$TAG" --target "$GITHUB_SHA" --notes-file notes.md
+            gh release upload "$TAG" awg-router.tar.gz awg-router.tar.gz.sha256 --clobber
+          else
+            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "AWG Router $TAG" \
+              --notes-file notes.md awg-router.tar.gz awg-router.tar.gz.sha256
           fi
+          echo "Draft $TAG is ready: open Releases and press Publish." >> "$GITHUB_STEP_SUMMARY"
+
+  published:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+
+      - name: Tag must match VERSION
+        run: |
+          ver=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/version.py)
+          [ "v$ver" = "$TAG" ] || { echo "::error::app/version.py says $ver, tag is $TAG"; exit 1; }
+
+      - name: Attach the archive if it is missing
+        run: |
+          have=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
+          case " $have " in *" awg-router.tar.gz "*" awg-router.tar.gz.sha256 "*|*" awg-router.tar.gz.sha256 "*" awg-router.tar.gz "*)
+            echo "archive is attached"; exit 0 ;;
+          esac
+          git archive --format=tar.gz --prefix=awg-router/ -o awg-router.tar.gz HEAD
+          sha256sum awg-router.tar.gz > awg-router.tar.gz.sha256
           gh release upload "$TAG" awg-router.tar.gz awg-router.tar.gz.sha256 --clobber
