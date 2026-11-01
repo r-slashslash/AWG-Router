@@ -64,7 +64,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/hostnet.py` | Host addresses without outside requests (panel runs in the host network): public IPv6 from `/proc/net/if_inet6`, IPv6 UDP listener on the AWG port from `/proc/net/udp6` |
 | `app/initserver.py` | CLI: create an Amnezia-layout server config (used by installer for a new container) |
 | `app/uninstall.py` | Removes nft table / ip rules from the target (used by `awg-router uninstall`) |
-| `app/static/` | SPA: `index.html`, `app.js` (tabs: overview, clients, exits, routing, lists, server, system), `app.css`, `i18n.js`, `qrcode.js` (MIT, Kazuhiko Arase) |
+| `app/static/` | SPA: `index.html`, `app.js` (tabs: overview, clients, exits, routing — rules + lists + route check since 1.12.1, `#lists` maps to it — server, system), `app.css`, `i18n.js`, `qrcode.js` (MIT, Kazuhiko Arase) |
 | `awg-server/` | Dockerfile + start.sh for an Amnezia-compatible `amnezia-awg2` container the installer can create |
 | `Dockerfile` | Builds amneziawg-go + static awg/awg-quick (Go), static hev-socks5-tunnel (`HEV_REF`, MIT), copies lego; Python 3.13 alpine runtime |
 | `install.sh` | Installer/updater; works via `curl … | bash` (bootstraps code into `/opt/awg-router` from the latest release archive) |

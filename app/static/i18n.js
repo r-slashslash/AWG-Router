@@ -14,7 +14,7 @@ const I18N = {
   ru: {
     "login.password": "Пароль", "login.submit": "Войти", "lang": "Язык",
     "tab.overview": "Обзор", "tab.clients": "Клиенты", "tab.exits": "Выходы",
-    "tab.routing": "Правила", "tab.lists": "Списки", "tab.system": "Система",
+    "tab.routing": "Маршрутизация", "tab.lists": "Списки", "tab.system": "Система",
     "n.clients": { one: "{n} клиент", few: "{n} клиента", many: "{n} клиентов", other: "{n} клиента" },
     "status.online": "{n} в сети", "status.applied": "правила применены {time}",
     "status.no_target": "Сервер Amnezia не найден", "panel.offline": "Нет связи с панелью: {e}",
@@ -173,7 +173,7 @@ const I18N = {
   en: {
     "login.password": "Password", "login.submit": "Sign in", "lang": "Language",
     "tab.overview": "Overview", "tab.clients": "Clients", "tab.exits": "Exits",
-    "tab.routing": "Rules", "tab.lists": "Lists", "tab.system": "System",
+    "tab.routing": "Routing", "tab.lists": "Lists", "tab.system": "System",
     "n.clients": { one: "{n} client", other: "{n} clients" },
     "status.online": "{n} online", "status.applied": "rules applied {time}",
     "status.no_target": "Amnezia server not found", "panel.offline": "Can't reach the panel: {e}",
@@ -331,7 +331,7 @@ const I18N = {
   zh: {
     "login.password": "密码", "login.submit": "登录", "lang": "语言",
     "tab.overview": "概览", "tab.clients": "客户端", "tab.exits": "出口",
-    "tab.routing": "规则", "tab.lists": "列表", "tab.system": "系统",
+    "tab.routing": "路由", "tab.lists": "列表", "tab.system": "系统",
     "n.clients": { other: "{n} 个客户端" },
     "status.online": "{n} 个在线", "status.applied": "规则应用于 {time}",
     "status.no_target": "未找到 Amnezia 服务器", "panel.offline": "无法连接到面板：{e}",
@@ -489,7 +489,7 @@ const I18N = {
   fa: {
     "login.password": "رمز عبور", "login.submit": "ورود", "lang": "زبان",
     "tab.overview": "نمای کلی", "tab.clients": "کلاینت‌ها", "tab.exits": "خروجی‌ها",
-    "tab.routing": "قوانین", "tab.lists": "فهرست‌ها", "tab.system": "سیستم",
+    "tab.routing": "مسیریابی", "tab.lists": "فهرست‌ها", "tab.system": "سیستم",
     "n.clients": { one: "{n} کلاینت", other: "{n} کلاینت" },
     "status.online": "{n} آنلاین", "status.applied": "قوانین اعمال شد {time}",
     "status.no_target": "سرور Amnezia پیدا نشد", "panel.offline": "ارتباط با پنل برقرار نیست: {e}",
@@ -2058,11 +2058,12 @@ Object.assign(I18N.ru, {
   "ex.socks_line": "Строка подключения",
   "ex.socks_line_hint": "Собирается из полей выше. Можно вставить готовую строку от продавца прокси — поля заполнятся сами: socks5://логин:пароль@адрес:порт или адрес:порт:логин:пароль.",
   "ex.route_title": "Маршрутизация через этот выход",
-  "ex.route_hint": "Сохраняется в общих правилах (вкладка «Правила»). Клиенты со своими правилами живут по своим.",
+  "ex.route_hint": "Сохраняется в общих правилах (вкладка «Маршрутизация»). Клиенты со своими правилами живут по своим.",
   "ex.route_sites": "Сайты через этот выход", "ex.route_sites_ph": "youtube.com\ninstagram.com",
   "ex.route_sites_hint": "По одному домену на строку, поддомены тоже идут через выход. Определяются по имени сайта в соединении (HTTPS и HTTP).",
   "ex.route_dlists": "Списки доменов", "ex.route_nlists": "Списки сетей (страны, ASN, адреса)",
   "ex.route_default": "Весь остальной трафик — тоже через этот выход (выход по умолчанию)",
+  "re.new_list": "Создать список", "ls.col_used": "Где используется", "ls.unused": "не используется",
   "ev.sni_failed": "Обработчик правил по доменам не запустился: {detail}",
 });
 Object.assign(I18N.en, {
@@ -2111,11 +2112,12 @@ Object.assign(I18N.en, {
   "ex.socks_line": "Connection string",
   "ex.socks_line_hint": "Built from the fields above. You can paste a ready string from your proxy seller and the fields fill in: socks5://login:password@host:port or host:port:login:password.",
   "ex.route_title": "Routing through this exit",
-  "ex.route_hint": "Saved in the global rules (Rules tab). Clients with their own rules keep them.",
+  "ex.route_hint": "Saved in the global rules (Routing tab). Clients with their own rules keep them.",
   "ex.route_sites": "Sites through this exit", "ex.route_sites_ph": "youtube.com\ninstagram.com",
   "ex.route_sites_hint": "One domain per line; subdomains go through the exit too. Matched by the site name in the connection (HTTPS and HTTP).",
   "ex.route_dlists": "Domain lists", "ex.route_nlists": "Network lists (countries, ASNs, addresses)",
   "ex.route_default": "All other traffic through this exit too (default exit)",
+  "re.new_list": "Create a list", "ls.col_used": "Used in", "ls.unused": "not used",
   "ev.sni_failed": "The domain rule handler did not start: {detail}",
 });
 Object.assign(I18N.zh, {
@@ -2164,11 +2166,12 @@ Object.assign(I18N.zh, {
   "ex.socks_line": "连接字符串",
   "ex.socks_line_hint": "由上面的字段生成。也可以粘贴代理商提供的字符串，字段会自动填写：socks5://用户名:密码@地址:端口 或 地址:端口:用户名:密码。",
   "ex.route_title": "经此出口的路由",
-  "ex.route_hint": "保存在全局规则中（「规则」标签页）。使用自定义规则的客户端不受影响。",
+  "ex.route_hint": "保存在全局规则中（「路由」标签页）。使用自定义规则的客户端不受影响。",
   "ex.route_sites": "经此出口访问的网站", "ex.route_sites_ph": "youtube.com\ninstagram.com",
   "ex.route_sites_hint": "每行一个域名，子域名也经此出口。按连接中的网站名称匹配（HTTPS 和 HTTP）。",
   "ex.route_dlists": "域名列表", "ex.route_nlists": "网络列表（国家、ASN、地址）",
   "ex.route_default": "其余所有流量也经此出口（默认出口）",
+  "re.new_list": "新建列表", "ls.col_used": "使用位置", "ls.unused": "未使用",
   "ev.sni_failed": "域名规则处理程序未能启动：{detail}",
 });
 Object.assign(I18N.fa, {
@@ -2217,11 +2220,12 @@ Object.assign(I18N.fa, {
   "ex.socks_line": "رشتهٔ اتصال",
   "ex.socks_line_hint": "از فیلدهای بالا ساخته می‌شود. می‌توانید رشتهٔ آماده از فروشندهٔ پراکسی را بچسبانید تا فیلدها خودشان پر شوند: ‎socks5://نام:رمز@نشانی:درگاه‎ یا نشانی:درگاه:نام:رمز.",
   "ex.route_title": "مسیریابی از طریق این خروجی",
-  "ex.route_hint": "در قانون‌های عمومی ذخیره می‌شود (برگهٔ «قوانین»). کلاینت‌هایی که قانون‌های خودشان را دارند تغییری نمی‌کنند.",
+  "ex.route_hint": "در قانون‌های عمومی ذخیره می‌شود (برگهٔ «مسیریابی»). کلاینت‌هایی که قانون‌های خودشان را دارند تغییری نمی‌کنند.",
   "ex.route_sites": "سایت‌ها از طریق این خروجی", "ex.route_sites_ph": "youtube.com\ninstagram.com",
   "ex.route_sites_hint": "در هر خط یک دامنه؛ زیردامنه‌ها هم از این خروجی می‌روند. بر اساس نام سایت در اتصال (HTTPS و HTTP).",
   "ex.route_dlists": "فهرست‌های دامنه", "ex.route_nlists": "فهرست‌های شبکه (کشورها، ASN، نشانی‌ها)",
   "ex.route_default": "بقیهٔ ترافیک هم از این خروجی (خروجی پیش‌فرض)",
+  "re.new_list": "ساختن فهرست", "ls.col_used": "محل استفاده", "ls.unused": "استفاده نشده",
   "ev.sni_failed": "پردازشگر قانون‌های دامنه راه‌اندازی نشد: {detail}",
 });
 

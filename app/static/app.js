@@ -81,6 +81,8 @@ async function api(method, path, body) {
 /* ================================================================ состояние */
 let S = null;
 let tab = (location.hash || "#overview").slice(1);
+let scrollToLists = tab === "lists";             // закладка на старую вкладку «Списки» (до 1.12.1)
+if (tab === "lists") { tab = "routing"; history.replaceState(null, "", "#routing"); }
 let routingDraft = null;
 const probes = {};
 let pollTimer = null;
@@ -259,9 +261,14 @@ function renderStatus() {
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
 }
 
-function render() {
-  const views = { overview: viewOverview, clients: viewClients, exits: viewExits, routing: viewRouting, lists: viewLists, server: viewServer, system: viewSystem };
-  if (tab === "routing" && routingDraft && $("#g-rules")) return; // не мешаем правке
+function render(force = false) {
+  const views = { overview: viewOverview, clients: viewClients, exits: viewExits, routing: viewRouting, server: viewServer, system: viewSystem };
+  if (!force && tab === "routing" && routingDraft && $("#g-rules")) {
+    // правку правил не трогаем, а раздел списков обновляем (счётчики, ошибки, новые списки)
+    $("#lists-sec").innerHTML = listsSection();
+    bindLists();
+    return;
+  }
   const keepSearch = $("#client-search") ? $("#client-search").value : null;
   $("#main").innerHTML = banners() + (views[tab] || viewOverview)();
   bind[tab] && bind[tab]();
@@ -786,21 +793,29 @@ function editClient(pk, section = null) {
 }
 
 /* ================================================================ редактор правил */
+const LIST_KINDS = ["country", "asn", "url", "manual", "domains"];
+/** список в правило; первый список доменов — выход первый SOCKS5, если выбран не он */
+function addListTo(r, id) {
+  if (r.lists.includes(id)) return;
+  r.lists.push(id);
+  if (isDomainList(id) && !socksExits().some((u) => "up:" + u.id === r.outbound) && socksExits().length) r.outbound = "up:" + socksExits()[0].id;
+}
 const isDomainList = (id) => (listObj(id) || {}).kind === "domains";
 const socksExits = () => S.upstreams.filter((u) => u.kind === "socks5");
-function rulesEditor(box, rules, onChange) {
+function rulesEditor(box, rules, onChange, { create = null } = {}) {
   const draw = () => {
     const items = rules.map((r, i) => {
       // списки доменов — отдельные правила и только на выход SOCKS5 (имя сайта передаётся прокси)
       const dom = r.lists.some(isDomainList);
       const addable = S.lists.filter((l) => !r.lists.includes(l.id) && (!r.lists.length || (l.kind === "domains") === dom));
+      const kinds = LIST_KINDS.filter((k) => !r.lists.length || (k === "domains") === dom);
       return `
       <div class="rule ${r.enabled ? "" : "off"}" data-i="${i}">
         <div class="rule-n">${esc(fmtNum(i + 1))}</div>
         <div>
           <div class="rule-lists">
             ${r.lists.map((l) => `<span class="chip"><bdi>${esc(listName(l))}</bdi><button type="button" data-rm-list="${esc(l)}" aria-label="${esc(t("re.remove_list"))}">×</button></span>`).join("")}
-            <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}</select>
+            <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
           </div>
           <input type="text" class="rule-comment" data-comment value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}" maxlength="80">
           ${dom ? `<div class="small muted" style="margin-top:4px">${esc(t(socksExits().length ? "re.domain_hint" : "re.domain_no_socks"))}</div>` : ""}
@@ -821,10 +836,10 @@ function rulesEditor(box, rules, onChange) {
       const ch = () => { onChange(); draw(); };
       $$("[data-rm-list]", el).forEach((b) => b.onclick = () => { r.lists = r.lists.filter((x) => x !== b.dataset.rmList); ch(); });
       $("[data-add-list]", el).onchange = (e) => {
-        if (!e.target.value) return;
-        r.lists.push(e.target.value);
-        // первый список доменов в правиле: выход — первый SOCKS5, если выбран не он
-        if (isDomainList(e.target.value) && !socksExits().some((u) => "up:" + u.id === r.outbound) && socksExits().length) r.outbound = "up:" + socksExits()[0].id;
+        const v = e.target.value;
+        if (!v) return;
+        if (v.startsWith("new:")) { e.target.value = ""; create(v.slice(4), (id) => addListTo(r, id)); return; }
+        addListTo(r, v);
         ch();
       };
       $("[data-comment]", el).oninput = (e) => { r.comment = e.target.value; onChange(); };
@@ -861,6 +876,7 @@ function viewRouting() {
     <div class="savebar" id="savebar" hidden><span>${esc(t("rt.unsaved"))}</span>
       <span class="actions"><button class="btn sm" id="g-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="g-save">${esc(t("rt.save"))}</button></span></div>
   </section>
+  <section class="section" id="lists-sec">${listsSection()}</section>
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("tr.title"))}</h2><p class="muted small">${esc(t("tr.subtitle"))}</p></div></div>
     <div class="panel panel-pad">
@@ -876,8 +892,11 @@ function viewRouting() {
 bind.routing = () => {
   const draft = routingDraft || { default: S.routing.default, rules: structuredClone(S.routing.rules) };
   const upd = () => { routingDraft = draft; $("#savebar").hidden = !routingDirty(); };
-  rulesEditor($("#g-rules"), draft.rules, upd);
+  // новый список из правила: после сохранения он сразу в этом правиле (правка не теряется)
+  rulesEditor($("#g-rules"), draft.rules, upd, { create: (kind, put) => editList(null, kind, (id) => { put(id); routingDraft = draft; render(true); }) });
   upd();
+  bindLists();
+  if (scrollToLists) { scrollToLists = false; $("#lists-sec").scrollIntoView(); }
   $("#g-default").onchange = (e) => { draft.default = e.target.value; upd(); };
   $("#g-reset").onclick = () => { routingDraft = null; render(); };
   $("#g-save").onclick = async () => {
@@ -1159,7 +1178,17 @@ async function editUpstream(id) {
 }
 
 /* ================================================================ списки */
-function viewLists() {
+/** где используется список: общие правила (с выходом), правила клиентов */
+function listUses(l) {
+  const out = [];
+  S.routing.rules.forEach((r, i) => {
+    if (!r.lists.includes(l.id)) return;
+    out.push(`<div class="use ${r.enabled === false ? "off" : ""}"><span>${esc(t("ref.rule", { rule: r.comment || "#" + (i + 1) }))}</span> → ${outChip(r.outbound)}</div>`);
+  });
+  for (const m of l.refs || []) if (m && m.$t === "ref.client_rule") out.push(`<div class="use"><span>${esc(tm(m))}</span></div>`);
+  return out.length ? out.join("") : `<span class="muted">${esc(t("ls.unused"))}</span>`;
+}
+function listsSection() {
   const rows = S.lists.map((l) => {
     const badge = l.kind === "country" ? `<span class="cc">${esc(l.source.toUpperCase())}</span>`
       : l.kind === "asn" ? `<span class="cc">AS</span>` : l.kind === "domains" ? `<span class="cc">SNI</span>` : "";
@@ -1174,8 +1203,8 @@ function viewLists() {
     <tr>
       <td>${badge}<b><bdi>${esc(listName(l.id))}</bdi></b><div class="list-row-src">${src}</div></td>
       <td data-m="sub">${size !== null ? size : l.count ? `${esc(t("n.networks", { n: l.count }))}<div class="small muted">${esc(t("n.addresses", { n: l.addresses, nText: fmtCompact(l.addresses) }))}</div>` : `<span class="muted">${esc(t("ls.not_loaded"))}</span>`}${l.skipped_v6 ? `<div class="small warn-text">${esc(t("ls.skipped_v6", { n: l.skipped_v6 }))}</div>` : ""}
-        ${l.error ? `<div class="err small">${esc(tm(l.error))}</div>` : ""}</td>
-      <td data-m="hide" class="small muted">${l.updated ? esc(t("ls.updated", { time: fmtTime(l.updated) })) : "—"}${l.refs.length ? `<div>${esc(t("n.in_rules", { n: l.refs.length }))}</div>` : ""}</td>
+        ${l.error ? `<div class="err small">${esc(tm(l.error))}</div>` : ""}${l.updated ? `<div class="small muted">${esc(t("ls.updated", { time: fmtTime(l.updated) }))}</div>` : ""}</td>
+      <td data-m="sub" class="uses">${listUses(l)}</td>
       <td data-m="right" class="nowrap acts">
         ${l.kind !== "manual" ? `<button class="icon-btn" data-refresh="${esc(l.id)}" title="${esc(t("ls.refresh"))}" aria-label="${esc(t("ls.refresh"))}">⟳</button>` : ""}
         ${l.kind !== "country" ? `<button class="icon-btn" data-edit-list="${esc(l.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>` : ""}
@@ -1184,16 +1213,14 @@ function viewLists() {
     </tr>`;
   }).join("");
   return `
-  <section class="section">
     <div class="section-head">
       <div><h2>${esc(t("ls.title"))}</h2><p class="muted small">${esc(t("ls.subtitle", { hours: fmtNum(S.settings.list_update_hours) }))}</p></div>
-      <div class="add-row">${["country", "asn", "url", "manual", "domains"].map((k) => `<button class="btn" data-add-kind="${k}">${esc(t("ls.add_" + k))}</button>`).join("")}</div>
+      <div class="add-row">${LIST_KINDS.map((k) => `<button class="btn" data-add-kind="${k}">${esc(t("ls.add_" + k))}</button>`).join("")}</div>
     </div>
-    <div class="panel">${S.lists.length ? `<table class="table responsive"><thead><tr><th>${esc(t("ls.col_list"))}</th><th>${esc(t("ls.col_size"))}</th><th>${esc(t("ls.col_updated"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-      : `<div class="empty"><p>${esc(t("ls.empty"))}</p></div>`}</div>
-  </section>`;
+    <div class="panel">${S.lists.length ? `<table class="table responsive"><thead><tr><th>${esc(t("ls.col_list"))}</th><th>${esc(t("ls.col_size"))}</th><th>${esc(t("ls.col_used"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty"><p>${esc(t("ls.empty"))}</p></div>`}</div>`;
 }
-bind.lists = () => {
+function bindLists() {
   $$("[data-add-kind]").forEach((b) => b.onclick = () => editList(null, b.dataset.addKind));
   $$("[data-edit-list]").forEach((b) => b.onclick = () => editList(b.dataset.editList));
   $$("[data-refresh]").forEach((b) => b.onclick = async () => {
@@ -1208,8 +1235,8 @@ bind.lists = () => {
     if (!confirm(t("ls.delete_confirm", { name: listName(b.dataset.delList) }))) return;
     try { await api("DELETE", "lists/" + b.dataset.delList); refresh(); } catch (e) { toast(e.message, true); }
   });
-};
-function editList(id, kind) {
+}
+function editList(id, kind, onSaved = null) {
   const l = id ? listObj(id) : null;
   kind = l ? l.kind : kind;
   const nameField = (ph = "") => `<label class="field"><span>${esc(t("ls.name"))}</span><input type="text" id="l-name" maxlength="40" value="${esc(l ? l.name : "")}" placeholder="${esc(ph)}"></label>`;
@@ -1255,6 +1282,7 @@ function editList(id, kind) {
       const r = l ? await api("PUT", "lists/" + l.id, b) : await api("POST", "lists", b);
       closeModal();
       await refresh();
+      if (onSaved && r && r.id) onSaved(r.id);
       if (r && r.error) toast(t("ls.saved_failed", { e: tm(r.error) }), true);
       else {
         toast(t("ls.saved", { name: listName(r.id), count: t(kind === "domains" ? "n.domains" : "n.networks", { n: r.count || 0 }) }));
