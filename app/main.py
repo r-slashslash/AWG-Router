@@ -1031,7 +1031,7 @@ def _upstream_view(st: dict, u: dict) -> dict:
     try:
         pc = engine.parsed(u)
         info = {"endpoint": pc.endpoint, "address": pc.address, "mtu": pc.mtu,
-                "version": pc.version, "kind": pc.kind,
+                "version": pc.version, "kind": pc.kind, "own_list": u.get("own_list"),
                 "socks_user": pc.socks.get("user") if pc.kind == "socks5" else None,
                 "config_error": None}
     except awgconf.ConfigError as e:
@@ -1127,6 +1127,68 @@ def v_quota_action(st: dict, v, uid: str | None) -> str:
     return out
 
 
+def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | None, str | None]:
+    """Маршрутизация через выход из его окна (SOCKS5): общие правила «списки доменов → выход»
+    и «списки сетей → выход» заменяются выбранными; свои домены выхода — его собственный
+    список доменов (u["own_list"]); «основной выход». → (список, который нужно обновить;
+    список, который нужно удалить)."""
+    out = "up:" + uid
+    u = Store.upstream(st, uid)
+    if not isinstance(r, dict) or not u:
+        bad("err.bad_rules")
+    pick = lambda key, dom: list(dict.fromkeys(
+        lid for lid in (r.get(key) or []) if isinstance(lid, str) and Store.lst(st, lid)
+        and (Store.lst(st, lid)["kind"] == "domains") == dom))
+    dl, nl = pick("domain_lists", True), pick("net_lists", False)
+    text = str(r.get("domains") or "").strip()
+    own = u.get("own_list") if Store.lst(st, u.get("own_list") or "") else None
+    refresh = drop = None
+    if text:
+        if len(text) > 2_000_000:
+            bad("err.list_too_big")
+        urls, rest = domains.split_source(text)
+        if not urls and not domains.parse(rest):
+            bad("err.no_domains")
+        if own:
+            l = Store.lst(st, own)
+            if l["source"] != text or l.get("name") != name:
+                l.update(source=text, name=name)
+                refresh = own
+        else:
+            own = new_id("l")
+            st["lists"].append({"id": own, "kind": "domains", "source": text, "name": name})
+            u["own_list"] = own
+            refresh = own
+        dl = [own] + [x for x in dl if x != own]
+    elif own:
+        dl = [x for x in dl if x != own]
+        drop = own
+    rules = st["routing"]["rules"]
+    first = next((i for i, x in enumerate(rules) if x["outbound"] == out), 0)
+    pos = sum(1 for x in rules[:first] if x["outbound"] != out)
+    rest = [x for x in rules if x["outbound"] != out]
+    new = [{"lists": l, "outbound": out, "enabled": True, "comment": name[:80]} for l in (dl, nl) if l]
+    st["routing"]["rules"] = v_rules(st, rest[:pos] + new + rest[pos:])
+    if r.get("default") is True:
+        st["routing"]["default"] = out
+    elif r.get("default") is False and st["routing"]["default"] == out:
+        st["routing"]["default"] = "direct"
+    if drop and not Store.list_refs(st, drop):
+        st["lists"] = [x for x in st["lists"] if x["id"] != drop]
+        u.pop("own_list", None)
+    else:
+        drop = None
+    return refresh, drop
+
+
+def _after_exit_routing(lists_changed: tuple) -> None:
+    refresh, drop = lists_changed
+    if drop:
+        lists.delete_cidrs(drop)
+    if refresh:
+        engine.refresh_lists(False, [refresh])
+
+
 @app.post("/api/upstreams")
 def add_upstream(req):
     body = req.json()
@@ -1145,8 +1207,10 @@ def add_upstream(req):
         st["upstreams"].append(u)
         if body.get("make_default") and st["routing"]["default"] in ("direct", "block"):
             st["routing"]["default"] = "up:" + u["id"]
-        return u["id"]
-    uid = store.mutate(fn)
+        ch = apply_exit_routing(st, u["id"], body["routing"], name) if body.get("routing") else (None, None)
+        return u["id"], ch
+    uid, ch = store.mutate(fn)
+    _after_exit_routing(ch)
     engine.trigger()
     return {"id": uid}
 
@@ -1172,6 +1236,9 @@ def edit_upstream(req, uid):
             bad("err.not_found", 404)
         if "name" in body:
             u["name"] = v_name(body["name"])
+            own = Store.lst(st, u.get("own_list") or "")
+            if own:
+                own["name"] = u["name"]          # свой список сайтов выхода называется как выход
         if "enabled" in body:
             u["enabled"] = bool(body["enabled"])
         if "fallback" in body:
@@ -1189,7 +1256,10 @@ def edit_upstream(req, uid):
             if quota != u.get("quota") or action != (engine.quota_target(u) or "notify"):
                 u["quota_hit"] = u["quota_warned"] = None   # события квоты — заново
             u["quota"], u["quota_action"] = quota, action
-    store.mutate(fn)
+        if body.get("routing"):
+            return apply_exit_routing(st, uid, body["routing"], u["name"])
+        return None, None
+    _after_exit_routing(store.mutate(fn))
     engine.trigger()
     return {"ok": True}
 
@@ -1214,7 +1284,21 @@ def del_upstream(req, uid):
                 bad("err.bad_outbound")
             Store.replace_outbound(st, target, new, u.get("fallback"))
         st["upstreams"] = [x for x in st["upstreams"] if x["id"] != uid]
-    store.mutate(fn)
+        # правила со списками доменов могут вести только на SOCKS5: если замена не SOCKS5 — убираем их
+        dom = {l["id"] for l in st["lists"] if l["kind"] == "domains"}
+        keep = lambda r: not (set(r.get("lists") or []) & dom) or is_socks_out(st, r.get("outbound"))
+        st["routing"]["rules"] = [r for r in st["routing"]["rules"] if keep(r)]
+        for c in st["clients"].values():
+            if c.get("rules"):
+                c["rules"] = [r for r in c["rules"] if keep(r)]
+        own = u.get("own_list")
+        if own and Store.lst(st, own) and not Store.list_refs(st, own):
+            st["lists"] = [x for x in st["lists"] if x["id"] != own]
+            return own
+        return None
+    own = store.mutate(fn)
+    if own:
+        lists.delete_cidrs(own)
     engine.traffic.forget_out(uid)
     engine.trigger()
     return {"ok": True}

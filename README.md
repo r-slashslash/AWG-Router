@@ -42,6 +42,7 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Traffic per exit and direct for the month and all time, and each client's monthly traffic split by exit. An exit can have a monthly limit; when it is used up, its traffic until the 1st goes direct, gets blocked or moves to another exit, whichever you choose (or you only get a notification).
 - Rules map a list to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, your own subnets or domains, and they refresh automatically.
 - Domain rules for SOCKS5 exits: `example.com` on a list also covers all its subdomains; you can paste a link to a ready-made list (plain domains, dnsmasq, hosts, Adblock, v2ray). The server learns the site from its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself, so DNS spoofing by the ISP doesn't matter. Client DNS and configs don't change. Such rules are checked before address rules.
+- The exit window asks for the type first (AmneziaWG or SOCKS5). For SOCKS5 there are separate fields for the address, port, login and password (they make up the connection string; a pasted string fills them in), and the routing for that exit is set in the same window: sites (domains) to send through it, domain and network lists, or all traffic. This is saved as ordinary global rules.
 - Each client can have its own exit and its own rules.
 - **Route check** shows which way an IP or domain would go.
 

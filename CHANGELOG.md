@@ -17,6 +17,12 @@ it grows, so every user-visible change gets a new version.
   Client DNS and configs don't change. Domain rules are checked before address rules; other
   connections of such clients follow the address rules as before. QUIC (HTTP/3) is blocked for
   clients with domain rules — browsers switch to regular HTTPS by themselves.
+- **Exit window: type first.** Adding an exit starts with **AmneziaWG | SOCKS5**. For SOCKS5
+  there are fields for the address, port, login and password; they fill the connection string, and
+  a string pasted from a proxy seller fills the fields (pasting one in AmneziaWG mode switches to
+  SOCKS5). The same window sets the routing through the exit: sites (domains) to send through it,
+  domain and network lists, or all traffic. It is saved as ordinary global rules (the sites become
+  the exit's own domain list named after it, deleted together with the exit).
 - **Route check** finds domain rules too: checking `www.youtube.com` shows the domain list it matched.
 - **Telegram bot: everything in one message.** `/start` opens the menu as buttons in a message
   titled with the server's address (Status | Clients, Exits | New client, Panel | Backup) instead of the keyboard at the bottom of the

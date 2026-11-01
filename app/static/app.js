@@ -1009,19 +1009,78 @@ async function deleteUpstream(u) {
   };
 }
 
+/* Строка SOCKS5 ⇄ отдельные поля (как awgconf.parse_socks: socks5://логин:пароль@адрес:порт,
+   socks5h://, socks://, логин:пароль@адрес:порт, адрес:порт:логин:пароль) */
+function socksParse(text) {
+  const s = text.trim(); let m;
+  const dec = (x) => { try { return decodeURIComponent(x); } catch (e) { return x; } };
+  if (!/^socks(5h?)?:\/\//i.test(s) && (m = s.match(/^([^\s:@\/\[\]]+):(\d{1,5}):([^:]*):(.*)$/)))
+    return { host: m[1], port: m[2], user: m[3], pass: m[4] };
+  let rest = s.replace(/^socks(5h?)?:\/\//i, "").replace(/\/$/, ""), user = "", pass = "";
+  const at = rest.lastIndexOf("@");
+  if (at >= 0) {
+    const up = rest.slice(0, at), i = up.indexOf(":");
+    user = dec(i < 0 ? up : up.slice(0, i)); pass = i < 0 ? "" : dec(up.slice(i + 1));
+    rest = rest.slice(at + 1);
+  }
+  m = rest.match(/^\[([0-9a-fA-F:.]+)\](?::(\d*))?$/) || rest.match(/^([^\s:\/\[\]@]*)(?::(\d*))?$/);
+  return m ? { host: m[1], port: m[2] || "", user, pass } : null;
+}
+function socksBuild(f) {
+  if (!f.host && !f.port && !f.user && !f.pass) return "";
+  const q = encodeURIComponent, h = f.host.includes(":") ? `[${f.host}]` : f.host;
+  return "socks5://" + (f.user || f.pass ? q(f.user) + (f.pass ? ":" + q(f.pass) : "") + "@" : "") + h + (f.port ? ":" + f.port : "");
+}
+const looksSocks = (s) => /^socks(5h?)?:\/\//i.test(s.trim()) || (!!s.trim() && !/[\[\]=\n]/.test(s.trim()) && !/^vpn:\/\//i.test(s.trim()) && !!socksParse(s));
+
 async function editUpstream(id) {
   const u = id ? upstreamById(id) : null;
-  let conf = "";
-  if (u) { try { conf = (await api("GET", `upstreams/${id}/config`)).config; } catch (e) { toast(e.message, true); return; } }
+  const out = u ? "up:" + u.id : null;
+  let conf = "", ownText = "";
+  if (u) {
+    try { conf = (await api("GET", `upstreams/${id}/config`)).config; } catch (e) { toast(e.message, true); return; }
+    if (u.own_list && listObj(u.own_list)) { try { ownText = (await api("GET", "lists/" + u.own_list)).source || ""; } catch (e) { /* пусто */ } }
+  }
+  let kind = u ? (u.kind === "socks5" ? "socks5" : "awg") : "awg";
+  const buf = { awg: kind === "awg" ? conf : "", socks5: kind === "socks5" ? conf : "" };
+  // что сейчас ведёт на этот выход в общих правилах
+  const routed = new Set(out ? S.routing.rules.filter((r) => r.outbound === out && r.enabled !== false).flatMap((r) => r.lists) : []);
+  const dlists = S.lists.filter((l) => l.kind === "domains" && l.id !== (u && u.own_list));
+  const nlists = S.lists.filter((l) => l.kind !== "domains");
+  const box = (l) => `<label class="check"><input type="checkbox" data-rl="${esc(l.id)}" ${routed.has(l.id) ? "checked" : ""}><span><bdi>${esc(listName(l.id))}</bdi></span></label>`;
+  const group = (title, ls) => ls.length ? `<div class="field"><span>${esc(title)}</span><div class="check-cols">${ls.map(box).join("")}</div></div>` : "";
   openModal(u ? t("ex.modal_title", { name: u.name }) : t("ex.new"), `
+    <div class="field"><span>${esc(t("ex.kind"))}</span>
+      <div class="seg" id="u-kind"><button type="button" data-v="awg">AmneziaWG</button><button type="button" data-v="socks5">SOCKS5</button></div>
+      ${u ? `<span class="hint">${esc(t("ex.kind_locked"))}</span>` : ""}</div>
     <label class="field"><span>${esc(t("ex.name"))}</span><input type="text" id="u-name" maxlength="40" value="${esc(u ? u.name : "")}" placeholder="${esc(t("ex.name_ph"))}"></label>
-    <label class="field"><span>${esc(t("ex.config"))}</span>
-      <textarea id="u-conf" dir="ltr" spellcheck="false" placeholder="${esc(t("ex.config_ph"))}">${esc(conf)}</textarea>
-      <span class="hint">${esc(t("ex.config_hint"))} ${esc(t("ex.config_socks"))}</span>
+    <div id="u-sf">
+      <div class="row2 row2-port">
+        <label class="field"><span>${esc(t("ex.socks_host"))}</span><input type="text" id="u-sh" dir="ltr" spellcheck="false" autocomplete="off" placeholder="203.0.113.20"></label>
+        <label class="field"><span>${esc(t("ex.socks_port"))}</span><input type="text" id="u-sp" dir="ltr" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="1080"></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>${esc(t("ex.socks_user"))}</span><input type="text" id="u-su" dir="ltr" spellcheck="false" autocomplete="off" placeholder="${esc(t("ex.socks_opt"))}"></label>
+        <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input type="password" id="u-sw" dir="ltr" autocomplete="new-password" placeholder="${esc(t("ex.socks_opt"))}"></label>
+      </div>
+    </div>
+    <label class="field"><span id="u-conf-l"></span>
+      <textarea id="u-conf" dir="ltr" spellcheck="false"></textarea>
+      <span class="hint" id="u-conf-h"></span>
     </label>
-    <div class="field"><input type="file" id="u-file" accept=".conf,.txt,.vpn" aria-label="${esc(t("ex.file"))}"></div>
+    <div class="field" id="u-filef"><input type="file" id="u-file" accept=".conf,.txt,.vpn" aria-label="${esc(t("ex.file"))}"></div>
+    <fieldset class="subbox" id="u-route">
+      <legend>${esc(t("ex.route_title"))}</legend>
+      <p class="small muted" style="margin-top:0">${esc(t("ex.route_hint"))}</p>
+      <label class="field"><span>${esc(t("ex.route_sites"))}</span>
+        <textarea id="u-doms" class="short" dir="ltr" spellcheck="false" placeholder="${esc(t("ex.route_sites_ph"))}">${esc(ownText)}</textarea>
+        <span class="hint">${esc(t("ex.route_sites_hint"))}</span></label>
+      ${group(t("ex.route_dlists"), dlists)}
+      ${group(t("ex.route_nlists"), nlists)}
+      <label class="check"><input type="checkbox" id="u-rdef" ${out && S.routing.default === out ? "checked" : ""}><span>${esc(t("ex.route_default"))}</span></label>
+    </fieldset>
     <label class="field"><span>${esc(t("ex.fallback"))}</span>
-      <select id="u-fb">${outOptions(u ? u.fallback : "direct", { exclude: u ? "up:" + u.id : null })}</select>
+      <select id="u-fb">${outOptions(u ? u.fallback : "direct", { exclude: out })}</select>
       <span class="hint">${esc(t("ex.fallback_hint"))}</span>
     </label>
     <div class="row2">
@@ -1031,24 +1090,71 @@ async function editUpstream(id) {
         <select id="u-qa">${quotaOptions(u)}</select></label>
     </div>
     <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.quota_hint"))}</p>
-    ${u ? "" : `<label class="check"><input type="checkbox" id="u-def" ${S.routing.default === "direct" ? "checked" : ""}><span>${esc(t("ex.make_default"))}</span></label>`}
+    ${u ? "" : `<label class="check" id="u-defl"><input type="checkbox" id="u-def" ${S.routing.default === "direct" ? "checked" : ""}><span>${esc(t("ex.make_default"))}</span></label>`}
   `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`);
+  const F = { host: $("#u-sh"), port: $("#u-sp"), user: $("#u-su"), pass: $("#u-sw") };
+  const ta = $("#u-conf");
+  let routeTouched = false;
+  const toFields = () => {
+    const f = socksParse(ta.value);
+    if (f) for (const k in F) F[k].value = f[k];
+  };
+  const draw = () => {
+    const socks = kind === "socks5";
+    $$("#u-kind button").forEach((b) => {
+      b.setAttribute("aria-pressed", b.dataset.v === kind);
+      b.disabled = !!u && b.dataset.v !== kind;          // тип существующего выхода не меняется
+    });
+    $("#u-sf").hidden = $("#u-route").hidden = !socks;
+    $("#u-filef").hidden = socks;
+    if ($("#u-defl")) $("#u-defl").hidden = socks;      // у SOCKS5 — в блоке маршрутизации
+    $("#u-conf-l").textContent = t(socks ? "ex.socks_line" : "ex.config");
+    $("#u-conf-h").textContent = socks ? t("ex.socks_line_hint") : t("ex.config_hint");
+    ta.placeholder = socks ? "socks5://login:password@203.0.113.20:1080" : t("ex.config_ph");
+    ta.classList.toggle("short", socks);
+    ta.value = buf[kind];
+    if (socks) toFields();
+  };
+  $$("#u-kind button").forEach((b) => b.onclick = () => {
+    if (b.disabled || b.dataset.v === kind) return;
+    buf[kind] = ta.value; kind = b.dataset.v; draw();
+  });
+  Object.values(F).forEach((el) => el.oninput = () => {
+    if (el === F.port) el.value = el.value.replace(/\D/g, "");
+    ta.value = buf.socks5 = socksBuild({ host: F.host.value.trim(), port: F.port.value.trim(), user: F.user.value, pass: F.pass.value });
+  });
+  ta.oninput = () => {
+    if (kind === "socks5") { buf.socks5 = ta.value; toFields(); return; }
+    buf.awg = ta.value;
+    if (!u && looksSocks(ta.value)) { buf.socks5 = ta.value.trim(); buf.awg = ""; kind = "socks5"; draw(); }   // вставили прокси — сразу SOCKS5
+  };
+  $$("#u-route input, #u-route textarea").forEach((el) => el.addEventListener("input", () => routeTouched = true));
   $("#u-file").onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
-    $("#u-conf").value = (await f.text()).trim();
+    ta.value = buf.awg = (await f.text()).trim();
     if (!$("#u-name").value) $("#u-name").value = f.name.replace(/\.(conf|txt|vpn)$/i, "").slice(0, 40);
   };
+  draw();
   $("#u-save").onclick = async () => {
     const body = { name: $("#u-name").value.trim(), fallback: $("#u-fb").value,
       quota_gb: $("#u-quota").value.trim(), quota_action: $("#u-qa").value };
-    const c = $("#u-conf").value.trim();
+    const c = ta.value.trim();
     if (!u || c !== conf.trim()) body.config = c;
+    if (kind === "socks5" && (routeTouched || !u)) {
+      const picked = $$("#u-route [data-rl]").filter((x) => x.checked).map((x) => x.dataset.rl);
+      body.routing = { domains: $("#u-doms").value.trim(), default: $("#u-rdef").checked,
+        domain_lists: picked.filter((x) => dlists.some((l) => l.id === x)),
+        net_lists: picked.filter((x) => nlists.some((l) => l.id === x)) };
+      if (!u && !body.routing.domains && !picked.length && !body.routing.default) delete body.routing;
+    }
+    const btn = $("#u-save"); btn.disabled = true;
     try {
       if (u) await api("PUT", "upstreams/" + u.id, body);
-      else await api("POST", "upstreams", { ...body, make_default: $("#u-def").checked });
+      else await api("POST", "upstreams", { ...body, make_default: kind === "awg" && $("#u-def").checked });
       closeModal(); toast(t(u ? "toast.exit_saved" : "toast.exit_added"));
       refresh();
     } catch (e) { toast(e.message, true); }
+    btn.disabled = false;
   };
 }
 
