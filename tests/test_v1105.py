@@ -229,7 +229,7 @@ class NoDuplicateMenuTest(unittest.TestCase):
         self.tg.updates = [msg("/start"), msg("/help", uid=2)]
         self.bot.poll_once(cfg(), timeout=0)
         start, full = [p for m, p in self.tg.calls if m == "sendMessage"][-2:]
-        self.assertIn("/help", start["text"])
+        self.assertIn("AWG Router", start["text"])
         self.assertIn("/clients", full["text"])
         for p in (start, full):
             self.assertNotIn("keyboard", p["reply_markup"])

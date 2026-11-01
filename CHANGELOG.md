@@ -19,7 +19,7 @@ it grows, so every user-visible change gets a new version.
   clients with domain rules — browsers switch to regular HTTPS by themselves.
 - **Route check** finds domain rules too: checking `www.youtube.com` shows the domain list it matched.
 - **Telegram bot: everything in one message.** `/start` opens the menu as buttons in a message
-  (Status | Clients, Exits | New client, Panel | Backup) instead of the keyboard at the bottom of the
+  titled with the server's address (Status | Clients, Exits | New client, Panel | Backup) instead of the keyboard at the bottom of the
   screen, which is removed. Every screen opens in that same message and has **‹ Menu** to go back;
   a client's card also has **‹ Clients**. The personal link and an exit check show up in the
   message itself. After files (QR and config, backup) the menu moves below them, and an older menu

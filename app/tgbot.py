@@ -106,7 +106,7 @@ TEXTS = {
         "gone": "Такого клиента больше нет.", "gone_exit": "Такого выхода больше нет.",
         "fail": "⚠️ Не получилось: {error}", "cancelled": "Отменено.",
         "unknown": "Не знаю такой команды. /help — что я умею.",
-        "start": "🤖 <b>Пульт AWG Router</b>\n/help — команды",
+        "start": "🤖 <b>Пульт AWG Router</b>\n<code>{host}</code>",
         "b_menu": "‹ Меню", "bk_done": "💾 Копия отправлена (файл выше).", "cfg_done": "📱 Конфиг отправлен (QR и файл выше).", "help_title": "<b>Команды</b>",
         "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
         "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
@@ -189,7 +189,7 @@ TEXTS = {
         "gone": "This client no longer exists.", "gone_exit": "This exit no longer exists.",
         "fail": "⚠️ That didn't work: {error}", "cancelled": "Cancelled.",
         "unknown": "I don't know this command. /help — what I can do.",
-        "start": "🤖 <b>AWG Router remote</b>\n/help — commands",
+        "start": "🤖 <b>AWG Router remote</b>\n<code>{host}</code>",
         "b_menu": "‹ Menu", "bk_done": "💾 Backup sent (the file is above).", "cfg_done": "📱 Config sent (QR and file above).", "help_title": "<b>Commands</b>",
         "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
         "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
@@ -270,7 +270,7 @@ TEXTS = {
         "gone": "该客户端已不存在。", "gone_exit": "该出口已不存在。",
         "fail": "⚠️ 操作失败：{error}", "cancelled": "已取消。",
         "unknown": "不认识这个命令。/help — 我能做什么。",
-        "start": "🤖 <b>AWG Router 遥控</b>\n/help — 命令",
+        "start": "🤖 <b>AWG Router 遥控</b>\n<code>{host}</code>",
         "b_menu": "‹ 菜单", "bk_done": "💾 备份已发送（文件在上方）。", "cfg_done": "📱 配置已发送（二维码和文件在上方）。", "help_title": "<b>命令</b>",
         "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
         "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
@@ -352,7 +352,7 @@ TEXTS = {
         "gone": "این کلاینت دیگر وجود ندارد.", "gone_exit": "این خروجی دیگر وجود ندارد.",
         "fail": "⚠️ انجام نشد: {error}", "cancelled": "لغو شد.",
         "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
-        "start": "🤖 <b>کنترل از راه دور AWG Router</b>\n‎/help — دستورها",
+        "start": "🤖 <b>کنترل از راه دور AWG Router</b>\n<code>{host}</code>",
         "b_menu": "منو ›", "bk_done": "💾 پشتیبان فرستاده شد (فایل بالاتر است).", "cfg_done": "📱 پیکربندی فرستاده شد (QR و فایل بالاتر است).", "help_title": "<b>دستورها</b>",
         "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
         "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
@@ -873,7 +873,8 @@ class Bot:
     def show_menu(self, c: dict, msg: dict | None, note: str = "", move: bool = False) -> None:
         """Главное меню. Кнопка «Панель» — сразу ссылка; если Telegram её не примет (адрес ему
         не нравится), — экран со ссылкой."""
-        text = tr(c["lang"], "start") + (f"\n\n{note}" if note else "")
+        # вторая строка — адрес сервера: видно, какой это сервер, если ботов несколько
+        text = tr(c["lang"], "start", host=self.ops.panel().get("host") or "—") + (f"\n\n{note}" if note else "")
         show = self._move if move else (lambda c_, t_, m_: self._show(c_, t_, m_, msg))
         try:
             show(c, text, self._menu_kb(c))
