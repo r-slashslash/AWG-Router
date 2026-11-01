@@ -3,6 +3,22 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.12.0 — 2026-11-02
+
+- **SOCKS5 exits.** An exit can be a SOCKS5 proxy: `socks5://login:password@host:port` (or
+  `host:port:login:password`) in the exit's config field. TCP and UDP go through it; rules,
+  fallbacks, limits, traffic counting, Check and Telegram work as with AmneziaWG exits. The panel
+  checks the proxy every minute (login and a test connection) and shows its response time.
+- **Rules by domain for SOCKS5 exits.** Lists has a new kind, **Domains**: `example.com` also
+  covers all its subdomains, and a link to a ready-made list (plain domains, dnsmasq, hosts,
+  Adblock, v2ray) is downloaded and refreshed like other lists. A domain list can go only to a
+  SOCKS5 exit. The server learns the site from its name at the start of an HTTPS or HTTP
+  connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself.
+  Client DNS and configs don't change. Domain rules are checked before address rules; other
+  connections of such clients follow the address rules as before. QUIC (HTTP/3) is blocked for
+  clients with domain rules — browsers switch to regular HTTPS by themselves.
+- **Route check** finds domain rules too: checking `www.youtube.com` shows the domain list it matched.
+
 ## 1.11.0 — 2026-11-02
 
 - **Bot: a short greeting.** `/start` answers "🤖 AWG Router remote · /help — commands" and opens

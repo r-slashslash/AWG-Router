@@ -17,7 +17,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from . import awgconf, awgserver, config, cps, limits, lists, notify, selfupdate, system, tgbot, totp
+from . import awgconf, awgserver, config, cps, domains, limits, lists, notify, selfupdate, system, tgbot, totp
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -197,6 +197,14 @@ def v_outbound(st: dict, v, allow_inherit: bool = False) -> str:
     bad(Msg("err.unknown_outbound", value=v))
 
 
+def is_socks_out(st: dict, out: str) -> bool:
+    u = Store.upstream(st, out[3:]) if isinstance(out, str) and out.startswith("up:") else None
+    try:
+        return bool(u) and engine.parsed(u).kind == "socks5"
+    except awgconf.ConfigError:
+        return False
+
+
 def v_rules(st: dict, rules) -> list[dict]:
     if not isinstance(rules, list) or len(rules) > 50:
         bad("err.bad_rules")
@@ -210,9 +218,17 @@ def v_rules(st: dict, rules) -> list[dict]:
         for lid in ls:
             if not Store.lst(st, lid):
                 bad(Msg("err.unknown_list", id=lid))
+        outbound = v_outbound(st, r.get("outbound"))
+        kinds = {Store.lst(st, lid)["kind"] == "domains" for lid in ls}
+        if True in kinds:
+            # списки доменов — только на выход SOCKS5: имя сайта передаётся прокси (sniproxy.py)
+            if len(kinds) > 1:
+                bad("err.rule_mixed_domains")
+            if not is_socks_out(st, outbound):
+                bad("err.domains_need_socks")
         rid = r.get("id") if isinstance(r.get("id"), str) and ID_RE.match(r.get("id", "")) else new_id("r_")
         out.append({"id": rid, "lists": list(dict.fromkeys(ls)),
-                    "outbound": v_outbound(st, r.get("outbound")),
+                    "outbound": outbound,
                     "enabled": bool(r.get("enabled", True)),
                     "comment": str(r.get("comment") or "")[:80]})
     return out
@@ -1015,7 +1031,8 @@ def _upstream_view(st: dict, u: dict) -> dict:
     try:
         pc = engine.parsed(u)
         info = {"endpoint": pc.endpoint, "address": pc.address, "mtu": pc.mtu,
-                "version": pc.version,
+                "version": pc.version, "kind": pc.kind,
+                "socks_user": pc.socks.get("user") if pc.kind == "socks5" else None,
                 "config_error": None}
     except awgconf.ConfigError as e:
         info = {"config_error": str(e)}
@@ -1076,6 +1093,7 @@ def get_state(req):
         "direct_traffic": engine.traffic.out_view("direct"),
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
+        "sni": engine.sni_view(),
         "clients": clients,
         "events": engine.events[-40:][::-1],
         "country_codes": lists.COUNTRY_CODES,
@@ -1325,7 +1343,7 @@ def trace_target(client: str | None, ip: str) -> dict:
             except Exception:  # noqa: BLE001
                 bad("err.ip_or_domain")
             bad(Msg("tr.ipv6_only", host=ip))   # у домена только AAAA
-        res = engine.trace(client, resolved)
+        res = engine.trace(client, resolved, ip.lower().rstrip("."))
         res["steps"].insert(0, Msg("tr.resolved", host=ip, ip=resolved))
         res["ip"] = resolved
         return res
@@ -1341,7 +1359,7 @@ def trace_target(client: str | None, ip: str) -> dict:
 def _list_view(l: dict | None) -> dict | None:
     """Список для браузера. Текст ручного списка (до 2 МБ) не отдаём в /api/state,
     который опрашивается каждые 5 секунд, — только по /api/lists/<id>."""
-    if l is None or l.get("kind") != "manual":
+    if l is None or l.get("kind") not in ("manual", "domains"):
         return l
     return {**l, "source": None}
 
@@ -1356,7 +1374,7 @@ def get_list(req, lid):
 
 def _list_body(st: dict, body: dict, existing: dict | None = None) -> dict:
     kind = body.get("kind", existing["kind"] if existing else None)
-    if kind not in ("country", "asn", "url", "manual"):
+    if kind not in ("country", "asn", "url", "manual", "domains"):
         bad("err.list_kind")
     src = str(body.get("source", existing["source"] if existing else "")).strip()
     if kind == "country":
@@ -1370,6 +1388,15 @@ def _list_body(st: dict, body: dict, existing: dict | None = None) -> dict:
             bad("err.asn_format")
         src = " ".join(f"AS{a}" for a in asns)
         name = body.get("name") or src
+    elif kind == "domains":
+        if len(src) > 2_000_000:
+            bad("err.list_too_big")
+        urls, text = domains.split_source(src)
+        found = domains.parse(text)
+        if not urls and not found:
+            bad("err.no_domains")
+        # без названия — первый домен (или сайт первой ссылки)
+        name = body.get("name") or (found[0] if found else urls[0].split("/")[2])[:40]
     elif kind == "url":
         urls = src.split()
         if not urls or not all(re.match(r"^https?://\S+$", u) for u in urls):

@@ -2,7 +2,8 @@
 
 Каждые RECONCILE_INTERVAL секунд (и сразу после изменений в панели):
   * находит контейнер Amnezia (если он перезапустился — всё создаётся заново);
-  * поднимает/гасит туннели awgrN к выходным серверам;
+  * поднимает/гасит туннели awgrN к выходным серверам (AWG или прокси SOCKS5);
+  * держит sniproxy.py для правил по доменам (выходы SOCKS5);
   * проверяет «живость» туннелей по рукопожатиям и переключает на резерв;
   * генерирует и атомарно применяет nftables, синхронизирует ip rule / маршруты.
 """
@@ -13,11 +14,12 @@ import ipaddress
 import json
 import logging
 import os
+import signal
 import subprocess
 import threading
 import time
 
-from . import awgconf, config, limits, lists, nftgen, system
+from . import awgconf, config, domains, limits, lists, nftgen, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
@@ -29,6 +31,9 @@ RUN_DIR = "/run/awgr" if not config.DRY_RUN else os.path.join(config.DATA_DIR, "
 SOCK_DIR = "/var/run/amneziawg"
 LOG_DIR = os.path.join(config.DATA_DIR, "logs")
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe.py")
+SNIPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sniproxy.py")
+SNI_CONF = os.path.join(RUN_DIR, "sni.json")
+SNI_STATS = os.path.join(RUN_DIR, "sni-stats.json")
 
 
 def _sha(s: str) -> str:
@@ -44,6 +49,15 @@ class UpRT:
         self.conf_hash = conf_hash
         self.target_key = target_key
         self.proc: subprocess.Popen | None = None
+        self.started = time.time()
+        self.socks_ip: str | None = None        # адрес прокси SOCKS5 (имя разрешает панель)
+
+
+class HelperRT:
+    """Запущенный вспомогательный процесс (sniproxy.py)."""
+
+    def __init__(self, proc: subprocess.Popen, key: str, cfg_hash: str):
+        self.proc, self.key, self.cfg_hash = proc, key, cfg_hash
         self.started = time.time()
 
 
@@ -79,6 +93,12 @@ class Engine:
         self.srv = ServerManager(self)
         self._runtime_checked = False
         self._last_start_try = 0.0
+        self.domain_matcher = domains.Matcher()
+        self.sni: HelperRT | None = None
+        self.sni_state: dict | None = None      # для интерфейса: state, listen, error
+        self._sni_retry = 0.0
+        self._socks_res: dict[str, dict] = {}   # uid → результат последней проверки прокси
+        self._socks_busy: set[str] = set()
         os.makedirs(RUN_DIR, exist_ok=True)
         os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -203,10 +223,11 @@ class Engine:
         t = self.target
         if t and t.key == r.target_key:
             t.ns(["ip", "link", "del", r.iface], check=False)
-        try:
-            os.remove(f"{SOCK_DIR}/{r.iface}.sock")
-        except OSError:
-            pass
+        for p in (f"{SOCK_DIR}/{r.iface}.sock", os.path.join(RUN_DIR, f"{r.iface}.yml")):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
     def _stop_all(self) -> None:
         for uid in list(self.rt):
@@ -217,6 +238,15 @@ class Engine:
         r = UpRT(u["num"], conf_hash, t.key)
         ifn = r.iface
         t.ns(["ip", "link", "del", ifn], check=False)
+        if pc.kind == "socks5":
+            self._start_socks(t, r, u, pc)
+            self.rt[uid] = r
+            self._socks_res.pop(uid, None)
+            t.ns(["ip", "addr", "replace", f"169.254.200.{u['num']}/32", "dev", ifn], check=False)
+            t.ns(["ip", "link", "set", ifn, "up"], check=False)
+            t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
+            self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
+            return
         if not config.DRY_RUN:
             if config.UPSTREAM_BACKEND == "kernel":
                 t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
@@ -263,6 +293,54 @@ class Engine:
         t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
         self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
 
+    def _start_socks(self, t: system.Target, r: UpRT, u: dict, pc: awgconf.UpstreamConf) -> None:
+        """hev-socks5-tunnel в сети сервера: создаёт TUN awgrN и отправляет всё из него в прокси."""
+        if config.DRY_RUN:
+            return
+        if not os.path.exists("/proc/sys/net/ipv6"):
+            # hev-socks5-tunnel открывает сокеты AF_INET6 (IPv4 внутри них): нужна поддержка
+            # IPv6 в ядре; выключенный sysctl disable_ipv6 не мешает, мешает загрузка с ipv6.disable=1
+            raise system.SysError(Msg("sys.socks_no_ipv6"))
+        try:
+            ip = socks.resolve(pc.socks["host"])
+        except socks.SocksError as e:
+            raise system.SysError(e.msg) from None
+        r.socks_ip = ip
+        path = os.path.join(RUN_DIR, f"{r.iface}.yml")      # в нём пароль прокси — только для root
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(socks.hev_config(r.iface, r.num, ip, pc.socks))
+        logp = os.path.join(LOG_DIR, f"{r.iface}.log")
+        with open(logp, "w") as logf:
+            r.proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", socks.HEV, path],
+                                      stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+        up = False
+        for _ in range(50):
+            if r.proc.poll() is not None:
+                break
+            links = self._links(t)
+            if links and r.iface in links:
+                up = True
+                break
+            time.sleep(0.1)
+        try:
+            os.remove(path)          # hev прочитал настройки при запуске
+        except OSError:
+            pass
+        if not up:
+            if r.proc.poll() is None:
+                r.proc.kill()
+            try:
+                r.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                with open(logp) as f:
+                    tail = f.read()[-300:].strip()
+            except OSError:
+                tail = ""
+            raise system.SysError(Msg("sys.socks_start_failed", iface=r.iface, detail=tail))
+
     def _links(self, t: system.Target) -> set[str] | None:
         if config.DRY_RUN:
             return None
@@ -285,7 +363,7 @@ class Engine:
             except awgconf.ConfigError as e:
                 self.health[uid] = {"state": "error", "error": e.msg}
                 continue
-            h = _sha(pc.setconf + str(pc.mtu))
+            h = _sha((pc.setconf if pc.kind == "awg" else pc.raw) + str(pc.mtu))
             r = self.rt.get(uid)
             alive = bool(r) and (links is None or r.iface in links) and \
                 (r.proc is None or r.proc.poll() is None)
@@ -315,6 +393,13 @@ class Engine:
                 if self.health[uid].get("state") not in ("error",):
                     self.health[uid] = {"state": "down"}
                 continue
+            try:
+                kind = self.parsed(u).kind
+            except Exception:  # noqa: BLE001
+                kind = "awg"
+            if kind == "socks5":
+                self._socks_health(t, u, r, now)
+                continue
             if config.DRY_RUN and self._fake and r.iface not in self._fake.handshakes:
                 # в демо второй туннель «мёртвый», чтобы было видно резервирование
                 self._fake.handshakes[r.iface] = now - (900 if r.num == 2 else 20)
@@ -340,6 +425,50 @@ class Engine:
                 "endpoint": peer["endpoint"] if peer else None,
                 "since": r.started,
             }
+
+    def _socks_health(self, t: system.Target, u: dict, r: UpRT, now: float) -> None:
+        """Выход SOCKS5 работает, если жив hev-socks5-tunnel и недавняя проверка прокси прошла.
+        Проверка идёт в фоне раз в минуту, чтобы не задерживать цикл."""
+        uid = u["id"]
+        if config.DRY_RUN:
+            self._socks_res[uid] = {"ok": r.num != 2, "ms": 35, "at": now,
+                                    "error": None if r.num != 2 else Msg("socks.timeout")}
+        res = self._socks_res.get(uid)
+        if (not res or now - res["at"] >= socks.CHECK_EVERY) and uid not in self._socks_busy:
+            conf = self.parsed(u).socks
+            self._socks_busy.add(uid)
+
+            def run(uid=uid, conf=conf):
+                try:
+                    self._socks_res[uid] = socks.check(conf)
+                finally:
+                    self._socks_busy.discard(uid)
+                    ok = bool((self._socks_res.get(uid) or {}).get("ok"))
+                    if ok != bool((self.health.get(uid) or {}).get("healthy")):
+                        self.trigger()      # состояние изменилось — пересчитать правила сразу
+            threading.Thread(target=run, name=f"socks-{uid}", daemon=True).start()
+        alive = r.proc is None or r.proc.poll() is None
+        healthy = bool(alive and res and res["ok"] and now - res["at"] < socks.CHECK_FRESH)
+        prev = self.health.get(uid, {}).get("healthy")
+        if prev is not None and prev != healthy:
+            self.event("info" if healthy else "warn",
+                       Msg("ev.upstream_ok" if healthy else "ev.upstream_failed", name=u["name"], uid=uid))
+        rx = tx = 0
+        if not config.DRY_RUN:
+            p = t.ns(["ip", "-j", "-s", "link", "show", "dev", r.iface], check=False, timeout=10)
+            try:
+                st64 = (json.loads(p.stdout or "[]") or [{}])[0].get("stats64") or {}
+                # TUN со стороны ядра: rx — пришло от прокси (к клиентам), tx — ушло в прокси
+                rx, tx = st64.get("rx", {}).get("bytes", 0), st64.get("tx", {}).get("bytes", 0)
+            except (ValueError, IndexError, AttributeError):
+                pass
+        state = "up" if healthy else ("connecting" if not res and now - r.started < 30 else "stale")
+        self.health[uid] = {"state": state, "healthy": healthy, "iface": r.iface, "since": r.started,
+                            "kind": "socks5", "check_age": now - res["at"] if res else None,
+                            "latency_ms": res["ms"] if res else None,
+                            "error": res["error"] if res and not res["ok"] else
+                            (None if alive else Msg("socks.tunnel_down")),
+                            "rx": rx, "tx": tx}
 
     # ------------------------------------------------- трафик по выходам
     def _account(self, t: system.Target, st: dict) -> None:
@@ -477,17 +606,35 @@ class Engine:
         return {"rules": [(r["lists"], self.resolve(r["outbound"], st)) for r in pol["rules"]],
                 "default": self.resolve(pol["default"], st)}
 
-    def build_ruleset(self, t: system.Target, st: dict) -> str:
-        gp = self._resolved(st, self.policy_for(st, None))
+    @staticmethod
+    def domain_lists(st: dict) -> set[str]:
+        return {l["id"] for l in st["lists"] if l.get("kind") == "domains"}
+
+    def _policies(self, st: dict) -> tuple[dict, dict]:
+        """Общая и личные политики для nftables и sniproxy.py: правила по адресам — с выходом
+        после резолва; правила со списками доменов — отдельно (их выход резолвит sniproxy-конфиг)."""
+        dl = self.domain_lists(st)
+
+        def conv(pol: dict) -> dict:
+            ip_rules, dom = [], []
+            for r in pol["rules"]:
+                if any(lid in dl for lid in r["lists"]):
+                    dom.append(([lid for lid in r["lists"] if lid in dl], r["outbound"]))
+                else:
+                    ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
+            return {"rules": ip_rules, "default": self.resolve(pol["default"], st), "domain": dom}
+
+        gp = conv(self.policy_for(st, None))
         cps = {}
         for c in self.clients:
             if not c.get("ip"):
                 continue
             pol = self.policy_for(st, c["public_key"])
             if pol["custom"]:
-                cps[c["ip"]] = self._resolved(st, pol)
-        used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
-        lst = {lid: self._cidrs(lid) for lid in used}
+                cps[c["ip"]] = conv(pol)
+        return gp, cps
+
+    def _up_list(self, st: dict) -> list[dict]:
         ups = []
         for u in st["upstreams"]:
             if u["id"] in self.rt:
@@ -496,7 +643,167 @@ class Engine:
                 except Exception:  # noqa: BLE001
                     continue
                 ups.append({"num": u["num"], "snat": pc.address, "mtu": pc.mtu})
-        return nftgen.generate(t.iface, lst, ups, gp, cps)
+        return ups
+
+    def build_ruleset(self, t: system.Target, st: dict, sniff_port: int | None = None) -> str:
+        gp, cps = self._policies(st)
+        used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
+        lst = {lid: self._cidrs(lid) for lid in used}
+        return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port)
+
+    # ---------------------------------------------- правила по доменам (sniproxy.py)
+    def tunnel_addr(self, t: system.Target) -> tuple[str, str] | None:
+        """Адрес сервера в туннеле (на нём слушает sniproxy.py) и подсеть клиентов."""
+        if config.DRY_RUN:
+            return "10.8.1.1", "10.8.1.0/24"
+        p = t.ns(["ip", "-j", "-4", "addr", "show", "dev", t.iface], check=False)
+        try:
+            for x in json.loads(p.stdout or "[]"):
+                for a in x.get("addr_info") or []:
+                    if a.get("family") == "inet" and a.get("local"):
+                        net = ipaddress.ip_interface(f'{a["local"]}/{a.get("prefixlen", 24)}').network
+                        return a["local"], str(net)
+        except (ValueError, TypeError):
+            pass
+        return None
+
+    def _sni_target(self, st: dict, out: str) -> dict:
+        """Куда sniproxy.py ведёт соединение с совпавшим доменом: SOCKS5 выхода (если он
+        работает), иначе — его резервный путь."""
+        eff = self.resolve(out, st)
+        if eff == "block":
+            return {"block": True}
+        if eff == "direct":
+            return {"mark": 0}
+        u = next((x for x in st["upstreams"] if x["num"] == eff), None)
+        r = self.rt.get(u["id"]) if u else None
+        try:
+            pc = self.parsed(u) if u else None
+        except Exception:  # noqa: BLE001
+            pc = None
+        if pc and pc.kind == "socks5":
+            return {"socks": {"ip": (r.socks_ip if r and r.socks_ip else pc.socks["host"]), "port": pc.socks["port"],
+                              "user": pc.socks["user"], "password": pc.socks["password"]}}
+        return {"mark": nftgen.mark_for(eff)}
+
+    def _stop_sni(self) -> None:
+        d, self.sni = self.sni, None
+        if d and d.proc.poll() is None:
+            d.proc.terminate()
+            try:
+                d.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                d.proc.kill()
+
+    def _input_rule(self, t: system.Target, op: str) -> None:
+        """Перенаправленные соединения клиентов — входящие для сервера (а не транзитные).
+        Файрвол на iptables (ufw и т. п.) их бы отбросил: разрешаем порт sniproxy.py на
+        интерфейсе клиентов. op: "add" | "del". Нет iptables — ничего не делаем."""
+        ifn, port = t.iface, int(config.SNI_PROXY_PORT)
+        rule = f"INPUT -i {ifn} -p tcp --dport {port} -j ACCEPT"
+        if op == "add":
+            cmd = f"iptables -C {rule} 2>/dev/null || iptables -I {rule}"
+        else:
+            cmd = f"while iptables -C {rule} 2>/dev/null; do iptables -D {rule}; done"
+        try:
+            t.native(["sh", "-c", f"command -v iptables >/dev/null 2>&1 || exit 0; {cmd}"],
+                     check=False, timeout=30)
+        except Exception as e:  # noqa: BLE001
+            log.info("sni input rule: %s", e)
+
+    def _sni_hung(self) -> bool:
+        """Процесс жив, но цикл событий стоит: счётчики (пишет каждые 30 с) давно не обновлялись."""
+        d = self.sni
+        if not d or time.time() - d.started < 120:
+            return False
+        try:
+            with open(SNI_STATS) as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            return False
+        return s.get("pid") == d.proc.pid and time.time() - float(s.get("at") or 0) > 120
+
+    def _sync_sni(self, t: system.Target, st: dict) -> int | None:
+        """Держит sniproxy.py запущенным, пока в правилах есть списки доменов.
+        → порт для nftables или None (правила по доменам сейчас не действуют)."""
+        gp, cps = self._policies(st)
+        up_nums = {u["num"] for u in self._up_list(st)}
+        policies, client_map = nftgen.layout(gp, cps, up_nums)
+        marks = nftgen.sniff_marks(policies)
+        if not marks:
+            self._stop_sni()
+            self.sni_state = None
+            return None
+        la = self.tunnel_addr(t)
+        if not la:
+            self._stop_sni()
+            self.sni_state = {"state": "error", "error": Msg("sni.no_addr", iface=t.iface)}
+            return None
+        listen, net = la
+        if config.DRY_RUN:
+            self.sni_state = {"state": "on", "listen": listen}
+            return config.SNI_PROXY_PORT
+        lids = sorted({lid for n in marks for l, _ in policies[n]["domain"] for lid in l})
+        files = {lid: domains.path_for(lid) for lid in lids}
+        cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS,
+               "lists": files, "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
+               "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o)}
+                                                     for l, o in policies[n]["domain"]]}
+                            for n, m in marks.items()}}
+        mt = {lid: os.path.getmtime(p) if os.path.exists(p) else 0 for lid, p in files.items()}
+        h = _sha(json.dumps([cfg, mt], sort_keys=True))
+        key = f"{t.key}|{listen}|{config.SNI_PROXY_PORT}"
+        d = self.sni
+        if d and (d.key != key or d.proc.poll() is not None or self._sni_hung()):
+            if d.key == key:
+                self.event("warn", Msg("ev.sni_died"))
+            self._stop_sni()
+            d = None
+        if d is None or d.cfg_hash != h:
+            fd = os.open(SNI_CONF + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # пароли прокси
+            with os.fdopen(fd, "w") as f:
+                json.dump(cfg, f)
+            os.replace(SNI_CONF + ".tmp", SNI_CONF)
+        if d is None:
+            if time.time() - self._sni_retry < 60:
+                return None
+            self._sni_retry = time.time()
+            logp = os.path.join(LOG_DIR, "sniproxy.log")
+            with open(logp, "a") as logf:
+                proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", "python3", SNIPROXY, SNI_CONF],
+                                        stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                try:
+                    with open(logp) as f:
+                        tail = f.read()[-300:].strip()
+                except OSError:
+                    tail = ""
+                self.sni_state = {"state": "error", "listen": listen, "error": Msg("sni.start_failed", detail=tail)}
+                self.event("error", Msg("ev.sni_failed", detail=tail))
+                return None
+            self.sni = HelperRT(proc, key, h)
+            self._input_rule(t, "add")
+        elif d.cfg_hash != h:
+            d.proc.send_signal(signal.SIGHUP)       # перечитать настройки и списки
+            d.cfg_hash = h
+        self.sni_state = {"state": "on", "listen": listen}
+        return config.SNI_PROXY_PORT
+
+    def sni_view(self) -> dict | None:
+        """Для интерфейса: состояние и счётчики sniproxy.py."""
+        if not self.sni_state:
+            return None
+        v = dict(self.sni_state)
+        if self.sni and not config.DRY_RUN:
+            try:
+                with open(SNI_STATS) as f:
+                    s = json.load(f)
+                if s.get("pid") == self.sni.proc.pid:
+                    v.update({k: s.get(k) for k in ("conns", "active", "matched", "errors", "by_list")})
+            except (OSError, ValueError):
+                pass
+        return v
 
     # -------------------------------------------------------- ip rule/route
     def _sync_rules(self, t: system.Target) -> None:
@@ -582,6 +889,7 @@ class Engine:
                 if self.target is not None and self.target.exists:
                     self.event("warn", Msg("ev.target_restarted"))
                 self._stop_all()
+                self._stop_sni()
                 self.target = t
                 self.applied_hash = None
                 self._sysctl(t)
@@ -605,8 +913,14 @@ class Engine:
 
             self._sync_upstreams(t, st)
             self._update_health(t, st)
+            try:
+                sniff = self._sync_sni(t, st)
+            except Exception as e:  # noqa: BLE001
+                log.exception("sniproxy")
+                self.sni_state = {"state": "error", "error": msg_of(e)}
+                sniff = None        # правила по доменам не действуют, по адресам — как обычно
 
-            text = self.build_ruleset(t, st)
+            text = self.build_ruleset(t, st, sniff)
             h = _sha(text)
             present = t.ns(["nft", "list", "chain", "ip", config.NFT_TABLE, "c_prerouting"],
                            check=False).returncode == 0
@@ -629,9 +943,11 @@ class Engine:
         with self.lock:
             t = self.target
             self._stop_all()
+            self._stop_sni()
             if t:
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
                 t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
+                self._input_rule(t, "del")
                 self._acct_key = None
                 p = t.ns(["ip", "-j", "rule", "show"], check=False)
                 try:
@@ -655,6 +971,19 @@ class Engine:
         else:
             with self.lock:
                 self._stop_all()
+                if self.sni:
+                    self._stop_sni()
+                    t = self.target
+                    if t:
+                        # без sniproxy.py перенаправление в него оборвало бы HTTPS у клиентов с
+                        # правилами по доменам: оставляем только правила по адресам
+                        try:
+                            p = os.path.join(RUN_DIR, "ruleset.nft")
+                            with open(p, "w") as f:
+                                f.write(self.build_ruleset(t, st, None))
+                            t.ns(["nft", "-f", p], check=False, timeout=60)
+                        except Exception:  # noqa: BLE001
+                            log.exception("ruleset without sniproxy")
 
     # ---------------------------------------------------------------- tools
     def own_route(self, out: str) -> tuple[int, int] | None:
@@ -701,8 +1030,12 @@ class Engine:
         res["via"] = eff
         return res
 
-    def trace(self, pk: str | None, ip: str) -> dict:
+    def trace(self, pk: str | None, ip: str, name: str | None = None) -> dict:
+        """Куда пойдёт трафик клиента до ip. name — домен, по которому его нашли: правила со
+        списками доменов (HTTPS/HTTP) проверяются по нему первыми — так же, как в sniproxy.py."""
         st = self.store.snapshot()
+        dl = self.domain_lists(st)
+        sni_on = bool(self.sni_state and self.sni_state.get("state") == "on")
         steps = []
         for net in nftgen.LOCAL_NETS:
             if ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(net):
@@ -711,8 +1044,18 @@ class Engine:
         pol = self.policy_for(st, pk)
         steps.append(Msg("tr.client_rules" if pk and st["clients"].get(pk, {}).get("rules_mode")
                          == "custom" else "tr.global_rules"))
+        for r in pol["rules"] if name and sni_on else []:
+            for lid in r["lists"]:
+                dom = self.domain_matcher.match(lid, name) if lid in dl else None
+                if dom:
+                    steps.append(Msg("tr.match_domain", list=lid, domain=dom))
+                    eff = self.resolve(r["outbound"], st)
+                    return {"result": r["outbound"], "effective": eff, "steps": steps,
+                            "rule": r.get("comment") or r["id"], "domain": dom}
         for r in pol["rules"]:
             for lid in r["lists"]:
+                if lid in dl:
+                    continue
                 hit = self.matcher.contains(lid, ip)
                 if hit:
                     steps.append(Msg("tr.match", list=lid, net=hit))
