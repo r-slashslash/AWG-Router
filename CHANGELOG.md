@@ -3,6 +3,25 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.12.0 — 2026-11-02
+
+- **Rules by domain.** Lists has a new kind, **Domains**: `example.com` on the list also covers all
+  its subdomains, and a link to a ready-made list (plain domains, dnsmasq, hosts, Adblock, v2ray)
+  is downloaded and refreshed like other lists. A domain list goes into rules like any other list,
+  for everyone or for one client.
+- **DNS through the server** (Server tab) makes domain rules work: client configs get the server's
+  tunnel address as DNS, every client DNS query (port 53, to any address) goes to a DNS forwarder
+  on the server, and the addresses of listed domains are put into the rules before the client gets
+  the answer (CNAME chains included). It turns on by itself with the first domain list; clients
+  need new configs. Queries are forwarded to the DNS set on the Server tab, along the same path
+  client traffic to that address would take. AAAA answers are empty: the tunnel is IPv4 only.
+  If the forwarder stops, client DNS goes straight to that DNS, so nobody loses DNS.
+- **SOCKS5 exits.** An exit can be a SOCKS5 proxy: `socks5://login:password@host:port` (or
+  `host:port:login:password`) in the exit's config field. TCP and UDP go through it, rules,
+  fallbacks, limits, traffic counting, Check and Telegram work as with AmneziaWG exits. The panel
+  checks the proxy every minute (login and a test connection) and shows its response time.
+- **Route check** finds domain rules too: checking `www.youtube.com` shows the domain list it matched.
+
 ## 1.11.0 — 2026-11-02
 
 - **Bot: a short greeting.** `/start` answers "🤖 AWG Router remote · /help — commands" and opens

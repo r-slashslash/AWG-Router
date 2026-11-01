@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import ipaddress
+
 from . import config
 
 LOCAL_NETS = [
@@ -21,6 +23,30 @@ LOCAL_NETS = [
 
 ACCT_TABLE = "awgr_acct"
 ACCT_VER = 1
+
+
+DNS_TABLE = "awgr_dns"
+
+
+def dns_fallback_ruleset(wg_iface: str, dns_ip: str) -> str:
+    """Запасной путь DNS клиентов, у которых в конфиге DNS — адрес сервера («DNS через сервер»).
+
+    Отдельная таблица, цепочка позже основной (dstnat + 10): пока DNS-посредник работает,
+    его redirect в основной таблице срабатывает первым, а адресное преобразование делается для
+    соединения один раз — сюда пакет уже не попадает. Когда посредника нет (панель
+    перезапускается, остановлена или он упал), запросы уходят прямо на DNS из настроек и у
+    клиентов не пропадает DNS. Основная таблица пересоздаётся постоянно, эта — нет."""
+    ip = ipaddress.IPv4Address(dns_ip)
+    return f"""table ip {DNS_TABLE}
+delete table ip {DNS_TABLE}
+table ip {DNS_TABLE} {{
+\tchain c_dns_fallback {{
+\t\ttype nat hook prerouting priority dstnat + 10; policy accept;
+\t\tiifname "{wg_iface}" udp dport 53 dnat to {ip}
+\t\tiifname "{wg_iface}" tcp dport 53 dnat to {ip}
+\t}}
+}}
+"""
 
 
 def acct_marker(wg_iface: str) -> str:
@@ -128,8 +154,23 @@ def _policy_chain(name: str, policy: dict, available: set[str]) -> str:
     return "\n".join(lines)
 
 
+def _domain_set(name: str) -> str:
+    """Набор адресов списка доменов: его наполняет dnsproxy.py, у каждого адреса свой срок."""
+    return (f"\tset {name} {{\n\t\ttype ipv4_addr\n\t\tflags timeout\n"
+            f"\t\tsize {DOMAIN_SET_SIZE}\n\t}}")
+
+
+DOMAIN_SET_SIZE = 262144
+
+
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
-             global_policy: dict, client_policies: dict[str, dict]) -> str:
+             global_policy: dict, client_policies: dict[str, dict],
+             domain_lists: set[str] | frozenset = frozenset(), dns: tuple | None = None) -> str:
+    """domain_lists — какие из lists списки доменов (их наборы динамические).
+    dns — DNS клиентов: ("proxy", порт) — в dnsproxy.py на адресе сервера в туннеле;
+    ("dnat", IP) — прямо на этот DNS; None — не трогать (тогда, если включён «DNS через
+    сервер», работает запасной путь из таблицы awgr_dns — см. dns_fallback_ruleset)."""
+    dns_port = dns[1] if dns and dns[0] == "proxy" else None
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
 
@@ -159,12 +200,14 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         policies.setdefault(chains[_policy_key(p)], p)
 
     used_lists = sorted({lid for p in policies.values() for l, _ in p["rules"] for lid in l})
-    available = {lid for lid in used_lists if lists.get(lid)}
+    # набор списка доменов нужен, только пока работает DNS-посредник: без него он всегда пуст
+    available = {lid for lid in used_lists if (lid in domain_lists and dns_port) or
+                 (lid not in domain_lists and lists.get(lid))}
 
     out = [f"table ip {T}", f"delete table ip {T}", f"table ip {T} {{"]
     out.append(_set_block("local4", LOCAL_NETS))
     for lid in sorted(available):
-        out.append(_set_block(f"l_{lid}", lists[lid]))
+        out.append(_domain_set(f"l_{lid}") if lid in domain_lists else _set_block(f"l_{lid}", lists[lid]))
 
     out.append("\tmap clients {")
     out.append("\t\ttype ipv4_addr : verdict")
@@ -206,9 +249,20 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     fwd.append("\t}")
     out.append("\n".join(fwd))
 
+    if dns:
+        # все DNS-запросы клиентов, куда бы они ни шли, — в dnsproxy.py на адресе сервера в туннеле
+        act = f"redirect to :{int(dns_port)}" if dns_port else f"dnat to {ipaddress.IPv4Address(dns[1])}"
+        out.append(f"""\tchain c_dns {{
+\t\ttype nat hook prerouting priority dstnat; policy accept;
+\t\tiifname "{wg_iface}" udp dport 53 {act}
+\t\tiifname "{wg_iface}" tcp dport 53 {act}
+\t}}""")
+
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]
     for u in sorted(upstreams, key=lambda x: x["num"]):
+        if not u.get("snat"):          # SOCKS5: соединения завершает hev-socks5-tunnel, SNAT не нужен
+            continue
         ifn = f"{config.IFACE_PREFIX}{u['num']}"
         # адрес туннеля не назначаем на интерфейс (он часто пересекается с подсетью
         # наших же клиентов 10.8.1.0/24), а подставляем через SNAT
