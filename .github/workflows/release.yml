@@ -1,7 +1,8 @@
 # Релизы без ручного ввода тега.
 #
 # Каждый push в main: тесты, затем, если версия в app/version.py ещё не выпущена, — черновик
-# релиза v<VERSION> с архивом кода awg-router.tar.gz, его .sha256 и текстом из CHANGELOG.md.
+# релиза v<VERSION> с архивом кода awg-router.tar.gz, его .sha256 и текстом на 4 языках из
+# release-notes/v<VERSION>.md (нет файла — черновика нет, workflow падает).
 # Новые коммиты с той же версией обновляют этот черновик (архив, текст, коммит тега).
 # Владелец открывает Releases и нажимает Publish: тег создаётся при публикации, вводить его не нужно.
 #
@@ -67,13 +68,15 @@ jobs:
           sha256sum awg-router.tar.gz > awg-router.tar.gz.sha256
           ls -l awg-router.tar.gz*
 
-      - name: Release notes from CHANGELOG.md
+      - name: Release notes (4 languages)
         if: steps.v.outputs.state != 'published'
         run: |
-          awk -v v="${{ steps.v.outputs.ver }}" '
-            /^## / { if (on) exit; on = (index($0, "## " v " ") == 1 || $0 == "## " v); next }
-            on' CHANGELOG.md > notes.md
-          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no section for ${{ steps.v.outputs.ver }}"; exit 1; }
+          f="release-notes/${{ steps.v.outputs.tag }}.md"
+          [ -s "$f" ] || { echo "::error::$f is missing: write the release notes in en / ru / zh / fa"; exit 1; }
+          for a in 'id="ru"' 'id="zh"' 'id="fa"'; do
+            grep -q "$a" "$f" || { echo "::error::$f has no $a section"; exit 1; }
+          done
+          cp "$f" notes.md
 
       - name: Create or refresh the draft
         if: steps.v.outputs.state != 'published'
