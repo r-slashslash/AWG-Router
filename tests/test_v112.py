@@ -20,6 +20,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from app.store import Store  # noqa: E402
 from app import awgconf, config, domains, lists, nftgen, sniproxy, socks, web  # noqa: E402
 from app import main  # noqa: E402
 from tests import e2e_servers  # noqa: E402
@@ -382,6 +383,89 @@ class PanelTest(unittest.TestCase):
 
 
 # ------------------------------------------------------------------ бот: всё в одном сообщении
+class ExitDialogRoutingTest(unittest.TestCase):
+    """Маршрутизация SOCKS5-выхода прямо из его окна (POST/PUT /api/upstreams с routing)."""
+
+    @classmethod
+    def setUpClass(cls):
+        main.engine.reconcile()
+
+    def setUp(self):
+        st = main.store.snapshot()
+        self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
+        self._lists = {l["id"] for l in st["lists"]}
+        self.ids = []
+
+    def tearDown(self):
+        r = self._routing
+        main.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
+        for uid in self.ids:
+            if Store.upstream(main.store.snapshot(), uid):
+                main.del_upstream(Req({"replace": "direct"}), uid)
+        for l in main.store.snapshot()["lists"]:
+            if l["id"] not in self._lists:
+                main.del_list(None, l["id"])
+        main.engine.reconcile()
+
+    def add(self, routing, name="Seller"):
+        with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
+            uid = main.add_upstream(Req({"name": name, "config": "socks5://u:p@198.51.100.30:1080",
+                                         "routing": routing}))["id"]
+        self.ids.append(uid)
+        return uid
+
+    def mine(self, uid):
+        return [r for r in main.store.snapshot()["routing"]["rules"] if r["outbound"] == "up:" + uid]
+
+    def test_own_sites_list_and_rules(self):
+        uid = self.add({"domains": "youtube.com\nInstagram.com", "net_lists": ["ru"], "default": False})
+        st = main.store.snapshot()
+        u = Store.upstream(st, uid)
+        own = Store.lst(st, u["own_list"])
+        self.assertEqual((own["kind"], own["name"]), ("domains", "Seller"))
+        self.assertEqual([r["lists"] for r in self.mine(uid)], [[own["id"]], ["ru"]])
+        self.assertEqual(main.get_state(None)["upstreams"][-1]["own_list"], own["id"])
+
+    def test_edit_keeps_position_and_default(self):
+        uid = self.add({"domains": "a.example"})
+        main.put_routing(Req({"default": "direct", "rules": [
+            {"lists": ["ru"], "outbound": "block", "enabled": True, "comment": ""},
+            *self.mine(uid)]}))
+        main.edit_upstream(Req({"name": "Seller", "routing": {"domains": "a.example\nb.example",
+                                                             "net_lists": ["ru"], "default": True}}), uid)
+        st = main.store.snapshot()
+        self.assertEqual(st["routing"]["default"], "up:" + uid)
+        self.assertEqual(st["routing"]["rules"][0]["outbound"], "block")    # чужое правило осталось первым
+        self.assertIn("b.example", Store.lst(st, Store.upstream(st, uid)["own_list"])["source"])
+        main.edit_upstream(Req({"name": "Seller", "routing": {"domains": "", "default": False}}), uid)
+        st = main.store.snapshot()
+        self.assertEqual(st["routing"]["default"], "direct")
+        self.assertEqual(self.mine(uid), [])
+        self.assertNotIn("own_list", Store.upstream(st, uid))              # свой список удалён
+        self.assertFalse(any(l["name"] == "Seller" and l["kind"] == "domains" for l in st["lists"]))
+
+    def test_edit_without_routing_changes_nothing(self):
+        uid = self.add({"domains": "a.example"})
+        before = self.mine(uid)
+        main.edit_upstream(Req({"name": "Renamed"}), uid)
+        self.assertEqual(self.mine(uid), before)
+        st = main.store.snapshot()
+        self.assertEqual(Store.lst(st, Store.upstream(st, uid)["own_list"])["name"], "Renamed")
+
+    def test_bad_input(self):
+        with self.assertRaises(web.HTTPError) as cm:
+            self.add({"domains": "!!! ???"})
+        self.assertIn("err.no_domains", str(cm.exception))
+
+    def test_delete_drops_own_list_and_domain_rules(self):
+        uid = self.add({"domains": "a.example"})
+        own = Store.upstream(main.store.snapshot(), uid)["own_list"]
+        main.del_upstream(Req({"replace": "direct"}), uid)
+        st = main.store.snapshot()
+        self.assertIsNone(Store.lst(st, own))
+        self.assertFalse(any(own in r["lists"] for r in st["routing"]["rules"]))
+
+
 class BotMenuTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

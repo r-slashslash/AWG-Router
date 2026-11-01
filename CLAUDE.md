@@ -148,6 +148,13 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   in the AWG server's network. Follows `resolve()` (dead exit → its fallback); the exit counts as a
   reference (`ref.telegram`). `NotifyError.msg` carries a `Msg` for errors of our own, so
   `notify_error` / `backup_error` may be `{"$t": …}` — render them with `tm()`.
+- Exit window routing (1.12.0): `POST`/`PUT /api/upstreams` take optional `routing` =
+  `{domains, domain_lists, net_lists, default}` → `main.apply_exit_routing`: the sites text is the exit's own
+  domain list (`u["own_list"]`, named like the exit, renamed with it, dropped when emptied or with the exit if
+  unreferenced); all global rules with outbound `up:<id>` are replaced by ≤ 2 rules (domains, networks) at the
+  position of the first old one (else top), then `v_rules`. The browser sends `routing` only when that part of
+  the form was touched (or for a new SOCKS5 exit with something chosen). Exit type can't change on edit.
+  Deleting an exit drops rules with domain lists whose replacement isn't SOCKS5.
 - Deleting an exit: `DELETE /api/upstreams/<id>` with `{"replace": out}` runs
   `Store.replace_outbound(st, target, new, spare=its fallback)` over every place `outbound_refs`
   knows (plus client rules in "inherit" mode); without `replace` an exit in use is refused as
