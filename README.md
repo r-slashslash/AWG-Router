@@ -54,11 +54,11 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - The address uses a random port and a secret path, and login is password-protected with brute-force protection. A sign-in lasts 4 hours.
 - Optional second factor: a 6-digit code from an authenticator app (Google Authenticator, Aegis, 2FAS…). Turned on in **System**.
 - Optional Telegram notifications: an exit stops or recovers or nears its limit, the AmneziaWG server is unreachable or restarted, a client nears or hits its end date or limit, a new client connects for the first time, panel sign-ins, a certificate that can't be renewed, a new panel version. Set up in **System**. Where Telegram is blocked (Russia, China, Iran), the bot can send through one of your exits.
-- Optional control from Telegram: the bot becomes a remote with commands and buttons — status, the client list, turning a client on or off, its QR code and config file, +30 days or +10 GB, a new client with `/add`, checking an exit and changing the default one, where traffic to an address goes, a backup and a panel update. Buttons also appear under notifications (for example, +30 days under “access period ended”). Only the chat set in the panel is obeyed, and nothing can be deleted from the bot.
+- Optional control from Telegram: the bot becomes a remote with commands and buttons — status, the client list, turning a client on or off or deleting it (after a confirmation), its QR code and config file, +30 days or +10 GB, a new client with `/add`, checking an exit and changing the default one, where traffic to an address goes, a backup, a link to the panel and a panel update. Buttons also appear under notifications (for example, +30 days under “access period ended”). Only the chat set in the panel is obeyed.
 - The password can be changed right in the panel.
-- Backup and restore in one file: panel settings, exits, rules, client keys and the AmneziaWG server config — handy for moving to another server. The bot can also send a backup to Telegram every day or week, encrypted with a password if you set one.
+- Backup and restore in one file: panel settings, exits, rules, client keys and the AmneziaWG server config — handy for moving to another server. The downloaded file can be encrypted with a password. The bot can also send a backup to Telegram every day or week, encrypted with a password if you set one.
 - The panel shows its version, tells you when an update is out and updates itself with one button (or `awg-router update` on the server).
-- Can be added to a phone's home screen and opens like an app.
+- Can be installed on a phone: **System → Install on a phone** shows a QR code and how to add the panel to the home screen, where it opens like an app.
 - Languages: English, Russian, Chinese and Persian. The language follows the browser or system setting, and a manual choice is remembered.
 
 <p align="center">

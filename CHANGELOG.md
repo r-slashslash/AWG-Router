@@ -3,6 +3,23 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.11.0 — 2026-11-02
+
+- **Bot: a short greeting.** `/start` answers "🤖 AWG Router remote · /help — commands" and opens
+  the menu; the full list of commands is in `/help`.
+- **Bot: a new menu.** Status | Clients, Exits | New client, Panel | Backup. Route left the menu
+  (the `/route` command still works, and an old Route button on the screen is still understood).
+- **Bot: Panel** (and `/panel`) sends the panel's address with an Open button. In SSH-only mode it
+  sends the `ssh -N -L …` command to open the tunnel instead.
+- **Bot: deleting a client.** 🗑 Delete in a client's card asks first; after Yes, delete the client
+  is removed the same way as in the panel (its config stops working; end date, limits and personal
+  link go too). The event log shows who deleted it.
+- **Backup with a password.** **Download backup** asks for an optional password: with one the file
+  is encrypted (like the Telegram backups) and opens in **Restore from file** with that password.
+- **System → Install on a phone.** Under Access, a button shows how to put the panel on the home
+  screen. On a computer it shows a QR code of the panel's address to open it on the phone; on a
+  phone with Chrome it opens the install window right away.
+
 ## 1.10.6 — 2026-11-01
 
 - **Install and update from releases.** The installer, `awg-router update` and the panel's update

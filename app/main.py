@@ -477,6 +477,18 @@ def get_backup(req):
     return make_backup()
 
 
+@app.post("/api/backup/encrypted")
+def get_backup_encrypted(req):
+    """«Скачать копию» с паролем: тот же JSON, зашифрованный так же, как копии в Telegram
+    (openssl, открывается «Восстановить из файла» с этим паролем)."""
+    pw = str(req.json().get("password") or "")
+    if not 8 <= len(pw) <= 128:
+        bad("err.backup_pw")
+    b = make_backup()
+    data = json.dumps(b, ensure_ascii=False, indent=1).encode()
+    return {"data": base64.b64encode(notify.encrypt(data, pw)).decode(), "host": b.get("host") or ""}
+
+
 def make_backup() -> dict:
     st = store.snapshot()
     srv = None
@@ -1539,10 +1551,15 @@ def set_client_enabled(pk: str, on: bool) -> None:
 
 @app.delete("/api/users/{pk:path}")
 def del_user(req, pk):
+    delete_user(pk)
+    return {"ok": True}
+
+
+def delete_user(pk: str) -> None:
+    """Удаление клиента: из панели и из бота."""
     _user_errors(lambda: engine.srv.delete_client(_pk(pk)))
     engine.traffic.forget(pk)
     engine.reconcile_soon()
-    return {"ok": True}
 
 
 @app.get("/api/users/{pk:path}/config")
@@ -1638,6 +1655,9 @@ bot_ops = SimpleNamespace(
     set_enabled=set_client_enabled,
     apply_limits=apply_limits,
     add_client=lambda name: _user_errors(lambda: engine.srv.add_client(name)),
+    delete_client=delete_user,
+    panel=lambda: {"url": panel_url(), "ssh": config.PANEL_HOST.startswith("127."), "port": config.PANEL_PORT,
+                   "host": engine.srv.public_host(store.snapshot())},
     client_config=lambda pk: _user_errors(lambda: engine.srv.client_config(pk)),
     share=ensure_share,
     set_default=set_default_outbound,

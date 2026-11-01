@@ -50,7 +50,7 @@ class BotUiTest(unittest.TestCase):
         self.assertIn("AWG Router remote", self.sent()[-1]["text"])
         self.assertTrue(self.sent()[-1]["reply_markup"]["is_persistent"])
         self.assertEqual([[b["text"] for b in row] for row in self.keyboard()],
-                         [["📊 Status", "👥 Clients"], ["🌐 Exits", "➕ New client"], ["🧭 Route", "💾 Backup"]])
+                         [["📊 Status", "👥 Clients"], ["🌐 Exits", "➕ New client"], ["🖥 Panel", "💾 Backup"]])
         self.c["lang"] = "ru"
         self.run_updates(msg("/start", uid=2))
         self.assertEqual(self.keyboard()[0][0]["text"], "📊 Состояние")
