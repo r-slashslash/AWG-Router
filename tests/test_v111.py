@@ -61,7 +61,7 @@ class BotTest(unittest.TestCase):
             p = self.sent()[-1]
             self.assertEqual(p["text"].count("\n"), 1, p["text"])
             self.assertIn(title, p["text"])
-            self.assertIn("/help", p["text"])
+            self.assertIn(main.bot_ops.panel()["host"], p["text"])   # адрес сервера
             self.assertIn("inline_keyboard", p["reply_markup"])
 
     def test_menu_layout_in_every_language(self):
