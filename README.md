@@ -38,9 +38,10 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Adding or removing a client is applied live without dropping anyone. Server-side parameters restart the interface, which takes a few seconds.
 
 **Routing**
-- Exits are client configs from other AmneziaWG servers. If an exit fails, its traffic goes direct, gets blocked or moves to another exit, whichever you choose.
+- Exits are client configs from other AmneziaWG servers or SOCKS5 proxies (`socks5://login:password@host:port`). Both TCP and UDP go through a SOCKS5 exit (UDP if the proxy supports UDP ASSOCIATE). If an exit fails, its traffic goes direct, gets blocked or moves to another exit, whichever you choose.
 - Traffic per exit and direct for the month and all time, and each client's monthly traffic split by exit. An exit can have a monthly limit; when it is used up, its traffic until the 1st goes direct, gets blocked or moves to another exit, whichever you choose (or you only get a notification).
-- Rules map a list of networks to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, or your own subnets, and they refresh automatically.
+- Rules map a list to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, your own subnets or domains, and they refresh automatically.
+- Domain rules: `example.com` on a list also covers all its subdomains; you can paste a link to a ready-made list (plain domains, dnsmasq, hosts, Adblock, v2ray). They work through DNS through the server: clients ask the server for DNS, it forwards the query and puts the addresses of listed domains into the rules before the client gets the answer. It turns on by itself with the first domain list; clients need new configs.
 - Each client can have its own exit and its own rules.
 - **Route check** shows which way an IP or domain would go.
 
@@ -150,7 +151,8 @@ The panel installs `awg`, `awg-quick`, `amneziawg-go` (AWG 3.1) and the `awg-qui
 ## How routing works
 
 The panel runs in its own container (`network_mode: host`, `pid: host`, `privileged`) and enters the AWG server's network namespace with `nsenter`.
-- Each exit gets a tunnel `awgrN` with its own routing table.
+- Each exit gets a tunnel `awgrN` with its own routing table. For a SOCKS5 exit it is a [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) interface: whatever enters it goes through the proxy.
+- DNS through the server: client DNS queries (port 53, any address) are redirected to a DNS forwarder in the server's network, which adds the addresses of listed domains to nftables sets for 12 hours (each new query extends it). If the forwarder is down, client DNS goes straight to the DNS from the settings.
 - Client packets are marked by nftables rules in the `ip awgr` table.
 - The tunnel address on the exit server is applied with SNAT, so it never clashes with your clients.
 - If a tunnel disappears, an `unreachable` route stays in its table, so traffic never leaks around the exit.
@@ -168,7 +170,9 @@ The panel effectively has root access to the server.
 ## Limitations
 
 - Inside the tunnel, IPv4 only. Clients connect to the server over IPv4 or IPv6.
-- Rules match IP networks, not domain names.
+- Domain rules don't see DNS-over-HTTPS/TLS: if a browser or phone uses its own secure DNS (for example, Android Private DNS with a named provider), listed domains follow the general rules. If different domains share an address (CDN), the rule applies to the whole address.
+- In host mode with an nftables-only firewall (for example, firewalld), allow incoming UDP and TCP port 10053 on the clients' interface, or DNS through the server won't answer. With iptables or ufw the panel does it itself.
+- SOCKS5 exits need IPv6 support in the kernel (always there, except on servers booted with `ipv6.disable=1`).
 - Country lists are built from registry data. For a specific service, an ASN list is more accurate.
 
 ## Development

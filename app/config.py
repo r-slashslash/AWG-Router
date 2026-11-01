@@ -60,3 +60,7 @@ RULE_PRIO_BASE = 20000         # приоритет ip rule = 20000 + N
 MARK_BLOCK = 0xB10C
 NFT_TABLE = "awgr"
 MAX_UPSTREAMS = 200
+# DNS-посредник для правил по доменам (dnsproxy.py): порт на адресе сервера в туннеле,
+# сюда nftables перенаправляет DNS-запросы клиентов; сколько живёт адрес из ответа DNS в наборе
+DNS_PROXY_PORT = int(os.environ.get("DNS_PROXY_PORT", "10053"))
+DNS_SET_TIMEOUT = int(os.environ.get("DNS_SET_TIMEOUT", str(12 * 3600)))

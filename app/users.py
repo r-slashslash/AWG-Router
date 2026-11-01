@@ -80,10 +80,21 @@ class ServerManager:
             host=self.client_host(st) or "SERVER_IP",
             port=sc.port,
             server_pub=self.server_pub(sc),
-            dns=client_dns(s),
+            dns=self.dns_for_clients(st, sc),
             mtu=int(s.get("client_mtu") or DEFAULT_MTU),
             keepalive=s.get("client_keepalive") or awgserver.default_keepalive(params),
         )
+
+    @staticmethod
+    def dns_for_clients(st: dict, sc: ServerConf) -> list[str]:
+        """DNS в конфигах клиентов. С «DNS через сервер» — адрес сервера в туннеле: запросы
+        туда разбирает DNS-посредник (правила по доменам). Адрес общеизвестного DNS вроде
+        1.1.1.1 здесь не годится: Chrome и Android сами переходят с него на DNS-over-HTTPS/TLS,
+        и такие запросы мимо посредника."""
+        s = st["settings"]
+        if s.get("dns_proxy") and sc.network:
+            return [str(sc.network.ip)]
+        return client_dns(s)
 
     def list_clients(self, t: system.Target) -> list[dict]:
         """Клиенты для движка и интерфейса: конфиг + clientsTable + живые данные."""
@@ -244,6 +255,8 @@ class ServerManager:
             "client_host": s.get("client_host") or "",
             "addrs": self.host_addrs(sc.port),
             "client_dns": client_dns(s),
+            "dns_proxy": bool(s.get("dns_proxy")),
+            "dns_server_ip": str(sc.network.ip) if sc.network else "",
             "client_mtu": int(s.get("client_mtu") or DEFAULT_MTU),
             "client_keepalive": s.get("client_keepalive") or "",
             "keepalive_auto": awgserver.default_keepalive(params),
@@ -281,7 +294,12 @@ class ServerManager:
                         raise UserError(Msg("srv.bad_dns", value=d))
                     if a.version != 4:
                         raise UserError(Msg("srv.dns_v6", value=d))
+                own = str(sc.network.ip) if sc.network else ""
+                if own and own in dns:
+                    raise UserError(Msg("srv.dns_self", value=own))
                 settings_patch["client_dns"] = dns[:4]
+            if "dns_proxy" in body:
+                settings_patch["dns_proxy"] = bool(body["dns_proxy"])
             if "client_mtu" in body:
                 try:
                     mtu = int(body["client_mtu"])
@@ -329,9 +347,11 @@ class ServerManager:
                 sc.set("Address", str(i))
                 restart = True
             host_before = self.client_host(self.e.store.snapshot())
+            dns_before = self.dns_for_clients(self.e.store.snapshot(), sc)
             if settings_patch:
                 self.e.store.mutate(lambda st: st["settings"].update(settings_patch))
             host_changed = self.client_host(self.e.store.snapshot()) != host_before
+            dns_changed = self.dns_for_clients(self.e.store.snapshot(), sc) != dns_before
             changed_conf = sc.render() != (t.read_file(t.conf_path) or "")
             if changed_conf:
                 self._write(t, sc, None, restart=restart)
@@ -339,7 +359,7 @@ class ServerManager:
                              Msg("ev.server_restarted" if restart else "ev.server_updated"))
             return {"restarted": restart and changed_conf,
                     "server_side_changed": awgserver.server_side_changed(old, sc.params()),
-                    "host_changed": host_changed}
+                    "host_changed": host_changed, "dns_changed": dns_changed}
 
     def regenerate_params(self) -> dict[str, str]:
         """Новые параметры обфускации (не применяет — возвращает для формы)."""
