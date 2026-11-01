@@ -317,7 +317,6 @@ function viewOverview() {
   }
   const track = (cls, color, title, meta, side) => `
     <div class="track ${cls}" style="--c:${color}">
-      <div class="track-rail"></div>
       <div class="track-body"><div class="track-title">${title}</div><div class="track-meta">${meta}</div></div>
       <div class="track-side">${side}</div>
     </div>`;
@@ -362,22 +361,20 @@ function viewOverview() {
     : `<p class="muted small">${esc(t("ov.log_empty"))}</p>`;
 
   return `
-  <div class="grid2">
-    <section class="section">
-      <div class="section-head"><div><h2>${esc(t("ov.title"))}</h2><p class="muted small">${esc(t("ov.subtitle"))}</p></div>
-        <button class="btn" data-goto="exits">${esc(t("ov.add_exit"))}</button></div>
-      <div class="map"><div class="map-hub"><bdi>${esc(S.target ? S.target.container : "—")}</bdi></div><div class="map-lines">${lines}</div></div>
-    </section>
-    <section class="section ov-side">
-      <div class="section-head"><div><h2>${esc(t("ov.policy"))}</h2><p class="muted small">${esc(t("ov.policy_sub"))}</p></div>
-        <button class="btn" data-goto="routing">${esc(t("btn.edit"))}</button></div>
+  <div class="ov-grid">
+    <div class="section-head ov-head ov-h1"><div><h2>${esc(t("ov.title"))}</h2><p class="muted small">${esc(t("ov.subtitle"))}</p></div>
+      <button class="btn" data-goto="exits">${esc(t("ov.add_exit"))}</button></div>
+    <div class="section-head ov-head ov-h2"><div><h2>${esc(t("ov.policy"))}</h2><p class="muted small">${esc(t("ov.policy_sub"))}</p></div>
+      <button class="btn" data-goto="routing">${esc(t("btn.edit"))}</button></div>
+    <div class="map-lines ov-c1">${lines}</div>
+    <div class="ov-c2">
       <div class="panel panel-pad">
         ${rulesSummary(S.routing.rules)}
         <div style="margin-top:10px">${th("ov.everything_else", { exit: effChip(S.global_effective, S.routing.default) })}</div>
       </div>
       <div class="section-head" style="margin-top:20px"><h2>${esc(t("ov.log"))}</h2></div>
       <div class="panel panel-pad ov-log">${ev}</div>
-    </section>
+    </div>
   </div>`;
 }
 bind.overview = () => {

@@ -24,7 +24,8 @@ it grows, so every user-visible change gets a new version.
   a client's card also has **‹ Clients**. The personal link and an exit check show up in the
   message itself. After files (QR and config, backup) the menu moves below them, and an older menu
   message is deleted, so there is always one. **Panel** in the menu opens the panel right away.
-- **Overview:** the right column now has headings like the left one, so both columns line up.
+- **Overview:** the block with the container name is gone; both columns are the same width, their
+  headings share one row, and the cards start on one line. Exits are cards with a colored stripe.
 - **System → Panel access:** **Install on a phone** sits next to **Check for updates**.
 
 ## 1.11.0 — 2026-11-02
