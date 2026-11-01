@@ -346,10 +346,11 @@ class PanelTest(unittest.TestCase):
         if main.engine.health.get(self.socks, {}).get("healthy"):
             self.assertEqual(to["socks"]["port"], 1080)
             self.assertEqual(to["socks"]["user"], "bob")
+            self.assertEqual(to["acct"], self.socks)                      # байты — на счёт этого выхода
         else:                                                             # демо: «нерабочий» выход → резерв
-            self.assertEqual(to, {"mark": 0})
+            self.assertEqual(to, {"mark": 0, "acct": "direct"})
         self.assertEqual(main.engine._sni_target(st, "block"), {"block": True})
-        self.assertEqual(main.engine._sni_target(st, "direct"), {"mark": 0})
+        self.assertEqual(main.engine._sni_target(st, "direct"), {"mark": 0, "acct": "direct"})
         self.assertTrue(u)
 
     def test_socks_exit_view(self):

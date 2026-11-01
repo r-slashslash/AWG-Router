@@ -730,6 +730,7 @@ Object.assign(I18N.ru, {
   "srv.bad_subnet": "Подсеть IPv4, например 10.8.1.0/24 (не уже /29)",
   "srv.port_container": "Порт контейнера Amnezia меняется в приложении AmneziaVPN",
   "srv.subnet_locked": "Подсеть можно менять, только пока нет клиентов",
+  "srv.subnet_container": "У этого контейнера подсеть вписана в start.sh: после смены клиенты остались бы без интернета", "srv.subnet_container_hint": "У контейнера AmneziaVPN подсеть задана при установке и здесь не меняется.",
   "srv.already_exists": "Сервер уже создан", "srv.init_only_host": "Создать сервер можно только в режиме «AWG на хосте»",
 });
 
@@ -818,6 +819,7 @@ Object.assign(I18N.en, {
   "srv.bad_subnet": "An IPv4 subnet like 10.8.1.0/24 (no narrower than /29)",
   "srv.port_container": "The Amnezia container's port is changed in the AmneziaVPN app",
   "srv.subnet_locked": "The subnet can only change while there are no clients",
+  "srv.subnet_container": "This container has its subnet written into start.sh: after a change, clients would have no internet", "srv.subnet_container_hint": "An AmneziaVPN container gets its subnet at install time; it can't change here.",
   "srv.already_exists": "The server already exists", "srv.init_only_host": "A server can only be created in “AWG on the host” mode",
 });
 
@@ -906,6 +908,7 @@ Object.assign(I18N.zh, {
   "srv.bad_subnet": "IPv4 子网，例如 10.8.1.0/24（不小于 /29）",
   "srv.port_container": "Amnezia 容器的端口需在 AmneziaVPN 应用中修改",
   "srv.subnet_locked": "仅在没有客户端时可修改子网",
+  "srv.subnet_container": "此容器的子网写在 start.sh 中：更改后客户端将无法上网", "srv.subnet_container_hint": "AmneziaVPN 容器的子网在安装时设定，此处无法更改。",
   "srv.already_exists": "服务器已存在", "srv.init_only_host": "只有「主机上的 AWG」模式才能创建服务器",
 });
 
@@ -994,6 +997,7 @@ Object.assign(I18N.fa, {
   "srv.bad_subnet": "زیرشبکه IPv4 مانند 10.8.1.0/24 (نه کوچک‌تر از /29)",
   "srv.port_container": "پورت کانتینر Amnezia در برنامه AmneziaVPN تغییر می‌کند",
   "srv.subnet_locked": "زیرشبکه فقط وقتی کلاینتی نیست قابل تغییر است",
+  "srv.subnet_container": "زیرشبکه این کانتینر در start.sh نوشته شده است: پس از تغییر، کلاینت‌ها اینترنت نخواهند داشت", "srv.subnet_container_hint": "زیرشبکه کانتینر AmneziaVPN هنگام نصب تعیین می‌شود و اینجا تغییر نمی‌کند.",
   "srv.already_exists": "سرور از قبل وجود دارد", "srv.init_only_host": "ساخت سرور فقط در حالت «AWG روی میزبان» ممکن است",
 });
 
@@ -1151,7 +1155,7 @@ Object.assign(I18N.ru, {
   "cl.this_month": "Трафик в этом месяце", "cl.all_time": "За всё время",
   "cl.expires": "Действует до", "cl.expires_hint": "Пусто — бессрочно. В этот день в 23:59 клиент отключится сам.",
   "cl.quota": "Лимит трафика, ГБ", "cl.no_limit": "без лимита", "cl.per_month": "в месяц", "cl.in_total": "всего",
-  "cl.quota_hint": "Загрузка и отдача вместе. Месячный лимит обнуляется 1-го числа (UTC), и клиент включается сам.",
+  "cl.quota_hint": "Загрузка и отдача вместе. Месячный лимит обнуляется 1-го числа в 00:00 UTC (у вас — {time}), и клиент включается сам.",
   "cl.share": "Личная ссылка",
   "cl.share_hint": "По ссылке человек сам скачает конфиг и увидит свой трафик и срок — без входа в панель.",
   "cl.share_ssh": "Недоступно: панель открыта только через SSH-туннель.",
@@ -1204,7 +1208,7 @@ Object.assign(I18N.en, {
   "cl.this_month": "Traffic this month", "cl.all_time": "All time",
   "cl.expires": "Valid until", "cl.expires_hint": "Empty — no end date. The client turns off at 23:59 on that day.",
   "cl.quota": "Traffic limit, GB", "cl.no_limit": "no limit", "cl.per_month": "per month", "cl.in_total": "in total",
-  "cl.quota_hint": "Download and upload together. A monthly limit resets on the 1st (UTC) and the client turns back on by itself.",
+  "cl.quota_hint": "Download and upload together. A monthly limit resets on the 1st at 00:00 UTC ({time} your time) and the client turns back on by itself.",
   "cl.share": "Personal link",
   "cl.share_hint": "With the link, the person downloads their config and sees their traffic and end date — no panel sign-in.",
   "cl.share_ssh": "Unavailable: the panel is reachable only through an SSH tunnel.",
@@ -1257,7 +1261,7 @@ Object.assign(I18N.zh, {
   "cl.this_month": "本月流量", "cl.all_time": "累计",
   "cl.expires": "有效期至", "cl.expires_hint": "留空表示不限期。客户端将在当天 23:59 自动停用。",
   "cl.quota": "流量限额（GB）", "cl.no_limit": "不限", "cl.per_month": "每月", "cl.in_total": "总计",
-  "cl.quota_hint": "下载和上传合计。每月限额在每月 1 日（UTC）清零，客户端会自动重新启用。",
+  "cl.quota_hint": "下载和上传合计。每月限额在每月 1 日 00:00 UTC（您的时间 {time}）清零，客户端会自动重新启用。",
   "cl.share": "个人链接",
   "cl.share_hint": "对方可通过链接自行下载配置，并查看自己的流量和有效期，无需登录面板。",
   "cl.share_ssh": "不可用：面板只能通过 SSH 隧道访问。",
@@ -1310,7 +1314,7 @@ Object.assign(I18N.fa, {
   "cl.this_month": "ترافیک این ماه", "cl.all_time": "از ابتدا",
   "cl.expires": "معتبر تا", "cl.expires_hint": "خالی یعنی بدون انقضا. کلاینت در آن روز ساعت ۲۳:۵۹ خودکار غیرفعال می‌شود.",
   "cl.quota": "سقف ترافیک (گیگابایت)", "cl.no_limit": "بدون سقف", "cl.per_month": "در ماه", "cl.in_total": "در کل",
-  "cl.quota_hint": "دانلود و آپلود با هم. سقف ماهانه روز اول هر ماه (UTC) صفر می‌شود و کلاینت خودکار دوباره فعال می‌شود.",
+  "cl.quota_hint": "دانلود و آپلود با هم. سقف ماهانه روز اول هر ماه ساعت 00:00 UTC (به وقت شما: {time}) صفر می‌شود و کلاینت خودکار دوباره فعال می‌شود.",
   "cl.share": "لینک شخصی",
   "cl.share_hint": "با این لینک، فرد خودش پیکربندی را دانلود می‌کند و ترافیک و تاریخ انقضایش را می‌بیند — بدون ورود به پنل.",
   "cl.share_ssh": "در دسترس نیست: پنل فقط از راه تونل SSH باز می‌شود.",
@@ -1369,7 +1373,7 @@ Object.assign(I18N.ru, {
   "ex.qa_notify": "Только уведомить",
   "ref.quota": "лимит у «{name}»",
   "err.quota_self": "При исчерпании лимита нельзя выбрать этот же выход",
-  "ex.quota_hint": "Трафик считается внутри туннеля.",
+  "ex.quota_hint": "Трафик считается внутри туннеля, включая сайты из правил по доменам. Месяц — по UTC: новый начинается 1-го в 00:00 UTC (у вас — {time}).",
   "cl.by_exit": "За месяц по выходам",
   "ev.upstream_quota": "«{name}»: исчерпан лимит {gb} ГБ за месяц — трафик идёт через «{to}»",
   "ev.upstream_quota_direct": "«{name}»: исчерпан лимит {gb} ГБ за месяц — трафик идёт напрямую",
@@ -1392,7 +1396,7 @@ Object.assign(I18N.en, {
   "ex.qa_notify": "Notify only",
   "ref.quota": "limit of “{name}”",
   "err.quota_self": "An exit can't switch to itself when its limit is used up",
-  "ex.quota_hint": "Traffic is counted inside the tunnel.",
+  "ex.quota_hint": "Traffic is counted inside the tunnel, including sites from domain rules. Months follow UTC: a new one starts on the 1st at 00:00 UTC ({time} your time).",
   "cl.by_exit": "This month by exit",
   "ev.upstream_quota": "“{name}”: the monthly {gb} GB limit is used up — traffic goes through “{to}”",
   "ev.upstream_quota_direct": "“{name}”: the monthly {gb} GB limit is used up — traffic goes direct",
@@ -1415,7 +1419,7 @@ Object.assign(I18N.zh, {
   "ex.qa_notify": "仅通知",
   "ref.quota": "「{name}」的限额",
   "err.quota_self": "限额用完时不能切换到出口自身",
-  "ex.quota_hint": "流量按隧道内统计。",
+  "ex.quota_hint": "流量按隧道内统计，包括域名规则中的网站。月份按 UTC 计算：新的一月从 1 日 00:00 UTC 开始（您的时间 {time}）。",
   "cl.by_exit": "本月各出口流量",
   "ev.upstream_quota": "「{name}」：本月 {gb} GB 限额已用完——流量经由「{to}」",
   "ev.upstream_quota_direct": "「{name}」：本月 {gb} GB 限额已用完——流量直连",
@@ -1438,7 +1442,7 @@ Object.assign(I18N.fa, {
   "ex.qa_notify": "فقط اعلان",
   "ref.quota": "سقف «{name}»",
   "err.quota_self": "وقتی سقف تمام شد، نمی‌توان همین خروجی را انتخاب کرد",
-  "ex.quota_hint": "ترافیک درون تونل شمرده می‌شود.",
+  "ex.quota_hint": "ترافیک درون تونل شمرده می‌شود، از جمله سایت‌های قانون‌های دامنه. ماه بر پایه UTC است: ماه نو روز اول ساعت 00:00 UTC آغاز می‌شود (به وقت شما: {time}).",
   "cl.by_exit": "این ماه به تفکیک خروجی",
   "ev.upstream_quota": "«{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد — ترافیک از «{to}» می‌رود",
   "ev.upstream_quota_direct": "«{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد — ترافیک مستقیم می‌رود",
@@ -2019,7 +2023,7 @@ Object.assign(I18N.ru, {
   "ls.add_domains": "Домены", "ls.kind.domains": "Домены", "ls.new.domains": "Список доменов",
   "ls.domains": "Домены и ссылки на списки",
   "ls.domains_hint": "По одному в строке. example.com подходит и для всех поддоменов (www.example.com, m.example.com). Можно вставить ссылку на готовый список: понимаются простые списки доменов и форматы dnsmasq, hosts, Adblock (||example.com^) и v2ray (domain:example.com).",
-  "ls.domains_how": "Правило со списком доменов работает только на выход SOCKS5: сервер узнаёт сайт по имени в начале HTTPS- и HTTP-соединения (порты 443 и 80) и передаёт имя прокси — адрес находит сам прокси. Такие правила проверяются раньше правил по адресам. HTTP/3 (QUIC) у клиентов с такими правилами отключается: браузеры сами переходят на обычный HTTPS.",
+  "ls.domains_how": "Правило со списком доменов работает только на выход SOCKS5: сервер узнаёт сайт по имени в начале HTTPS- и HTTP-соединения (порты 443 и 80) и передаёт имя прокси — адрес находит сам прокси. Такие правила проверяются раньше правил по адресам. HTTP/3 (QUIC) у клиентов с такими правилами отключается для всех сайтов, не только из списка: браузеры сами переходят на обычный HTTPS, первое соединение может открываться чуть дольше. Сайты с Encrypted Client Hello (ECH, например часть сайтов за Cloudflare) показывают в соединении не своё имя, а общее — их по списку доменов не узнать; для них добавьте список адресов.",
   "n.domains": { one: "{n} домен", few: "{n} домена", many: "{n} доменов", other: "{n} домена" },
 
 
@@ -2050,6 +2054,7 @@ Object.assign(I18N.ru, {
   "re.domain_no_socks": "Нужен выход SOCKS5: добавьте его на вкладке «Выходы».",
   "err.rule_mixed_domains": "Списки доменов и списки адресов нельзя смешивать в одном правиле",
   "err.domains_need_socks": "Список доменов можно направить только на выход SOCKS5",
+  "err.exit_kind_change": "Тип выхода не меняется: удалите выход и добавьте новый", "err.list_kind_change": "Вид списка не меняется: создайте новый список",
   "sni.no_addr": "у интерфейса {iface} нет IPv4-адреса",
   "sni.start_failed": "обработчик правил по доменам не запустился: {detail}",
   "ev.sni_died": "Обработчик правил по доменам остановился — перезапуск",
@@ -2073,7 +2078,7 @@ Object.assign(I18N.en, {
   "ls.add_domains": "Domains", "ls.kind.domains": "Domains", "ls.new.domains": "Domain list",
   "ls.domains": "Domains and links to lists",
   "ls.domains_hint": "One per line. example.com also covers all its subdomains (www.example.com, m.example.com). You can paste a link to a ready-made list: plain domain lists and the dnsmasq, hosts, Adblock (||example.com^) and v2ray (domain:example.com) formats are understood.",
-  "ls.domains_how": "A rule with a domain list works only with a SOCKS5 exit: the server learns the site from its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself. Such rules are checked before address rules. HTTP/3 (QUIC) is turned off for clients with such rules: browsers switch to regular HTTPS by themselves.",
+  "ls.domains_how": "A rule with a domain list works only with a SOCKS5 exit: the server learns the site from its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself. Such rules are checked before address rules. HTTP/3 (QUIC) is turned off for clients with such rules, for all sites, not only listed ones: browsers switch to regular HTTPS by themselves, and the first connection may open a little slower. Sites with Encrypted Client Hello (ECH, such as some sites behind Cloudflare) show a shared name instead of their own, so a domain list can't recognise them; add an address list for those.",
   "n.domains": { one: "{n} domain", other: "{n} domains" },
 
 
@@ -2104,6 +2109,7 @@ Object.assign(I18N.en, {
   "re.domain_no_socks": "Needs a SOCKS5 exit: add one on the Exits tab.",
   "err.rule_mixed_domains": "Domain lists and address lists can't be mixed in one rule",
   "err.domains_need_socks": "A domain list can only go to a SOCKS5 exit",
+  "err.exit_kind_change": "An exit's type can't change: delete the exit and add a new one", "err.list_kind_change": "A list's kind can't change: create a new list",
   "sni.no_addr": "interface {iface} has no IPv4 address",
   "sni.start_failed": "the domain rule handler did not start: {detail}",
   "ev.sni_died": "The domain rule handler stopped — restarting",
@@ -2127,7 +2133,7 @@ Object.assign(I18N.zh, {
   "ls.add_domains": "域名", "ls.kind.domains": "域名", "ls.new.domains": "域名列表",
   "ls.domains": "域名和列表链接",
   "ls.domains_hint": "每行一个。example.com 同时匹配它的所有子域名（www.example.com、m.example.com）。也可以粘贴现成列表的链接：支持普通域名列表以及 dnsmasq、hosts、Adblock（||example.com^）和 v2ray（domain:example.com）格式。",
-  "ls.domains_how": "带域名列表的规则只能用于 SOCKS5 出口：服务器从 HTTPS 和 HTTP 连接开头的网站名称（443 和 80 端口）识别网站，并把名称交给代理，由代理自己解析地址。这类规则在地址规则之前检查。使用这类规则的客户端会关闭 HTTP/3（QUIC）：浏览器会自动改用普通 HTTPS。",
+  "ls.domains_how": "带域名列表的规则只能用于 SOCKS5 出口：服务器从 HTTPS 和 HTTP 连接开头的网站名称（443 和 80 端口）识别网站，并把名称交给代理，由代理自己解析地址。这类规则在地址规则之前检查。使用这类规则的客户端会对所有网站（不只是列表中的）关闭 HTTP/3（QUIC）：浏览器会自动改用普通 HTTPS，首次连接可能稍慢。启用 Encrypted Client Hello（ECH，例如部分 Cloudflare 后的网站）的网站在连接中显示的是公共名称而不是自己的名称，域名列表无法识别它们；请为这些网站添加地址列表。",
   "n.domains": { other: "{n} 个域名" },
 
 
@@ -2158,6 +2164,7 @@ Object.assign(I18N.zh, {
   "re.domain_no_socks": "需要 SOCKS5 出口：请在“出口”页添加。",
   "err.rule_mixed_domains": "同一条规则中不能混用域名列表和地址列表",
   "err.domains_need_socks": "域名列表只能指向 SOCKS5 出口",
+  "err.exit_kind_change": "出口类型不能更改：请删除该出口并添加新出口", "err.list_kind_change": "列表类型不能更改：请新建列表",
   "sni.no_addr": "接口 {iface} 没有 IPv4 地址",
   "sni.start_failed": "域名规则处理程序未能启动：{detail}",
   "ev.sni_died": "域名规则处理程序已停止——正在重启",
@@ -2181,7 +2188,7 @@ Object.assign(I18N.fa, {
   "ls.add_domains": "دامنه‌ها", "ls.kind.domains": "دامنه‌ها", "ls.new.domains": "فهرست دامنه‌ها",
   "ls.domains": "دامنه‌ها و پیوند فهرست‌ها",
   "ls.domains_hint": "هر کدام در یک خط. example.com همهٔ زیردامنه‌هایش را هم در بر می‌گیرد (www.example.com، m.example.com). می‌توانید پیوند یک فهرست آماده را هم بگذارید: فهرست ساده دامنه‌ها و قالب‌های dnsmasq، hosts، Adblock (‎||example.com^‎) و v2ray (‎domain:example.com‎) پشتیبانی می‌شوند.",
-  "ls.domains_how": "قانونی که فهرست دامنه دارد فقط با خروجی SOCKS5 کار می‌کند: سرور سایت را از نام آن در آغاز اتصال HTTPS و HTTP (درگاه‌های 443 و 80) تشخیص می‌دهد و نام را به پراکسی می‌دهد تا خودش نشانی را پیدا کند. این قانون‌ها پیش از قانون‌های نشانی بررسی می‌شوند. برای کلاینت‌هایی که چنین قانونی دارند HTTP/3 (QUIC) خاموش می‌شود: مرورگرها خودشان به HTTPS معمولی می‌روند.",
+  "ls.domains_how": "قانونی که فهرست دامنه دارد فقط با خروجی SOCKS5 کار می‌کند: سرور سایت را از نام آن در آغاز اتصال HTTPS و HTTP (درگاه‌های 443 و 80) تشخیص می‌دهد و نام را به پراکسی می‌دهد تا خودش نشانی را پیدا کند. این قانون‌ها پیش از قانون‌های نشانی بررسی می‌شوند. برای کلاینت‌هایی که چنین قانونی دارند HTTP/3 (QUIC) برای همه سایت‌ها، نه فقط سایت‌های فهرست، خاموش می‌شود: مرورگرها خودشان به HTTPS معمولی می‌روند و نخستین اتصال ممکن است کمی کندتر باز شود. سایت‌هایی با Encrypted Client Hello (ECH، مانند برخی سایت‌های پشت Cloudflare) در اتصال به‌جای نام خود یک نام مشترک نشان می‌دهند، پس فهرست دامنه آن‌ها را نمی‌شناسد؛ برای آن‌ها فهرست نشانی بیفزایید.",
   "n.domains": { one: "{n} دامنه", other: "{n} دامنه" },
 
 
@@ -2212,6 +2219,7 @@ Object.assign(I18N.fa, {
   "re.domain_no_socks": "خروجی SOCKS5 لازم است: آن را در برگهٔ «خروجی‌ها» اضافه کنید.",
   "err.rule_mixed_domains": "فهرست دامنه و فهرست نشانی را نمی‌توان در یک قانون ترکیب کرد",
   "err.domains_need_socks": "فهرست دامنه فقط می‌تواند به خروجی SOCKS5 برود",
+  "err.exit_kind_change": "نوع خروجی تغییر نمی‌کند: خروجی را حذف کنید و یکی تازه بیفزایید", "err.list_kind_change": "نوع فهرست تغییر نمی‌کند: فهرست تازه‌ای بسازید",
   "sni.no_addr": "رابط {iface} نشانی IPv4 ندارد",
   "sni.start_failed": "پردازشگر قانون‌های دامنه راه‌اندازی نشد: {detail}",
   "ev.sni_died": "پردازشگر قانون‌های دامنه متوقف شد — راه‌اندازی دوباره",

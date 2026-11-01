@@ -503,9 +503,12 @@ def new_server(priv: str, port: int, subnet: str, params: dict[str, str], wan_ma
 HOOK_KEYS = ("PreUp", "PostUp", "PreDown", "PostDown")
 
 
+WAN = "$(ip -4 route show default | awk '{print $5; exit}')"
+
+
 def nat_hooks(cidr: str) -> tuple[str, str]:
     """PostUp/PostDown сервера на хосте: пересылка и NAT подсети клиентов."""
-    wan = "$(ip -4 route show default | awk '{print $5; exit}')"
+    wan = WAN
     up = ("sysctl -qw net.ipv4.ip_forward=1; "
           "iptables -I FORWARD -i %i -j ACCEPT; "
           "iptables -I FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; "
@@ -514,6 +517,24 @@ def nat_hooks(cidr: str) -> tuple[str, str]:
             "iptables -D FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; "
             f"iptables -t nat -D POSTROUTING -s {cidr} -o {wan} -j MASQUERADE; true")
     return up, down
+
+
+def retarget_nat(sc: ServerConf, old_cidr: str, new_cidr: str) -> bool:
+    """Подсеть сервера на хосте сменилась: NAT в PostUp/PostDown — на новую подсеть.
+    True — в хуках была старая подсеть (её правило MASQUERADE нужно убрать вручную:
+    awg-quick down при перезапуске читает уже новый файл)."""
+    hit = False
+    for k in HOOK_KEYS:
+        v = sc.get(k)
+        if v and f"-s {old_cidr} " in v:
+            sc.set(k, v.replace(f"-s {old_cidr} ", f"-s {new_cidr} "))
+            hit = True
+    return hit
+
+
+def drop_nat_cmd(cidr: str) -> str:
+    """Убрать правило MASQUERADE старой подсети (как в nat_hooks)."""
+    return f"iptables -t nat -D POSTROUTING -s {cidr} -o {WAN} -j MASQUERADE; true"
 
 
 def safe_hooks(sc: ServerConf, host_mode: bool) -> None:

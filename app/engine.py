@@ -40,6 +40,10 @@ def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
 
 
+UP_PAUSES = (10, 30, 60, 120, 300)      # пауза перед новой попыткой запустить выход, с
+FLAP_SECS = 60                          # туннель упал раньше — считаем неудачным запуском
+
+
 class UpRT:
     """Состояние запущенного туннеля."""
 
@@ -99,6 +103,7 @@ class Engine:
         self._sni_retry = 0.0
         self._socks_res: dict[str, dict] = {}   # uid → результат последней проверки прокси
         self._socks_busy: set[str] = set()
+        self._up_fail: dict[str, dict] = {}     # uid → {"n", "next", "sig", "err"}: неудачные запуски
         os.makedirs(RUN_DIR, exist_ok=True)
         os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -356,7 +361,11 @@ class Engine:
             r = self.rt[uid]
             if uid not in wanted or wanted[uid]["num"] != r.num or r.target_key != t.key:
                 self._stop_up(uid)
+        for uid in list(self._up_fail):
+            if uid not in wanted:
+                self._up_fail.pop(uid, None)
         links = self._links(t)
+        now = time.time()
         for uid, u in wanted.items():
             try:
                 pc = self.parsed(u)
@@ -364,21 +373,47 @@ class Engine:
                 self.health[uid] = {"state": "error", "error": e.msg}
                 continue
             h = _sha((pc.setconf if pc.kind == "awg" else pc.raw) + str(pc.mtu))
+            sig = f"{h}|{t.key}"
+            f = self._up_fail.get(uid)
+            if f and f["sig"] != sig:
+                self._up_fail.pop(uid, None)            # настройки или сервер сменились — пробуем сразу
+                f = None
             r = self.rt.get(uid)
             alive = bool(r) and (links is None or r.iface in links) and \
                 (r.proc is None or r.proc.poll() is None)
+            if r and alive and f and now - r.started >= FLAP_SECS:
+                self._up_fail.pop(uid, None)            # туннель держится — счёт неудач сначала
+                f = None
             if r and (r.conf_hash != h or not alive):
                 if not alive:
-                    self.event("warn", Msg("ev.tunnel_down", iface=r.iface, name=u["name"]))
+                    if not f:
+                        self.event("warn", Msg("ev.tunnel_down", iface=r.iface, name=u["name"]))
+                    if now - r.started < FLAP_SECS:
+                        # процесс туннеля падает сразу после запуска — как неудачный запуск
+                        f = self._failed_up(uid, sig, Msg("ev.tunnel_down", iface=r.iface, name=u["name"]),
+                                            u, quiet=True)
                 self._stop_up(uid)
                 r = None
             if not r:
+                if f and now < f["next"]:
+                    continue                            # пауза после неудачи (UP_PAUSES)
                 try:
                     self._start_up(t, uid, u, pc, h)
                 except Exception as e:  # noqa: BLE001
                     self._stop_up(uid)
-                    self.health[uid] = {"state": "error", "error": msg_of(e)}
-                    self.event("error", Msg("ev.upstream_error", name=u["name"], error=msg_of(e)))
+                    self._failed_up(uid, sig, msg_of(e), u)
+
+    def _failed_up(self, uid: str, sig: str, err, u: dict, quiet: bool = False) -> dict:
+        """Неудачный запуск выхода: следующая попытка — через растущую паузу (10 с … 5 мин),
+        событие — только при первой неудаче или другой ошибке, чтобы не засорять журнал и Telegram."""
+        prev = self._up_fail.get(uid) or {}
+        n = prev.get("n", 0) + 1
+        f = {"n": n, "sig": sig, "err": err, "next": time.time() + UP_PAUSES[min(n, len(UP_PAUSES)) - 1]}
+        self._up_fail[uid] = f
+        self.health[uid] = {"state": "error", "error": err, "retry_at": f["next"]}
+        if not quiet and (n == 1 or str(prev.get("err")) != str(err)):
+            self.event("error", Msg("ev.upstream_error", name=u["name"], error=err))
+        return f
 
     def _update_health(self, t: system.Target, st: dict) -> None:
         now = time.time()
@@ -674,17 +709,44 @@ class Engine:
         if eff == "block":
             return {"block": True}
         if eff == "direct":
-            return {"mark": 0}
+            return {"mark": 0, "acct": "direct"}
         u = next((x for x in st["upstreams"] if x["num"] == eff), None)
         r = self.rt.get(u["id"]) if u else None
         try:
             pc = self.parsed(u) if u else None
         except Exception:  # noqa: BLE001
             pc = None
+        acct = u["id"] if u else None           # для учёта трафика выхода (sniproxy считает байты)
         if pc and pc.kind == "socks5":
             return {"socks": {"ip": (r.socks_ip if r and r.socks_ip else pc.socks["host"]), "port": pc.socks["port"],
-                              "user": pc.socks["user"], "password": pc.socks["password"]}}
-        return {"mark": nftgen.mark_for(eff)}
+                              "user": pc.socks["user"], "password": pc.socks["password"]}, "acct": acct}
+        return {"mark": nftgen.mark_for(eff), "acct": acct}
+
+    @staticmethod
+    def _acct_label(st: dict, out) -> str | None:
+        """Выход после резолва → ключ учёта трафика: "direct" | id выхода | None (блок)."""
+        if out == "direct":
+            return "direct"
+        if out == "block":
+            return None
+        u = next((x for x in st["upstreams"] if x["num"] == out), None)
+        return u["id"] if u else None
+
+    def _sni_account(self) -> None:
+        """Байты соединений sniproxy.py (по «клиент|выход») → трафик выходов. Через посредника
+        идут TCP 80/443 клиентов с правилами по доменам: для сервера это входящие и исходящие
+        соединения, а не транзит, поэтому таблица учёта nftables (hook forward) их не видит."""
+        try:
+            with open(SNI_STATS) as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            return
+        if not isinstance(s, dict) or not isinstance(s.get("pid"), int) or not isinstance(s.get("bytes"), dict):
+            return
+        st = self.store.snapshot()
+        valid = {"direct"} | {u["id"] for u in st["upstreams"]}
+        pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
+        self.traffic.update_sni(s["pid"], s["bytes"], valid, pk_of)
 
     def _stop_sni(self) -> None:
         d, self.sni = self.sni, None
@@ -694,6 +756,11 @@ class Engine:
                 d.proc.wait(5)
             except subprocess.TimeoutExpired:
                 d.proc.kill()
+        if d and not config.DRY_RUN:
+            try:
+                self._sni_account()          # последние байты (процесс пишет их при остановке)
+            except Exception:  # noqa: BLE001
+                log.exception("sni traffic")
 
     def _input_rule(self, t: system.Target, op: str) -> None:
         """Перенаправленные соединения клиентов — входящие для сервера (а не транзитные).
@@ -712,7 +779,7 @@ class Engine:
             log.info("sni input rule: %s", e)
 
     def _sni_hung(self) -> bool:
-        """Процесс жив, но цикл событий стоит: счётчики (пишет каждые 30 с) давно не обновлялись."""
+        """Процесс жив, но цикл событий стоит: счётчики (пишет каждые 15 с) давно не обновлялись."""
         d = self.sni
         if not d or time.time() - d.started < 120:
             return False
@@ -745,12 +812,20 @@ class Engine:
             return config.SNI_PROXY_PORT
         lids = sorted({lid for n in marks for l, _ in policies[n]["domain"] for lid in l})
         files = {lid: domains.path_for(lid) for lid in lids}
+        # правила по адресам этих политик — для учёта: куда ушло соединение без совпадения по
+        # домену (те же правила проверяет цепочка q_* в nftables)
+        nets = sorted({lid for n in marks for l, _ in policies[n]["rules"] for lid in l})
+        cidrs = {lid: lists.path_for(lid) for lid in nets if os.path.exists(lists.path_for(lid))}
+        acct = lambda p: {"rules": [[l, self._acct_label(st, o)] for l, o in p["rules"]],
+                          "default": self._acct_label(st, p["default"])}
         cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS,
-               "lists": files, "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
+               "lists": files, "cidrs": cidrs,
+               "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
                "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o)}
-                                                     for l, o in policies[n]["domain"]]}
+                                                     for l, o in policies[n]["domain"]],
+                                "acct": acct(policies[n])}
                             for n, m in marks.items()}}
-        mt = {lid: os.path.getmtime(p) if os.path.exists(p) else 0 for lid, p in files.items()}
+        mt = {lid: os.path.getmtime(p) if os.path.exists(p) else 0 for lid, p in {**files, **cidrs}.items()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
         key = f"{t.key}|{listen}|{config.SNI_PROXY_PORT}"
         d = self.sni
@@ -907,6 +982,8 @@ class Engine:
                     log.exception("traffic/limits")
             try:
                 self._account(t, st)
+                if not config.DRY_RUN:
+                    self._sni_account()
                 self._exit_quotas(st)
             except Exception:  # noqa: BLE001
                 log.exception("exit traffic")

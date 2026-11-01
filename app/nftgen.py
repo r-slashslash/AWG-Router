@@ -249,6 +249,15 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         out.append("\tchain oq_block {\n\t\treject with tcp reset\n\t}")
         for u in sorted(upstreams, key=lambda x: x["num"]):
             out.append(f"\tchain oq_u{u['num']} {{\n\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
+        # MSS clamp для соединений sniproxy.py: они локальные (output), а не транзитные, поэтому
+        # правило из c_forward их не видит — без него SYN объявит MSS 1460 под MTU туннеля ~1280
+        mss = [f'\t\toifname "{config.IFACE_PREFIX}{u["num"]}" tcp flags & (syn | rst) == syn '
+               f'tcp option maxseg size > {int(u.get("mtu", 1280)) - 40} '
+               f'tcp option maxseg size set {int(u.get("mtu", 1280)) - 40}'
+               for u in sorted(upstreams, key=lambda x: x["num"])]
+        if mss:
+            out.append("\tchain c_mss_out {\n\t\ttype filter hook postrouting priority mangle; policy accept;\n"
+                       + "\n".join(mss) + "\n\t}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]

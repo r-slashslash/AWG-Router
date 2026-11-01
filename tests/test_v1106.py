@@ -3,6 +3,7 @@
 
 python3 -m unittest discover tests
 """
+import hashlib
 import os
 import re
 import shutil
@@ -111,29 +112,42 @@ class FetchCodeTest(unittest.TestCase):
         self.func = m.group(0)
         bindir = os.path.join(self.tmp, "bin")
         os.makedirs(bindir)
-        # curl: пишет адрес в лог; адреса из FAIL — ошибка, остальные отдают архив
+        # curl: пишет адрес в лог; CODES — «адрес=код ответа» (по умолчанию 200, 000 — нет сети);
+        # 200 отдаёт архив (или его .sha256 = SUM), -w печатает код, -f при ошибке — выход 22
         with open(os.path.join(bindir, "curl"), "w") as f:
             f.write(textwrap.dedent("""\
                 #!/usr/bin/env bash
-                out=""; url=""
+                out=""; url=""; w=""; fail=0
                 while [ $# -gt 0 ]; do
-                  case "$1" in -o) out="$2"; shift 2 ;; --retry|--max-time) shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
+                  case "$1" in
+                    -o) out="$2"; shift 2 ;; -w) w="$2"; shift 2 ;; --retry|--max-time) shift 2 ;;
+                    --*) shift ;; -*) [[ "$1" == *f* ]] && fail=1; shift ;; *) url="$1"; shift ;;
+                  esac
                 done
                 echo "$url" >> "$CURL_LOG"
-                for u in $FAIL; do [ "$u" = "$url" ] && exit 22; done
-                cp "$GOOD_TGZ" "$out"
+                code=200
+                for p in $CODES; do [ "${p%%=*}" = "$url" ] && code="${p#*=}"; done
+                [ -n "$w" ] && printf '%s' "$code"
+                [ "$code" = 000 ] && exit 7
+                if [ "$code" != 200 ]; then [ "$fail" = 1 ] && exit 22; [ -n "$out" ] && echo "Not Found" > "$out"; exit 0; fi
+                if [[ "$url" == *.sha256 ]]; then
+                  if [ -n "$out" ]; then echo "$SUM  awg-router.tar.gz" > "$out"; else echo "$SUM  awg-router.tar.gz"; fi
+                else cp "$GOOD_TGZ" "$out"; fi
                 """))
         os.chmod(os.path.join(bindir, "curl"), 0o755)
+        with open(self.tgz, "rb") as f:
+            self.sum = hashlib.sha256(f.read()).hexdigest()
         self.env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "GOOD_TGZ": self.tgz,
                     "CURL_LOG": os.path.join(self.tmp, "curl.log")}
 
-    def run_fetch(self, branch="main", src_url="", fail=""):
+    def run_fetch(self, branch="main", src_url="", codes="", sum=None):
         dest = os.path.join(self.tmp, "dest")
         shutil.rmtree(dest, ignore_errors=True)
         open(self.env["CURL_LOG"], "w").close()
         script = (f'REPO=o/r; BRANCH={branch}; AWGR_SRC_URL="{src_url}"\n{self.func}\n'
                   f'fetch_code "{dest}"')
-        r = subprocess.run(["bash", "-uo", "pipefail", "-c", script], env={**self.env, "FAIL": fail},
+        r = subprocess.run(["bash", "-uo", "pipefail", "-c", script],
+                           env={**self.env, "CODES": codes, "SUM": self.sum if sum is None else sum},
                            capture_output=True, text=True)
         with open(self.env["CURL_LOG"]) as f:
             urls = f.read().split()
@@ -145,14 +159,29 @@ class FetchCodeTest(unittest.TestCase):
 
     def test_release_first(self):
         rc, urls, ok = self.run_fetch()
-        self.assertEqual((rc, urls, ok), (0, [self.REL], True))
+        self.assertEqual((rc, urls, ok), (0, [self.REL, self.REL + ".sha256"], True))
 
-    def test_branch_when_release_missing(self):
-        rc, urls, ok = self.run_fetch(fail=self.REL)
+    def test_branch_only_when_no_release(self):
+        rc, urls, ok = self.run_fetch(codes=f"{self.REL}=404")
         self.assertEqual((rc, urls, ok), (0, [self.REL, self.MAIN], True))
 
-    def test_both_fail(self):
-        rc, urls, ok = self.run_fetch(fail=f"{self.REL} {self.MAIN}")
+    def test_network_error_never_falls_back_to_branch(self):
+        """1.12.2: сбой сети при скачивании релиза — ошибка, а не неопубликованный код из main."""
+        for code in ("000", "503", "403"):
+            rc, urls, ok = self.run_fetch(codes=f"{self.REL}={code}")
+            self.assertEqual((urls, ok), ([self.REL], False), code)
+            self.assertNotEqual(rc, 0, code)
+
+    def test_checksum_mismatch(self):
+        rc, urls, ok = self.run_fetch(sum="0" * 64)
+        self.assertEqual((urls, ok), ([self.REL, self.REL + ".sha256"], False))
+        self.assertNotEqual(rc, 0)
+        rc, urls, ok = self.run_fetch(codes=f"{self.REL}.sha256=404")      # без файла суммы — тоже нет
+        self.assertFalse(ok)
+        self.assertNotEqual(rc, 0)
+
+    def test_both_missing(self):
+        rc, urls, ok = self.run_fetch(codes=f"{self.REL}=404 {self.MAIN}=404")
         self.assertNotEqual(rc, 0)
         self.assertFalse(ok)
 
@@ -162,12 +191,18 @@ class FetchCodeTest(unittest.TestCase):
         rc, urls, _ = self.run_fetch(src_url="https://example.org/x.tgz")
         self.assertEqual(urls, ["https://example.org/x.tgz"])
 
-    def test_broken_archive_is_skipped(self):
+    def test_broken_archive_is_refused(self):
         with open(self.tgz, "wb") as f:                         # не архив — например, страница ошибки
             f.write(b"<html>")
+        with open(self.tgz, "rb") as f:
+            self.sum = hashlib.sha256(f.read()).hexdigest()
         rc, urls, ok = self.run_fetch()
+        self.assertEqual(urls, [self.REL, self.REL + ".sha256"])
+        self.assertNotEqual(rc, 0)
+        rc, urls, ok = self.run_fetch(codes=f"{self.REL}=404")            # архив ветки тоже проверяется
         self.assertEqual(urls, [self.REL, self.MAIN])
         self.assertNotEqual(rc, 0)
+
 
 
 class WorkflowTest(unittest.TestCase):

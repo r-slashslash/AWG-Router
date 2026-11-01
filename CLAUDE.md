@@ -14,8 +14,9 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 - The installer (`install.sh`) speaks English only.
 - Commits end with `Co-Authored-By: Claude …` only (no session links). Push to `main`, then tag.
   Users get code only from **releases**: `install.sh` (also `awg-router update` and the panel's
-  update button) downloads `releases/latest/download/awg-router.tar.gz`, falling back to the `main`
-  tarball only if that fails; GitHub counts the asset's downloads (≈ installs + updates).
+  update button) downloads `releases/latest/download/awg-router.tar.gz` and checks its `.sha256`; the
+  `main` tarball is used only when there is no release (HTTP 404) — a network error or a bad checksum
+  stops the install (1.12.2); GitHub counts the asset's downloads (≈ installs + updates).
 - **Bump `VERSION` in `app/version.py`** with every user-visible change: panels compare it with
   the latest release tag (every 6 h; `version.py` on the branch only if there is no release) to show
   "update available". A fix after a release is a new version, never the same number again; add it
@@ -25,8 +26,8 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   attaches to a release that already exists). Claude Code cloud sessions cannot push tags or create
   releases (the proxy refuses): push `main`, then ask the owner to publish the release in the GitHub
   UI (Releases → Draft a new release → new tag `vX.Y.Z` on `main` → Publish); the workflow then
-  attaches the archive. Until then panels see no update and the installer falls back to `main`, so an
-  unreleased push breaks nothing. Check the asset is there:
+  attaches the archive. Until then panels see no update and the installer keeps installing the latest
+  release, so an unreleased push breaks nothing. Check the asset is there:
   `gh api repos/r-slashslash/AWG-Router/releases/latest --jq '.assets[].name'`. If Actions did not
   run, build the same archive locally and `gh release upload vX.Y.Z awg-router.tar.gz* --clobber`.
   Downloads: `gh api repos/r-slashslash/AWG-Router/releases --jq '.[]|[.tag_name,(.assets[]|select(.name=="awg-router.tar.gz").download_count)]'`.
@@ -106,7 +107,14 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   `public_host` directly: `public_host` is also the panel URL and the Let's Encrypt name, and the panel
   listens on IPv4 only. Restore keeps this server's `client_host`, as it does `public_host`. The tunnel
   itself is IPv4 only (clients get `::/0` → IPv6 goes into the tunnel and is dropped, no leak).
-- Exit configs: `FwMark`/`ListenPort` are dropped (`awgconf.LOCAL_ONLY_KEYS`).
+- Exit configs: `FwMark`/`ListenPort` are dropped (`awgconf.LOCAL_ONLY_KEYS`). An exit's type (AWG / SOCKS5)
+  and a list's kind can't change on edit (`err.exit_kind_change`, `err.list_kind_change`).
+- Exit start failures (1.12.2): `engine._failed_up` → pause `UP_PAUSES` (10 s … 5 min) per exit, one event per
+  new error; a tunnel that dies within `FLAP_SECS` counts as a failed start. Reset: config or target change,
+  exit disabled/deleted, `POST /api/reapply`.
+- Host subnet change (1.12.2): `awgserver.retarget_nat` moves `-s <cidr>` in PostUp/PostDown and the old
+  MASQUERADE is deleted after the restart (awg-quick down reads the new file). Container: subnet locked
+  (`subnet_lock: "container"`) unless `/opt/amnezia/start.sh` reads it from `Address` (our awg-server does).
 - The counting table `awgr_acct` must **never** be rebuilt with the main `awgr` table (counters
   would reset): `engine._account` creates it only when it is missing or its rule comment marker
   (`nftgen.acct_marker`, bump `ACCT_VER` when the table changes) differs. It only counts — no
@@ -151,8 +159,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 - Exit window routing (1.12.0): `POST`/`PUT /api/upstreams` take optional `routing` =
   `{domains, domain_lists, net_lists, default}` → `main.apply_exit_routing`: the sites text is the exit's own
   domain list (`u["own_list"]`, named like the exit, renamed with it, dropped when emptied or with the exit if
-  unreferenced); all global rules with outbound `up:<id>` are replaced by ≤ 2 rules (domains, networks) at the
-  position of the first old one (else top), then `v_rules`. The browser sends `routing` only when that part of
+  unreferenced; restore keeps it). `merge_exit_rules` (1.12.2) changes only ENABLED global rules to `up:<id>`
+  (the window shows their lists): unticked lists leave them (an emptied rule goes), new lists join the first
+  enabled rule of the same kind (domains / networks) or a new rule right after the last rule to the exit (else
+  top); disabled rules, comments and order stay; then `v_rules`. The browser sends `routing` only when that part of
   the form was touched (or for a new SOCKS5 exit with something chosen). Exit type can't change on edit.
   Deleting an exit drops rules with domain lists whose replacement isn't SOCKS5.
 - Deleting an exit: `DELETE /api/upstreams/<id>` with `{"replace": out}` runs
@@ -198,7 +208,13 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
   `{"mark"}` / `{"block"}` from `engine._sni_target`); miss → connect to SO_ORIGINAL_DST with the policy's mark,
   and `c_output` (`type route hook output`) jumps to `q_<policy>` = the same address rules with `oq_*` outs
   (mark change → re-route). No sniproxy (not started, died, hung — stats older than 120 s) → ruleset without
-  sniffing (address rules only); panel stop with `on_stop=keep` re-applies the ruleset without it. Redirected
+  sniffing (address rules only); panel stop with `on_stop=keep` re-applies the ruleset without it.
+  Traffic (1.12.2): sniproxy connections are input/output, so `awgr_acct` (forward) misses them — sniproxy
+  counts bytes per `client ip|out` (`to.acct` for hits; misses: `policies[n].acct` = the policy's address rules
+  resolved to `direct` / upstream id / null=block, CIDR files in `cfg.cidrs`) into `sni-stats.json["bytes"]`
+  (every 15 s and on SIGTERM); `engine._sni_account` → `Traffic.update_sni(pid, …)` (`traffic.json["sni"]` keeps
+  the last values per pid; a new pid counts from zero). Also `c_mss_out` (filter postrouting) clamps MSS for
+  sniproxy's own connections, TCP keepalive + `IDLE_TIMEOUT` 15 min. Redirected
   connections are *input* traffic: `_input_rule` inserts `iptables -I INPUT -i <wg> -p tcp --dport 10443 -j ACCEPT`
   (ufw); an nftables-only host firewall must allow it by hand. `trace(pk, ip, name)` checks domain rules first.
 - SOCKS5 exits (1.12.0): upstream `config` = normalized `socks5://user:pass@host:port` (`awgconf.parse_socks`,
