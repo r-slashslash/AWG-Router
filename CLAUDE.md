@@ -22,16 +22,12 @@ Public repo https://github.com/r-slashslash/AWG-Router, branch `main`, MIT.
 ## Release
 1. Bump `VERSION`, add the CHANGELOG section, push `main`.
 2. The owner publishes the release in the GitHub UI (cloud sessions can't push tags or create releases):
-   Releases → Draft a new release → new tag **`v` + VERSION exactly** (`v1.12.2`) on `main` → Publish.
+   Releases → Draft a new release → new tag `v` + VERSION (`v1.12.2`) on `main` → Publish. Never move or
+   reuse a tag.
 3. `.github/workflows/release.yml` builds `awg-router.tar.gz` (`git archive --prefix=awg-router/`) and its
    `.sha256` and attaches them. It fails when the tag ≠ `VERSION`.
 4. Check: `gh api repos/r-slashslash/AWG-Router/releases/latest --jq '.assets[].name'`. If Actions didn't run,
    build the same archive locally and `gh release upload vX.Y.Z awg-router.tar.gz* --clobber`.
-
-A wrong tag (`v12.2.2` instead of `v1.12.2` happened once) leaves the latest release without an archive:
-the installer then takes the `main` tarball, and panels see "12.2.2" and offer an update forever. Fix:
-delete that release **and** its tag (deleting the release keeps the tag), publish the right one. Never move
-or reuse a tag.
 
 Users get code only from releases: `install.sh` (also `awg-router update` and the panel's update button)
 downloads `releases/latest/download/awg-router.tar.gz` and checks its `.sha256`; the `main` tarball is used
