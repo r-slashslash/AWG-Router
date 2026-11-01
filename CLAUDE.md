@@ -1,135 +1,134 @@
-# AWG Router — памятка для разработки
+# AWG Router — notes for development
 
-Веб-панель для AmneziaWG (до AWG 3.1): клиенты, все настройки туннеля и каскадная маршрутизация (клиенты
-выходят через другие AWG-серверы или прокси SOCKS5, выбранные сети идут напрямую, у клиента могут быть
-свои правила). Репозиторий https://github.com/r-slashslash/AWG-Router, ветка `main`, MIT.
+Web panel for AmneziaWG (up to AWG 3.1): clients, all tunnel settings and cascade routing (clients exit
+through other AWG servers or SOCKS5 proxies, chosen networks go direct, a client can have its own rules).
+Repo https://github.com/r-slashslash/AWG-Router, branch `main`, MIT.
 
-Памятка говорит, что делать и почему. Как устроено — смотри код и docstring; числа — в константах
-(здесь названы константы, а не их значения). Правила, которые можно проверить, проверяют тесты
-`tests/test_rules.py` — если тест упал, правило нарушено.
+These notes say what to do and why. How things work is in the code and its docstrings; numbers live in
+constants (named here, not their values). Rules that can be checked are checked by `tests/test_rules.py` —
+if it fails, a rule is broken.
 
-## Правила
-- **Только стандартная библиотека Python** (PyPI может быть недоступен). HTTP — свой, `app/web.py`.
-- **Каждая строка интерфейса — на 4 языках: ru, en, zh, fa** (fa справа налево). Сервер отдаёт
-  `Msg("ключ", **параметры)` → `{"$t": ключ, "p": параметры}`, браузер переводит через `t()` / `th()` /
-  `tm()` из `app/static/i18n.js`. Плейсхолдеры `{…}` одинаковые во всех языках; текст со смешанным
-  направлением — в `<bdi>` (`t()` сам изолирует параметры). Тексты для Telegram — в `notify.TEXTS` и
-  `tgbot.py`, не в `i18n.js`. *Тест:* `I18nTest`.
-- Комментарии и docstring — по-русски. README на en / ru / zh / fa меняются вместе. `install.sh` — только
-  по-английски.
-- Коммит заканчивается строкой `Co-Authored-By: Claude …` и ничем больше (ссылка на сессию ведёт в личный
-  чат, в публичном репозитории она бесполезна).
-- Любое изменение, которое увидят пользователи, — новая `VERSION` в `app/version.py` и раздел в
-  `CHANGELOG.md`. Исправление после релиза — новая версия, номер никогда не повторяется.
-- Браузер не обращается к сторонним хостам: шрифты и скрипты отдаёт панель (`app/static/fonts`, OFL).
-  Google и CDN заблокированы в Китае и Иране и выдают, кто открывает панель.
+## Rules
+- **Python standard library only** (PyPI may be unreachable). Own HTTP framework in `app/web.py`.
+- **Every user-facing string in 4 languages: ru, en, zh, fa** (fa is RTL). The server returns
+  `Msg("key", **params)` → `{"$t": key, "p": params}`; the browser translates with `t()` / `th()` / `tm()`
+  from `app/static/i18n.js`. `{placeholders}` identical in every language; mixed-direction text in `<bdi>`
+  (`t()` isolates its params itself). Telegram texts live in `notify.TEXTS` and `tgbot.py`, not in
+  `i18n.js`. *Test:* `I18nTest`.
+- Code comments and docstrings in Russian. README in en / ru / zh / fa change together. `install.sh` speaks
+  English only.
+- A commit message ends with `Co-Authored-By: Claude …` and nothing else (a session link leads to a private
+  chat and is useless in a public repo).
+- Every user-visible change gets a new `VERSION` in `app/version.py` and a `CHANGELOG.md` section. A fix
+  after a release is a new version; a number is never reused.
+- The browser never calls third-party hosts: fonts and scripts are served by the panel
+  (`app/static/fonts`, OFL). Google and CDNs are blocked in CN/IR and reveal who opens the panel.
 
-## Релиз
-1. Поднять `VERSION`, написать раздел `CHANGELOG.md` (`## X.Y.Z — дата`), push в `main`.
-2. `.github/workflows/release.yml` сам прогоняет тесты, собирает `awg-router.tar.gz` + `.sha256` и создаёт
-   **черновик** релиза `vX.Y.Z` с текстом из CHANGELOG. Новые коммиты с той же версией обновляют черновик.
-   Версия не новее последнего релиза или нет раздела в CHANGELOG — workflow падает.
-3. Владелец открывает Releases и нажимает **Publish** (при желании правит текст, например на 4 языках).
-   Тег создаётся при публикации, вводить его не нужно. Облачные сессии Claude Code публиковать не могут.
-4. Проверка: `gh api repos/r-slashslash/AWG-Router/releases/latest --jq '.assets[].name'`.
+## Release
+1. Bump `VERSION`, write the `CHANGELOG.md` section (`## X.Y.Z — date`, English) and the release text
+   `release-notes/vX.Y.Z.md` in en / ru / zh / fa (same layout as the previous file: English on top, then
+   `<details>` for ru, zh, fa with `<a id="…">`, update instructions in each). Push `main`.
+2. `.github/workflows/release.yml` runs the tests, builds `awg-router.tar.gz` + `.sha256` and creates a
+   **draft** release `vX.Y.Z` with that text. Later commits with the same version refresh the draft. A
+   version not newer than the latest release, or a missing notes file, fails the workflow.
+3. The owner opens Releases and presses **Publish**. The tag is created on publishing; nobody types it.
+   Claude Code cloud sessions can't publish.
+4. Check: `gh api repos/r-slashslash/AWG-Router/releases/latest --jq '.assets[].name'`.
 
-Пользователи получают код только из релизов: `install.sh` (и `awg-router update`, и кнопка в панели)
-скачивает `releases/latest/download/awg-router.tar.gz` и сверяет `.sha256`; архив `main` — только если
-релизов нет (HTTP 404). Панели сравнивают `VERSION` с последним релизом раз в `updates.INTERVAL`.
-Скачивания (≈ установки + обновления):
+Users get code only from releases: `install.sh` (also `awg-router update` and the panel's button) downloads
+`releases/latest/download/awg-router.tar.gz` and checks its `.sha256`; the `main` tarball is used only when
+there is no release (HTTP 404). Panels compare `VERSION` with the latest release every `updates.INTERVAL`.
+Downloads (≈ installs + updates):
 `gh api repos/r-slashslash/AWG-Router/releases --jq '.[]|[.tag_name,(.assets[]|select(.name=="awg-router.tar.gz").download_count)]'`
 
-## Чек-листы
-**Новое поле в `state.json`**
-- значение по умолчанию — в `store.DEFAULT_STATE` (или читать через `.get` с умолчанием);
-- проверка при вводе — в обработчике API в `main.py`;
-- перенос при восстановлении — в `clean_backup_state` (незнакомые поля отбрасываются!) *Тест:*
-  `RestoreKeepsFieldsTest`; если поле переносить не нужно — в его `DROPPED` с причиной;
-- что видит браузер — в `get_state`; `/api/state` опрашивается каждые несколько секунд, держать его
-  маленьким (большие данные — отдельным запросом, как текст списка в `GET /api/lists/<id>`).
+## Checklists
+**A new field in `state.json`**
+- default value in `store.DEFAULT_STATE` (or read with `.get` and a default);
+- input validation in the API handler in `main.py`;
+- carried over by restore in `clean_backup_state` (unknown fields are dropped!). *Test:*
+  `RestoreKeepsFieldsTest`; a field that must not be carried over goes into its `DROPPED` with a reason;
+- what the browser sees in `get_state`; `/api/state` is polled every few seconds, keep it small (big data
+  through a separate request, like a list's text via `GET /api/lists/<id>`).
 
-**Новое место, которое может указывать на выход** (`up:<id>`)
-- и в `Store.outbound_refs`, и в `Store.replace_outbound`; *тест:* `ExitReferencesTest` (добавь туда
-  новое место и поправь ожидаемое число ссылок).
+**A new place that can point to an exit** (`up:<id>`)
+- in both `Store.outbound_refs` and `Store.replace_outbound`; *test:* `ExitReferencesTest` (add the new
+  place there and update the expected number of references).
 
-**Новый текст в интерфейсе или ошибка с сервера**
-- ключ во все 4 словаря `i18n.js` с одинаковыми плейсхолдерами; *тест:* `I18nTest`.
+**A new UI text or server error**
+- the key in all 4 dictionaries of `i18n.js` with the same placeholders; *test:* `I18nTest`.
 
-**Новый файл для личной страницы клиента** (`/s/…`, без входа)
-- в белый список `app.public_files` в `main.py`; *тест:* `FormatsTest`.
+**A new file for a client's personal page** (`/s/…`, no login)
+- in the `app.public_files` whitelist in `main.py`; *test:* `FormatsTest`.
 
-**Изменение маршрутизации (nft)**
-- `nftgen.layout()` общий для nftables и конфига `sniproxy.py` — имена политик должны совпадать;
-- таблицу учёта `awgr_acct` никогда не пересоздавать вместе с `awgr` (счётчики обнулятся): при её
-  изменении поднять `nftgen.ACCT_VER`;
-- проверить правила `nft -c -f` и e2e-тестами в netns (раздел «Тесты»).
+**A routing (nft) change**
+- `nftgen.layout()` is shared by nftables and the `sniproxy.py` config — policy names must match;
+- never rebuild the counting table `awgr_acct` together with `awgr` (counters would reset): bump
+  `nftgen.ACCT_VER` when it changes;
+- check the ruleset with `nft -c -f` and the netns e2e tests (see Tests).
 
-**Изменение формата `traffic.json`**
-- `traffic.FORMAT` остаётся 2: старые панели читают только его и игнорируют новые ключи, поэтому откат
-  версии не стирает итоги. *Тест:* `FormatsTest`.
+**A `traffic.json` format change**
+- `traffic.FORMAT` stays 2: older panels read only that and ignore new keys, so a downgrade keeps the
+  totals. *Test:* `FormatsTest`.
 
-## Как это работает
-- Контейнер панели: `network_mode: host`, `pid: host`, `privileged`, docker.sock, данные в `./data`.
-  Сервер AWG — цель `system.Target`: контейнер AmneziaVPN (`ContainerTarget`, nsenter в его сеть), сервер
-  на хосте (`HostTarget`) или демо (`DemoTarget`).
-- Контейнер: формат AmneziaVPN в `/opt/amnezia/awg/` — `awg0.conf` (I1–I5 как комментарии `# I1 = …`,
-  разделитель `" = "`), общий PSK `wireguard_psk.key`, `clientsTable` с именами. Пиры — `awg syncconf`;
-  порт, S1–S4, H1–H4, HeaderProtectionKey — только с перезапуском интерфейса. Хост:
-  `/etc/amnezia/amneziawg/awg0.conf`, `awg-quick@awg0`, NAT в PostUp.
-- Отключённый клиент — закомментированный блок пира с `#awgr:disabled` (IP остаётся занятым).
-- Маршрутизация: prerouting ставит метку `MARK_BASE + N` → `ip rule` `RULE_PRIO_BASE + N` → таблица
-  `TABLE_BASE + N` → `default dev awgrN`, запасной маршрут `unreachable` (без туннеля трафик не утечёт);
-  SNAT на адрес туннеля выхода; MSS clamp; `rp_filter=2` (константы — в `config.py`).
-- Выход: работает → его номер; не работает → `fallback`; исчерпал месячную квоту → `quota_action`
-  (`engine.resolve`). Неудачный запуск выхода ждёт `engine.UP_PAUSES`.
-- Правила по доменам — только на выходы SOCKS5. TCP 80/443 таких клиентов nftables перенаправляет в
-  `sniproxy.py` (порт `config.SNI_PROXY_PORT`), QUIC блокируется. sniproxy читает имя сайта (SNI / Host):
-  совпало — CONNECT в прокси по имени, нет — на исходный адрес с меткой политики. Его соединения не
-  транзитные: учёт трафика, MSS clamp и разрешение во входящем файрволе для них сделаны отдельно.
-- Клиенту в конфиг идёт `client_host`, никогда `public_host` (это ещё и адрес панели и имя в сертификате).
-  В туннеле только IPv4: клиенты получают `::/0`, IPv6 отбрасывается внутри туннеля, утечки нет.
-- `Target.key` включает PID и время запуска контейнера: его перезапуск — полное повторное применение.
+## How it works
+- Panel container: `network_mode: host`, `pid: host`, `privileged`, docker.sock, data in `./data`. The AWG
+  server is a `system.Target`: the AmneziaVPN container (`ContainerTarget`, nsenter into its network), a
+  server on the host (`HostTarget`) or demo (`DemoTarget`).
+- Container: AmneziaVPN layout in `/opt/amnezia/awg/` — `awg0.conf` (I1–I5 as `# I1 = …` comments,
+  `" = "` separators), shared PSK `wireguard_psk.key`, `clientsTable` with names. Peers via `awg syncconf`;
+  port, S1–S4, H1–H4, HeaderProtectionKey only with an interface restart. Host:
+  `/etc/amnezia/amneziawg/awg0.conf`, `awg-quick@awg0`, NAT in PostUp.
+- A disabled client is a commented peer block marked `#awgr:disabled` (its IP stays taken).
+- Routing: prerouting sets mark `MARK_BASE + N` → `ip rule` `RULE_PRIO_BASE + N` → table `TABLE_BASE + N` →
+  `default dev awgrN`, with an `unreachable` fallback route (no tunnel, no leak); SNAT to the exit's tunnel
+  address; MSS clamp; `rp_filter=2` (constants in `config.py`).
+- An exit: working → its number; down → `fallback`; over its monthly quota → `quota_action`
+  (`engine.resolve`). A failed exit start waits `engine.UP_PAUSES`.
+- Domain rules go only to SOCKS5 exits. nftables redirects TCP 80/443 of such clients to `sniproxy.py`
+  (port `config.SNI_PROXY_PORT`) and blocks QUIC. sniproxy reads the site name (SNI / Host): a match → CONNECT
+  to the proxy by name, otherwise → the original address with the policy mark. Its connections are not
+  forwarded: traffic counting, MSS clamp and the input firewall rule are handled separately for them.
+- Client configs get `client_host`, never `public_host` (that is also the panel URL and the certificate
+  name). The tunnel is IPv4 only: clients get `::/0`, IPv6 is dropped inside the tunnel, no leak.
+- `Target.key` includes the container PID and start time: a container restart re-applies everything.
 
-## Подводные камни
-- Имена цепочек nft `fwd` / `post` / `pre` зарезервированы → `c_*`.
-- Браузеры не открывают некоторые порты (ERR_UNSAFE_PORT) — список `UNSAFE_PORTS` в установщике.
-- Непрочитанное тело запроса нужно вычитать (keep-alive): `_drain_body` в `web.py`.
-- Повторное включение пира на настоящем AWG может занять до ~15 с (таймеры WireGuard).
-- `install.sh` читает ответы из `/dev/tty` (работает под `curl | bash`), без терминала берёт умолчания.
-  Существующий контейнер `amnezia-awg2` не удаляет, а переименовывает. Образ собирает `docker build`, не
-  `docker compose build` (новый Compose отказывается работать со старым buildx).
-- Интерфейс перерисовывается по таймеру: не перерисовывать, пока пользователь печатает в `#main`.
-- Всё вне секретного пути видят сканеры: публичных маршрутов минимум, заголовок `Server: httpd`.
-- Восстановление проверяет каждое поле как ввод в панели и заменяет хуки PostUp/PostDown
-  (`safe_hooks`): awg-quick выполняет их от root.
-- Возраст сообщений бота считать по часам Telegram (`notify.clock_skew`): часы VPS уходят.
-- hev-socks5-tunnel открывает сокеты AF_INET6: ядру нужна поддержка IPv6 (не работает с
-  `ipv6.disable=1`).
-- I1–I5 — клиентские параметры: своя маскировка клиента меняет только его конфиг. Данные клиента — в
-  `state.cps`, не в `state.clients` (его пересобирает `put_client`).
+## Gotchas
+- nft chain names `fwd` / `post` / `pre` are reserved → `c_*`.
+- Browsers refuse some ports (ERR_UNSAFE_PORT) — the installer's `UNSAFE_PORTS`.
+- Unread request bodies must be drained on keep-alive: `_drain_body` in `web.py`.
+- Re-enabling a peer on real AWG may take up to ~15 s (WireGuard timers).
+- `install.sh` reads answers from `/dev/tty` (works under `curl | bash`); without a terminal it takes the
+  defaults. It never deletes an existing `amnezia-awg2` container, it renames it. The image is built with
+  `docker build`, not `docker compose build` (new Compose refuses old buildx).
+- The UI re-renders on a timer: don't re-render while the user types in `#main`.
+- Everything outside the secret path is visible to scanners: minimal public routes, `Server: httpd`.
+- Restore validates every field like panel input and replaces PostUp/PostDown hooks (`safe_hooks`):
+  awg-quick runs them as root.
+- Measure the bot's message age by Telegram's clock (`notify.clock_skew`): VPS clocks drift.
+- hev-socks5-tunnel opens AF_INET6 sockets: the kernel needs IPv6 support (fails with `ipv6.disable=1`).
+- I1–I5 are client-side: a client's own masking changes only its config. Client data lives in
+  `state.cps`, not `state.clients` (rebuilt by `put_client`).
 
-## Решено, это не баги
-- Управление из Telegram слушается чата, а не человека: в группе панелью управляет любой участник
-  (README, «Безопасность»).
-- В резервной копии все закрытые ключи; без пароля она не зашифрована (README, «Безопасность»).
-- QUIC блокируется для всех сайтов у клиентов с правилами по доменам; сайты с ECH по имени не узнать
-  (подсказка в интерфейсе).
-- Месяцы для квот и итогов — по UTC.
+## Decided, not bugs
+- Telegram control trusts the chat, not the person: in a group every member controls the panel (README,
+  Security).
+- A backup holds all private keys; without a password it is not encrypted (README, Security).
+- QUIC is blocked for all sites of clients with domain rules; ECH sites can't be matched by name (UI hint).
+- Months for quotas and totals are UTC.
 
-## Тесты
+## Tests
 ```bash
-python3 -m unittest discover tests            # всё без root; tests/test_rules.py — правила из памятки
+python3 -m unittest discover tests            # all without root; tests/test_rules.py — the rules above
 sudo PYTHONPATH=<pyroute2>:. python3 tests/netns_e2e.py
 sudo PATH=<awg,amneziawg-go>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/awg_real_e2e.py
 sudo PATH=<hev-socks5-tunnel>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/domains_socks_e2e.py
 DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo PANEL_PORT=8099 PUBLIC_HOST=203.0.113.5 python3 -m app.main
 ```
-Демо-режим изображает сервер AWG: интерфейс проверять через Playwright на 4 языках, на компьютере и на
-ширине 375 px (без горизонтальной прокрутки, RTL для fa). Скриншоты README (`docs/screenshots`) — из
-демо-режима: английский, светлая тема, 1280×860 с масштабом 1.25 и телефон 390×844 с масштабом 3, без
-демо-баннера и «(demo)», 256 цветов.
+Demo mode fakes the AWG server: check the UI with Playwright in 4 languages, desktop and 375 px wide (no
+horizontal scroll, RTL for fa). README screenshots (`docs/screenshots`) come from demo mode: English, light
+theme, 1280×860 at scale 1.25 and phone 390×844 at scale 3, demo banner and "(demo)" hidden, 256 colours.
 
-## Состояние
-Проверено на настоящем сервере (Ubuntu 22.04, контейнер AmneziaVPN): сборка образа, Let's Encrypt через
-установщик, панель, обновление с GitHub. Выходы SOCKS5 и правила по доменам проверены e2e-тестами в
-сетевых пространствах, на настоящем сервере — ещё нет.
+## Status
+Verified on a real server (Ubuntu 22.04, AmneziaVPN container): image build, Let's Encrypt through the
+installer, the panel, update from GitHub. SOCKS5 exits and domain rules are covered by e2e tests in network
+namespaces, not yet on a real server.
