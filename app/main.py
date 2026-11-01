@@ -17,7 +17,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from . import awgconf, awgserver, config, cps, domains, limits, lists, notify, selfupdate, system, tgbot, totp
+from . import awgconf, awgserver, config, cps, limits, lists, notify, selfupdate, system, tgbot, totp
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -747,8 +747,6 @@ def clean_backup_state(new: dict) -> dict:
                 fail("settings.client_dns")
         # IPv6 DNS из старых копий не берём: в туннеле только IPv4
         out["client_dns"] = [str(d) for d in dns if ":" not in str(d)]
-    if isinstance(s.get("dns_proxy"), bool):
-        out["dns_proxy"] = s["dns_proxy"]
     mtu = s.get("client_mtu")
     if mtu not in (None, ""):
         if not isinstance(mtu, int) or isinstance(mtu, bool) or not 1100 <= mtu <= 1500:
@@ -1017,8 +1015,7 @@ def _upstream_view(st: dict, u: dict) -> dict:
     try:
         pc = engine.parsed(u)
         info = {"endpoint": pc.endpoint, "address": pc.address, "mtu": pc.mtu,
-                "version": pc.version, "kind": pc.kind,
-                "socks_user": pc.socks.get("user") if pc.kind == "socks5" else None,
+                "version": pc.version,
                 "config_error": None}
     except awgconf.ConfigError as e:
         info = {"config_error": str(e)}
@@ -1079,7 +1076,6 @@ def get_state(req):
         "direct_traffic": engine.traffic.out_view("direct"),
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
-        "dns": engine.dns_view(),
         "clients": clients,
         "events": engine.events[-40:][::-1],
         "country_codes": lists.COUNTRY_CODES,
@@ -1329,7 +1325,7 @@ def trace_target(client: str | None, ip: str) -> dict:
             except Exception:  # noqa: BLE001
                 bad("err.ip_or_domain")
             bad(Msg("tr.ipv6_only", host=ip))   # у домена только AAAA
-        res = engine.trace(client, resolved, ip.lower().rstrip("."))
+        res = engine.trace(client, resolved)
         res["steps"].insert(0, Msg("tr.resolved", host=ip, ip=resolved))
         res["ip"] = resolved
         return res
@@ -1345,7 +1341,7 @@ def trace_target(client: str | None, ip: str) -> dict:
 def _list_view(l: dict | None) -> dict | None:
     """Список для браузера. Текст ручного списка (до 2 МБ) не отдаём в /api/state,
     который опрашивается каждые 5 секунд, — только по /api/lists/<id>."""
-    if l is None or l.get("kind") not in ("manual", "domains"):
+    if l is None or l.get("kind") != "manual":
         return l
     return {**l, "source": None}
 
@@ -1360,7 +1356,7 @@ def get_list(req, lid):
 
 def _list_body(st: dict, body: dict, existing: dict | None = None) -> dict:
     kind = body.get("kind", existing["kind"] if existing else None)
-    if kind not in ("country", "asn", "url", "manual", "domains"):
+    if kind not in ("country", "asn", "url", "manual"):
         bad("err.list_kind")
     src = str(body.get("source", existing["source"] if existing else "")).strip()
     if kind == "country":
@@ -1374,15 +1370,6 @@ def _list_body(st: dict, body: dict, existing: dict | None = None) -> dict:
             bad("err.asn_format")
         src = " ".join(f"AS{a}" for a in asns)
         name = body.get("name") or src
-    elif kind == "domains":
-        if len(src) > 2_000_000:
-            bad("err.list_too_big")
-        urls, text = domains.split_source(src)
-        found = domains.parse(text)
-        if not urls and not found:
-            bad("err.no_domains")
-        # без названия — первый домен (или сайт первой ссылки)
-        name = body.get("name") or (found[0] if found else urls[0].split("/")[2])[:40]
     elif kind == "url":
         urls = src.split()
         if not urls or not all(re.match(r"^https?://\S+$", u) for u in urls):
@@ -1407,18 +1394,10 @@ def add_list(req):
         if d["kind"] == "country" and Store.lst(st, lid):
             bad("err.country_exists")
         st["lists"].append({"id": lid, **d})
-        # первый список доменов включает «DNS через сервер»: без него правила по доменам не работают.
-        # Если его когда-то выключили вручную (False), не трогаем
-        dns_on = d["kind"] == "domains" and "dns_proxy" not in st["settings"]
-        if dns_on:
-            st["settings"]["dns_proxy"] = True
-        return lid, dns_on
-    lid, dns_on = store.mutate(fn)
+        return lid
+    lid = store.mutate(fn)
     engine.refresh_lists(False, [lid])
-    if dns_on:
-        engine.event("info", Msg("ev.dns_enabled"))
-        engine.trigger()
-    return {"id": lid, **(_list_view(Store.lst(store.snapshot(), lid)) or {}), "dns_enabled": dns_on}
+    return {"id": lid, **(_list_view(Store.lst(store.snapshot(), lid)) or {})}
 
 
 @app.put("/api/lists/{lid}")
