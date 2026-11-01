@@ -6,7 +6,7 @@
 
 A web panel for **AmneziaWG**: users, tunnel settings and cascade routing in one place.
 
-It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Docker container), or installs its own AmneziaWG server on the host. Protocol support goes up to **AmneziaWG 3.1**.
+It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Docker container), or installs its own AmneziaWG server — in a Docker container or on the host. Protocol support goes up to **AmneziaWG 3.1**.
 
 ```
                                ┌── RU / CN / IR ──────────► internet (this server's IP)
@@ -27,8 +27,12 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Clients created in the AmneziaVPN app show up and can be managed too. The panel can't show their config, because the private key exists only on the device.
 - A disabled client stays in the config as a comment, so nobody else takes its address.
 - Traffic per client for the month and all time; it survives restarts. Sort by name, address, traffic or activity.
-- An end date and a traffic limit (per month or in total). When they run out, the client turns off by itself; a monthly limit resets on the 1st and the client turns back on. Three days before the end date and at 90% of the limit you get a warning, and **Ending soon** in the client list shows who is close.
+- An end date and a traffic limit (per month or in total). When they run out, the client turns off by itself; a monthly limit resets on the 1st at 00:00 UTC (the panel shows when that is in your time) and the client turns back on. Three days before the end date and at 90% of the limit you get a warning, and **Ending soon** in the client list shows who is close.
 - A personal link: the person opens it, downloads their config or scans the QR code, and sees their traffic and end date — no panel sign-in.
+
+<p align="center">
+  <img src="docs/screenshots/clients.png" alt="Clients: activity, traffic this month, limits and exits" width="860">
+</p>
 
 **Server**
 - Every AmneziaWG parameter: Jc/Jmin/Jmax, S1–S4, H1–H4, I1–I5, HeaderProtectionKey, ContentPaddingAddition, AWG 3 timings, RandomTrailers and DisableCookies.
@@ -42,12 +46,13 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Traffic per exit and direct for the month and all time, and each client's monthly traffic split by exit. An exit can have a monthly limit; when it is used up, its traffic until the 1st goes direct, gets blocked or moves to another exit, whichever you choose (or you only get a notification).
 - Rules map a list to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, your own subnets or domains, and they refresh automatically. Rules and lists live on one **Routing** tab: each list shows where it is used, and a new list can be created right from a rule.
 - Domain rules for SOCKS5 exits: `example.com` on a list also covers all its subdomains; you can paste a link to a ready-made list (plain domains, dnsmasq, hosts, Adblock, v2ray). The server learns the site from its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself, so DNS spoofing by the ISP doesn't matter. Client DNS and configs don't change. Such rules are checked before address rules.
-- The exit window asks for the type first (AmneziaWG or SOCKS5). For SOCKS5 there are separate fields for the address, port, login and password (they make up the connection string; a pasted string fills them in), and the routing for that exit is set in the same window: sites (domains) to send through it, domain and network lists, or all traffic. This is saved as ordinary global rules.
+- The exit window asks for the type first (AmneziaWG or SOCKS5). For SOCKS5 there are separate fields for the address, port, login and password (they make up the connection string; a pasted string fills them in), and the routing for that exit is set in the same window: sites (domains) to send through it, domain and network lists, or all traffic. This is saved as ordinary global rules; rules you turned off, rule names and their order stay as they are.
 - Each client can have its own exit and its own rules.
 - **Route check** shows which way an IP or domain would go.
 
 <p align="center">
   <img src="docs/screenshots/exits.png" alt="Exits: traffic per exit and direct, monthly limits" width="860">
+  <img src="docs/screenshots/routing.png" alt="Routing: rules, the default exit and lists" width="860">
 </p>
 
 **Panel**
@@ -59,13 +64,17 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 - Optional control from Telegram: the bot becomes a remote: `/start` opens a button menu in a single message, and everything happens in that message, with a ‹ Menu button to go back — status, the client list, turning a client on or off or deleting it (after a confirmation), its QR code and config file, +30 days or +10 GB, a new client with `/add`, checking an exit and changing the default one, where traffic to an address goes, a backup, a link to the panel and a panel update. Buttons also appear under notifications (for example, +30 days under “access period ended”). Only the chat set in the panel is obeyed.
 - The password can be changed right in the panel.
 - Backup and restore in one file: panel settings, exits, rules, client keys and the AmneziaWG server config — handy for moving to another server. The downloaded file can be encrypted with a password. The bot can also send a backup to Telegram every day or week, encrypted with a password if you set one.
-- The panel shows its version, tells you when an update is out and updates itself with one button (or `awg-router update` on the server).
+- The panel shows its version, tells you when an update is out and updates itself with one button (or `awg-router update` on the server). Only a released version is installed, and its archive is checked against its checksum.
 - Can be installed on a phone: **System → Install on a phone** shows a QR code and how to add the panel to the home screen, where it opens like an app.
 - Languages: English, Russian, Chinese and Persian. The language follows the browser or system setting, and a manual choice is remembered.
 
 <p align="center">
   <img src="docs/screenshots/client-connect.png" alt="Connecting a client with a QR code" width="420">
   <img src="docs/screenshots/server.png" alt="Server settings" width="420">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" alt="The panel on a phone" width="300">
 </p>
 
 ## Install
@@ -139,6 +148,7 @@ Clients added in the panel appear in the app, and vice versa.
 
 Limitations:
 - The container's port can only be changed in the AmneziaVPN app.
+- In a container created by the AmneziaVPN app the subnet can't be changed either: the app writes it into the container's start script.
 - If you change server-side parameters in the panel (S1–S4, H1–H4, header protection key), the app doesn't learn about it. New clients from the app won't connect until you re-check the server in the app, which reads the parameters back from the server.
 
 If the AWG Router installer created the container, its configs live on the host in `/opt/awg-router/awg-server/data` and survive re-creating the container.
@@ -147,7 +157,7 @@ If the AWG Router installer created the container, its configs live on the host 
 
 The panel installs `awg`, `awg-quick`, `amneziawg-go` (AWG 3.1) and the `awg-quick@awg0` service.
 - The config is at `/etc/amnezia/amneziawg/awg0.conf`.
-- NAT and forwarding are set up in `PostUp`, so the VPN keeps working even when the panel is stopped.
+- NAT and forwarding are set up in `PostUp`, so the VPN keeps working even when the panel is stopped. When you change the subnet, the panel moves NAT to the new one.
 
 ## How routing works
 
@@ -167,6 +177,8 @@ The panel effectively has root access to the server.
 - After 8 wrong passwords, logins from that IP are blocked for 10 minutes.
 - The most locked-down option is access through an SSH tunnel only.
 - Private keys of exits and of clients created in the panel are stored in `/opt/awg-router/data/state.json`, with permissions 600.
+- Telegram control obeys a chat, not a person: if that chat is a group, every member can control the panel. Use a private chat with the bot.
+- A backup holds the private keys of the server and of all clients. Set a password for downloaded backups and for backups sent to Telegram.
 
 ## Limitations
 
@@ -182,17 +194,21 @@ python3 -m unittest discover tests                                     # configs
 sudo PYTHONPATH=<pyroute2>:. python3 tests/netns_e2e.py                 # routing in network namespaces
 sudo PATH=<awg,amneziawg-go>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/awg_real_e2e.py
                                                                         # a real AWG tunnel client ↔ server
+sudo PATH=<hev-socks5-tunnel>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/domains_socks_e2e.py
+                                                                        # a SOCKS5 exit and domain rules
 DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo without a server
 ```
 
-The panel has no Python dependencies outside the standard library. The Docker image adds `amneziawg-go`, `amneziawg-tools` and `lego`.
+The panel has no Python dependencies outside the standard library. The Docker image adds `amneziawg-go`, `amneziawg-tools`, `hev-socks5-tunnel` and `lego`.
 
 ## Credits
 
 - [AmneziaWG](https://github.com/amnezia-vpn) — the protocol, `amneziawg-go` and `amneziawg-tools`
 - [lego](https://github.com/go-acme/lego) — Let's Encrypt client
+- [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) — SOCKS5 exits (MIT)
 - [ipverse](https://github.com/ipverse) — country and ASN IP lists
 - [QR Code Generator](https://github.com/kazuhikoarase/qrcode-generator) by Kazuhiko Arase (MIT)
+- Fonts [Golos Text](https://github.com/googlefonts/golos-text), [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), [Vazirmatn](https://github.com/rastikerdar/vazirmatn) (SIL Open Font License 1.1)
 
 ## License
 

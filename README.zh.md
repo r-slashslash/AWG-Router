@@ -6,7 +6,7 @@
 
 **AmneziaWG** 的 Web 管理面板：用户、隧道设置和级联路由，集中在一个地方管理。
 
-它可以管理 AmneziaVPN 应用安装的服务器（Docker 容器 `amnezia-awg2`），也可以直接在主机上安装自己的 AmneziaWG 服务器。协议最高支持 **AmneziaWG 3.1**。
+它可以管理 AmneziaVPN 应用安装的服务器（Docker 容器 `amnezia-awg2`），也可以安装自己的 AmneziaWG 服务器——在 Docker 容器中或直接在主机上。协议最高支持 **AmneziaWG 3.1**。
 
 ```
 客户端 ──AWG──► 本服务器
@@ -27,8 +27,12 @@
 - 在 AmneziaVPN 应用中创建的客户端同样会显示并可管理。面板无法显示它们的配置，因为私钥只保存在设备上。
 - 停用的客户端以注释形式保留在配置中，其地址不会被他人占用。
 - 每个客户端的本月和累计流量，重启后不会清零。可按名称、地址、流量或活动排序。
-- 有效期和流量限额（每月或总计）。到期或用完时客户端会自动停用；每月限额在 1 日清零，客户端会重新启用。到期前 3 天和用量达到 90% 时会发出提醒，客户端列表中的 **即将到期** 筛选可显示哪些客户端快到期。
+- 有效期和流量限额（每月或总计）。到期或用完时客户端会自动停用；每月限额在 1 日 00:00 UTC 清零（面板会显示对应的您当地时间），客户端会重新启用。到期前 3 天和用量达到 90% 时会发出提醒，客户端列表中的 **即将到期** 筛选可显示哪些客户端快到期。
 - 个人链接：对方打开链接即可下载配置或扫描二维码，并查看自己的流量和有效期，无需登录面板。
+
+<p align="center">
+  <img src="docs/screenshots/clients.png" alt="客户端：活动、本月流量、限额和出口" width="860">
+</p>
 
 **服务器**
 - 全部 AmneziaWG 参数：Jc/Jmin/Jmax、S1–S4、H1–H4、I1–I5、HeaderProtectionKey、ContentPaddingAddition、AWG 3 计时参数、RandomTrailers 和 DisableCookies。
@@ -42,12 +46,13 @@
 - 每个出口和直连的本月及累计流量，以及每个客户端本月按出口划分的流量。出口可设置每月限额：用完后，到下月 1 日前其流量改为直连、被阻止或切换到另一个出口，由你选择（或仅发送通知）。
 - 规则把列表映射到出口。列表可以是国家、自治系统（ASN）、从 URL 获取的列表、你自己的子网或域名，并会自动更新。规则和列表都在 **路由** 标签页：每个列表都显示它在哪里被使用，也可以直接在规则中新建列表。
 - SOCKS5 出口的域名规则：列表中的 `example.com` 同时匹配它的所有子域名；也可以粘贴现成列表的链接（普通域名列表、dnsmasq、hosts、Adblock、v2ray）。服务器从 HTTPS 和 HTTP 连接开头的网站名称（443 和 80 端口）识别网站，并把名称交给代理，由代理自己解析地址，因此运营商的 DNS 污染不受影响。客户端的 DNS 和配置都不变。这类规则在地址规则之前检查。
-- 出口窗口先选择类型（AmneziaWG 或 SOCKS5）。SOCKS5 有单独的地址、端口、用户名和密码字段（它们组成连接字符串，粘贴的字符串也会自动填入字段），经此出口的路由也在同一窗口设置：网站（域名）、域名列表和网络列表，或全部流量。保存为普通的全局规则。
+- 出口窗口先选择类型（AmneziaWG 或 SOCKS5）。SOCKS5 有单独的地址、端口、用户名和密码字段（它们组成连接字符串，粘贴的字符串也会自动填入字段），经此出口的路由也在同一窗口设置：网站（域名）、域名列表和网络列表，或全部流量。保存为普通的全局规则；已关闭的规则、规则名称和顺序保持不变。
 - 每个客户端都可以有自己的出口和规则。
 - **路由检测** 可显示到某个 IP 或域名的流量会走哪条路。
 
 <p align="center">
   <img src="docs/screenshots/exits.png" alt="出口：各出口和直连的流量、每月限额" width="860">
+  <img src="docs/screenshots/routing.png" alt="路由：规则、默认出口和列表" width="860">
 </p>
 
 **面板**
@@ -59,13 +64,17 @@
 - 可选的 Telegram 控制：机器人成为遥控器：`/start` 在一条消息中打开按钮菜单，所有操作都在这条消息里进行，用“‹ 菜单”按钮返回——状态、客户端列表、启用、停用或删除客户端（需确认）、发送其二维码和配置文件、+30 天或 +10 GB、用 `/add` 新建客户端、检查出口和更换默认出口、查询访问某地址的流量走哪里、备份、面板链接和更新面板。通知下方也会出现按钮（例如“使用期限已到”下方的“+30 天”）。机器人只听从面板中设置的聊天。
 - 可以直接在面板中更改密码。
 - 单文件备份与恢复：面板设置、出口、规则、客户端密钥和 AmneziaWG 服务器配置——便于迁移到其他服务器。下载的文件可以用密码加密。机器人还可以每天或每周把备份发送到 Telegram，设置密码后备份会被加密。
-- 面板会显示自己的版本，在有更新时提示，并可一键更新（或在服务器上运行 `awg-router update`）。
+- 面板会显示自己的版本，在有更新时提示，并可一键更新（或在服务器上运行 `awg-router update`）。只会安装已发布的版本，其归档会按校验和检查。
 - 可以把面板安装到手机：**系统 → 安装到手机** 会显示二维码以及如何把面板添加到主屏幕，之后它会像应用一样打开。
 - 界面语言：英语、俄语、中文和波斯语。语言跟随浏览器或系统设置，手动选择的语言会被记住。
 
 <p align="center">
   <img src="docs/screenshots/client-connect.png" alt="用二维码连接客户端" width="420">
   <img src="docs/screenshots/server.png" alt="服务器设置" width="420">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" alt="手机上的面板" width="300">
 </p>
 
 ## 安装
@@ -139,6 +148,7 @@ Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配�
 
 限制：
 - 容器端口只能在 AmneziaVPN 应用中修改。
+- 由 AmneziaVPN 应用创建的容器也不能修改子网：应用会把子网写入容器的启动脚本。
 - 如果在面板中修改服务器端参数（S1–S4、H1–H4、头部保护密钥），应用不会知道。在应用中重新检查服务器之前，应用新建的客户端将无法连接；重新检查时应用会从服务器读回参数。
 
 如果容器由 AWG Router 安装程序创建，其配置保存在主机的 `/opt/awg-router/awg-server/data` 中，重新创建容器后依然保留。
@@ -147,7 +157,7 @@ Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配�
 
 面板会在主机上安装 `awg`、`awg-quick`、`amneziawg-go`（AWG 3.1）和 `awg-quick@awg0` 服务。
 - 配置文件位于 `/etc/amnezia/amneziawg/awg0.conf`。
-- NAT 和转发规则通过 `PostUp` 设置，因此即使面板停止，VPN 仍可工作。
+- NAT 和转发规则通过 `PostUp` 设置，因此即使面板停止，VPN 仍可工作。更改子网时，面板会把 NAT 移到新子网。
 
 ## 路由原理
 
@@ -167,6 +177,8 @@ Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配�
 - 同一 IP 输错 8 次密码后，登录会被封禁 10 分钟。
 - 最安全的方式是只允许通过 SSH 隧道访问。
 - 出口以及在面板中创建的客户端的私钥保存在 `/opt/awg-router/data/state.json` 中，权限为 600。
+- Telegram 控制只认聊天而不认人：如果该聊天是群组，任何成员都能控制面板。请使用与机器人的私聊。
+- 备份中包含服务器和所有客户端的私钥。请为下载的备份和发送到 Telegram 的备份设置密码。
 
 ## 限制
 
@@ -182,17 +194,21 @@ python3 -m unittest discover tests                                     # 配置�
 sudo PYTHONPATH=<pyroute2>:. python3 tests/netns_e2e.py                 # 网络命名空间中的路由
 sudo PATH=<awg,amneziawg-go>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/awg_real_e2e.py
                                                                         # 真实的 AWG 隧道 客户端 ↔ 服务器
+sudo PATH=<hev-socks5-tunnel>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/domains_socks_e2e.py
+                                                                        # SOCKS5 出口和域名规则
 DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需服务器的演示模式
 ```
 
-面板本身只依赖 Python 标准库。Docker 镜像额外包含 `amneziawg-go`、`amneziawg-tools` 和 `lego`。
+面板本身只依赖 Python 标准库。Docker 镜像额外包含 `amneziawg-go`、`amneziawg-tools`、`hev-socks5-tunnel` 和 `lego`。
 
 ## 致谢
 
 - [AmneziaWG](https://github.com/amnezia-vpn) — 协议、`amneziawg-go` 和 `amneziawg-tools`
 - [lego](https://github.com/go-acme/lego) — Let's Encrypt 客户端
+- [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) — SOCKS5 出口（MIT）
 - [ipverse](https://github.com/ipverse) — 国家和 ASN 的 IP 列表
 - [QR Code Generator](https://github.com/kazuhikoarase/qrcode-generator)，作者 Kazuhiko Arase（MIT）
+- 字体 [Golos Text](https://github.com/googlefonts/golos-text), [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), [Vazirmatn](https://github.com/rastikerdar/vazirmatn)（SIL Open Font License 1.1）
 
 ## 许可证
 
