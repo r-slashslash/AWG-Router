@@ -466,6 +466,28 @@ class ExitDialogRoutingTest(unittest.TestCase):
         self.assertFalse(any(own in r["lists"] for r in st["routing"]["rules"]))
 
 
+class RoutingTabTest(unittest.TestCase):
+    """1.12.1: «Правила» и «Списки» — одна вкладка «Маршрутизация»."""
+
+    def read(self, name):
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", name)) as f:
+            return f.read()
+
+    def test_one_tab(self):
+        html = self.read("index.html")
+        self.assertIn('data-tab="routing"', html)
+        self.assertNotIn('data-tab="lists"', html)
+        js = self.read("app.js")
+        self.assertIn('if (tab === "lists")', js)            # старые закладки #lists
+        self.assertIn('id="lists-sec"', js)
+
+    def test_texts(self):
+        js = self.read("i18n.js")
+        for key in ("re.new_list", "ls.col_used", "ls.unused", "ex.route_hint"):
+            self.assertEqual(js.count(f'"{key}":'), 4, key)
+        self.assertNotIn("«Правила»", js)
+
+
 class BotMenuTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

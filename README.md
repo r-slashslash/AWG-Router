@@ -40,7 +40,7 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
 **Routing**
 - Exits are client configs from other AmneziaWG servers or SOCKS5 proxies (`socks5://login:password@host:port`). Both TCP and UDP go through a SOCKS5 exit (UDP if the proxy supports UDP ASSOCIATE). If an exit fails, its traffic goes direct, gets blocked or moves to another exit, whichever you choose.
 - Traffic per exit and direct for the month and all time, and each client's monthly traffic split by exit. An exit can have a monthly limit; when it is used up, its traffic until the 1st goes direct, gets blocked or moves to another exit, whichever you choose (or you only get a notification).
-- Rules map a list to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, your own subnets or domains, and they refresh automatically.
+- Rules map a list to an exit. Lists can be countries, autonomous systems (ASN), lists fetched from a URL, your own subnets or domains, and they refresh automatically. Rules and lists live on one **Routing** tab: each list shows where it is used, and a new list can be created right from a rule.
 - Domain rules for SOCKS5 exits: `example.com` on a list also covers all its subdomains; you can paste a link to a ready-made list (plain domains, dnsmasq, hosts, Adblock, v2ray). The server learns the site from its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself, so DNS spoofing by the ISP doesn't matter. Client DNS and configs don't change. Such rules are checked before address rules.
 - The exit window asks for the type first (AmneziaWG or SOCKS5). For SOCKS5 there are separate fields for the address, port, login and password (they make up the connection string; a pasted string fills them in), and the routing for that exit is set in the same window: sites (domains) to send through it, domain and network lists, or all traffic. This is saved as ordinary global rules.
 - Each client can have its own exit and its own rules.
@@ -171,7 +171,6 @@ The panel effectively has root access to the server.
 ## Limitations
 
 - Inside the tunnel, IPv4 only. Clients connect to the server over IPv4 or IPv6.
-- Domain rules don't see DNS-over-HTTPS/TLS: if a browser or phone uses its own secure DNS (for example, Android Private DNS with a named provider), listed domains follow the general rules. If different domains share an address (CDN), the rule applies to the whole address.
 - Domain rules see only HTTPS and HTTP (ports 443 and 80) and can't see the site when the browser hides the name (Encrypted Client Hello); such connections follow the address rules. In host mode with an nftables-only firewall (for example, firewalld), allow incoming TCP port 10443 on the clients' interface; with iptables or ufw the panel does it itself.
 - SOCKS5 exits need IPv6 support in the kernel (always there, except on servers booted with `ipv6.disable=1`).
 - Country lists are built from registry data. For a specific service, an ASN list is more accurate.

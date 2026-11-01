@@ -242,6 +242,11 @@ textarea.short { min-height: 64px; }
   .table.responsive td[data-m="right"] { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
   .table.responsive td[data-m="sub"] { font-size: .85rem; color: var(--muted); }
 }
+.uses .use { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: .86rem; }
+.uses .use + .use { margin-top: 4px; }
+.uses .use.off { opacity: .55; }
+.uses .line { font-size: .8rem; }
+@media (max-width: 760px) { .table.responsive td.uses { color: var(--ink-2); } }
 
 /* ---------- exits ---------- */
 .exit { display: grid; grid-template-columns: 6px minmax(0, 1fr); border-radius: var(--r); overflow: hidden; margin-bottom: 12px; }

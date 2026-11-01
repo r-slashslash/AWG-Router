@@ -3,6 +3,18 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.12.1 — 2026-11-02
+
+- **Rules and lists on one tab.** The **Rules** and **Lists** tabs are now one tab, **Routing**: rules
+  and the default exit on top, then the lists, then the route check. An old bookmark to Lists opens
+  this tab at the lists.
+- **A new list right from a rule:** the **+ list** menu of a rule has **Create a list** (country,
+  ASN, link, your own, domains); once saved, the list is already in that rule.
+- **Where a list is used:** the lists table shows each rule that uses the list and the exit it
+  sends traffic to, and rules of clients; unused lists are marked **not used**.
+- **README:** removed a wrong note that domain rules don't see DNS-over-HTTPS and act on whole
+  shared (CDN) addresses — that was true only for a design that was never released.
+
 ## 1.12.0 — 2026-11-02
 
 - **SOCKS5 exits.** An exit can be a SOCKS5 proxy: `socks5://login:password@host:port` (or
