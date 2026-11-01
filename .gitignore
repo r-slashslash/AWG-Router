@@ -13,3 +13,6 @@ __pycache__/
 # misc
 *.zip
 .DS_Store
+
+# development notes are kept by the owner outside the repo
+CLAUDE.md
