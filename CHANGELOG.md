@@ -18,6 +18,14 @@ it grows, so every user-visible change gets a new version.
   connections of such clients follow the address rules as before. QUIC (HTTP/3) is blocked for
   clients with domain rules — browsers switch to regular HTTPS by themselves.
 - **Route check** finds domain rules too: checking `www.youtube.com` shows the domain list it matched.
+- **Telegram bot: everything in one message.** `/start` opens the menu as buttons in a message
+  (Status | Clients, Exits | New client, Panel | Backup) instead of the keyboard at the bottom of the
+  screen, which is removed. Every screen opens in that same message and has **‹ Menu** to go back;
+  a client's card also has **‹ Clients**. The personal link and an exit check show up in the
+  message itself. After files (QR and config, backup) the menu moves below them, and an older menu
+  message is deleted, so there is always one. **Panel** in the menu opens the panel right away.
+- **Overview:** the right column now has headings like the left one, so both columns line up.
+- **System → Panel access:** **Install on a phone** sits next to **Check for updates**.
 
 ## 1.11.0 — 2026-11-02
 

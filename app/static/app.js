@@ -368,13 +368,15 @@ function viewOverview() {
         <button class="btn" data-goto="exits">${esc(t("ov.add_exit"))}</button></div>
       <div class="map"><div class="map-hub"><bdi>${esc(S.target ? S.target.container : "—")}</bdi></div><div class="map-lines">${lines}</div></div>
     </section>
-    <section class="section">
-      <div class="panel panel-pad" style="margin-bottom:20px">
-        <div class="section-head" style="margin-bottom:8px"><h3>${esc(t("ov.policy"))}</h3><button class="btn sm" data-goto="routing">${esc(t("btn.edit"))}</button></div>
+    <section class="section ov-side">
+      <div class="section-head"><div><h2>${esc(t("ov.policy"))}</h2><p class="muted small">${esc(t("ov.policy_sub"))}</p></div>
+        <button class="btn" data-goto="routing">${esc(t("btn.edit"))}</button></div>
+      <div class="panel panel-pad">
         ${rulesSummary(S.routing.rules)}
         <div style="margin-top:10px">${th("ov.everything_else", { exit: effChip(S.global_effective, S.routing.default) })}</div>
       </div>
-      <div class="panel panel-pad"><h3 style="margin-bottom:6px">${esc(t("ov.log"))}</h3>${ev}</div>
+      <div class="section-head" style="margin-top:20px"><h2>${esc(t("ov.log"))}</h2></div>
+      <div class="panel panel-pad ov-log">${ev}</div>
     </section>
   </div>`;
 }
@@ -1406,8 +1408,7 @@ function viewSystem() {
     <div class="panel panel-pad">
       <div class="kv">
         <div><span>${esc(t("sy.url"))}</span><b><bdi>${esc(P.url || "—")}</bdi></b></div>
-        <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b>
-          ${standalone() ? "" : `<div style="margin-top:6px"><button type="button" class="btn sm" id="app-phone">${esc(t("app.btn"))}</button></div>`}</div>
+        <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b></div>
         <div><span>${esc(t("sy.cert"))}</span><b>${esc(tlsLine)}</b></div>
         <div><span>${esc(t("sy.version"))}</span><b>${esc((S.version || {}).current || "—")}</b></div>
       </div>
@@ -1416,6 +1417,7 @@ function viewSystem() {
       <div class="actions" style="margin-top:12px">
         ${T.mode === "letsencrypt" ? `<button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button>` : ""}
         <button class="btn sm" id="upd-check">${esc(t("sy.check_updates"))}</button>
+        ${standalone() ? "" : `<button type="button" class="btn sm" id="app-phone">${esc(t("app.btn"))}</button>`}
       </div>
     </div>
   </section>

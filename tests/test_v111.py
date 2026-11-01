@@ -62,14 +62,14 @@ class BotTest(unittest.TestCase):
             self.assertEqual(p["text"].count("\n"), 1, p["text"])
             self.assertIn(title, p["text"])
             self.assertIn("/help", p["text"])
-            self.assertIn("keyboard", p["reply_markup"])
+            self.assertIn("inline_keyboard", p["reply_markup"])
 
     def test_menu_layout_in_every_language(self):
         rows = {"ru": [["📊 Состояние", "👥 Клиенты"], ["🌐 Выходы", "➕ Новый клиент"], ["🖥 Панель", "💾 Копия"]]}
         for i, lang in enumerate(tgbot.TEXTS):
             self.c["lang"] = lang
             self.run_updates(msg("/start", uid=i + 1))
-            kbd = [[b["text"] for b in row] for row in self.sent()[-1]["reply_markup"]["keyboard"]]
+            kbd = [[b["text"] for b in row] for row in self.sent()[-1]["reply_markup"]["inline_keyboard"]]
             self.assertEqual([len(r) for r in kbd], [2, 2, 2])
             flat = [t for r in kbd for t in r]
             self.assertNotIn(tgbot.TEXTS[lang]["b_route"], flat)
@@ -94,11 +94,11 @@ class BotTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- панель
     def test_panel_link(self):
-        self.run_updates(msg("🖥 Panel"))
+        self.run_updates(msg("/panel"))
         p = self.sent()[-1]
         url = main.panel_url()
         self.assertIn(url, p["text"])
-        self.assertEqual(self.inline(p), [url])
+        self.assertEqual(self.inline(p), [url, "m"])
         self.assertTrue(p["disable_web_page_preview"])        # Telegram не ходит по секретному адресу сам
 
     def test_panel_link_button_refused(self):
@@ -109,10 +109,11 @@ class BotTest(unittest.TestCase):
                 raise notify.NotifyError("Bad Request: BUTTON_URL_INVALID")
             return real(token, method, data, ctype, timeout, via)
         with mock.patch.object(notify, "_post", picky):
-            self.run_updates(msg("/panel"))
-        p = self.sent()[-1]
-        self.assertIn(main.panel_url(), p["text"])
-        self.assertNotIn("reply_markup", p)
+            self.run_updates(msg("/panel"), msg("/start", uid=2))
+        panel, menu = self.sent()[-2:]
+        self.assertIn(main.panel_url(), panel["text"])
+        self.assertEqual(self.inline(panel), ["m"])
+        self.assertIn("pn", self.inline(menu))                # в меню «Панель» — экран со ссылкой
 
     def test_panel_ssh_mode(self):
         with mock.patch.object(config, "PANEL_HOST", "127.0.0.1"):
@@ -120,9 +121,8 @@ class BotTest(unittest.TestCase):
         p = self.sent()[-1]
         self.assertIn("ssh -N -L", p["text"])
         self.assertIn("127.0.0.1", p["text"])
-        self.assertEqual(self.inline(p), [])                   # кнопка-ссылка на 127.0.0.1 бесполезна
+        self.assertEqual(self.inline(p), ["m"])                # кнопка-ссылка на 127.0.0.1 бесполезна
 
-    # ---------------------------------------------------------------- удаление
     def _new_client(self, name):
         pk = main.bot_ops.add_client(name)
         self.assertIsNotNone(self.bot._client_wait(pk))

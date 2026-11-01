@@ -107,6 +107,7 @@ TEXTS = {
         "fail": "⚠️ Не получилось: {error}", "cancelled": "Отменено.",
         "unknown": "Не знаю такой команды. /help — что я умею.",
         "start": "🤖 <b>Пульт AWG Router</b>\n/help — команды",
+        "b_menu": "‹ Меню", "bk_done": "💾 Копия отправлена (файл выше).", "cfg_done": "📱 Конфиг отправлен (QR и файл выше).", "help_title": "<b>Команды</b>",
         "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
         "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
         "pn_ssh": "🖥 Панель открывается только через SSH-туннель. Запустите на своём компьютере\n"
@@ -189,6 +190,7 @@ TEXTS = {
         "fail": "⚠️ That didn't work: {error}", "cancelled": "Cancelled.",
         "unknown": "I don't know this command. /help — what I can do.",
         "start": "🤖 <b>AWG Router remote</b>\n/help — commands",
+        "b_menu": "‹ Menu", "bk_done": "💾 Backup sent (the file is above).", "cfg_done": "📱 Config sent (QR and file above).", "help_title": "<b>Commands</b>",
         "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
         "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
         "pn_ssh": "🖥 The panel opens only through an SSH tunnel. Run on your computer\n"
@@ -269,6 +271,7 @@ TEXTS = {
         "fail": "⚠️ 操作失败：{error}", "cancelled": "已取消。",
         "unknown": "不认识这个命令。/help — 我能做什么。",
         "start": "🤖 <b>AWG Router 遥控</b>\n/help — 命令",
+        "b_menu": "‹ 菜单", "bk_done": "💾 备份已发送（文件在上方）。", "cfg_done": "📱 配置已发送（二维码和文件在上方）。", "help_title": "<b>命令</b>",
         "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
         "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
         "pn_ssh": "🖥 面板只能通过 SSH 隧道打开。请在您的电脑上运行\n"
@@ -350,6 +353,7 @@ TEXTS = {
         "fail": "⚠️ انجام نشد: {error}", "cancelled": "لغو شد.",
         "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
         "start": "🤖 <b>کنترل از راه دور AWG Router</b>\n‎/help — دستورها",
+        "b_menu": "منو ›", "bk_done": "💾 پشتیبان فرستاده شد (فایل بالاتر است).", "cfg_done": "📱 پیکربندی فرستاده شد (QR و فایل بالاتر است).", "help_title": "<b>دستورها</b>",
         "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
         "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
         "pn_ssh": "🖥 پنل فقط از طریق تونل SSH باز می‌شود. روی رایانهٔ خود اجرا کنید\n"
@@ -400,10 +404,10 @@ def fmt_date(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
-# Клавиатура внизу экрана после /start: (текст, команда), по две в ряд. Нажатие присылает текст кнопки.
+# Меню — кнопки в одном сообщении (1.12.0); всё управление открывается в нём же.
+# Надписи кнопок клавиатуры внизу экрана из 1.10.0–1.11.0: у людей она остаётся до следующего /start
 MENU = (("b_status", "status"), ("b_clients", "clients"), ("b_exits", "exits"), ("b_add", "add"),
         ("b_panel", "panel"), ("b_backup", "backup"))
-# Кнопки прежних клавиатур: у людей они остаются на экране до следующего /start
 OLD_MENU = (("kbd_menu", "menu"), ("b_route", "route"))
 DENY_EVERY = 600          # «нет доступа» в один и тот же чужой чат — не чаще раза в 10 минут
 
@@ -465,10 +469,11 @@ class Bot:
         self.error = None                      # str | Msg — последняя ошибка опроса
         self.last_cmd: float | None = None
         self._ask: dict | None = None          # ждём ответа: {"kind": add|route, "msg": id, "t": …}
-        self._panel_msgs: list[int] = []       # сообщения меню/списков: их можно редактировать
         self._denied: dict[str, float] = {}       # чужой чат → когда ответили «нет доступа»
         self._webhook_dropped = False
         self._st = self._load()
+        # сообщение-меню (обычно одно): его правим на месте, старые удаляем; переживает перезапуск
+        self._panel_msgs: list[int] = [m for m in self._st.get("panel") or [] if isinstance(m, int)]
 
     # ------------------------------------------------------------- состояние
     def _load(self) -> dict:
@@ -612,11 +617,26 @@ class Bot:
     def _send(self, c: dict, text: str, markup: dict | None = None, panel: bool = False) -> dict:
         r = notify.send(c["token"], c["chat_id"], text, c["via"], markup, html=True)
         if panel and isinstance(r, dict) and r.get("message_id"):
-            self._panel_msgs = (self._panel_msgs + [r["message_id"]])[-20:]
+            # управление — в одном сообщении: прежнее меню убираем
+            for mid in self._panel_msgs:
+                self._delete(c, mid)
+            self._panel_msgs = [r["message_id"]]
+            self._st["panel"] = self._panel_msgs
+            self._save()
         return r
 
+    def _delete(self, c: dict, mid) -> None:
+        try:
+            notify._call(c["token"], "deleteMessage", {"chat_id": c["chat_id"], "message_id": mid}, via=c["via"])
+        except notify.NotifyError:
+            pass       # старше 48 часов или уже удалено
+
+    def _move(self, c: dict, text: str, markup: dict | None) -> None:
+        """Меню — новым сообщением внизу (после файлов: QR, конфиг, копия), прежнее удаляется."""
+        self._send(c, text, markup, panel=True)
+
     def _show(self, c: dict, text: str, markup: dict | None, msg: dict | None) -> None:
-        """Меню и списки: если нажали кнопку в таком же сообщении — меняем его на месте."""
+        """Экран меню: если кнопку нажали в сообщении-меню — меняем его на месте."""
         mid = (msg or {}).get("message_id")
         if mid and mid in self._panel_msgs:
             p = {"chat_id": c["chat_id"], "message_id": mid, "text": text, "parse_mode": "HTML",
@@ -688,12 +708,14 @@ class Bot:
         reply_to = (m.get("reply_to_message") or {}).get("message_id")
         if ask and time.time() - ask["t"] < ASK_TTL and (reply_to in (None, ask["msg"])):
             self._ask = None
+            if ask.get("msg"):
+                self._delete(c, ask["msg"])          # вопрос «как назвать?» больше не нужен
             if ask["kind"] == "add":
-                self.do_add(c, text)
+                self._guard(c, self.do_add, text)
             else:
-                self.do_route(c, text)
+                self._guard(c, self.do_route, text)
             return
-        self.on_command(c, "help", "")
+        self.on_command(c, "menu", "")
 
     def _guard(self, c: dict, fn, *args) -> None:
         try:
@@ -714,12 +736,13 @@ class Bot:
         return str(e)[:300]
 
     def on_command(self, c: dict, cmd: str, arg: str) -> None:
+        self._drop_keyboard(c)
         if cmd in ("start", "menu"):
-            self._send(c, tr(c["lang"], "start"), self._keyboard(c))
+            self._guard(c, self.show_menu, None)
         elif cmd == "help":
-            self._send(c, tr(c["lang"], "help"), self._keyboard(c))
+            self._show(c, tr(c["lang"], "help"), kb(self._back(c)), None)
         elif cmd == "panel":
-            self._guard(c, self.send_panel)
+            self._guard(c, self.show_panel, None)
         elif cmd == "status":
             self._guard(c, self.show_status, None)
         elif cmd == "clients":
@@ -739,7 +762,7 @@ class Bot:
         elif cmd == "backup":
             self._guard(c, self.do_backup)
         else:
-            self._send(c, tr(c["lang"], "unknown"), self._keyboard(c))
+            self._guard(c, self.show_menu, None, tr(c["lang"], "unknown"))
 
     def ask(self, c: dict, kind: str) -> None:
         r = notify.send(c["token"], c["chat_id"], tr(c["lang"], "add_ask" if kind == "add" else "rt_ask"),
@@ -751,8 +774,10 @@ class Bot:
         op, _, arg = data.partition(":")
         toast = ""
         try:
-            if op == "m":                      # «‹ Меню» в старых сообщениях: меню теперь внизу
-                self._show(c, tr(L, "help"), None, msg)
+            if op in ("m", "x"):
+                self.show_menu(c, msg)
+            elif op == "pn":
+                self.show_panel(c, msg)
             elif op == "st":
                 self.show_status(c, msg)
             elif op == "cl":
@@ -775,8 +800,9 @@ class Bot:
                 self._toast(c, qid)
                 qid = ""
                 self.send_config(c, arg)
+                self.show_client(c, arg, None, tr(L, "cfg_done"))      # меню — под файлами
             elif op == "sh":
-                self.do_share(c, arg)
+                self.show_client(c, arg, msg, self.do_share(c, arg))
             elif op == "dl":
                 self.ask_delete(c, arg, msg)
             elif op == "dlgo":
@@ -791,7 +817,7 @@ class Bot:
             elif op == "pr":
                 self._toast(c, qid, tr(L, "pr_wait", False, name=self._exit_name(arg)))
                 qid = ""
-                self.do_probe(c, arg)
+                self.show_exits(c, msg, self.do_probe(c, arg))
             elif op == "df":
                 toast = self.do_default(c, arg)
                 self.show_exits(c, msg)
@@ -800,11 +826,9 @@ class Bot:
                 qid = ""
                 self.do_backup(c)
             elif op == "up":
-                self.ask_update(c)
+                self.ask_update(c, msg)
             elif op == "upgo":
-                self.do_update(c)
-            elif op == "x":
-                toast = tr(L, "cancelled", False)
+                self.do_update(c, msg)
         except BotError as e:
             toast = tr(L, e.key, False, **e.params)
             if not qid:              # на кнопку уже ответили — ошибку пишем сообщением
@@ -818,14 +842,61 @@ class Bot:
             self._toast(c, qid, toast)
 
     # ------------------------------------------------------------- экраны
-    def _keyboard(self, c: dict) -> dict:
-        """Всё меню на клавиатуре внизу экрана: остаётся там, пока его не уберут."""
-        L = c["lang"]
-        names = [tr(L, key) for key, _ in MENU]
-        self._st["kbd"] = L
+    def _drop_keyboard(self, c: dict) -> None:
+        """Клавиатуру внизу экрана (1.10.0–1.11.0) убирает только сообщение с remove_keyboard:
+        отправляем его и сразу удаляем — клавиатура уходит, в чате ничего не остаётся."""
+        if not self._st.get("kbd"):
+            return
+        try:
+            r = notify.send(c["token"], c["chat_id"], "⌨️", c["via"], {"remove_keyboard": True})
+            if isinstance(r, dict) and r.get("message_id"):
+                self._delete(c, r["message_id"])
+        except notify.NotifyError as e:
+            log.info("telegram: %s", e)
+            return
+        self._st.pop("kbd", None)
         self._save()
-        return {"keyboard": [[{"text": n} for n in names[i:i + 2]] for i in range(0, len(names), 2)],
-                "resize_keyboard": True, "is_persistent": True}
+
+    def _back(self, c: dict) -> list:
+        return [(tr(c["lang"], "b_menu"), "m")]
+
+    def _menu_kb(self, c: dict, url: bool = True) -> dict:
+        L = c["lang"]
+        b = lambda key, data: {"text": tr(L, key, False), "callback_data": data}
+        p = self.ops.panel() if url else {}
+        panel = ({"text": tr(L, "b_panel", False), "url": p["url"]} if p and not p.get("ssh")
+                 else b("b_panel", "pn"))
+        return {"inline_keyboard": [[b("b_status", "st"), b("b_clients", "cl:0")],
+                                    [b("b_exits", "ex"), b("b_add", "add")],
+                                    [panel, b("b_backup", "bk")]]}
+
+    def show_menu(self, c: dict, msg: dict | None, note: str = "", move: bool = False) -> None:
+        """Главное меню. Кнопка «Панель» — сразу ссылка; если Telegram её не примет (адрес ему
+        не нравится), — экран со ссылкой."""
+        text = tr(c["lang"], "start") + (f"\n\n{note}" if note else "")
+        show = self._move if move else (lambda c_, t_, m_: self._show(c_, t_, m_, msg))
+        try:
+            show(c, text, self._menu_kb(c))
+        except notify.NotifyError as e:
+            if "url" not in str(e).lower():
+                raise
+            log.info("telegram: panel button refused (%s)", e)
+            show(c, text, self._menu_kb(c, url=False))
+
+    def show_panel(self, c: dict, msg: dict | None) -> None:
+        L = c["lang"]
+        p = self.ops.panel()
+        if p.get("ssh"):
+            self._show(c, tr(L, "pn_ssh", url=p["url"], port=p["port"], host=p.get("host") or "SERVER_IP"),
+                       kb(self._back(c)), msg)
+            return
+        text = tr(L, "pn_text", url=p["url"])
+        try:
+            self._show(c, text, {"inline_keyboard": [[{"text": tr(L, "b_open", False), "url": p["url"]}],
+                                                     [{"text": tr(L, "b_menu", False), "callback_data": "m"}]]}, msg)
+        except notify.NotifyError as e:
+            log.info("telegram: panel button refused (%s), sending the link only", e)
+            self._show(c, text, kb(self._back(c)), msg)
 
     def out_label(self, c: dict, out, st: dict) -> str:
         """Выход из настроек ('direct' | 'block' | 'up:<id>') или фактический (номер туннеля)."""
@@ -869,10 +940,10 @@ class Bot:
             lines.append(tr(L, "st_version", version=v.get("current", self.ops.version)))
         if s.get("cert_until"):
             lines.append(tr(L, "st_cert", date=fmt_date(s["cert_until"])))
-        # меню — на клавиатуре внизу; здесь только то, что относится к этому сообщению
-        rows = [[(tr(L, "b_refresh"), "st")]]
+        rows = []
         if v.get("available") and v.get("latest"):
             rows.append([(tr(L, "b_update", False, version=v["latest"]), "up")])
+        rows.append([(tr(L, "b_refresh"), "st")] + self._back(c))
         self._show(c, "\n".join(lines), kb(*rows), msg)
 
     def _exit_line(self, c: dict, u: dict, st: dict) -> str:
@@ -906,7 +977,7 @@ class Bot:
         L = c["lang"]
         clients = sorted(self.ops.clients(), key=lambda x: self._name(x).casefold())
         if not clients:
-            self._show(c, tr(L, "cl_empty"), None, msg)
+            self._show(c, tr(L, "cl_empty"), kb([(tr(L, "b_add"), "add")], self._back(c)), msg)
             return
         pages = max(1, math.ceil(len(clients) / PAGE))
         page = min(max(0, page), pages - 1)
@@ -924,6 +995,7 @@ class Bot:
             if page < pages - 1:
                 nav.append(("›", f"cl:{page + 1}"))
             rows.append(nav)
+        rows.append(self._back(c))
         text = tr(L, "cl_title", n=len(clients)) + "\n" + tr(L, "cl_legend")
         self._show(c, text, kb(*rows), msg)
 
@@ -933,7 +1005,8 @@ class Bot:
             raise BotError("gone")
         return x
 
-    def show_client(self, c: dict, pk: str, msg: dict | None) -> None:
+    def show_client(self, c: dict, pk: str, msg: dict | None, note: str = "") -> None:
+        """Карточка клиента. msg=None — новым сообщением внизу (после файлов), note — строка снизу."""
         L = c["lang"]
         x = self._client(pk)
         st = self.ops.snapshot()
@@ -972,19 +1045,23 @@ class Bot:
             row3.append((tr(L, "b_days"), "d30:" + pk))
         if lim.get("quota"):
             row3.append((tr(L, "b_gb"), "g10:" + pk))
-        self._show(c, "\n".join(lines), kb(row1, row2, row3, [(tr(L, "b_list"), "cl:0")]), msg)
+        if note:
+            lines += ["", note]
+        self._show(c, "\n".join(lines), kb(row1, row2, row3, [(tr(L, "b_list"), "cl:0")] + self._back(c)), msg)
 
-    def show_exits(self, c: dict, msg: dict | None) -> None:
+    def show_exits(self, c: dict, msg: dict | None, note: str = "") -> None:
         L = c["lang"]
         st = self.ops.snapshot()
         ups = st.get("upstreams") or []
         if not ups:
-            self._show(c, tr(L, "ex_title") + "\n\n" + tr(L, "ex_none"), None, msg)
+            self._show(c, tr(L, "ex_title") + "\n\n" + tr(L, "ex_none"), kb(self._back(c)), msg)
             return
         d = st["routing"]["default"]
         lines = [tr(L, "ex_title"), tr(L, "st_default", out=self.out_label(c, d, st)), ""]
         lines += [self._exit_line(c, u, st) for u in ups]
         lines += ["", tr(L, "ex_hint")]
+        if note:
+            lines += ["", note]
         rows = []
         for u in ups:
             row = [(tr(L, "b_probe", False, name=u["name"]), "pr:" + u["id"])]
@@ -993,7 +1070,7 @@ class Bot:
             rows.append(row)
         if d != "direct":
             rows.append([(tr(L, "b_direct"), "df:direct")])
-        rows.append([(tr(L, "b_refresh"), "ex")])
+        rows.append([(tr(L, "b_refresh"), "ex")] + self._back(c))
         self._show(c, "\n".join(lines), kb(*rows), msg)
 
     # ------------------------------------------------------------- действия
@@ -1017,10 +1094,12 @@ class Bot:
     def do_add(self, c: dict, name: str) -> None:
         pk = self.ops.add_client(name.strip()[:60])
         x = self._client_wait(pk)
-        self._send(c, tr(c["lang"], "add_ok", name=self._name(x) if x else name))
+        ok = tr(c["lang"], "add_ok", name=self._name(x) if x else name)
         self.send_config(c, pk)
-        if x:
-            self.show_client(c, pk, None)
+        if x:                         # карточка нового клиента — меню под файлами
+            self.show_client(c, pk, None, ok)
+        else:
+            self.show_menu(c, None, ok, move=True)
 
     def _client_wait(self, pk: str) -> dict | None:
         """Новый клиент появляется в списке движка после следующего опроса сервера."""
@@ -1056,11 +1135,12 @@ class Bot:
             self._send(c, tr(L, "cfg_link") + "\n<code>" + html.escape(cfg["link"]) + "</code>")
         self.ops.audit(Msg("tg.act_config", name=name))
 
-    def do_share(self, c: dict, pk: str) -> None:
+    def do_share(self, c: dict, pk: str) -> str:
+        """Личная ссылка — строкой в карточке клиента."""
         x = self._client(pk)
         url = self.ops.share(pk)
-        self._send(c, tr(c["lang"], "share", name=self._name(x), url=url))
         self.ops.audit(Msg("tg.act_share", name=self._name(x)))
+        return tr(c["lang"], "share", name=self._name(x), url=url)
 
     def ask_delete(self, c: dict, pk: str, msg: dict | None) -> None:
         """Удаление — только после подтверждения; «Отмена» возвращает карточку клиента."""
@@ -1080,28 +1160,14 @@ class Bot:
             time.sleep(0.5)
         return tr(c["lang"], "ok_deleted", False, name=self._name(x))
 
-    def send_panel(self, c: dict) -> None:
-        """Ссылка на панель. Предпросмотр ссылки выключен (notify.send): иначе Telegram
-        сам зашёл бы по секретному адресу."""
-        L = c["lang"]
-        p = self.ops.panel()
-        if p.get("ssh"):
-            self._send(c, tr(L, "pn_ssh", url=p["url"], port=p["port"], host=p.get("host") or "SERVER_IP"))
-            return
-        text = tr(L, "pn_text", url=p["url"])
-        try:
-            self._send(c, text, {"inline_keyboard": [[{"text": tr(L, "b_open", False), "url": p["url"]}]]})
-        except notify.NotifyError as e:
-            log.info("telegram: panel button refused (%s), sending the link only", e)
-            self._send(c, text)
-
     def _exit_name(self, uid: str) -> str:
         u = next((u for u in self.ops.snapshot().get("upstreams", []) if u["id"] == uid), None)
         if not u:
             raise BotError("gone_exit")
         return u["name"]
 
-    def do_probe(self, c: dict, uid: str) -> None:
+    def do_probe(self, c: dict, uid: str) -> str:
+        """Проверка выхода → строка для экрана «Выходы»."""
         L = c["lang"]
         name = self._exit_name(uid)
         r = self.ops.probe("up:" + uid)
@@ -1112,7 +1178,7 @@ class Bot:
         else:
             err = r.get("error")
             text = tr(L, "pr_fail", name=name, error=self._err(err) if isinstance(err, Msg) else (err or "?"))
-        self._send(c, text.replace("  ", " "))
+        return text.replace("  ", " ")
 
     def do_default(self, c: dict, out: str) -> str:
         st = self.ops.snapshot()
@@ -1154,7 +1220,7 @@ class Bot:
         eff, res = r.get("effective"), r.get("result")
         if res and res.startswith("up:") and _tunnel_num(st, res) != eff:
             lines.append(tr(L, "rt_now", out=self.out_label(c, eff, st)))
-        self._send(c, "\n".join(lines), self._keyboard(c))
+        self._send(c, "\n".join(lines))
 
     def do_backup(self, c: dict) -> None:
         try:
@@ -1162,27 +1228,28 @@ class Bot:
         except Exception as e:  # noqa: BLE001
             raise BotError("bk_fail", error=self._err(e)) from None
         self.ops.audit(Msg("tg.act_backup"))
+        self.show_menu(c, None, tr(c["lang"], "bk_done"), move=True)    # меню — под файлом
 
-    def ask_update(self, c: dict) -> None:
+    def ask_update(self, c: dict, msg: dict | None = None) -> None:
         L = c["lang"]
         v = self.ops.update_info()
         if not v.get("available") or not v.get("latest"):
-            self._send(c, tr(L, "up_none", version=v.get("current") or self.ops.version))
+            self._show(c, tr(L, "up_none", version=v.get("current") or self.ops.version), kb(self._back(c)), msg)
             return
-        self._send(c, tr(L, "up_ask", version=v["latest"]),
-                   kb([(tr(L, "b_update_go"), "upgo"), (tr(L, "b_cancel"), "x")]))
+        self._show(c, tr(L, "up_ask", version=v["latest"]),
+                   kb([(tr(L, "b_update_go"), "upgo"), (tr(L, "b_cancel"), "m")]), msg)
 
-    def do_update(self, c: dict) -> None:
+    def do_update(self, c: dict, msg: dict | None = None) -> None:
         L = c["lang"]
         v = self.ops.update_info()
         if not v.get("available") or not v.get("latest"):
-            self._send(c, tr(L, "up_none", version=v.get("current") or self.ops.version))
+            self._show(c, tr(L, "up_none", version=v.get("current") or self.ops.version), kb(self._back(c)), msg)
             return
         self.ops.start_update(v["latest"])
         self._st["update"] = {"to": v["latest"], "t": time.time()}
         self._save()
         self.ops.audit(Msg("tg.act_update", version=v["latest"]))
-        self._send(c, tr(L, "up_started", version=v["latest"]))
+        self._show(c, tr(L, "up_started", version=v["latest"]), kb(self._back(c)), msg)
 
 
 def _tunnel_num(st: dict, out: str):
