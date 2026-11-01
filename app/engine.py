@@ -2,8 +2,7 @@
 
 Каждые RECONCILE_INTERVAL секунд (и сразу после изменений в панели):
   * находит контейнер Amnezia (если он перезапустился — всё создаётся заново);
-  * поднимает/гасит туннели awgrN к выходным серверам (AWG или прокси SOCKS5);
-  * держит DNS-посредник для правил по доменам (dnsproxy.py);
+  * поднимает/гасит туннели awgrN к выходным серверам;
   * проверяет «живость» туннелей по рукопожатиям и переключает на резерв;
   * генерирует и атомарно применяет nftables, синхронизирует ip rule / маршруты.
 """
@@ -14,12 +13,11 @@ import ipaddress
 import json
 import logging
 import os
-import signal
 import subprocess
 import threading
 import time
 
-from . import awgconf, config, domains, limits, lists, nftgen, socks, system
+from . import awgconf, config, limits, lists, nftgen, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
@@ -31,9 +29,6 @@ RUN_DIR = "/run/awgr" if not config.DRY_RUN else os.path.join(config.DATA_DIR, "
 SOCK_DIR = "/var/run/amneziawg"
 LOG_DIR = os.path.join(config.DATA_DIR, "logs")
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe.py")
-DNSPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dnsproxy.py")
-DNS_CONF = os.path.join(RUN_DIR, "dns.json")
-DNS_STATS = os.path.join(RUN_DIR, "dns-stats.json")
 
 
 def _sha(s: str) -> str:
@@ -49,14 +44,6 @@ class UpRT:
         self.conf_hash = conf_hash
         self.target_key = target_key
         self.proc: subprocess.Popen | None = None
-        self.started = time.time()
-
-
-class DnsRT:
-    """Запущенный DNS-посредник."""
-
-    def __init__(self, proc: subprocess.Popen, key: str, cfg_hash: str):
-        self.proc, self.key, self.cfg_hash = proc, key, cfg_hash
         self.started = time.time()
 
 
@@ -92,13 +79,6 @@ class Engine:
         self.srv = ServerManager(self)
         self._runtime_checked = False
         self._last_start_try = 0.0
-        self.domain_matcher = domains.Matcher()
-        self.dns: DnsRT | None = None
-        self.dns_state: dict | None = None      # для интерфейса: state, listen, error
-        self._dns_retry = 0.0
-        self._dns_fb: str | None = None         # применённый запасной путь DNS (ключ цели + текст)
-        self._socks_res: dict[str, dict] = {}   # uid → результат последней проверки прокси
-        self._socks_busy: set[str] = set()
         os.makedirs(RUN_DIR, exist_ok=True)
         os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -223,11 +203,10 @@ class Engine:
         t = self.target
         if t and t.key == r.target_key:
             t.ns(["ip", "link", "del", r.iface], check=False)
-        for p in (f"{SOCK_DIR}/{r.iface}.sock", os.path.join(RUN_DIR, f"{r.iface}.yml")):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        try:
+            os.remove(f"{SOCK_DIR}/{r.iface}.sock")
+        except OSError:
+            pass
 
     def _stop_all(self) -> None:
         for uid in list(self.rt):
@@ -238,15 +217,6 @@ class Engine:
         r = UpRT(u["num"], conf_hash, t.key)
         ifn = r.iface
         t.ns(["ip", "link", "del", ifn], check=False)
-        if pc.kind == "socks5":
-            self._start_socks(t, r, u, pc)
-            self.rt[uid] = r
-            self._socks_res.pop(uid, None)
-            t.ns(["ip", "addr", "replace", f"169.254.200.{u['num']}/32", "dev", ifn], check=False)
-            t.ns(["ip", "link", "set", ifn, "up"], check=False)
-            t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
-            self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
-            return
         if not config.DRY_RUN:
             if config.UPSTREAM_BACKEND == "kernel":
                 t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
@@ -293,53 +263,6 @@ class Engine:
         t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
         self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
 
-    def _start_socks(self, t: system.Target, r: UpRT, u: dict, pc: awgconf.UpstreamConf) -> None:
-        """hev-socks5-tunnel в сети сервера: создаёт TUN awgrN и отправляет всё из него в прокси."""
-        if config.DRY_RUN:
-            return
-        if not os.path.exists("/proc/sys/net/ipv6"):
-            # hev-socks5-tunnel открывает сокеты AF_INET6 (IPv4 внутри них): нужна поддержка
-            # IPv6 в ядре; выключенный sysctl disable_ipv6 не мешает, мешает загрузка с ipv6.disable=1
-            raise system.SysError(Msg("sys.socks_no_ipv6"))
-        try:
-            ip = socks.resolve(pc.socks["host"])
-        except socks.SocksError as e:
-            raise system.SysError(e.msg) from None
-        path = os.path.join(RUN_DIR, f"{r.iface}.yml")      # в нём пароль прокси — только для root
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(socks.hev_config(r.iface, r.num, ip, pc.socks))
-        logp = os.path.join(LOG_DIR, f"{r.iface}.log")
-        with open(logp, "w") as logf:
-            r.proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", socks.HEV, path],
-                                      stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
-        up = False
-        for _ in range(50):
-            if r.proc.poll() is not None:
-                break
-            links = self._links(t)
-            if links and r.iface in links:
-                up = True
-                break
-            time.sleep(0.1)
-        try:
-            os.remove(path)          # hev прочитал настройки при запуске
-        except OSError:
-            pass
-        if not up:
-            if r.proc.poll() is None:
-                r.proc.kill()
-            try:
-                r.proc.wait(5)
-            except subprocess.TimeoutExpired:
-                pass
-            try:
-                with open(logp) as f:
-                    tail = f.read()[-300:].strip()
-            except OSError:
-                tail = ""
-            raise system.SysError(Msg("sys.socks_start_failed", iface=r.iface, detail=tail))
-
     def _links(self, t: system.Target) -> set[str] | None:
         if config.DRY_RUN:
             return None
@@ -362,7 +285,7 @@ class Engine:
             except awgconf.ConfigError as e:
                 self.health[uid] = {"state": "error", "error": e.msg}
                 continue
-            h = _sha((pc.setconf if pc.kind == "awg" else pc.raw) + str(pc.mtu))
+            h = _sha(pc.setconf + str(pc.mtu))
             r = self.rt.get(uid)
             alive = bool(r) and (links is None or r.iface in links) and \
                 (r.proc is None or r.proc.poll() is None)
@@ -392,13 +315,6 @@ class Engine:
                 if self.health[uid].get("state") not in ("error",):
                     self.health[uid] = {"state": "down"}
                 continue
-            try:
-                kind = self.parsed(u).kind
-            except Exception:  # noqa: BLE001
-                kind = "awg"
-            if kind == "socks5":
-                self._socks_health(t, u, r, now)
-                continue
             if config.DRY_RUN and self._fake and r.iface not in self._fake.handshakes:
                 # в демо второй туннель «мёртвый», чтобы было видно резервирование
                 self._fake.handshakes[r.iface] = now - (900 if r.num == 2 else 20)
@@ -424,50 +340,6 @@ class Engine:
                 "endpoint": peer["endpoint"] if peer else None,
                 "since": r.started,
             }
-
-    def _socks_health(self, t: system.Target, u: dict, r: UpRT, now: float) -> None:
-        """Выход SOCKS5 работает, если жив hev-socks5-tunnel и недавняя проверка прокси прошла.
-        Проверка идёт в фоне раз в минуту, чтобы не задерживать цикл."""
-        uid = u["id"]
-        if config.DRY_RUN:
-            self._socks_res[uid] = {"ok": r.num != 2, "ms": 35, "at": now,
-                                    "error": None if r.num != 2 else Msg("socks.timeout")}
-        res = self._socks_res.get(uid)
-        if (not res or now - res["at"] >= socks.CHECK_EVERY) and uid not in self._socks_busy:
-            conf = self.parsed(u).socks
-            self._socks_busy.add(uid)
-
-            def run(uid=uid, conf=conf):
-                try:
-                    self._socks_res[uid] = socks.check(conf)
-                finally:
-                    self._socks_busy.discard(uid)
-                    ok = bool((self._socks_res.get(uid) or {}).get("ok"))
-                    if ok != bool((self.health.get(uid) or {}).get("healthy")):
-                        self.trigger()      # состояние изменилось — пересчитать правила сразу
-            threading.Thread(target=run, name=f"socks-{uid}", daemon=True).start()
-        alive = r.proc is None or r.proc.poll() is None
-        healthy = bool(alive and res and res["ok"] and now - res["at"] < socks.CHECK_FRESH)
-        prev = self.health.get(uid, {}).get("healthy")
-        if prev is not None and prev != healthy:
-            self.event("info" if healthy else "warn",
-                       Msg("ev.upstream_ok" if healthy else "ev.upstream_failed", name=u["name"], uid=uid))
-        rx = tx = 0
-        if not config.DRY_RUN:
-            p = t.ns(["ip", "-j", "-s", "link", "show", "dev", r.iface], check=False, timeout=10)
-            try:
-                st64 = (json.loads(p.stdout or "[]") or [{}])[0].get("stats64") or {}
-                # TUN со стороны ядра: rx — пришло от прокси (к клиентам), tx — ушло в прокси
-                rx, tx = st64.get("rx", {}).get("bytes", 0), st64.get("tx", {}).get("bytes", 0)
-            except (ValueError, IndexError, AttributeError):
-                pass
-        state = "up" if healthy else ("connecting" if not res and now - r.started < 30 else "stale")
-        self.health[uid] = {"state": state, "healthy": healthy, "iface": r.iface, "since": r.started,
-                            "kind": "socks5", "check_age": now - res["at"] if res else None,
-                            "latency_ms": res["ms"] if res else None,
-                            "error": res["error"] if res and not res["ok"] else
-                            (None if alive else Msg("socks.tunnel_down")),
-                            "rx": rx, "tx": tx}
 
     # ------------------------------------------------- трафик по выходам
     def _account(self, t: system.Target, st: dict) -> None:
@@ -605,16 +477,7 @@ class Engine:
         return {"rules": [(r["lists"], self.resolve(r["outbound"], st)) for r in pol["rules"]],
                 "default": self.resolve(pol["default"], st)}
 
-    @staticmethod
-    def domain_lists(st: dict) -> set[str]:
-        return {l["id"] for l in st["lists"] if l.get("kind") == "domains"}
-
-    def used_lists(self, st: dict) -> set[str]:
-        """Списки, на которые ссылаются включённые правила (общие и личные)."""
-        pols = [self.policy_for(st, None)] + [self.policy_for(st, c["public_key"]) for c in self.clients]
-        return {lid for p in pols for r in p["rules"] for lid in r["lists"]}
-
-    def build_ruleset(self, t: system.Target, st: dict, dns: tuple | None = None) -> str:
+    def build_ruleset(self, t: system.Target, st: dict) -> str:
         gp = self._resolved(st, self.policy_for(st, None))
         cps = {}
         for c in self.clients:
@@ -624,8 +487,7 @@ class Engine:
             if pol["custom"]:
                 cps[c["ip"]] = self._resolved(st, pol)
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
-        dl = self.domain_lists(st)
-        lst = {lid: ([] if lid in dl else self._cidrs(lid)) for lid in used}
+        lst = {lid: self._cidrs(lid) for lid in used}
         ups = []
         for u in st["upstreams"]:
             if u["id"] in self.rt:
@@ -634,188 +496,7 @@ class Engine:
                 except Exception:  # noqa: BLE001
                     continue
                 ups.append({"num": u["num"], "snat": pc.address, "mtu": pc.mtu})
-        return nftgen.generate(t.iface, lst, ups, gp, cps, dl & used, dns)
-
-    # ------------------------------------------------------- DNS-посредник
-    def dns_listen(self, t: system.Target) -> tuple[str, str] | None:
-        """Адрес сервера в туннеле (на нём слушает посредник) и подсеть клиентов."""
-        if config.DRY_RUN:
-            return "10.8.1.1", "10.8.1.0/24"
-        p = t.ns(["ip", "-j", "-4", "addr", "show", "dev", t.iface], check=False)
-        try:
-            for x in json.loads(p.stdout or "[]"):
-                for a in x.get("addr_info") or []:
-                    if a.get("family") == "inet" and a.get("local"):
-                        net = ipaddress.ip_interface(f'{a["local"]}/{a.get("prefixlen", 24)}').network
-                        return a["local"], str(net)
-        except (ValueError, TypeError):
-            pass
-        return None
-
-    def _dns_upstreams(self, st: dict, listen: str) -> list[dict]:
-        """DNS из настроек сервера и путь до каждого: как пошёл бы запрос клиента (общие правила).
-        Через SOCKS5 — по TCP: UDP умеют не все прокси."""
-        from .users import client_dns
-        kinds = {}
-        for u in st["upstreams"]:
-            try:
-                kinds[u["num"]] = self.parsed(u).kind
-            except Exception:  # noqa: BLE001
-                pass
-        out = []
-        for ip in client_dns(st["settings"]):
-            if ip == listen:
-                continue
-            try:
-                eff = self.trace(None, ip)["effective"]
-            except Exception:  # noqa: BLE001
-                eff = "direct"
-            if eff == "block":
-                continue
-            u = {"ip": ip, "mark": 0 if eff == "direct" else nftgen.mark_for(eff)}
-            if eff != "direct" and kinds.get(eff) == "socks5":
-                u["tcp"] = True
-            out.append(u)
-        return out or [{"ip": "1.1.1.1", "mark": 0}]
-
-    def _stop_dns(self) -> None:
-        d, self.dns = self.dns, None
-        if d and d.proc.poll() is None:
-            d.proc.terminate()
-            try:
-                d.proc.wait(5)
-            except subprocess.TimeoutExpired:
-                d.proc.kill()
-
-    def _dns_fallback(self, t: system.Target, st: dict, listen: str | None) -> None:
-        """Таблица awgr_dns: пока включён «DNS через сервер» — всегда на месте (см.
-        nftgen.dns_fallback_ruleset), выключили — убираем."""
-        from .users import client_dns
-        if st["settings"].get("dns_proxy"):
-            ip = next((d for d in client_dns(st["settings"]) if d != listen), "1.1.1.1")
-            text = nftgen.dns_fallback_ruleset(t.iface, ip)
-            key = t.key + _sha(text)
-            present = config.DRY_RUN or t.ns(["nft", "list", "table", "ip", nftgen.DNS_TABLE],
-                                             check=False).returncode == 0
-            if key != self._dns_fb or not present:
-                path = os.path.join(RUN_DIR, "dns-fallback.nft")
-                with open(path, "w") as f:
-                    f.write(text)
-                t.ns(["nft", "-f", path], timeout=30)
-                self._dns_fb = key
-        elif self._dns_fb != "off:" + t.key:
-            t.ns(["nft", "delete", "table", "ip", nftgen.DNS_TABLE], check=False)
-            self._dns_fb = "off:" + t.key
-
-    def _input_rule(self, t: system.Target, op: str) -> None:
-        """Перенаправленный DNS клиентов — входящий трафик сервера (а не транзитный, как раньше).
-        Файрвол на iptables (ufw и т. п.) его бы отбросил: разрешаем порт посредника на интерфейсе
-        клиентов. op: "add" | "del". Нет iptables — ничего не делаем."""
-        ifn, port = t.iface, int(config.DNS_PROXY_PORT)
-        if op == "add":
-            body = (f"iptables -C INPUT -i {ifn} -p $p --dport {port} -j ACCEPT 2>/dev/null || "
-                    f"iptables -I INPUT -i {ifn} -p $p --dport {port} -j ACCEPT")
-        else:
-            body = (f"while iptables -C INPUT -i {ifn} -p $p --dport {port} -j ACCEPT 2>/dev/null; do "
-                    f"iptables -D INPUT -i {ifn} -p $p --dport {port} -j ACCEPT; done")
-        cmd = f"command -v iptables >/dev/null 2>&1 || exit 0; for p in udp tcp; do {body}; done"
-        try:
-            t.native(["sh", "-c", cmd], check=False, timeout=30)
-        except Exception as e:  # noqa: BLE001
-            log.info("dns input rule: %s", e)
-
-    def _dns_hung(self) -> bool:
-        """Процесс жив, но цикл событий стоит: счётчики (их пишет каждые 30 с) давно не обновлялись."""
-        d = self.dns
-        if not d or time.time() - d.started < 120:
-            return False
-        try:
-            with open(DNS_STATS) as f:
-                s = json.load(f)
-        except (OSError, ValueError):
-            return False
-        return s.get("pid") == d.proc.pid and time.time() - float(s.get("at") or 0) > 120
-
-    def _sync_dns(self, t: system.Target, st: dict) -> tuple | None:
-        """Держит посредник запущенным, пока включён «DNS через сервер».
-        → ("proxy", порт) — DNS клиентов в посредник; None — посредника нет (выключен или не
-        работает: тогда DNS клиентов идёт запасным путём из таблицы awgr_dns)."""
-        if not st["settings"].get("dns_proxy"):
-            self._stop_dns()
-            self.dns_state = None
-            self._dns_fallback(t, st, None)
-            return None
-        la = self.dns_listen(t)
-        self._dns_fallback(t, st, la[0] if la else None)
-        fallback = None
-        if not la:
-            self._stop_dns()
-            self.dns_state = {"state": "error", "error": Msg("dns.no_addr", iface=t.iface)}
-            return fallback
-        listen, net = la
-        if config.DRY_RUN:
-            self.dns_state = {"state": "on", "listen": listen}
-            return ("proxy", config.DNS_PROXY_PORT)
-        used = self.used_lists(st) & self.domain_lists(st)
-        files = {lid: domains.path_for(lid) for lid in sorted(used)}
-        cfg = {"listen": listen, "port": config.DNS_PROXY_PORT, "clients": net, "table": config.NFT_TABLE,
-               "upstreams": self._dns_upstreams(st, listen), "lists": files,
-               "timeout": config.DNS_SET_TIMEOUT, "stats": DNS_STATS, "strip_aaaa": True}
-        mt = {lid: os.path.getmtime(p) if os.path.exists(p) else 0 for lid, p in files.items()}
-        h = _sha(json.dumps([cfg, mt], sort_keys=True))
-        key = f"{t.key}|{listen}|{config.DNS_PROXY_PORT}"
-        d = self.dns
-        if d and (d.key != key or d.proc.poll() is not None or self._dns_hung()):
-            if d.key == key:
-                self.event("warn", Msg("ev.dns_died"))
-            self._stop_dns()
-            d = None
-        if d is None or d.cfg_hash != h:
-            with open(DNS_CONF + ".tmp", "w") as f:
-                json.dump(cfg, f)
-            os.replace(DNS_CONF + ".tmp", DNS_CONF)
-        if d is None:
-            if time.time() - self._dns_retry < 60:
-                return fallback
-            self._dns_retry = time.time()
-            logp = os.path.join(LOG_DIR, "dnsproxy.log")
-            with open(logp, "a") as logf:
-                proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", "python3", DNSPROXY, DNS_CONF],
-                                        stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
-            time.sleep(0.5)
-            if proc.poll() is not None:
-                try:
-                    with open(logp) as f:
-                        tail = f.read()[-300:].strip()
-                except OSError:
-                    tail = ""
-                self.dns_state = {"state": "error", "listen": listen,
-                                  "error": Msg("dns.start_failed", detail=tail)}
-                self.event("error", Msg("ev.dns_failed", detail=tail))
-                return fallback
-            self.dns = DnsRT(proc, key, h)
-            self._input_rule(t, "add")
-            self.event("info", Msg("ev.dns_started", listen=listen))
-        elif d.cfg_hash != h:
-            d.proc.send_signal(signal.SIGHUP)       # перечитать настройки и списки
-            d.cfg_hash = h
-        self.dns_state = {"state": "on", "listen": listen}
-        return ("proxy", config.DNS_PROXY_PORT)
-
-    def dns_view(self) -> dict | None:
-        """Для интерфейса: состояние и счётчики посредника."""
-        if not self.dns_state:
-            return None
-        v = dict(self.dns_state)
-        if self.dns and not config.DRY_RUN:
-            try:
-                with open(DNS_STATS) as f:
-                    s = json.load(f)
-                if s.get("pid") == self.dns.proc.pid:
-                    v.update({k: s.get(k) for k in ("queries", "matched", "upstream_errors", "addresses")})
-            except (OSError, ValueError):
-                pass
-        return v
+        return nftgen.generate(t.iface, lst, ups, gp, cps)
 
     # -------------------------------------------------------- ip rule/route
     def _sync_rules(self, t: system.Target) -> None:
@@ -901,7 +582,6 @@ class Engine:
                 if self.target is not None and self.target.exists:
                     self.event("warn", Msg("ev.target_restarted"))
                 self._stop_all()
-                self._stop_dns()
                 self.target = t
                 self.applied_hash = None
                 self._sysctl(t)
@@ -925,14 +605,8 @@ class Engine:
 
             self._sync_upstreams(t, st)
             self._update_health(t, st)
-            try:
-                dns = self._sync_dns(t, st)
-            except Exception as e:  # noqa: BLE001
-                log.exception("dns proxy")
-                self.dns_state = {"state": "error", "error": msg_of(e)}
-                dns = None          # запасной путь DNS — таблица awgr_dns
 
-            text = self.build_ruleset(t, st, dns)
+            text = self.build_ruleset(t, st)
             h = _sha(text)
             present = t.ns(["nft", "list", "chain", "ip", config.NFT_TABLE, "c_prerouting"],
                            check=False).returncode == 0
@@ -943,9 +617,6 @@ class Engine:
                 t.ns(["nft", "-f", path], timeout=60)
                 if self.applied_hash and present:
                     self.event("info", Msg("ev.rules_applied"))
-                if self.dns and self.dns.proc.poll() is None:
-                    # таблица пересоздана — наборы доменов пусты: посредник вернёт в них адреса
-                    self.dns.proc.send_signal(signal.SIGHUP)
                 self.applied_hash = h
                 self.ruleset = text
                 self.last_apply = time.time()
@@ -958,15 +629,9 @@ class Engine:
         with self.lock:
             t = self.target
             self._stop_all()
-            self._stop_dns()
             if t:
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
                 t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
-                # awgr_dns не трогаем, пока включён «DNS через сервер»: у клиентов в конфиге DNS —
-                # адрес сервера, и без неё DNS у них пропадёт (в том числе после удаления панели)
-                if not self.store.snapshot()["settings"].get("dns_proxy"):
-                    t.ns(["nft", "delete", "table", "ip", nftgen.DNS_TABLE], check=False)
-                self._input_rule(t, "del")
                 self._acct_key = None
                 p = t.ns(["ip", "-j", "rule", "show"], check=False)
                 try:
@@ -990,16 +655,6 @@ class Engine:
         else:
             with self.lock:
                 self._stop_all()
-                if self.dns:
-                    self._stop_dns()
-                    t = self.target
-                    if t:
-                        # без посредника DNS клиентов идёт запасным путём (awgr_dns)
-                        p = os.path.join(RUN_DIR, "dns-off.nft")
-                        with open(p, "w") as f:
-                            f.write(f"flush chain ip {config.NFT_TABLE} c_dns\n"
-                                    f"delete chain ip {config.NFT_TABLE} c_dns\n")
-                        t.ns(["nft", "-f", p], check=False)
 
     # ---------------------------------------------------------------- tools
     def own_route(self, out: str) -> tuple[int, int] | None:
@@ -1046,11 +701,8 @@ class Engine:
         res["via"] = eff
         return res
 
-    def trace(self, pk: str | None, ip: str, name: str | None = None) -> dict:
-        """Куда пойдёт трафик клиента до ip. name — домен, по которому его нашли: списки
-        доменов проверяются по нему (так же, как это делает DNS-посредник)."""
+    def trace(self, pk: str | None, ip: str) -> dict:
         st = self.store.snapshot()
-        dl = self.domain_lists(st) if st["settings"].get("dns_proxy") else set()
         steps = []
         for net in nftgen.LOCAL_NETS:
             if ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(net):
@@ -1061,14 +713,6 @@ class Engine:
                          == "custom" else "tr.global_rules"))
         for r in pol["rules"]:
             for lid in r["lists"]:
-                if lid in dl:
-                    dom = self.domain_matcher.match(lid, name) if name else None
-                    if dom:
-                        steps.append(Msg("tr.match_domain", list=lid, domain=dom))
-                        eff = self.resolve(r["outbound"], st)
-                        return {"result": r["outbound"], "effective": eff, "steps": steps,
-                                "rule": r.get("comment") or r["id"], "domain": dom}
-                    continue
                 hit = self.matcher.contains(lid, ip)
                 if hit:
                     steps.append(Msg("tr.match", list=lid, net=hit))

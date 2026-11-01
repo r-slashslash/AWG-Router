@@ -338,7 +338,7 @@ function viewOverview() {
     const na = assigned["up:" + u.id] || 0;
     const meta = [
       `<span><bdi>${esc(u.endpoint || "")}</bdi></span>`,
-      h.healthy ? `<span>${esc(u.kind === "socks5" ? t("ov.socks_ms", { ms: h.latency_ms ?? "?" }) : t("ov.handshake", { ago: fmtAge(h.handshake_age) }))}</span>` : "",
+      h.healthy ? `<span>${esc(t("ov.handshake", { ago: fmtAge(h.handshake_age) }))}</span>` : "",
       acctOn() ? `<span>${esc(t("ex.month"))} ${arrows(u.traffic)}</span>`
         : h.rx != null && u.enabled ? `<span>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</span>` : "",
       dead ? `<span>${esc(na ? t("ov.assigned_now", { n: na }) : t("ov.traffic_goes"))} ${effChip(u.effective)}</span>` : "",
@@ -889,11 +889,10 @@ function viewExits() {
   const cards = S.upstreams.map((u) => {
     const h = u.health || {};
     let st = stateBadge(u);
-    if (u.enabled && h.healthy && !quotaSwitched(u)) st = `<span class="state"><span class="dot ok"></span>${esc(u.kind === "socks5" ? t("ex.working_socks", { ms: h.latency_ms ?? "?" }) : t("ex.working", { ago: fmtAge(h.handshake_age) }))}</span>`;
-    else if (u.enabled && u.kind === "socks5" && h.error && h.state !== "error") st += ` <span class="small warn-text">${esc(tm(h.error))}</span>`;
+    if (u.enabled && h.healthy && !quotaSwitched(u)) st = `<span class="state"><span class="dot ok"></span>${esc(t("ex.working", { ago: fmtAge(h.handshake_age) }))}</span>`;
     else if (u.enabled && h.state === "error") st = `<span class="state"><span class="dot bad"></span>${esc(tm(h.error) || t("st.error"))}</span>`;
     else if (u.enabled && h.handshake_age) st += ` <span class="muted small">${esc(t("ex.last_handshake", { ago: fmtAge(h.handshake_age) }))}</span>`;
-    const ver = u.kind === "socks5" ? "SOCKS5" : u.version ? `AWG ${u.version}` : u.config_error ? "" : "WireGuard";
+    const ver = u.version ? `AWG ${u.version}` : u.config_error ? "" : "WireGuard";
     return `
     <div class="panel exit ${u.enabled ? "" : "disabled-exit"}" style="--c:${lineVar(u)}">
       <div class="exit-bar"></div>
@@ -906,8 +905,7 @@ function viewExits() {
         ${u.config_error ? `<p class="err">${esc(tm(u.config_error))}</p>` : ""}
         <div class="kv">
           <div><span>${esc(t("ex.server"))}</span><b><bdi>${esc(u.endpoint || "—")}</bdi></b></div>
-          ${u.kind === "socks5" ? `<div><span>${esc(t("ex.socks_user"))}</span><b><bdi>${esc(u.socks_user || t("ex.socks_noauth"))}</bdi></b></div>`
-            : `<div><span>${esc(t("ex.address"))}</span><b><bdi>${esc(u.address || "—")}</bdi></b></div>`}
+          <div><span>${esc(t("ex.address"))}</span><b><bdi>${esc(u.address || "—")}</bdi></b></div>
           ${acctOn()
             ? `<div><span>${esc(t("ex.month"))}</span><b>${arrows(u.traffic)}</b></div>
                <div><span>${esc(t("ex.all_time"))}</span><b>${arrows(u.traffic, "total")}</b></div>`
@@ -1003,7 +1001,7 @@ async function editUpstream(id) {
     <label class="field"><span>${esc(t("ex.name"))}</span><input type="text" id="u-name" maxlength="40" value="${esc(u ? u.name : "")}" placeholder="${esc(t("ex.name_ph"))}"></label>
     <label class="field"><span>${esc(t("ex.config"))}</span>
       <textarea id="u-conf" dir="ltr" spellcheck="false" placeholder="${esc(t("ex.config_ph"))}">${esc(conf)}</textarea>
-      <span class="hint">${esc(t("ex.config_hint"))} ${esc(t("ex.config_socks"))}</span>
+      <span class="hint">${esc(t("ex.config_hint"))}</span>
     </label>
     <div class="field"><input type="file" id="u-file" accept=".conf,.txt,.vpn" aria-label="${esc(t("ex.file"))}"></div>
     <label class="field"><span>${esc(t("ex.fallback"))}</span>
@@ -1042,18 +1040,12 @@ async function editUpstream(id) {
 function viewLists() {
   const rows = S.lists.map((l) => {
     const badge = l.kind === "country" ? `<span class="cc">${esc(l.source.toUpperCase())}</span>`
-      : l.kind === "asn" ? `<span class="cc">AS</span>` : l.kind === "domains" ? `<span class="cc">DNS</span>` : "";
-    const active = S.dns && S.dns.addresses ? S.dns.addresses[l.id] || 0 : null;
-    const size = l.kind === "domains"
-      ? (l.count ? `${esc(t("n.domains", { n: l.count }))}${l.refs.length && active !== null ? `<div class="small muted">${esc(t("ls.domains_active", { n: active }))}</div>` : ""}` : `<span class="muted">${esc(t("ls.not_loaded"))}</span>`)
-        + (l.refs.length && !(S.dns && S.dns.state === "on") ? `<div class="small warn-text">${esc(t(S.settings.dns_proxy ? "ls.dns_error" : "ls.dns_off"))}</div>` : "")
-      : null;
+      : l.kind === "asn" ? `<span class="cc">AS</span>` : "";
     const src = l.kind === "url" || (l.kind === "asn" && l.name !== l.source) ? `<bdi>${esc(l.source)}</bdi>` : esc(t("ls.kind." + l.kind));
-
     return `
     <tr>
       <td>${badge}<b><bdi>${esc(listName(l.id))}</bdi></b><div class="list-row-src">${src}</div></td>
-      <td data-m="sub">${size !== null ? size : l.count ? `${esc(t("n.networks", { n: l.count }))}<div class="small muted">${esc(t("n.addresses", { n: l.addresses, nText: fmtCompact(l.addresses) }))}</div>` : `<span class="muted">${esc(t("ls.not_loaded"))}</span>`}${l.skipped_v6 ? `<div class="small warn-text">${esc(t("ls.skipped_v6", { n: l.skipped_v6 }))}</div>` : ""}
+      <td data-m="sub">${l.count ? `${esc(t("n.networks", { n: l.count }))}<div class="small muted">${esc(t("n.addresses", { n: l.addresses, nText: fmtCompact(l.addresses) }))}</div>` : `<span class="muted">${esc(t("ls.not_loaded"))}</span>`}${l.skipped_v6 ? `<div class="small warn-text">${esc(t("ls.skipped_v6", { n: l.skipped_v6 }))}</div>` : ""}
         ${l.error ? `<div class="err small">${esc(tm(l.error))}</div>` : ""}</td>
       <td data-m="hide" class="small muted">${l.updated ? esc(t("ls.updated", { time: fmtTime(l.updated) })) : "—"}${l.refs.length ? `<div>${esc(t("n.in_rules", { n: l.refs.length }))}</div>` : ""}</td>
       <td data-m="right" class="nowrap acts">
@@ -1067,7 +1059,7 @@ function viewLists() {
   <section class="section">
     <div class="section-head">
       <div><h2>${esc(t("ls.title"))}</h2><p class="muted small">${esc(t("ls.subtitle", { hours: fmtNum(S.settings.list_update_hours) }))}</p></div>
-      <div class="add-row">${["country", "asn", "url", "manual", "domains"].map((k) => `<button class="btn" data-add-kind="${k}">${esc(t("ls.add_" + k))}</button>`).join("")}</div>
+      <div class="add-row">${["country", "asn", "url", "manual"].map((k) => `<button class="btn" data-add-kind="${k}">${esc(t("ls.add_" + k))}</button>`).join("")}</div>
     </div>
     <div class="panel">${S.lists.length ? `<table class="table responsive"><thead><tr><th>${esc(t("ls.col_list"))}</th><th>${esc(t("ls.col_size"))}</th><th>${esc(t("ls.col_updated"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
       : `<div class="empty"><p>${esc(t("ls.empty"))}</p></div>`}</div>
@@ -1107,17 +1099,13 @@ function editList(id, kind) {
   } else if (kind === "url") {
     body = nameField() + `<label class="field"><span>${esc(t("ls.urls"))}</span><textarea id="l-src" dir="ltr" style="min-height:90px" placeholder="https://example.com/list.txt">${esc(l ? l.source : "")}</textarea>
       <span class="hint">${esc(t("ls.urls_hint"))}</span></label>`;
-  } else if (kind === "domains") {
-    body = nameField("YouTube") + `<label class="field"><span>${esc(t("ls.domains"))}</span><textarea id="l-src" dir="ltr" spellcheck="false" placeholder="youtube.com&#10;googlevideo.com&#10;https://example.com/domains.txt">${esc(l ? l.source || "" : "")}</textarea>
-      <span class="hint">${esc(t("ls.domains_hint"))}</span></label>
-      <p class="small muted" style="margin:0">${esc(t("ls.domains_how"))}</p>`;
   } else {
     body = nameField(t("ls.manual_ph")) + `<label class="field"><span>${esc(t("ls.cidrs"))}</span><textarea id="l-src" dir="ltr" placeholder="203.0.113.0/24&#10;198.51.100.7">${esc(l ? l.source : "")}</textarea>
       <span class="hint">${esc(t("ls.cidrs_hint"))}</span></label>`;
   }
   const title = l ? t("ls.edit", { name: listName(l.id) }) : t("ls.new." + kind);
   openModal(title, body, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="l-save">${esc(t(l ? "btn.save" : "btn.add"))}</button>`);
-  if (l && (kind === "manual" || kind === "domains")) {
+  if (l && kind === "manual") {
     // текст ручного списка не приходит в /api/state (он бывает в мегабайты) — берём отдельно
     const ta = $("#l-src"), save = $("#l-save");
     ta.disabled = save.disabled = true;
@@ -1137,9 +1125,8 @@ function editList(id, kind) {
       await refresh();
       if (r && r.error) toast(t("ls.saved_failed", { e: tm(r.error) }), true);
       else {
-        toast(t("ls.saved", { name: listName(r.id), count: t(kind === "domains" ? "n.domains" : "n.networks", { n: r.count || 0 }) }));
+        toast(t("ls.saved", { name: listName(r.id), count: t("n.networks", { n: r.count || 0 }) }));
         if (r.skipped_v6) toast(t("ls.skipped_v6", { n: r.skipped_v6 }));
-        if (r.dns_enabled) toast(t("ls.dns_enabled"));
       }
     } catch (err) { toast(err.message, true); e.target.disabled = false; e.target.textContent = label; }
   };
@@ -1255,9 +1242,7 @@ function viewServer() {
       <div class="section-head"><h2>${esc(t("srv.clients_title"))}</h2></div>
       <div class="panel panel-pad">
         <label class="field"><span>${esc(t("srv.client_host"))}</span><select id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
-        <label class="check"><input type="checkbox" id="s-dnsp" ${SRV.dns_proxy ? "checked" : ""}><span>${esc(t("srv.dns_proxy"))}</span></label>
-        <p class="small muted" style="margin:-4px 0 12px">${esc(t(SRV.dns_proxy ? "srv.dns_proxy_on" : "srv.dns_proxy_off", { ip: SRV.dns_server_ip || "—" }))}</p>
-        <label class="field"><span>${esc(SRV.dns_proxy ? t("srv.dns_upstream") : "DNS")}</span><input type="text" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t(SRV.dns_proxy ? "srv.dns_upstream_hint" : "srv.dns_hint"))}</span></label>
+        <label class="field"><span>DNS</span><input type="text" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
         <div class="row2">
           <label class="field"><span>MTU</span><input type="number" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
           <label class="field"><span>PersistentKeepalive</span><input type="text" id="s-ka" dir="ltr" value="${esc(SRV.client_keepalive)}" placeholder="${esc(t("srv.auto", { v: SRV.keepalive_auto }))}"><span class="hint">${esc(t("srv.ka_hint"))}</span></label>
@@ -1305,8 +1290,6 @@ function clientHostHint(val) {
 }
 function srvDirty() {
   if (!SRV || !srvDraft) return false;
-  const dp = $("#s-dnsp");
-  if (dp && dp.checked !== !!SRV.dns_proxy) return true;
   return Object.keys(SRV.params).some((k) => (srvDraft[k] || "") !== (SRV.params[k] || "")) ||
     ["#s-host", "#s-ch", "#s-dns", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
@@ -1335,8 +1318,6 @@ bind.server = () => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar;
   });
-  const dnsp = $("#s-dnsp");
-  if (dnsp) dnsp.onchange = showBar;
   const syncTpl = () => {
     const sel = $("#s-cps"); if (!sel) return;
     const m = cpsMatch(SRV.cps_presets, srvDraft);
@@ -1369,10 +1350,8 @@ bind.server = () => {
     const port = +$("#s-port").value, addr = $("#s-addr").value.trim();
     const restart = serverSide || (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
     if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
-    const dnsOn = $("#s-dnsp").checked;
-    if (SRV.dns_proxy && !dnsOn && S.lists.some((l) => l.kind === "domains" && l.refs.length) && !confirm(t("srv.dns_proxy_off_confirm"))) return;
     const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, client_dns: $("#s-dns").value,
-      client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim(), dns_proxy: dnsOn };
+      client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
     if (!SRV.port_locked) body.port = port;
     if (!SRV.subnet_locked) body.address = addr;
@@ -1380,7 +1359,7 @@ bind.server = () => {
     try {
       const r = await api("PUT", "server", body);
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
-      if (r.server_side_changed || r.host_changed || r.dns_changed) toast(t("toast.reimport"));
+      if (r.server_side_changed || r.host_changed) toast(t("toast.reimport"));
       SRV = null; srvDraft = null; await refresh(); loadServer();
     } catch (e) { toast(e.message, true); $("#s-save").disabled = false; }
   };

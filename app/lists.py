@@ -1,4 +1,4 @@
-"""Списки сетей: страны, URL-списки, ручные CIDR; списки доменов (domains.py)."""
+"""Списки сетей: страны, URL-списки, ручные CIDR."""
 from __future__ import annotations
 
 import bisect
@@ -8,7 +8,7 @@ import re
 import time
 import urllib.request
 
-from . import config, domains
+from . import config
 from .i18n import Msg
 
 COUNTRY_SOURCES = [
@@ -97,27 +97,6 @@ def delete_cidrs(list_id: str) -> None:
         os.remove(path_for(list_id))
     except FileNotFoundError:
         pass
-    domains.delete(list_id)
-
-
-def fetch_domains(lst: dict) -> list[str]:
-    """Список доменов: строки текста + содержимое ссылок из него. Бросает ListError."""
-    urls, text = domains.split_source(lst.get("source", ""))
-    found = domains.parse(text)
-    errors = []
-    for url in urls:
-        try:
-            found += domains.parse(_fetch(url))
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"{url.split('/')[2]}: {e}")
-    if errors and (not found or len(errors) == len(urls) and not text.strip()):
-        raise ListError(Msg("list.fetch_failed", detail="; ".join(errors)))
-    names = domains.compact(list(dict.fromkeys(found)))
-    if not names:
-        raise ListError(Msg("list.no_domains"))
-    if len(names) > domains.MAX_DOMAINS:
-        raise ListError(Msg("list.too_many_domains", n=domains.MAX_DOMAINS))
-    return names
 
 
 def _fetch(url: str, timeout: int = 30) -> str:
@@ -211,17 +190,6 @@ class ListError(Exception):
 
 def refresh(lst: dict) -> dict:
     """Обновляет файл списка; возвращает поля для записи в состояние."""
-    if lst["kind"] == "domains":
-        try:
-            names = fetch_domains(lst)
-        except ListError as e:
-            return {"error": e.msg.to_json(), "checked": time.time()}
-        except Exception as e:  # noqa: BLE001
-            return {"error": Msg("list.fetch_failed", detail=str(e)[:300]).to_json(),
-                    "checked": time.time()}
-        domains.save(lst["id"], names)
-        return {"error": None, "count": len(names), "addresses": None, "skipped_v6": 0,
-                "updated": time.time(), "checked": time.time()}
     stats: dict = {}
     try:
         nets = fetch_list(lst, stats)
