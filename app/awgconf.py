@@ -1,10 +1,11 @@
-"""Разбор клиентских конфигов AmneziaWG (.conf и ссылок vpn://)."""
+"""Разбор конфигов выходов: AmneziaWG (.conf и ссылки vpn://) и прокси SOCKS5."""
 from __future__ import annotations
 
 import base64
 import ipaddress
 import json
 import re
+import urllib.parse
 import zlib
 from dataclasses import dataclass, field
 
@@ -57,6 +58,62 @@ class UpstreamConf:
     rekey_after: int = 120
     params: dict = field(default_factory=dict)
     version: str = ""
+    kind: str = "awg"              # "awg" | "socks5"
+    socks: dict = field(default_factory=dict)   # host, port, user, password
+
+
+SOCKS_MTU = 8500                   # как советует hev-socks5-tunnel: TCP он завершает сам
+_SOCKS_URL = re.compile(r"^socks(?:5h?|5)?://", re.I)
+_HOST_PORT_USER_PASS = re.compile(r"^([A-Za-z0-9.-]+):(\d{1,5}):([^:\s]+):(\S+)$")
+_HOSTNAME = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")
+
+
+def is_socks(text: str) -> bool:
+    t = text.strip()
+    return bool(_SOCKS_URL.match(t) or (("\n" not in t) and "[Interface]" not in t and
+                                        (_HOST_PORT_USER_PASS.match(t) or re.match(r"^[^\s/@]+@[^\s/@]+:\d+$", t))))
+
+
+def parse_socks(text: str) -> UpstreamConf:
+    """socks5://[логин:пароль@]хост:порт (также socks5h://, socks://, «логин:пароль@хост:порт»
+    и «хост:порт:логин:пароль», как их выдают продавцы прокси)."""
+    t = text.strip()
+    m = _HOST_PORT_USER_PASS.match(t)
+    if m and not _SOCKS_URL.match(t):
+        host, port, user, pw = m.group(1), m.group(2), m.group(3), m.group(4)
+    else:
+        if not _SOCKS_URL.match(t):
+            t = "socks5://" + t
+        try:
+            u = urllib.parse.urlsplit(t)
+            host, port = u.hostname or "", u.port
+        except ValueError:
+            raise ConfigError(Msg("cfg.socks_bad"))
+        if u.path not in ("", "/") or u.query or u.fragment:
+            raise ConfigError(Msg("cfg.socks_bad"))
+        user = urllib.parse.unquote(u.username or "")
+        pw = urllib.parse.unquote(u.password or "")
+    try:
+        port = int(port or 0)
+    except ValueError:
+        port = 0
+    if not 0 < port < 65536:
+        raise ConfigError(Msg("cfg.socks_port"))
+    try:
+        ip = ipaddress.ip_address(host)
+        host = str(ip)
+    except ValueError:
+        if not _HOSTNAME.match(host or ""):
+            raise ConfigError(Msg("cfg.socks_host"))
+        host = host.lower()
+    if len(user) > 255 or len(pw) > 255 or bool(pw) and not user:
+        raise ConfigError(Msg("cfg.socks_auth"))
+    q = lambda x: urllib.parse.quote(x, safe="")
+    auth = f"{q(user)}:{q(pw)}@" if user else ""
+    hp = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    return UpstreamConf(raw=f"socks5://{auth}{hp}", setconf="", address="", mtu=SOCKS_MTU,
+                        endpoint=hp, peer_public_key="", rekey_after=0, kind="socks5",
+                        socks={"host": host, "port": port, "user": user, "password": pw})
 
 
 def _parse_sections(text: str, strict: bool = True) -> list[tuple[str, list[tuple[str, str]]]]:
@@ -166,6 +223,8 @@ def _range_max(v: str, default: int) -> int:
 
 
 def parse_upstream(user_input: str) -> UpstreamConf:
+    if is_socks(user_input):
+        return parse_socks(user_input)
     text = extract_conf_text(user_input)
     sections = _parse_sections(text)
     ifaces = [s for s in sections if s[0] == "interface"]

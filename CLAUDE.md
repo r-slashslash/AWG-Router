@@ -55,7 +55,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/users.py` | `ServerManager`: clients CRUD, client configs/vpn:// links, server params, host init |
 | `app/awgserver.py` | Server conf model (Amnezia layout), parameter generation/validation, client conf, vpn:// encoder |
 | `app/awgconf.py` | Parsing exit configs (`.conf`, JSON, `vpn://`) |
-| `app/lists.py` | Country / ASN / URL / manual network lists (ipverse → ipdeny / RIPEstat fallback) |
+| `app/lists.py` | Country / ASN / URL / manual network lists (ipverse → ipdeny / RIPEstat fallback); kind `domains` → `domains.py` |
+| `app/domains.py` | Domain lists: parsing (plain, `*.`, dnsmasq `server=/…/`, hosts, Adblock `\|\|x^`, v2ray `domain:`/`full:`, Clash `DOMAIN-SUFFIX,`), IDN → punycode, subdomains of listed domains dropped (`compact`); file `data/lists/<id>.domains`; suffix match |
+| `app/sniproxy.py` | Domain rules for SOCKS5 exits, **stdlib only, no panel imports**: transparent TCP 80/443 proxy in the AWG server's network (`SO_ORIGINAL_DST`), SNI / Host → SOCKS5 CONNECT by name, otherwise the original address with the client's policy mark; SIGHUP → reload; stats in `/run/awgr/sni-stats.json` |
+| `app/socks.py` | SOCKS5 exits: `hev_config` (YAML for hev-socks5-tunnel), health `check()` (login + CONNECT 1.1.1.1:443 / 8.8.8.8:443 from the panel, every 60 s in a thread) |
 | `app/tlsmgr.py` | Let's Encrypt via `lego` (profile `shortlived`, 6-day IP certs, renew ~3 days), self-signed fallback, hot reload |
 | `app/store.py` | `data/state.json` (routing, upstreams, lists, client policies, private keys, settings) |
 | `app/hostnet.py` | Host addresses without outside requests (panel runs in the host network): public IPv6 from `/proc/net/if_inet6`, IPv6 UDP listener on the AWG port from `/proc/net/udp6` |
@@ -63,10 +66,10 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 | `app/uninstall.py` | Removes nft table / ip rules from the target (used by `awg-router uninstall`) |
 | `app/static/` | SPA: `index.html`, `app.js` (tabs: overview, clients, exits, routing, lists, server, system), `app.css`, `i18n.js`, `qrcode.js` (MIT, Kazuhiko Arase) |
 | `awg-server/` | Dockerfile + start.sh for an Amnezia-compatible `amnezia-awg2` container the installer can create |
-| `Dockerfile` | Builds amneziawg-go + static awg/awg-quick (Go), copies lego; Python 3.13 alpine runtime |
+| `Dockerfile` | Builds amneziawg-go + static awg/awg-quick (Go), static hev-socks5-tunnel (`HEV_REF`, MIT), copies lego; Python 3.13 alpine runtime |
 | `install.sh` | Installer/updater; works via `curl … | bash` (bootstraps code into `/opt/awg-router` from the latest release archive) |
 | `.github/workflows/release.yml` | On a `vX.Y.Z` tag: release with `awg-router.tar.gz` (the archive the installer downloads) |
-| `tests/` | `test_core.py`, `test_api.py` (unittest; `test_api` imports `main` in demo mode), `netns_e2e.py` (routing in netns, needs root + pyroute2), `awg_real_e2e.py` (real AWG tunnels) |
+| `tests/` | `test_core.py`, `test_api.py` (unittest; `test_api` imports `main` in demo mode), `netns_e2e.py` (routing in netns, needs root + pyroute2), `awg_real_e2e.py` (real AWG tunnels), `domains_socks_e2e.py` (SOCKS5 exit + domain rules with real nft, sniproxy.py, hev-socks5-tunnel; helper servers in `e2e_servers.py`) |
 
 ## How it works (essentials)
 - Panel container: `network_mode: host`, `pid: host`, `privileged`, docker.sock mounted; data in `./data`.
@@ -172,6 +175,30 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 - First connection (1.10.0): `users.add_client` puts the client into `state.await_first` (pk → created);
   `limits.first_seen` (after each poll) fires `ev.client_first` on its first handshake and drops entries
   for deleted clients or after 90 days. Restore does not carry `await_first` (built from `DEFAULT_STATE`).
+- Domain rules (1.12.0) — **only to SOCKS5 exits** (`v_rules`: `err.domains_need_socks`, no mixing with address
+  lists: `err.rule_mixed_domains`). No DNS changes: `sniproxy.py` (stdlib only, no panel imports; run as
+  `nsenter -t PID -n -- python3 sniproxy.py /run/awgr/sni.json`, 0600 — proxy passwords) listens on the server's
+  tunnel address `:10443`. Policies are split by `engine._policies`: address rules → nft as before, rules with
+  domain lists → `policy["domain"]`. `nftgen.layout()` (shared by nft and the sniproxy config, names must match)
+  dedups policies including domain rules; `sniff_marks()` gives each policy with domain rules a mark
+  `SNIFF_OUT_BASE + i`. In such a policy chain, first: `udp dport 443 goto o_block` (QUIC — no readable name) and
+  `tcp dport {80,443} meta mark set SNIFF_MARK accept`; `c_sniff` (nat prerouting) redirects that mark (needs
+  `meta l4proto tcp`). sniproxy reads SNI (ClientHello, may span TLS records) or HTTP Host (waits ≤ 3 s for client
+  data), matches the client's policy domain rules: hit → SOCKS5 CONNECT **by name** (or the exit's fallback:
+  `{"mark"}` / `{"block"}` from `engine._sni_target`); miss → connect to SO_ORIGINAL_DST with the policy's mark,
+  and `c_output` (`type route hook output`) jumps to `q_<policy>` = the same address rules with `oq_*` outs
+  (mark change → re-route). No sniproxy (not started, died, hung — stats older than 120 s) → ruleset without
+  sniffing (address rules only); panel stop with `on_stop=keep` re-applies the ruleset without it. Redirected
+  connections are *input* traffic: `_input_rule` inserts `iptables -I INPUT -i <wg> -p tcp --dport 10443 -j ACCEPT`
+  (ufw); an nftables-only host firewall must allow it by hand. `trace(pk, ip, name)` checks domain rules first.
+- SOCKS5 exits (1.12.0): upstream `config` = normalized `socks5://user:pass@host:port` (`awgconf.parse_socks`,
+  `UpstreamConf.kind == "socks5"`, `socks` dict; password only via `GET /api/upstreams/<id>/config`). Started as
+  `nsenter -t PID -n -- hev-socks5-tunnel /run/awgr/awgrN.yml` (TUN `awgrN`, ipv4 169.254.200.N, mtu 8500,
+  `udp: 'udp'`), YAML deleted once the link exists; proxy host resolved by the panel (hev needs an IP). No SNAT
+  for it (`snat` empty). hev's own sockets are unmarked → main table → no loop. **hev opens AF_INET6 sockets**
+  (v4-mapped): needs kernel IPv6 (fine with `disable_ipv6=1`, fails with `ipv6.disable=1` → `sys.socks_no_ipv6`).
+  The e2e test in a kernel without IPv6 needs an LD_PRELOAD shim mapping those sockets to AF_INET. Health:
+  `_socks_health` (hev alive + check ≤ 200 s old and ok); TUN rx = from proxy (download), tx = to proxy.
 - Very old installs may have an `awg-router` helper whose `update` doesn't pass `--update` (it rebuilds
   old code). Fix: re-run the installer via `curl … | bash`, which rewrites the helper.
 
@@ -180,6 +207,7 @@ Public repo: https://github.com/r-slashslash/AWG-Router (branch `main`, MIT).
 python3 -m unittest discover tests
 sudo PYTHONPATH=<pyroute2>:. python3 tests/netns_e2e.py
 sudo PATH=<awg,amneziawg-go>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/awg_real_e2e.py
+sudo PATH=<hev-socks5-tunnel>:$PATH PYTHONPATH=<pyroute2>:. python3 tests/domains_socks_e2e.py
 DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo PANEL_PORT=8099 PUBLIC_HOST=203.0.113.5 python3 -m app.main
 ```
 Demo mode (`DRY_RUN=1`) fakes the AWG server; useful with Playwright for UI checks in all four

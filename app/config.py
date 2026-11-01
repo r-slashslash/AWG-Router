@@ -60,3 +60,8 @@ RULE_PRIO_BASE = 20000         # приоритет ip rule = 20000 + N
 MARK_BLOCK = 0xB10C
 NFT_TABLE = "awgr"
 MAX_UPSTREAMS = 200
+# Правила по доменам для выходов SOCKS5 (sniproxy.py): порт на адресе сервера в туннеле, куда
+# nftables перенаправляет TCP 80/443 клиентов с такими правилами
+SNI_PROXY_PORT = int(os.environ.get("SNI_PROXY_PORT", "10443"))
+SNIFF_MARK = 0xD000            # пакет клиента → в sniproxy.py
+SNIFF_OUT_BASE = 0xD100        # соединения sniproxy.py: метка = база + номер политики клиента

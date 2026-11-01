@@ -100,7 +100,8 @@ def mark_for(num: int) -> int:
 
 
 def _policy_key(policy: dict) -> tuple:
-    return (tuple((tuple(l), o) for l, o in policy["rules"]), policy["default"])
+    return (tuple((tuple(l), o) for l, o in policy["rules"]), policy["default"],
+            tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()))
 
 
 def _set_block(name: str, cidrs: list[str], comment: str = "") -> str:
@@ -117,22 +118,29 @@ def _set_block(name: str, cidrs: list[str], comment: str = "") -> str:
     return "\n".join(lines)
 
 
-def _policy_chain(name: str, policy: dict, available: set[str]) -> str:
+def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = False,
+                  outs=None) -> str:
+    """Цепочка политики. sniff — у политики есть правила по доменам: её TCP 80/443 идёт в
+    sniproxy.py, а QUIC (UDP 443) блокируется — имени сайта в нём не прочитать, и браузер
+    переходит на обычный HTTPS. outs — свои цепочки выходов (для q_* в hook output)."""
+    oc = outs or out_chain
     lines = [f"\tchain {name} {{"]
+    if sniff:
+        lines.append(f"\t\tudp dport 443 goto {oc('block')}")
+        lines.append(f"\t\ttcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
     for list_ids, out in policy["rules"]:
         for lid in list_ids:
             if lid in available:
-                lines.append(f"\t\tip daddr @l_{lid} goto {out_chain(out)}")
-    lines.append(f"\t\tgoto {out_chain(policy['default'])}")
+                lines.append(f"\t\tip daddr @l_{lid} goto {oc(out)}")
+    lines.append(f"\t\tgoto {oc(policy['default'])}")
     lines.append("\t}")
     return "\n".join(lines)
 
 
-def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
-             global_policy: dict, client_policies: dict[str, dict]) -> str:
-    T = config.NFT_TABLE
-    up_nums = {u["num"] for u in upstreams}
-
+def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[int]) -> tuple[dict, dict]:
+    """Уникальные политики и какому клиенту какая: ({имя: политика}, {IP клиента: имя}).
+    Политика: {"rules": [(списки, выход)], "default": выход, "domain": [(списки доменов, выход)]}.
+    Ту же раскладку использует sniproxy.py (через engine), поэтому имена должны совпадать."""
     def norm(policy: dict) -> dict:
         # выход на несуществующий туннель → блок (безопасный вариант)
         fix = lambda o: o if o in ("direct", "block") or o in up_nums else "block"
@@ -140,23 +148,37 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         default = fix(policy["default"])
         while rules and rules[-1][1] == default:  # хвостовые правила ничего не меняют
             rules.pop()
-        return {"rules": rules, "default": default}
+        return {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
 
     gp = norm(global_policy)
-    # уникальные политики клиентов
     chains: dict[tuple, str] = {_policy_key(gp): "p_global"}
     client_map: dict[str, str] = {}
+    policies: dict[str, dict] = {"p_global": gp}
     for ip, pol in sorted(client_policies.items()):
         p = norm(pol)
         key = _policy_key(p)
         if key not in chains:
             chains[key] = f"p_{len(chains)}"
+            policies[chains[key]] = p
         if chains[key] != "p_global":
             client_map[ip] = chains[key]
-    policies: dict[str, dict] = {"p_global": gp}
-    for pol in client_policies.values():
-        p = norm(pol)
-        policies.setdefault(chains[_policy_key(p)], p)
+    return policies, client_map
+
+
+def sniff_marks(policies: dict) -> dict[str, int]:
+    """Метки соединений sniproxy.py для политик с правилами по доменам."""
+    names = sorted((n for n, p in policies.items() if p.get("domain")), key=lambda n: (n != "p_global", n))
+    return {n: config.SNIFF_OUT_BASE + i for i, n in enumerate(names)}
+
+
+def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
+             global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None) -> str:
+    """sniff_port — где слушает sniproxy.py (правила по доменам для выходов SOCKS5);
+    None — посредника нет, правила по доменам не действуют, работают только правила по адресам."""
+    T = config.NFT_TABLE
+    up_nums = {u["num"] for u in upstreams}
+    policies, client_map = layout(global_policy, client_policies, up_nums)
+    marks = sniff_marks(policies) if sniff_port else {}
 
     used_lists = sorted({lid for p in policies.values() for l, _ in p["rules"] for lid in l})
     available = {lid for lid in used_lists if lists.get(lid)}
@@ -184,7 +206,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 \t}}""")
 
     for name in sorted(policies, key=lambda n: (n != "p_global", n)):
-        out.append(_policy_chain(name, policies[name], available))
+        out.append(_policy_chain(name, policies[name], available, name in marks))
 
     out.append("\tchain o_direct {\n\t\taccept\n\t}")
     out.append(f"\tchain o_block {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept\n\t}}")
@@ -206,9 +228,33 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     fwd.append("\t}")
     out.append("\n".join(fwd))
 
+    if marks:
+        # TCP 80/443 клиентов с правилами по доменам — в sniproxy.py на адресе сервера в туннеле
+        out.append(f"""\tchain c_sniff {{
+\t\ttype nat hook prerouting priority dstnat; policy accept;
+\t\tiifname "{wg_iface}" meta mark {config.SNIFF_MARK:#x} meta l4proto tcp redirect to :{int(sniff_port)}
+\t}}""")
+        # соединения sniproxy.py без совпадения по домену: обычные правила политики клиента
+        # (метка политики → цепочка q_*; смена метки в type route — новый выбор маршрута)
+        oq = lambda o: "oq_direct" if o == "direct" else "oq_block" if o == "block" else f"oq_u{int(o)}"
+        vm = ", ".join(f"{m:#x} : goto q_{n}" for n, m in marks.items())
+        out.append(f"""\tchain c_output {{
+\t\ttype route hook output priority mangle; policy accept;
+\t\tmeta mark vmap {{ {vm} }}
+\t}}""")
+        for n in marks:
+            out.append(_policy_chain("q_" + n, policies[n], available, False, oq).replace(
+                f"\tchain q_{n} {{", f"\tchain q_{n} {{\n\t\tip daddr @local4 goto oq_direct", 1))
+        out.append("\tchain oq_direct {\n\t\tmeta mark set 0x0 accept\n\t}")
+        out.append("\tchain oq_block {\n\t\treject with tcp reset\n\t}")
+        for u in sorted(upstreams, key=lambda x: x["num"]):
+            out.append(f"\tchain oq_u{u['num']} {{\n\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
+
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]
     for u in sorted(upstreams, key=lambda x: x["num"]):
+        if not u.get("snat"):          # SOCKS5: соединения завершает hev-socks5-tunnel, SNAT не нужен
+            continue
         ifn = f"{config.IFACE_PREFIX}{u['num']}"
         # адрес туннеля не назначаем на интерфейс (он часто пересекается с подсетью
         # наших же клиентов 10.8.1.0/24), а подставляем через SNAT
