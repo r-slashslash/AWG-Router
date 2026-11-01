@@ -18,7 +18,8 @@ tx — отправлено клиенту (загрузка клиента).
 счётчик на каждую пару «адрес клиента + интерфейс». Выход — "direct" или id выхода.
 "outs" — итоги выходов по всем клиентам (не уменьшаются при удалении клиента: по ним
 работают квоты выходов), "by_out" у клиента — {месяц: {выход: [rx, tx]}}, "acct" —
-последние значения счётчиков. Номер формата прежний: новые ключи старые версии
+последние значения счётчиков, "sni" — {"pid", "vals"}: последние байты sniproxy.py по
+«клиент|выход» (его соединения не транзитные, nftables их не считает). Номер формата прежний: новые ключи старые версии
 просто не читают, и откат панели не обнуляет итоги клиентов.
 """
 from __future__ import annotations
@@ -38,6 +39,7 @@ PATH = os.path.join(config.DATA_DIR, "traffic.json")
 MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 OUT_RE = re.compile(r"^(direct|[a-z0-9_]{1,24})$")
 ACCT_KEY_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\|[A-Za-z0-9_.@-]{1,15}$")
+SNI_KEY_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})\|(direct|[a-z0-9_]{1,24})$")
 FORMAT = 2
 KEEP_MONTHS = 24
 SAVE_EVERY = 60
@@ -91,6 +93,7 @@ class Traffic:
         self.outs: dict[str, dict] = {}        # итоги выходов: {выход: {"total", "months"}}
         self.acct: dict[str, list[int]] = {}   # последние значения счётчиков nftables
         self.acct_synced = False               # acct соответствует таблице (есть в файле)
+        self.sni: dict = {}                    # {"pid", "vals"} — последние байты sniproxy.py
         self._saved = 0.0
         self._dirty = False
         try:
@@ -102,6 +105,7 @@ class Traffic:
             self.data = {k: v for k, v in d["clients"].items() if isinstance(v, dict)}
             self.outs, self.acct = self._clean_outs(d.get("outs")), self._clean_acct(d.get("acct"))
             self.acct_synced = isinstance(d.get("acct"), dict)
+            self.sni = self._clean_sni(d.get("sni"))
         elif isinstance(d, dict):
             # данные 1.2.0: итоги завышены, оставляем только точки отсчёта
             self.data = {k: {**_rec(), "last": v.get("last")} for k, v in d.items()
@@ -176,16 +180,7 @@ class Traffic:
                 out = out_of(ifn)
                 if not any(delta) or out is None:
                     continue
-                o = self.outs.setdefault(out, {"total": [0, 0], "months": {}})
-                o["total"] = [o["total"][i] + delta[i] for i in (0, 1)]
-                _add(o["months"], mk, delta)
-                _trim(o["months"])
-                pk = pk_of.get(ip)
-                d = self.data.get(pk) if pk else None
-                if d is not None:
-                    bo = d.setdefault("by_out", {})
-                    _add(bo.setdefault(mk, {}), out, delta)
-                    _trim(bo)
+                self._add_out(out, pk_of.get(ip), delta, mk)
             # пары, которых больше нет в таблице, забываем: если появятся снова — с нуля
             if seen != self.acct or not self.acct_synced:
                 self.acct = seen
@@ -193,6 +188,51 @@ class Traffic:
                 self._dirty = True
         if self._dirty and now - self._saved >= SAVE_EVERY:
             self.save()
+
+    def _add_out(self, out: str, pk: str | None, delta: list[int], mk: str) -> None:
+        o = self.outs.setdefault(out, {"total": [0, 0], "months": {}})
+        o["total"] = [o["total"][i] + delta[i] for i in (0, 1)]
+        _add(o["months"], mk, delta)
+        _trim(o["months"])
+        d = self.data.get(pk) if pk else None
+        if d is not None:
+            bo = d.setdefault("by_out", {})
+            _add(bo.setdefault(mk, {}), out, delta)
+            _trim(bo)
+
+    def update_sni(self, pid: int, vals: dict, valid: set[str], pk_of: dict[str, str],
+                   now: float | None = None) -> None:
+        """Байты sniproxy.py с запуска процесса pid ({"ip|выход": [от клиента, к клиенту]}) →
+        прирост к выходам и разбивке клиентов. Новый процесс считает с нуля, поэтому его
+        значения — прирост целиком; повторное чтение того же файла ничего не добавляет."""
+        now = time.time() if now is None else now
+        mk = month_key(now)
+        with self.lock:
+            last = (self.sni.get("vals") or {}) if self.sni.get("pid") == pid else {}
+            seen = {}
+            for key, cur in (vals.items() if isinstance(vals, dict) else ()):
+                m = SNI_KEY_RE.match(key) if isinstance(key, str) else None
+                cur = _pair(cur)
+                if not m or cur is None:
+                    continue
+                seen[key] = cur
+                prev = last.get(key) or [0, 0]
+                delta = [cur[i] - prev[i] if cur[i] >= prev[i] else cur[i] for i in (0, 1)]
+                if any(delta) and m.group(2) in valid:
+                    self._add_out(m.group(2), pk_of.get(m.group(1)), delta, mk)
+            if seen != last or self.sni.get("pid") != pid:
+                self.sni = {"pid": pid, "vals": seen}
+                self._dirty = True
+        if self._dirty and now - self._saved >= SAVE_EVERY:
+            self.save()
+
+    @staticmethod
+    def _clean_sni(v) -> dict:
+        if not isinstance(v, dict) or not isinstance(v.get("pid"), int) or isinstance(v.get("pid"), bool):
+            return {}
+        vals = v.get("vals") if isinstance(v.get("vals"), dict) else {}
+        return {"pid": v["pid"], "vals": {k: _pair(x) for k, x in vals.items()
+                                          if isinstance(k, str) and SNI_KEY_RE.match(k) and _pair(x)}}
 
     def forget_out(self, out: str) -> None:
         """Выход удалён: его итоги и строки в разбивке клиентов больше не нужны."""
@@ -212,7 +252,8 @@ class Traffic:
             tmp = self.path + ".tmp"
             try:
                 with open(tmp, "w") as f:
-                    json.dump({"_v": FORMAT, "clients": self.data, "outs": self.outs, "acct": self.acct}, f)
+                    json.dump({"_v": FORMAT, "clients": self.data, "outs": self.outs, "acct": self.acct,
+                               "sni": self.sni}, f)
                 os.replace(tmp, self.path)
                 self._dirty = False
                 self._saved = time.time()

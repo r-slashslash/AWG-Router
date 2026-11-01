@@ -27,6 +27,12 @@ function fmtAge(sec) {
   if (sec < 86400) return rtf.format(-Math.floor(sec / 3600), "hour");
   return rtf.format(-Math.floor(sec / 86400), "day");
 }
+/** когда начнётся следующий месяц учёта (1-е число, 00:00 UTC) по часам браузера — для подсказок */
+function monthResetLocal() {
+  const n = new Date(), d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1));
+  return d.toLocaleDateString(LANG, { day: "numeric", month: "short" }) + ", "
+    + d.toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" });
+}
 function fmtTime(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000), now = new Date();
@@ -632,7 +638,7 @@ function editClient(pk, section = null) {
         <div class="field"><span>${esc(t("cl.quota"))}</span>
           <div class="input-btn"><input type="number" id="c-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${L.quota ? +(L.quota / 1024 ** 3).toFixed(3) : ""}">
             <select id="c-period" style="width:auto"><option value="month" ${L.period !== "total" ? "selected" : ""}>${esc(t("cl.per_month"))}</option><option value="total" ${L.period === "total" ? "selected" : ""}>${esc(t("cl.in_total"))}</option></select></div>
-          <span class="hint">${esc(t("cl.quota_hint"))}</span></div>
+          <span class="hint">${esc(t("cl.quota_hint", { time: monthResetLocal() }))}</span></div>
       </div>
       <div class="manage-row">
         <div style="min-width:0"><b>${esc(t("cl.share"))}</b><div class="small muted">${esc(t(S.panel && S.panel.access === "ssh" ? "cl.share_ssh" : "cl.share_hint"))}</div>
@@ -1108,7 +1114,7 @@ async function editUpstream(id) {
       <label class="field"><span>${esc(t("ex.quota_action"))}</span>
         <select id="u-qa">${quotaOptions(u)}</select></label>
     </div>
-    <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.quota_hint"))}</p>
+    <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.quota_hint", { time: monthResetLocal() }))}</p>
     ${u ? "" : `<label class="check" id="u-defl"><input type="checkbox" id="u-def" ${S.routing.default === "direct" ? "checked" : ""}><span>${esc(t("ex.make_default"))}</span></label>`}
   `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`);
   const F = { host: $("#u-sh"), port: $("#u-sp"), user: $("#u-su"), pass: $("#u-sw") };
@@ -1394,7 +1400,7 @@ function viewServer() {
         <label class="field"><span>${esc(t("srv.public_host"))}</span><input type="text" id="s-host" dir="ltr" value="${esc(SRV.public_host)}" placeholder="203.0.113.10"><span class="hint">${esc(t("srv.public_host_hint"))}</span></label>
         <div class="row2">
           <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" id="s-port" min="1" max="65535" value="${SRV.port}" ${SRV.port_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.port_locked ? "srv.port_locked" : "srv.port_hint"))}</span></label>
-          <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
+          <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
         </div>
       </div>
     </section>

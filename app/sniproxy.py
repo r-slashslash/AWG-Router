@@ -12,11 +12,13 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
     type route (hook output) проверяет обычные правила по адресам и ставит метку нужного выхода
     (AWG, SOCKS5 через hev-socks5-tunnel, напрямую или блок).
 Если выход правила не работает, панель передаёт его резервный путь (метку, напрямую или блок).
-SIGHUP — перечитать настройки и списки. Счётчики — в файл stats раз в 30 секунд.
+SIGHUP — перечитать настройки и списки. Счётчики и байты по «клиент|выход» — в файл stats
+раз в 15 секунд и при остановке (по ним панель считает трафик выходов).
 """
 from __future__ import annotations
 
 import asyncio
+import bisect
 import ipaddress
 import json
 import os
@@ -32,6 +34,9 @@ PEEK_TIMEOUT = 3.0          # сколько ждём первых данных 
 PEEK_MAX = 64 * 1024
 CONNECT_TIMEOUT = 10.0
 BUF = 256 * 1024
+IDLE_TIMEOUT = 900          # соединение без данных в обе стороны дольше — закрываем
+KEEPALIVE = (120, 30, 4)    # TCP keepalive: пропавший без FIN собеседник виден через ~4 мин
+STATS_EVERY = 15
 
 
 # --------------------------------------------------------------- разбор имени
@@ -165,12 +170,31 @@ async def direct_connect(ip: str, port: int, mark: int):
     return await asyncio.open_connection(sock=s)
 
 
-async def pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+def keepalive(sock) -> None:
+    """Пропавший клиент (телефон ушёл из сети без FIN) не держит соединение вечно."""
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for opt, v in zip(("TCP_KEEPIDLE", "TCP_KEEPINTVL", "TCP_KEEPCNT"), KEEPALIVE):
+            if hasattr(socket, opt):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), v)
+    except OSError:
+        pass
+
+
+async def pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter, cnt: list | None = None,
+               i: int = 0, act: list | None = None) -> None:
+    """Копирует поток. cnt[i] — счётчик байт (учёт трафика выходов), act[0] — время последних данных."""
     try:
         while True:
             data = await r.read(BUF)
             if not data:
                 break
+            if cnt is not None:
+                cnt[i] += len(data)
+            if act is not None:
+                act[0] = time.monotonic()
             w.write(data)
             await w.drain()
     except (OSError, asyncio.IncompleteReadError):
@@ -183,14 +207,50 @@ async def pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
             pass
 
 
+class Nets:
+    """Адреса списка (файл CIDR панели) для поиска «в какой выход уйдёт соединение» —
+    так же, как цепочка q_* в nftables, только для учёта трафика."""
+
+    def __init__(self, path: str):
+        ranges = []
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    n = ipaddress.ip_network(line, strict=False)
+                except ValueError:
+                    continue
+                if n.version == 4:
+                    ranges.append((int(n.network_address), int(n.broadcast_address)))
+        ranges.sort()
+        self.starts, self.ends = [], []
+        for a, b in ranges:
+            if self.ends and a <= self.ends[-1] + 1:
+                self.ends[-1] = max(self.ends[-1], b)
+            else:
+                self.starts.append(a)
+                self.ends.append(b)
+
+    def __contains__(self, ip: str) -> bool:
+        x = int(ipaddress.IPv4Address(ip))
+        i = bisect.bisect_right(self.starts, x) - 1
+        return i >= 0 and self.ends[i] >= x
+
+
 # --------------------------------------------------------------- посредник
 class Sniffer:
     def __init__(self, path: str):
         self.path = path
         self.cfg: dict = {}
         self.lists: dict[str, set[str]] = {}
+        self.nets: dict[str, Nets] = {}
         self.stats = {"conns": 0, "active": 0, "matched": 0, "errors": 0, "no_name": 0,
                       "started": time.time(), "by_list": {}}
+        # байты по «клиент|выход» с запуска процесса: панель добавляет их к трафику выходов
+        # (соединения через посредника — не транзитные, таблица учёта nftables их не видит)
+        self.bytes: dict[str, list[int]] = {}
         self.reload()
 
     def reload(self) -> None:
@@ -203,19 +263,45 @@ class Sniffer:
                     lists[lid] = {x.strip() for x in f if x.strip()}
             except OSError as e:
                 log(f"list {lid}: {e}")
-        self.cfg, self.lists = cfg, lists
+        nets = {}
+        for lid, p in (cfg.get("cidrs") or {}).items():
+            try:
+                nets[lid] = Nets(p)
+            except OSError as e:
+                log(f"cidrs {lid}: {e}")
+        self.cfg, self.lists, self.nets = cfg, lists, nets
         self.net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
+
+    def policy(self, client: str) -> dict:
+        pname = (self.cfg.get("client_policy") or {}).get(client, "p_global")
+        return (self.cfg.get("policies") or {}).get(pname) or {}
 
     def decide(self, client: str, name: str | None) -> tuple[dict, str | None]:
         """→ (куда: {"socks"} | {"mark"} | {"block"}, список). Без совпадения — метка политики."""
-        pname = (self.cfg.get("client_policy") or {}).get(client, "p_global")
-        pol = (self.cfg.get("policies") or {}).get(pname) or {}
+        pol = self.policy(client)
         if name:
             for rule in pol.get("rules") or []:
                 for lid in rule.get("lists") or []:
                     if match(name, self.lists.get(lid, set())):
                         return rule.get("to") or {"mark": 0}, lid
         return {"mark": int(pol.get("mark") or 0)}, None
+
+    def miss_out(self, client: str, ip: str) -> str | None:
+        """Выход соединения без совпадения по домену (для учёта): правила политики по адресам,
+        затем выход по умолчанию — как цепочка q_* в nftables. None — блок или неизвестно."""
+        acct = self.policy(client).get("acct") or {}
+        try:
+            for lids, out in acct.get("rules") or []:
+                if any(ip in self.nets[lid] for lid in lids if lid in self.nets):
+                    return out
+        except ValueError:
+            return None
+        return acct.get("default")
+
+    def counter(self, client: str, out: str | None) -> list | None:
+        if not out:
+            return None
+        return self.bytes.setdefault(f"{client}|{out}", [0, 0])
 
     async def client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         sock = writer.get_extra_info("socket")
@@ -259,10 +345,25 @@ class Sniffer:
                 out_r, out_w = await socks_connect(to["socks"], name, dip, dport)
             else:
                 out_r, out_w = await direct_connect(dip, dport, int(to.get("mark") or 0))
+            keepalive(sock)
+            keepalive(out_w.get_extra_info("socket"))
+            cnt = self.counter(peer, to.get("acct") if lid else self.miss_out(peer, dip))
             if data:
                 out_w.write(data)
                 await out_w.drain()
-            await asyncio.gather(pipe(reader, out_w), pipe(out_r, writer))
+                if cnt is not None:
+                    cnt[0] += len(data)
+            act = [time.monotonic()]
+            both = asyncio.gather(pipe(reader, out_w, cnt, 0, act), pipe(out_r, writer, cnt, 1, act))
+            while not both.done():
+                await asyncio.wait([both], timeout=min(60, IDLE_TIMEOUT))
+                if not both.done() and time.monotonic() - act[0] > IDLE_TIMEOUT:
+                    both.cancel()           # молчит в обе стороны дольше IDLE_TIMEOUT — закрываем
+                    try:
+                        await both
+                    except (asyncio.CancelledError, OSError):
+                        pass
+                    break
         except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError) as e:
             self.stats["errors"] += 1
             if self.cfg.get("debug"):
@@ -283,7 +384,7 @@ class Sniffer:
             return
         try:
             with open(p + ".tmp", "w") as f:
-                json.dump({**self.stats, "pid": os.getpid(), "at": time.time()}, f)
+                json.dump({**self.stats, "bytes": self.bytes, "pid": os.getpid(), "at": time.time()}, f)
             os.replace(p + ".tmp", p)
         except OSError:
             pass
@@ -297,7 +398,7 @@ class Sniffer:
         log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
         while True:
             self.write_stats()
-            await asyncio.sleep(30)
+            await asyncio.sleep(STATS_EVERY)
 
     def on_hup(self) -> None:
         try:

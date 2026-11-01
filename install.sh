@@ -15,23 +15,37 @@ BRANCH="${AWGR_BRANCH:-main}"
 INSTALL_DIR="${AWGR_DIR:-/opt/awg-router}"
 
 # Downloads the code from GitHub into $1 (settings in .env and data/ are kept).
-# Branch main: the archive attached to the latest release (GitHub counts its downloads),
-# then the branch archive if the release has none. Another branch or AWGR_SRC_URL: just that.
+# Branch main: the archive attached to the latest release (GitHub counts its downloads), checked
+# against its .sha256. The branch archive is used only when the repository has no release yet
+# (HTTP 404): a network error or a bad checksum stops here, so an update never installs
+# unreleased code instead of the version it announced. Another branch or AWGR_SRC_URL: just that.
 fetch_code() {
-  local tmp url ok=0 urls=()
+  local tmp url ok=0 code sum urls=()
   tmp="$(mktemp -d)" || return 1
-  if [ -n "${AWGR_SRC_URL:-}" ]; then
-    urls=("$AWGR_SRC_URL")
-  else
-    [ "$BRANCH" = main ] && urls+=("https://github.com/$REPO/releases/latest/download/awg-router.tar.gz")
-    urls+=("https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH")
-  fi
-  for url in "${urls[@]}"; do
-    if curl -fsSL --retry 3 --max-time 300 "$url" -o "$tmp/src.tgz" 2>/dev/null \
-       && tar -tzf "$tmp/src.tgz" >/dev/null 2>&1; then
-      ok=1; break
+  if [ -z "${AWGR_SRC_URL:-}" ] && [ "$BRANCH" = main ]; then
+    url="https://github.com/$REPO/releases/latest/download/awg-router.tar.gz"
+    code=$(curl -sSL --retry 3 --max-time 300 -w '%{http_code}' -o "$tmp/src.tgz" "$url" 2>/dev/null) || true
+    if [ "$code" = 200 ]; then
+      sum=$(curl -fsSL --retry 3 --max-time 60 "$url.sha256" 2>/dev/null | awk '{print $1; exit}')
+      if [ -z "$sum" ] || ! echo "$sum  $tmp/src.tgz" | sha256sum -c --status 2>/dev/null \
+         || ! tar -tzf "$tmp/src.tgz" >/dev/null 2>&1; then
+        rm -rf "$tmp"; echo "The release archive failed its checksum check. Try again later." >&2; return 1
+      fi
+      ok=1
+    elif [ "$code" != 404 ]; then
+      rm -rf "$tmp"; echo "Could not download the latest release (HTTP ${code:-000}). Try again later." >&2; return 1
     fi
-  done
+  fi
+  if [ "$ok" != 1 ]; then
+    if [ -n "${AWGR_SRC_URL:-}" ]; then urls=("$AWGR_SRC_URL")
+    else urls=("https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH"); fi
+    for url in "${urls[@]}"; do
+      if curl -fsSL --retry 3 --max-time 300 "$url" -o "$tmp/src.tgz" 2>/dev/null \
+         && tar -tzf "$tmp/src.tgz" >/dev/null 2>&1; then
+        ok=1; break
+      fi
+    done
+  fi
   if [ "$ok" != 1 ]; then
     rm -rf "$tmp"; echo "Could not download https://github.com/$REPO" >&2; return 1
   fi

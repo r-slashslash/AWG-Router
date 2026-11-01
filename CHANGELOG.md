@@ -3,6 +3,36 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.12.2 — 2026-11-02
+
+- **Exit window keeps your rules.** Saving the routing part of an exit window no longer rewrites every
+  rule to that exit: a list you unticked leaves its rule, a list you ticked joins an existing rule to the
+  exit (or a new rule right after them). Turned-off rules, rule names and the order of rules stay as they
+  were — before, turned-off rules were deleted and rules to the exit were merged above other rules.
+- **Exit quotas count sites from domain rules.** HTTPS and HTTP of clients with domain rules pass
+  through the server's own proxy, which nftables accounting did not see: SOCKS5 exit quotas and the
+  by-exit split of clients missed most of that traffic. The proxy now counts bytes per client and exit.
+- **Subnet change on a host server.** Changing the subnet of an AmneziaWG server on the host left NAT
+  for the old subnet, so clients had no internet after the restart; NAT now follows the subnet. For an
+  AmneziaVPN container, whose start script has the subnet written in at install time, the subnet field
+  is locked with a note.
+- **Restore keeps an exit's own sites list.** Before, after a restore the exit window showed no sites,
+  and saving it created a second list with the same name.
+- **A failing exit is retried with a pause** (10 s growing to 5 min) instead of every 10 s: the event log
+  and Telegram no longer fill up with the same error, and the panel stays responsive. Edit the exit or
+  press **Apply again** to retry at once.
+- **Updates install only a released version.** If the release archive can't be downloaded, the
+  installer and the panel's update stop with an error instead of installing the `main` branch; the
+  archive is checked against its `.sha256`. The branch is still used when the repository has no release.
+- **Domain rules:** connections through the server's proxy get the same MSS clamp as forwarded traffic
+  (no stalled HTTPS through AmneziaWG exits when path MTU discovery is broken), TCP keepalive and a
+  15-minute idle timeout (connections of vanished devices no longer pile up).
+- **API:** an exit's type and a list's kind can't change on edit (the panel never offered it; through
+  the API it broke domain rules and restoring the panel's own backup).
+- **Hints:** client and exit limits show when a new month starts in your own time (months follow UTC);
+  the domain list hint says that QUIC is off for all sites of such clients and that sites with Encrypted
+  Client Hello (ECH) can't be matched by name.
+
 ## 1.12.1 — 2026-11-02
 
 - **Rules and lists on one tab.** The **Rules** and **Lists** tabs are now one tab, **Routing**: rules

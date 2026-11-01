@@ -233,7 +233,8 @@ class ServerManager:
         return {
             "exists": True, "kind": t.kind, "iface": t.iface, "conf": t.conf_path,
             "port": sc.port, "address": str(net) if net else "",
-            "subnet_locked": bool(sc.peers),
+            "subnet_locked": bool(sc.peers) or not self.subnet_follows_conf(t),
+            "subnet_lock": "clients" if sc.peers else (None if self.subnet_follows_conf(t) else "container"),
             "port_locked": t.kind != "host",
             "params": {k: sc.get(k) for k in awgserver.PARAM_ORDER},
             "param_meta": {k: {"type": v[0], "side": v[1]} for k, v in awgserver.AWG_PARAMS.items()},
@@ -249,6 +250,15 @@ class ServerManager:
             "keepalive_auto": awgserver.default_keepalive(params),
             "server_pub": self.server_pub(sc),
         }
+
+    @staticmethod
+    def subnet_follows_conf(t: system.Target) -> bool:
+        """Можно ли менять подсеть: NAT контейнера должен брать её из Address конфига при
+        запуске (наш start.sh). У контейнера AmneziaVPN подсеть вписана в start.sh при
+        установке — после смены клиенты остались бы без интернета."""
+        if t.kind != "container" or config.DRY_RUN:
+            return True
+        return "/^Address/" in (t.read_file("/opt/amnezia/start.sh") or "")
 
     def update_server(self, body: dict) -> dict:
         """Сохраняет настройки. Возвращает {restarted, server_side_changed, host_changed}."""
@@ -317,16 +327,25 @@ class ServerManager:
                 restart = True
                 if isinstance(t, system.HostTarget):
                     system.open_firewall_udp(t, port)
+            drop_nat = None
             if body.get("address") and body["address"] != str(sc.network or ""):
                 if sc.peers:
                     raise UserError(Msg("srv.subnet_locked"))
+                if not self.subnet_follows_conf(t):
+                    raise UserError(Msg("srv.subnet_container"))
                 try:
                     i = ipaddress.ip_interface(body["address"])
                 except ValueError:
                     raise UserError(Msg("srv.bad_subnet"))
                 if i.version != 4 or i.network.prefixlen > 29:
                     raise UserError(Msg("srv.bad_subnet"))
+                old_net = str(sc.network.network) if sc.network else None
                 sc.set("Address", str(i))
+                # NAT на хосте задан в PostUp для подсети: без замены клиенты новой подсети
+                # остались бы без интернета
+                if t.kind == "host" and old_net and old_net != str(i.network) and \
+                        awgserver.retarget_nat(sc, old_net, str(i.network)):
+                    drop_nat = old_net
                 restart = True
             host_before = self.client_host(self.e.store.snapshot())
             if settings_patch:
@@ -335,6 +354,8 @@ class ServerManager:
             changed_conf = sc.render() != (t.read_file(t.conf_path) or "")
             if changed_conf:
                 self._write(t, sc, None, restart=restart)
+                if drop_nat:
+                    t.native(["sh", "-c", awgserver.drop_nat_cmd(drop_nat)], check=False, timeout=30)
                 self.e.event("info" if not restart else "warn",
                              Msg("ev.server_restarted" if restart else "ev.server_updated"))
             return {"restarted": restart and changed_conf,

@@ -666,6 +666,12 @@ def clean_backup_state(new: dict) -> dict:
                                 "num": num, "config": pc.raw, "enabled": bool(u.get("enabled", True)),
                                 "fallback": "direct", "created": u.get("created") if _num(u.get("created")) else None,
                                 "quota": _int_or_none(u.get("quota")), "quota_action": "notify", **flags})
+        # свой список сайтов выхода (окно выхода): только если это список доменов из этой же
+        # копии и он ещё не принадлежит другому выходу
+        own = u.get("own_list")
+        ol = Store.lst(st, own) if isinstance(own, str) else None
+        if ol and ol["kind"] == "domains" and not any(x.get("own_list") == own for x in st["upstreams"]):
+            st["upstreams"][-1]["own_list"] = own
     for i, u in enumerate(raw_ups):
         fb = check(f"upstreams[{i}].fallback", lambda: v_outbound(st, u.get("fallback") or "direct"))
         if fb == "up:" + u["id"]:
@@ -1163,12 +1169,7 @@ def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | No
     elif own:
         dl = [x for x in dl if x != own]
         drop = own
-    rules = st["routing"]["rules"]
-    first = next((i for i, x in enumerate(rules) if x["outbound"] == out), 0)
-    pos = sum(1 for x in rules[:first] if x["outbound"] != out)
-    rest = [x for x in rules if x["outbound"] != out]
-    new = [{"lists": l, "outbound": out, "enabled": True, "comment": name[:80]} for l in (dl, nl) if l]
-    st["routing"]["rules"] = v_rules(st, rest[:pos] + new + rest[pos:])
+    st["routing"]["rules"] = v_rules(st, merge_exit_rules(st, out, dl, nl, name))
     if r.get("default") is True:
         st["routing"]["default"] = out
     elif r.get("default") is False and st["routing"]["default"] == out:
@@ -1179,6 +1180,37 @@ def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | No
     else:
         drop = None
     return refresh, drop
+
+
+def merge_exit_rules(st: dict, out: str, dl: list[str], nl: list[str], name: str) -> list[dict]:
+    """Общие правила после окна выхода: окно показывает списки ВКЛЮЧЁННЫХ правил на этот выход,
+    поэтому меняются только они и только точечно. Снятый список убирается из правила (пустое
+    правило — целиком), новый дописывается в первое включённое правило того же вида на этот выход,
+    а если такого нет — в новое правило сразу после последнего правила на выход (иначе в начало).
+    Выключенные правила, подписи, порядок и правила на другие выходы не меняются."""
+    dom = Engine.domain_lists(st)
+    want = set(dl) | set(nl)
+    rules = [dict(r) for r in st["routing"]["rules"]]
+    mine = lambda r: r["outbound"] == out and r.get("enabled", True)
+    have = {lid for r in rules if mine(r) for lid in r["lists"]}
+    for r in rules:
+        if mine(r):
+            r["lists"] = [lid for lid in r["lists"] if lid in want]
+    keep = [r for r in rules if not (mine(r) and not r["lists"])]
+    new_rules = []
+    for add in ([x for x in dl if x not in have], [x for x in nl if x not in have]):
+        if not add:
+            continue
+        is_dom = add[0] in dom
+        host = next((r for r in keep if mine(r) and (r["lists"][0] in dom) == is_dom), None)
+        if host:
+            host["lists"] = host["lists"] + add
+        else:
+            new_rules.append({"lists": add, "outbound": out, "enabled": True, "comment": name[:80]})
+    if new_rules:
+        last = max((i for i, r in enumerate(keep) if r["outbound"] == out), default=-1)
+        keep[last + 1:last + 1] = new_rules
+    return keep
 
 
 def _after_exit_routing(lists_changed: tuple) -> None:
@@ -1248,9 +1280,17 @@ def edit_upstream(req, uid):
             u["fallback"] = fb
         if body.get("config"):
             try:
-                u["config"] = awgconf.parse_upstream(str(body["config"])).raw
+                pc = awgconf.parse_upstream(str(body["config"]))
             except awgconf.ConfigError as e:
                 bad(e.msg)
+            # тип выхода не меняется: на SOCKS5 могут вести правила со списками доменов
+            try:
+                old_kind = engine.parsed(u).kind
+            except awgconf.ConfigError:
+                old_kind = None
+            if old_kind and pc.kind != old_kind:
+                bad("err.exit_kind_change")
+            u["config"] = pc.raw
         if "quota_gb" in body:
             action = v_quota_action(st, body.get("quota_action"), uid)
             if quota != u.get("quota") or action != (engine.quota_target(u) or "notify"):
@@ -1519,6 +1559,10 @@ def edit_list(req, lid):
         l = Store.lst(st, lid)
         if not l:
             bad("err.not_found", 404)
+        if body.get("kind", l["kind"]) != l["kind"]:
+            # вид списка не меняется: от него зависят правила (домены — только на SOCKS5),
+            # а у стран id = код страны
+            bad("err.list_kind_change")
         d = _list_body(st, body, l)
         if l["kind"] == "country":
             d["source"] = l["source"]  # страну у существующего списка не меняем
@@ -1580,6 +1624,7 @@ def put_settings(req):
 @app.post("/api/reapply")
 def reapply(req):
     engine.applied_hash = None
+    engine._up_fail.clear()          # «Применить заново» — и выходы на паузе после ошибок пробуем сразу
     engine.trigger()
     return {"ok": True}
 
