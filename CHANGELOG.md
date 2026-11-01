@@ -20,7 +20,7 @@ it grows, so every user-visible change gets a new version.
   and saving it created a second list with the same name.
 - **A failing exit is retried with a pause** (10 s growing to 5 min) instead of every 10 s: the event log
   and Telegram no longer fill up with the same error, and the panel stays responsive. Edit the exit or
-  press **Apply again** to retry at once.
+  press **System → Re-apply rules** to retry at once.
 - **Updates install only a released version.** If the release archive can't be downloaded, the
   installer and the panel's update stop with an error instead of installing the `main` branch; the
   archive is checked against its `.sha256`. The branch is still used when the repository has no release.
