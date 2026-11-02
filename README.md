@@ -4,7 +4,7 @@
 
 # AWG Router
 
-A web panel for **AmneziaWG**: users, tunnel settings and cascade routing in one place.
+A web panel for **AmneziaWG**: users, tunnel settings, cascade routing and individual routing for each client in one place.
 
 It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Docker container), or installs its own AmneziaWG server — in a Docker container or on the host. Protocol support goes up to **AmneziaWG 3.1**.
 
