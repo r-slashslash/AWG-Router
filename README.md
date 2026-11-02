@@ -19,6 +19,18 @@ It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Do
   <img src="docs/screenshots/overview.png" alt="Overview: exits and where traffic goes" width="860">
 </p>
 
+## Cascade VPN (double VPN): local traffic direct, the rest through a server abroad
+
+AWG Router makes your AmneziaWG server the entry point of a cascade. Clients connect to it only, and the server decides where each connection leaves for the internet:
+- traffic to the countries, networks or sites you choose goes out directly from the entry server, with its local IP and no detour;
+- everything else goes through a second AmneziaWG server (or a SOCKS5 proxy) in another country and reaches the internet from that server's IP;
+- there can be several exits: different lists to different servers, or a separate exit for a single client;
+- the split (split tunneling) lives on the server, so client configs stay ordinary — nothing to set up on phones or routers;
+- exits, lists and rules are set up in the panel instead of hand-written iptables and ipset scripts;
+- if an exit goes down, traffic doesn't slip past it: it goes direct, is blocked or moves to another exit, as you choose.
+
+Details are in [How routing works](#how-routing-works).
+
 ## Features
 
 **Clients**
