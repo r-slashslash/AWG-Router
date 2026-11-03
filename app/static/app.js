@@ -580,18 +580,54 @@ function addClient() {
   $("#n-name").onkeydown = (e) => { if (e.key === "Enter") go(); };
 }
 
-function qrSvg(text) {
+/** Растровая картинка, где каждый модуль — целое число физических пикселей (не меньше 3):
+ *  SVG с дробным или даже целым размером сканер AmneziaWG на Android читает плохо или не читает.
+ *  Размер подбирается после вёрстки по ширине .connect, чтобы белая рамка .qr-box не сжималась. */
+const QR_TARGET_CSS_PX = 300, QR_MIN_MODULE_PX = 3, QR_MIN_PAD_CSS_PX = 12, QR_QUIET_MODULES = 4;
+const qrCodes = new WeakMap();
+let qrSeq = 0, qrLayoutWidth = 0;
+function qrImage(text) {
   qrcode.stringToBytes = qrcode.stringToBytesFuncs["UTF-8"];
   let qr = null;
   for (const lvl of ["M", "L"]) {
     try { qr = qrcode(0, lvl); qr.addData(text, "Byte"); qr.make(); break; } catch { qr = null; }
   }
   if (!qr) return `<p class="muted small">${esc(t("cl.qr_too_big"))}</p>`;
-  const n = qr.getModuleCount(), m = 4;
-  let d = "";
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + m},${r + m}h1v1h-1z`;
-  return `<svg class="qr" viewBox="0 0 ${n + 2 * m} ${n + 2 * m}" role="img" aria-label="QR" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+  const id = `qr-${++qrSeq}`;
+  requestAnimationFrame(() => {
+    const img = document.getElementById(id);
+    if (img) { qrCodes.set(img, qr); drawQr(img); }
+  });
+  return `<img class="qr" id="${id}" alt="QR">`;
 }
+function drawQr(img) {
+  const qr = qrCodes.get(img), box = img.parentElement;
+  const n = qr.getModuleCount(), m = QR_QUIET_MODULES, size = n + 2 * m;
+  const dpr = window.devicePixelRatio || 1;
+  box.style.padding = "";
+  const style = getComputedStyle(box);
+  const pad = parseFloat(style.paddingLeft), border = 2 * parseFloat(style.borderLeftWidth);
+  const room = box.parentElement.clientWidth - border;
+  const fitPx = Math.floor(Math.min(QR_TARGET_CSS_PX, room - 2 * pad) * dpr / size);
+  const modulePx = Math.max(QR_MIN_MODULE_PX, fitPx);
+  const cssPx = size * modulePx / dpr;
+  if (cssPx + 2 * pad > room) box.style.padding = `${Math.max(QR_MIN_PAD_CSS_PX, Math.floor((room - cssPx) / 2))}px`;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size * modulePx;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) ctx.fillRect((c + m) * modulePx, (r + m) * modulePx, modulePx, modulePx);
+  img.src = canvas.toDataURL("image/png");
+  img.style.width = `${cssPx}px`;
+}
+window.addEventListener("resize", () => {
+  const w = document.documentElement.clientWidth;
+  if (w === qrLayoutWidth) return;
+  qrLayoutWidth = w;
+  document.querySelectorAll("img.qr").forEach((img) => { if (qrCodes.has(img)) drawQr(img); });
+});
 
 // application/octet-stream: с text/plain Chrome на Android дописывает к имени «.txt»,
 // и приложение AmneziaVPN не принимает файл «client.conf.txt»
@@ -725,7 +761,7 @@ function editClient(pk, section = null) {
       box.innerHTML = `
         ${cfg.warn_host ? `<div class="notice warn">${esc(t("cl.warn_host"))}</div>` : ""}
         <div class="connect">
-          <div class="qr-box">${qrSvg(cfg.conf)}</div>
+          <div class="qr-box">${qrImage(cfg.conf)}</div>
           <div class="connect-actions">
             <p class="small muted" style="margin-top:0">${esc(t("cl.qr_hint"))}</p>
             <button class="btn" id="c-dl">${esc(t("cl.download"))}</button>
@@ -1667,7 +1703,7 @@ function installApp() {
   } else {
     body = `<p style="margin-top:0">${esc(t("app.what"))}</p>
       <div class="connect">
-        <div class="qr-box">${qrSvg(P.url || location.href)}</div>
+        <div class="qr-box">${qrImage(P.url || location.href)}</div>
         <div><p class="small" style="margin:0 0 6px">${esc(t("app.scan"))}</p>${steps}</div>
       </div>`;
   }
@@ -2046,7 +2082,7 @@ async function totpEnable() {
   openModal(t("sec.enable_title"), `
     <p style="margin-top:0">${esc(t("sec.off_hint"))}</p>
     <div class="connect">
-      <div class="qr-box">${qrSvg(r.uri)}</div>
+      <div class="qr-box">${qrImage(r.uri)}</div>
       <div>
         <p style="margin-top:0"><b>1.</b> ${esc(t("sec.step1"))}</p>
         <p class="muted small" style="margin-bottom:4px">${esc(t("sec.manual"))}</p>

@@ -371,13 +371,16 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 .seg-wide button { flex: 1; }
 .notice { padding: 12px 14px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--rule); font-size: .92rem; margin-bottom: 12px; }
 .notice.warn { background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
-.connect { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 18px; align-items: start; }
-.qr-box { background: #fff; border-radius: 12px; padding: 6px; border: 1px solid var(--rule); }
-.qr { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.connect { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+.connect > :last-child { flex: 1 1 220px; min-width: 0; }
+.qr-box { flex: none; max-width: 100%; background: #fff; border-radius: 12px; padding: 6px; border: 1px solid var(--rule); }
+.qr { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
 .connect-actions { display: grid; gap: 8px; align-content: start; }
 .connect-actions .btn { justify-content: flex-start; }
 .connect-actions details pre { margin-top: 8px; max-height: 220px; }
-@media (max-width: 560px) { .connect { grid-template-columns: 1fr; } .qr-box { max-width: 300px; justify-self: center; width: 100%; } }
+@media (max-width: 560px) { .qr-box { margin-inline: auto; } }
+/* на тёмном фоне камера телефона пересвечивает белое поле QR, и сканер AmneziaWG не читает код */
+@media (prefers-color-scheme: dark) { .qr-box { padding: 64px; } }
 .manage-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid var(--rule); }
 .btn.danger { color: var(--bad); }
 .btn.danger:hover { border-color: var(--bad); }
