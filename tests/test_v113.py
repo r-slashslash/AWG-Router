@@ -91,6 +91,13 @@ class PanelHeaderTest(unittest.TestCase):
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
             self.assertIn('AWG Router<span id="brand-traffic"', f.read())       # справа от названия
 
+    def test_client_month_on_phone(self):
+        """Трафик клиента за месяц виден и в карточке на телефоне (раньше ячейка там пряталась)."""
+        js, css = self.read("app.js"), self.read("app.css")
+        self.assertIn('<td data-m="month"', js)
+        self.assertIn('td[data-m="month"]', css)
+        self.assertNotIn('data-m="hide" class="nowrap muted">${trafficCell(c)}', js)
+
     def test_texts(self):
         js = self.read("i18n.js")
         for key in ("status.traffic", "status.traffic_hint"):
