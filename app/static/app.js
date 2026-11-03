@@ -438,7 +438,7 @@ function viewClients() {
       <td><span class="client-name"><bdi>${esc(c.name || t("cl.unnamed"))}</bdi></span>${tags}</td>
       <td data-m="sub" class="nowrap"><bdi>${esc(c.ip || "—")}</bdi></td>
       <td data-m="sub">${activity}</td>
-      <td data-m="hide" class="nowrap muted">${trafficCell(c)}</td>
+      <td data-m="month" class="nowrap muted"><span class="m-label">${esc(t("ex.month"))}: </span>${trafficCell(c)}</td>
       <td data-m="right">${effChip(c.effective, wanted)}${p.outbound === "inherit" ? "" : `<div class="small muted" style="margin-top:3px">${esc(t("cl.manual"))}</div>`}</td>
     </tr>`;
   }).join("");

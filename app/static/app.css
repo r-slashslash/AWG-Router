@@ -239,6 +239,7 @@ textarea.short { min-height: 64px; }
 .table tbody tr.click { cursor: pointer; }
 .table tbody tr.click:hover { background: var(--surface-2); }
 .client-name { font-weight: 550; }
+.m-label { display: none; }   /* подпись ячейки — только в карточках на телефоне */
 .tag { display: inline-block; font-size: .76rem; padding: 1px 7px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--rule); color: var(--ink-2); margin-inline-start: 6px; vertical-align: 1px; }
 @media (max-width: 760px) {
   .table.responsive thead { display: none; }
@@ -248,6 +249,9 @@ textarea.short { min-height: 64px; }
   .table.responsive td[data-m="hide"] { display: none; }
   .table.responsive td[data-m="right"] { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
   .table.responsive td[data-m="sub"] { font-size: .85rem; color: var(--muted); }
+  /* трафик клиента за месяц — справа, под выходом, на одной строке с активностью */
+  .table.responsive td[data-m="month"] { grid-column: 2; grid-row: 3; justify-self: end; text-align: end; font-size: .85rem; }
+  .table.responsive .m-label { display: inline; }
 }
 .uses .use { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: .86rem; }
 .uses .use + .use { margin-top: 4px; }

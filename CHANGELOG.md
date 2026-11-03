@@ -10,6 +10,8 @@ it grows, so every user-visible change gets a new version.
   "rules applied …". It doesn't go down when clients are deleted; on panels updated from an earlier
   version it starts from the totals of the current clients. Stored in `traffic.json` (`"server"`,
   format unchanged) and carried over by restore.
+- **Client traffic on phones.** Client cards on a narrow screen now show the client's traffic this month
+  (or its limit meter) under the exit; before, the column was hidden there.
 - **New Telegram menu.** `/start` sends the panel logo with a summary under it: host, panel version,
   clients, clients online and all-time traffic. Buttons: **Server**, **Clients**, **Panel**, **Backup**
   and a wide **Refresh**. Other screens change the text under the logo in the same message; a screen
