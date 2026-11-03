@@ -87,7 +87,9 @@ class PanelHeaderTest(unittest.TestCase):
         body = js[js.index("function renderStatus()"):]
         body = body[:body.index("\n}\n")]
         self.assertNotIn("status.applied", body)
-        self.assertIn("trafficStatus()", body)
+        self.assertIn("renderBrandTraffic()", body)
+        with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
+            self.assertIn('AWG Router<span id="brand-traffic"', f.read())       # справа от названия
 
     def test_texts(self):
         js = self.read("i18n.js")
@@ -145,14 +147,14 @@ class BotMenuV113Test(unittest.TestCase):
 
     def press(self, data):
         self.upd(button(data, uid=len(self.tg.calls) + 2, mid=self.bot._panel_msgs[0]))
-        return next(p for m, p in reversed(self.tg.calls) if m in ("sendMessage", "editMessageText"))
+        return self.tg.screen()
 
     @staticmethod
     def cbs(p):
         return [b.get("callback_data") or b.get("url") for row in p["reply_markup"]["inline_keyboard"] for b in row]
 
     def test_menu_header(self):
-        p = self.tg.last("sendMessage")
+        p = self.tg.screen()
         n = len(main.engine.clients)
         self.assertIn(f"Clients: {n}\n", p["text"])
         for line in ("Host:", "Panel version: " + main.VERSION, "Clients online:", "Total traffic:"):
@@ -202,6 +204,39 @@ class BotMenuV113Test(unittest.TestCase):
         p = self.press("m")
         self.assertEqual(p.get("message_id"), mid)
         self.assertIn("Total traffic", p["text"])
+
+    def test_menu_is_logo_photo(self):
+        """Меню — фото с логотипом, информация в подписи; файл загружается один раз."""
+        m, p = next((m, p) for m, p in reversed(self.tg.calls) if m == "sendPhoto")
+        self.assertIn("multipart", p)                               # первый раз — сам файл
+        self.assertIn("Total traffic", p["caption"])
+        self.assertEqual(self.bot._st["photo"], self.bot._panel_msgs[0])
+        self.upd(msg("/start", uid=50))
+        p = self.tg.last("sendPhoto")
+        self.assertNotIn("multipart", p)                            # дальше — по file_id
+        self.assertTrue(p["photo"].startswith("photo-"))
+        with open(tgbot.LOGO, "rb") as f:
+            self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
+
+    def test_screens_edit_caption_under_logo(self):
+        mid = self.bot._panel_msgs[0]
+        self.press("sv")
+        e = self.tg.last("editMessageCaption")
+        self.assertEqual(e["message_id"], mid)
+        self.assertIn("Server", e["caption"])
+        self.press("m")
+        self.assertEqual(self.tg.last("editMessageCaption")["message_id"], mid)
+
+    def test_long_screen_goes_as_text(self):
+        """Подпись к фото — до 1024 знаков: длинный экран приходит текстом, меню вернёт фото."""
+        mid = self.bot._panel_msgs[0]
+        self.bot._show(self.c, "x" * 1100, None, {"message_id": mid})
+        self.assertEqual(len(self.tg.last("sendMessage")["text"]), 1100)
+        self.assertEqual(self.tg.last("deleteMessage")["message_id"], mid)
+        self.assertNotIn("photo", self.bot._st)
+        n = self.tg.methods().count("sendPhoto")
+        self.press("m")                                              # из текстового экрана — снова фото
+        self.assertEqual(self.tg.methods().count("sendPhoto"), n + 1)
 
     def test_texts_in_every_language(self):
         keys = set(tgbot.TEXTS["en"])

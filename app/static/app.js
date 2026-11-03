@@ -249,21 +249,23 @@ $("#tabs").addEventListener("click", (e) => {
   window.scrollTo(0, 0);
 });
 
-// итог всего сервера за всё время: сумма в шапке, разбивка по направлениям во всплывающей подсказке
-function trafficStatus() {
-  const x = S.server_traffic;
-  if (!x) return "";
+// итог всего сервера за всё время — рядом с названием; разбивка по направлениям во всплывающей подсказке
+function renderBrandTraffic() {
+  const el = $("#brand-traffic"), x = S.server_traffic;
+  el.hidden = !x;
+  if (!x) return;
   const sum = (x.total_rx || 0) + (x.total_tx || 0);
-  return `<span title="${esc(t("status.traffic_hint") + ": " + arrowsText(x, "total"))}">${esc(t("status.traffic"))} <b>${esc(fmtBytes(sum))}</b></span>`;
+  el.title = t("status.traffic_hint") + ": " + arrowsText(x, "total");
+  el.innerHTML = `${esc(t("status.traffic"))}: <b>${esc(fmtBytes(sum))}</b>`;
 }
 
 function renderStatus() {
   const tg = S.target;
   const online = S.clients.filter((c) => c.live && c.live.handshake && S.now - c.live.handshake < 180).length;
+  renderBrandTraffic();
   $("#status").innerHTML = tg
     ? `<span class="state"><span class="dot ${tg.exists === false ? "warn" : "ok"}"></span><b>${esc(tg.kind === "host" ? t("srv.kind_host") : tg.container)}</b> · ${esc(tg.iface)}</span>
-       <span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>
-       ${trafficStatus()}`
+       <span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>`
     : `<span class="state"><span class="dot bad"></span>${esc(t("status.no_target"))}</span>`;
   // новая версия: метка в строке состояния (видна и на телефоне) и точка на вкладке «Система»
   const v = S.version || {};

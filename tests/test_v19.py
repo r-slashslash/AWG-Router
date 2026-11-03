@@ -37,21 +37,55 @@ class FakeTG:
         self.next_id = 100
 
     def __call__(self, token, method, data, ctype, timeout, via):
-        p = json.loads(data) if ctype == "application/json" else {"multipart": len(data)}
+        p = json.loads(data) if ctype == "application/json" else self.form(data, ctype)
         self.calls.append((method, p))
         if method == "getUpdates":
             ups, self.updates = self.updates, []
             return ups
         if method in ("sendMessage", "sendPhoto", "sendDocument"):
             self.next_id += 1
-            return {"message_id": self.next_id}
+            r = {"message_id": self.next_id}
+            if method == "sendPhoto":
+                r["photo"] = [{"file_id": "small"}, {"file_id": f"photo-{self.next_id}"}]
+            return r
         return True
+
+    @staticmethod
+    def form(data, ctype):
+        """Текстовые поля multipart (caption, reply_markup…); у файла — только размер."""
+        p = {"multipart": len(data)}
+        boundary = ctype.split("boundary=", 1)[1].encode()
+        for part in data.split(b"--" + boundary):
+            head, _, body = part.partition(b"\r\n\r\n")
+            m = re.search(rb'name="([^"]+)"', head)
+            if not m or b"filename=" in head:
+                continue
+            v = body[:-2].decode()
+            p[m.group(1).decode()] = json.loads(v) if m.group(1) == b"reply_markup" else v
+        return p
+
+    # экраны меню: текстом или (1.13.0) подписью к фото с логотипом; подпись — в "text"
+    SENT = ("sendMessage", "sendPhoto")
+    EDITS = ("editMessageText", "editMessageCaption")
+
+    def screens(self, kinds=SENT + EDITS):
+        return [{**p, "text": p.get("text") or p.get("caption") or ""} for m, p in self.calls if m in kinds]
+
+    def screen(self):
+        return self.screens()[-1]
+
+    def sent(self):
+        return self.screens(self.SENT)
+
+    def edited(self):
+        return self.screens(self.EDITS)[-1]
 
     def methods(self):
         return [m for m, _ in self.calls]
 
     def texts(self):
-        return [p.get("text", "") for m, p in self.calls if m in ("sendMessage", "editMessageText")]
+        return [p.get("text") or p.get("caption") or "" for m, p in self.calls
+                if m in ("sendMessage", "editMessageText", "sendPhoto", "editMessageCaption")]
 
     def last(self, method):
         return next(p for m, p in reversed(self.calls) if m == method)
