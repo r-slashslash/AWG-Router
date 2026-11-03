@@ -539,11 +539,12 @@ class BotMenuTest(unittest.TestCase):
     def test_back_buttons(self):
         from tests.test_v19 import msg
         self.run_updates(msg("/start"))
-        for i, data in enumerate(("st", "cl:0", "ex", "pn", "up")):
+        for i, data in enumerate(("st", "cl:0", "ex", "pn", "up", "sv")):
             self.press(data, uid=i + 2)
             kb = self.last_screen()["reply_markup"]["inline_keyboard"]
             cbs = [b.get("callback_data") for row in kb for b in row]
-            self.assertTrue("m" in cbs, (data, cbs))
+            back = "sv" if data in ("st", "ex") else "m"      # 1.13.0: состояние и выходы — в «Сервере»
+            self.assertTrue(back in cbs, (data, cbs))
         self.press("c:" + self.pk, uid=9)
         cbs = [b.get("callback_data") for row in self.last_screen()["reply_markup"]["inline_keyboard"] for b in row]
         self.assertIn("cl:0", cbs)

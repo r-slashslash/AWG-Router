@@ -55,18 +55,11 @@ TEXTS = {
         "b_gb": "+10 ГБ", "b_client": "👤 Клиент", "b_check": "🔍 Проверить «{name}»",
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ Напрямую",
         "b_update": "⬆️ Обновить до {version}", "b_update_go": "✅ Да, обновить", "b_cancel": "Отмена",
-        "st_server_ok": "Сервер AmneziaWG: ✅ работает", "st_server_bad": "Сервер AmneziaWG: ⚠️ недоступен",
-        "st_clients": "Клиенты: {online} в сети из {total}",
-        "st_month": "Трафик клиентов за месяц: {size}",
-        "st_default": "Основной выход: {out}", "st_default_now": "Основной выход: {out}, сейчас: {now}",
-        "st_exits": "Выходы:", "st_version": "Версия панели: {version}",
-        "st_update": "Версия панели: {version}, доступна {latest}",
-        "st_cert": "Сертификат HTTPS до {date}",
+        "st_default": "⭐ Основной выход: {out}",
         "ex_title": "<b>🌐 Выходы</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — выключен",
         "ex_down": "🔴 {name} — не работает, его трафик: {to}",
         "ex_quota": "📦 {name} — лимит исчерпан, его трафик: {to}",
         "ex_none": "Выходов пока нет: весь трафик идёт напрямую. Выходы добавляются в панели.",
-        "ex_hint": "🔍 — проверить выход, ⭐ — сделать основным.",
         "o_direct": "напрямую", "o_block": "блокируется", "o_exit": "«{name}»",
         "cl_title": "<b>👥 Клиенты</b> · {n}", "cl_empty": "Клиентов пока нет.",
         "cl_legend": "🟢 в сети · ⚪ не в сети · ⏸ выключен",
@@ -106,7 +99,7 @@ TEXTS = {
         "gone": "Такого клиента больше нет.", "gone_exit": "Такого выхода больше нет.",
         "fail": "⚠️ Не получилось: {error}", "cancelled": "Отменено.",
         "unknown": "Не знаю такой команды. /help — что я умею.",
-        "start": "🤖 <b>Пульт AWG Router</b>\n<code>{host}</code>",
+        "start": "🔵🟢 <b>AWG Router</b>\n🌍 Хост: <code>{host}</code>\n🏷 Версия панели: {version}\n👥 Клиенты: {clients}\n🟢 Клиенты онлайн: {online}\n📶 Общий трафик: {traffic}",
         "b_menu": "‹ Меню", "bk_done": "💾 Копия отправлена (файл выше).", "cfg_done": "📱 Конфиг отправлен (QR и файл выше).", "help_title": "<b>Команды</b>",
         "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
         "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
@@ -116,6 +109,19 @@ TEXTS = {
         "del_ask": "Удалить клиента <b>{name}</b>?\nЕго конфиг перестанет работать, срок, лимиты и личная "
                    "ссылка будут удалены. Отменить это нельзя.",
         "ok_deleted": "🗑 «{name}» удалён",
+        "b_server": "🗄 Сервер", "b_back_server": "‹ Сервер",
+        "b_back_exits": "‹ Выходы", "sv_title": "🗄 <b>Сервер</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>Панель › Сервер</b>", "st_host": "🌍 Хост: <code>{host}</code>",
+        "st_panel": "🏷 Версия панели: {version}", "st_panel_up": "🏷 Версия панели: {version} (доступна {latest})",
+        "st_awg": "🛡 Версия AWG: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Время работы сервера: {time}",
+        "st_ram": "🧠 RAM: {used} из {total}", "st_online": "🟢 Клиентов онлайн: {online} из {total}",
+        "st_traffic": "📶 Трафик за месяц: {size}", "st_ok": "✅ Статус: работает",
+        "st_bad": "⚠️ Статус: сервер AmneziaWG недоступен", "up_dh": "{d} дн. {h} ч",
+        "up_hm": "{h} ч {m} мин", "ex_pick": "Нажмите на выход, чтобы проверить его или сделать основным.",
+        "ex_direct": "Напрямую", "eo_default": "⭐ Основной выход",
+        "eo_month": "📶 Трафик за месяц: {size}", "eo_direct": "🏠 Через IP этого сервера",
+        "b_probe_one": "🔍 Проверить выход", "b_make_default": "⭐ Сделать основным",
     },
     "en": {
         "help": "🤖 <b>AWG Router remote</b>\n"
@@ -138,18 +144,11 @@ TEXTS = {
         "b_gb": "+10 GB", "b_client": "👤 Client", "b_check": "🔍 Check “{name}”",
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ Direct",
         "b_update": "⬆️ Update to {version}", "b_update_go": "✅ Yes, update", "b_cancel": "Cancel",
-        "st_server_ok": "AmneziaWG server: ✅ running", "st_server_bad": "AmneziaWG server: ⚠️ unreachable",
-        "st_clients": "Clients: {online} online of {total}",
-        "st_month": "Clients' traffic this month: {size}",
-        "st_default": "Default exit: {out}", "st_default_now": "Default exit: {out}, now: {now}",
-        "st_exits": "Exits:", "st_version": "Panel version: {version}",
-        "st_update": "Panel version: {version}, {latest} is available",
-        "st_cert": "HTTPS certificate until {date}",
+        "st_default": "⭐ Default exit: {out}",
         "ex_title": "<b>🌐 Exits</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — turned off",
         "ex_down": "🔴 {name} — not working, its traffic: {to}",
         "ex_quota": "📦 {name} — limit used up, its traffic: {to}",
         "ex_none": "No exits yet: all traffic goes direct. Exits are added in the panel.",
-        "ex_hint": "🔍 — check an exit, ⭐ — make it the default.",
         "o_direct": "direct", "o_block": "blocked", "o_exit": "“{name}”",
         "cl_title": "<b>👥 Clients</b> · {n}", "cl_empty": "No clients yet.",
         "cl_legend": "🟢 online · ⚪ offline · ⏸ turned off",
@@ -189,7 +188,7 @@ TEXTS = {
         "gone": "This client no longer exists.", "gone_exit": "This exit no longer exists.",
         "fail": "⚠️ That didn't work: {error}", "cancelled": "Cancelled.",
         "unknown": "I don't know this command. /help — what I can do.",
-        "start": "🤖 <b>AWG Router remote</b>\n<code>{host}</code>",
+        "start": "🔵🟢 <b>AWG Router</b>\n🌍 Host: <code>{host}</code>\n🏷 Panel version: {version}\n👥 Clients: {clients}\n🟢 Clients online: {online}\n📶 Total traffic: {traffic}",
         "b_menu": "‹ Menu", "bk_done": "💾 Backup sent (the file is above).", "cfg_done": "📱 Config sent (QR and file above).", "help_title": "<b>Commands</b>",
         "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
         "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
@@ -199,6 +198,19 @@ TEXTS = {
         "del_ask": "Delete client <b>{name}</b>?\nIts config stops working; its end date, limits and personal "
                    "link are removed. This cannot be undone.",
         "ok_deleted": "🗑 “{name}” deleted",
+        "b_server": "🗄 Server", "b_back_server": "‹ Server",
+        "b_back_exits": "‹ Exits", "sv_title": "🗄 <b>Server</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>Panel › Server</b>", "st_host": "🌍 Host: <code>{host}</code>",
+        "st_panel": "🏷 Panel version: {version}", "st_panel_up": "🏷 Panel version: {version} ({latest} available)",
+        "st_awg": "🛡 AWG version: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Server uptime: {time}",
+        "st_ram": "🧠 RAM: {used} of {total}", "st_online": "🟢 Clients online: {online} of {total}",
+        "st_traffic": "📶 Traffic this month: {size}", "st_ok": "✅ Status: running",
+        "st_bad": "⚠️ Status: AmneziaWG server unavailable", "up_dh": "{d} d {h} h",
+        "up_hm": "{h} h {m} min", "ex_pick": "Tap an exit to check it or make it the default.",
+        "ex_direct": "Direct", "eo_default": "⭐ Default exit",
+        "eo_month": "📶 Traffic this month: {size}", "eo_direct": "🏠 Through this server's IP",
+        "b_probe_one": "🔍 Check exit", "b_make_default": "⭐ Make default",
     },
     "zh": {
         "help": "🤖 <b>AWG Router 遥控</b>\n"
@@ -221,18 +233,11 @@ TEXTS = {
         "b_gb": "+10 GB", "b_client": "👤 客户端", "b_check": "🔍 检查“{name}”",
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ 直连",
         "b_update": "⬆️ 更新到 {version}", "b_update_go": "✅ 是的，更新", "b_cancel": "取消",
-        "st_server_ok": "AmneziaWG 服务器：✅ 运行中", "st_server_bad": "AmneziaWG 服务器：⚠️ 无法访问",
-        "st_clients": "客户端：{total} 个中 {online} 个在线",
-        "st_month": "客户端本月流量：{size}",
-        "st_default": "默认出口：{out}", "st_default_now": "默认出口：{out}，当前：{now}",
-        "st_exits": "出口：", "st_version": "面板版本：{version}",
-        "st_update": "面板版本：{version}，可更新到 {latest}",
-        "st_cert": "HTTPS 证书有效期至 {date}",
+        "st_default": "⭐ 默认出口：{out}",
         "ex_title": "<b>🌐 出口</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — 已停用",
         "ex_down": "🔴 {name} — 无法工作，其流量：{to}",
         "ex_quota": "📦 {name} — 限额已用完，其流量：{to}",
         "ex_none": "还没有出口：所有流量直连。出口在面板中添加。",
-        "ex_hint": "🔍 — 检查出口，⭐ — 设为默认。",
         "o_direct": "直连", "o_block": "被阻止", "o_exit": "“{name}”",
         "cl_title": "<b>👥 客户端</b> · {n}", "cl_empty": "还没有客户端。",
         "cl_legend": "🟢 在线 · ⚪ 离线 · ⏸ 已停用",
@@ -270,7 +275,7 @@ TEXTS = {
         "gone": "该客户端已不存在。", "gone_exit": "该出口已不存在。",
         "fail": "⚠️ 操作失败：{error}", "cancelled": "已取消。",
         "unknown": "不认识这个命令。/help — 我能做什么。",
-        "start": "🤖 <b>AWG Router 遥控</b>\n<code>{host}</code>",
+        "start": "🔵🟢 <b>AWG Router</b>\n🌍 主机：<code>{host}</code>\n🏷 面板版本：{version}\n👥 客户端：{clients}\n🟢 在线客户端：{online}\n📶 总流量：{traffic}",
         "b_menu": "‹ 菜单", "bk_done": "💾 备份已发送（文件在上方）。", "cfg_done": "📱 配置已发送（二维码和文件在上方）。", "help_title": "<b>命令</b>",
         "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
         "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
@@ -279,6 +284,19 @@ TEXTS = {
         "b_delete": "🗑 删除", "b_delete_go": "🗑 是的，删除",
         "del_ask": "删除客户端 <b>{name}</b>？\n其配置将失效，有效期、限额和个人链接也会被删除。此操作无法撤销。",
         "ok_deleted": "🗑 “{name}”已删除",
+        "b_server": "🗄 服务器", "b_back_server": "‹ 服务器",
+        "b_back_exits": "‹ 出口", "sv_title": "🗄 <b>服务器</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>面板 › 服务器</b>", "st_host": "🌍 主机：<code>{host}</code>",
+        "st_panel": "🏷 面板版本：{version}", "st_panel_up": "🏷 面板版本：{version}（可更新至 {latest}）",
+        "st_awg": "🛡 AWG 版本：{version}", "st_v4": "🌐 IPv4：<code>{ip}</code>",
+        "st_v6": "🌐 IPv6：<code>{ip}</code>", "st_uptime": "⏱ 服务器运行时间：{time}",
+        "st_ram": "🧠 内存：{used} / {total}", "st_online": "🟢 在线客户端：{online} / {total}",
+        "st_traffic": "📶 本月流量：{size}", "st_ok": "✅ 状态：运行中",
+        "st_bad": "⚠️ 状态：AmneziaWG 服务器不可用", "up_dh": "{d} 天 {h} 小时",
+        "up_hm": "{h} 小时 {m} 分钟", "ex_pick": "点击出口可检查它或设为默认。",
+        "ex_direct": "直连", "eo_default": "⭐ 默认出口",
+        "eo_month": "📶 本月流量：{size}", "eo_direct": "🏠 通过本服务器的 IP",
+        "b_probe_one": "🔍 检查出口", "b_make_default": "⭐ 设为默认",
     },
     "fa": {
         "help": "🤖 <b>کنترل از راه دور AWG Router</b>\n"
@@ -301,18 +319,11 @@ TEXTS = {
         "b_gb": "+۱۰ گیگابایت", "b_client": "👤 کلاینت", "b_check": "🔍 بررسی «{name}»",
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ مستقیم",
         "b_update": "⬆️ به‌روزرسانی به {version}", "b_update_go": "✅ بله، به‌روزرسانی کن", "b_cancel": "لغو",
-        "st_server_ok": "سرور AmneziaWG: ✅ کار می‌کند", "st_server_bad": "سرور AmneziaWG: ⚠️ در دسترس نیست",
-        "st_clients": "کلاینت‌ها: {online} آنلاین از {total}",
-        "st_month": "ترافیک کلاینت‌ها در این ماه: {size}",
-        "st_default": "خروجی اصلی: {out}", "st_default_now": "خروجی اصلی: {out}، اکنون: {now}",
-        "st_exits": "خروجی‌ها:", "st_version": "نسخهٔ پنل: {version}",
-        "st_update": "نسخهٔ پنل: {version}، نسخهٔ {latest} آماده است",
-        "st_cert": "گواهی HTTPS تا {date}",
+        "st_default": "⭐ خروجی اصلی: {out}",
         "ex_title": "<b>🌐 خروجی‌ها</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — خاموش",
         "ex_down": "🔴 {name} — کار نمی‌کند، ترافیک آن: {to}",
         "ex_quota": "📦 {name} — سقف تمام شده، ترافیک آن: {to}",
         "ex_none": "هنوز خروجی‌ای نیست: همهٔ ترافیک مستقیم می‌رود. خروجی‌ها در پنل اضافه می‌شوند.",
-        "ex_hint": "🔍 — بررسی خروجی، ⭐ — خروجی اصلی کردن آن.",
         "o_direct": "مستقیم", "o_block": "مسدود", "o_exit": "«{name}»",
         "cl_title": "<b>👥 کلاینت‌ها</b> · {n}", "cl_empty": "هنوز کلاینتی نیست.",
         "cl_legend": "🟢 آنلاین · ⚪ آفلاین · ⏸ غیرفعال",
@@ -352,7 +363,7 @@ TEXTS = {
         "gone": "این کلاینت دیگر وجود ندارد.", "gone_exit": "این خروجی دیگر وجود ندارد.",
         "fail": "⚠️ انجام نشد: {error}", "cancelled": "لغو شد.",
         "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
-        "start": "🤖 <b>کنترل از راه دور AWG Router</b>\n<code>{host}</code>",
+        "start": "🔵🟢 <b>AWG Router</b>\n🌍 میزبان: <code>{host}</code>\n🏷 نسخهٔ پنل: {version}\n👥 کلاینت‌ها: {clients}\n🟢 کلاینت‌های آنلاین: {online}\n📶 ترافیک کل: {traffic}",
         "b_menu": "منو ›", "bk_done": "💾 پشتیبان فرستاده شد (فایل بالاتر است).", "cfg_done": "📱 پیکربندی فرستاده شد (QR و فایل بالاتر است).", "help_title": "<b>دستورها</b>",
         "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
         "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
@@ -362,6 +373,19 @@ TEXTS = {
         "del_ask": "کلاینت <b>{name}</b> حذف شود؟\nکانفیگ آن دیگر کار نمی‌کند و تاریخ پایان، سقف‌ها و پیوند "
                    "شخصی آن حذف می‌شوند. این کار برگشت‌پذیر نیست.",
         "ok_deleted": "🗑 «{name}» حذف شد",
+        "b_server": "🗄 سرور", "b_back_server": "سرور ›",
+        "b_back_exits": "خروجی‌ها ›", "sv_title": "🗄 <b>سرور</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>پنل › سرور</b>", "st_host": "🌍 میزبان: <code>{host}</code>",
+        "st_panel": "🏷 نسخهٔ پنل: {version}", "st_panel_up": "🏷 نسخهٔ پنل: {version} (نسخهٔ {latest} موجود است)",
+        "st_awg": "🛡 نسخهٔ AWG: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ مدت کارکرد سرور: {time}",
+        "st_ram": "🧠 RAM: {used} از {total}", "st_online": "🟢 کلاینت‌های آنلاین: {online} از {total}",
+        "st_traffic": "📶 ترافیک این ماه: {size}", "st_ok": "✅ وضعیت: در حال کار",
+        "st_bad": "⚠️ وضعیت: سرور AmneziaWG در دسترس نیست", "up_dh": "{d} روز {h} ساعت",
+        "up_hm": "{h} ساعت {m} دقیقه", "ex_pick": "روی یک خروجی بزنید تا آن را بررسی یا اصلی کنید.",
+        "ex_direct": "مستقیم", "eo_default": "⭐ خروجی اصلی",
+        "eo_month": "📶 ترافیک این ماه: {size}", "eo_direct": "🏠 از طریق IP همین سرور",
+        "b_probe_one": "🔍 بررسی خروجی", "b_make_default": "⭐ اصلی کردن",
     },
 }
 
@@ -398,6 +422,16 @@ def fmt_ago(sec: float, lang: str) -> str:
     if sec < 2 * DAY:
         return tr(lang, "ago_h", n=int(sec // 3600))
     return tr(lang, "ago_d", n=int(sec // DAY))
+
+
+def fmt_uptime(sec: int | None, lang: str) -> str:
+    """Время работы сервера: дни и часы, а меньше суток — часы и минуты."""
+    if sec is None:
+        return "—"
+    sec = max(0, int(sec))
+    if sec >= DAY:
+        return tr(lang, "up_dh", d=sec // DAY, h=sec % DAY // 3600)
+    return tr(lang, "up_hm", h=sec // 3600, m=sec % 3600 // 60)
 
 
 def fmt_date(ts: float) -> str:
@@ -778,6 +812,8 @@ class Bot:
                 self.show_menu(c, msg)
             elif op == "pn":
                 self.show_panel(c, msg)
+            elif op == "sv":
+                self.show_server(c, msg)
             elif op == "st":
                 self.show_status(c, msg)
             elif op == "cl":
@@ -814,13 +850,15 @@ class Bot:
                 self.ask(c, "route")
             elif op == "ex":
                 self.show_exits(c, msg)
+            elif op == "eo":
+                self.show_exit(c, arg, msg)
             elif op == "pr":
-                self._toast(c, qid, tr(L, "pr_wait", False, name=self._exit_name(arg)))
+                self._toast(c, qid, tr(L, "pr_wait", False, name=self._exit_name(arg, L)))
                 qid = ""
-                self.show_exits(c, msg, self.do_probe(c, arg))
+                self.show_exit(c, arg, msg, self.do_probe(c, arg))
             elif op == "df":
                 toast = self.do_default(c, arg)
-                self.show_exits(c, msg)
+                self.show_exit(c, arg.removeprefix("up:"), msg)
             elif op == "bk":
                 self._toast(c, qid, tr(L, "bk_wait", False))
                 qid = ""
@@ -860,21 +898,34 @@ class Bot:
     def _back(self, c: dict) -> list:
         return [(tr(c["lang"], "b_menu"), "m")]
 
+    def _back_server(self, c: dict) -> list:
+        return [(tr(c["lang"], "b_back_server"), "sv")]
+
     def _menu_kb(self, c: dict, url: bool = True) -> dict:
         L = c["lang"]
         b = lambda key, data: {"text": tr(L, key, False), "callback_data": data}
         p = self.ops.panel() if url else {}
         panel = ({"text": tr(L, "b_panel", False), "url": p["url"]} if p and not p.get("ssh")
                  else b("b_panel", "pn"))
-        return {"inline_keyboard": [[b("b_status", "st"), b("b_clients", "cl:0")],
-                                    [b("b_exits", "ex"), b("b_add", "add")],
-                                    [panel, b("b_backup", "bk")]]}
+        # «Обновить» — заново читает цифры в шапке меню
+        return {"inline_keyboard": [[b("b_server", "sv"), b("b_clients", "cl:0")],
+                                    [panel, b("b_backup", "bk")],
+                                    [b("b_refresh", "m")]]}
 
     def show_menu(self, c: dict, msg: dict | None, note: str = "", move: bool = False) -> None:
         """Главное меню. Кнопка «Панель» — сразу ссылка; если Telegram её не примет (адрес ему
         не нравится), — экран со ссылкой."""
-        # вторая строка — адрес сервера: видно, какой это сервер, если ботов несколько
-        text = tr(c["lang"], "start", host=self.ops.panel().get("host") or "—") + (f"\n\n{note}" if note else "")
+        # адрес сервера — видно, какой это сервер, если ботов несколько
+        L = c["lang"]
+        s = self.ops.status()
+        clients = self.ops.clients()
+        now = time.time()
+        tv = s.get("server_traffic") or {}
+        text = tr(L, "start", host=self.ops.panel().get("host") or "—",
+                  version=(s.get("version") or {}).get("current") or self.ops.version,
+                  clients=len(clients), online=sum(1 for x in clients if self._online(x, now)),
+                  traffic=fmt_size(tv.get("total_rx", 0) + tv.get("total_tx", 0), L))
+        text += f"\n\n{note}" if note else ""
         show = self._move if move else (lambda c_, t_, m_: self._show(c_, t_, m_, msg))
         try:
             show(c, text, self._menu_kb(c))
@@ -911,40 +962,39 @@ class Bot:
                 return tr(L, "o_exit", name=u["name"])
         return str(out)
 
+    def show_server(self, c: dict, msg: dict | None) -> None:
+        """Раздел «Сервер»: состояние и выходы."""
+        L = c["lang"]
+        self._show(c, tr(L, "sv_title", host=self.ops.panel().get("host") or "—"),
+                   kb([(tr(L, "b_status"), "st"), (tr(L, "b_exits"), "ex")], self._back(c)), msg)
+
     def show_status(self, c: dict, msg: dict | None) -> None:
         L = c["lang"]
-        st = self.ops.snapshot()
         s = self.ops.status()
-        lines = [f"<b>📊 {html.escape(s.get('host') or 'AWG Router')}</b>",
-                 tr(L, "st_server_ok" if s.get("server_ok") else "st_server_bad")]
+        h = self.ops.host_info()
         clients = self.ops.clients()
         now = time.time()
         online = sum(1 for x in clients if self._online(x, now))
-        lines.append(tr(L, "st_clients", online=online, total=len(clients)))
-        lines.append(tr(L, "st_month", size=fmt_size(s.get("month_bytes", 0), L)))
-        d = st["routing"]["default"]
-        eff = self.ops.resolve(d, st)
-        want, now_l = self.out_label(c, d, st), self.out_label(c, eff, st)
-        if d.startswith("up:") and (_tunnel_num(st, d) != eff):
-            lines.append(tr(L, "st_default_now", out=want, now=now_l))
-        else:
-            lines.append(tr(L, "st_default", out=want))
-        if st.get("upstreams"):
-            lines.append("")
-            lines.append(tr(L, "st_exits"))
-            lines += [self._exit_line(c, u, st) for u in st["upstreams"]]
-        lines.append("")
         v = s.get("version") or {}
-        if v.get("available") and v.get("latest"):
-            lines.append(tr(L, "st_update", version=v.get("current"), latest=v["latest"]))
-        else:
-            lines.append(tr(L, "st_version", version=v.get("current", self.ops.version)))
-        if s.get("cert_until"):
-            lines.append(tr(L, "st_cert", date=fmt_date(s["cert_until"])))
+        cur = v.get("current") or self.ops.version
+        upd = bool(v.get("available") and v.get("latest"))
+        mem = h.get("memory")
+        tv = s.get("server_traffic") or {}
+        lines = [tr(L, "st_title"),
+                 tr(L, "st_host", host=s.get("host") or "—"),
+                 tr(L, "st_panel_up", version=cur, latest=v["latest"]) if upd else tr(L, "st_panel", version=cur),
+                 tr(L, "st_awg", version=h.get("awg") or "—"),
+                 tr(L, "st_v4", ip=h.get("v4") or "—"),
+                 tr(L, "st_v6", ip=h.get("v6") or "—"),
+                 tr(L, "st_uptime", time=fmt_uptime(h.get("uptime"), L)),
+                 tr(L, "st_ram", used=fmt_size(mem[0], L) if mem else "—", total=fmt_size(mem[1], L) if mem else "—"),
+                 tr(L, "st_online", online=online, total=len(clients)),
+                 tr(L, "st_traffic", size=fmt_size(tv.get("month_rx", 0) + tv.get("month_tx", 0), L)),
+                 tr(L, "st_ok" if s.get("server_ok") else "st_bad")]
         rows = []
-        if v.get("available") and v.get("latest"):
+        if upd:
             rows.append([(tr(L, "b_update", False, version=v["latest"]), "up")])
-        rows.append([(tr(L, "b_refresh"), "st")] + self._back(c))
+        rows.append([(tr(L, "b_refresh"), "st")] + self._back_server(c))
         self._show(c, "\n".join(lines), kb(*rows), msg)
 
     def _exit_line(self, c: dict, u: dict, st: dict) -> str:
@@ -983,7 +1033,7 @@ class Bot:
         pages = max(1, math.ceil(len(clients) / PAGE))
         page = min(max(0, page), pages - 1)
         now = time.time()
-        rows = []
+        rows = [[(tr(L, "b_add"), "add")]]           # «Новый клиент» — первой кнопкой над списком
         for x in clients[page * PAGE:(page + 1) * PAGE]:
             month = self.ops.traffic_month(x["public_key"])
             rows.append([(f"{self._icon(x, now)} {self._name(x)} · {fmt_size(month, L)}",
@@ -1050,29 +1100,53 @@ class Bot:
             lines += ["", note]
         self._show(c, "\n".join(lines), kb(row1, row2, row3, [(tr(L, "b_list"), "cl:0")] + self._back(c)), msg)
 
+    def _exit_icon(self, u: dict) -> str:
+        if not u.get("enabled", True):
+            return "⚪"
+        if not self.ops.health(u["id"]).get("healthy"):
+            return "🔴"
+        return "📦" if self.ops.over_quota(u) else "🟢"
+
     def show_exits(self, c: dict, msg: dict | None, note: str = "") -> None:
+        """Список выходов кнопками; выход открывает свой экран (проверить, сделать основным)."""
         L = c["lang"]
         st = self.ops.snapshot()
         ups = st.get("upstreams") or []
-        if not ups:
-            self._show(c, tr(L, "ex_title") + "\n\n" + tr(L, "ex_none"), kb(self._back(c)), msg)
-            return
         d = st["routing"]["default"]
         lines = [tr(L, "ex_title"), tr(L, "st_default", out=self.out_label(c, d, st)), ""]
-        lines += [self._exit_line(c, u, st) for u in ups]
-        lines += ["", tr(L, "ex_hint")]
+        lines.append(tr(L, "ex_pick") if ups else tr(L, "ex_none"))
         if note:
             lines += ["", note]
-        rows = []
-        for u in ups:
-            row = [(tr(L, "b_probe", False, name=u["name"]), "pr:" + u["id"])]
-            if d != "up:" + u["id"]:
-                row.append((tr(L, "b_default", False, name=u["name"]), "df:up:" + u["id"]))
-            rows.append(row)
-        if d != "direct":
-            rows.append([(tr(L, "b_direct"), "df:direct")])
-        rows.append([(tr(L, "b_refresh"), "ex")] + self._back(c))
+        star = lambda out: " ⭐" if d == out else ""
+        rows = [[("🏠 " + tr(L, "ex_direct", False) + star("direct"), "eo:direct")]]
+        rows += [[(f"{self._exit_icon(u)} {u['name']}{star('up:' + u['id'])}", "eo:" + u["id"])] for u in ups]
+        rows.append([(tr(L, "b_refresh"), "ex")] + self._back_server(c))
         self._show(c, "\n".join(lines), kb(*rows), msg)
+
+    def show_exit(self, c: dict, uid: str, msg: dict | None, note: str = "") -> None:
+        """Экран одного выхода ('direct' или id): состояние, трафик за месяц и две кнопки."""
+        L = c["lang"]
+        st = self.ops.snapshot()
+        d = st["routing"]["default"]
+        if uid == "direct":
+            out = "direct"
+            lines = [f"<b>🏠 {html.escape(tr(L, 'ex_direct', False))}</b>", tr(L, "eo_direct")]
+        else:
+            u = next((u for u in st.get("upstreams", []) if u["id"] == uid), None)
+            if not u:
+                raise BotError("gone_exit")
+            out = "up:" + uid
+            lines = [f"<b>🌐 {html.escape(u['name'])}</b>", self._exit_line(c, u, st)]
+        if d == out:
+            lines.append(tr(L, "eo_default"))
+        if self.ops.acct_ok():
+            tv = self.ops.out_view(uid)
+            lines.append(tr(L, "eo_month", size=fmt_size(tv.get("month_rx", 0) + tv.get("month_tx", 0), L)))
+        if note:
+            lines += ["", note]
+        self._show(c, "\n".join(lines),
+                   kb([(tr(L, "b_probe_one"), "pr:" + uid), (tr(L, "b_make_default"), "df:" + out)],
+                      [(tr(L, "b_back_exits"), "ex")] + self._back(c)), msg)
 
     # ------------------------------------------------------------- действия
     def do_days(self, c: dict, pk: str) -> str:
@@ -1161,7 +1235,9 @@ class Bot:
             time.sleep(0.5)
         return tr(c["lang"], "ok_deleted", False, name=self._name(x))
 
-    def _exit_name(self, uid: str) -> str:
+    def _exit_name(self, uid: str, lang: str = "en") -> str:
+        if uid == "direct":
+            return tr(lang, "ex_direct", False)
         u = next((u for u in self.ops.snapshot().get("upstreams", []) if u["id"] == uid), None)
         if not u:
             raise BotError("gone_exit")
@@ -1170,8 +1246,8 @@ class Bot:
     def do_probe(self, c: dict, uid: str) -> str:
         """Проверка выхода → строка для экрана «Выходы»."""
         L = c["lang"]
-        name = self._exit_name(uid)
-        r = self.ops.probe("up:" + uid)
+        name = self._exit_name(uid, L)
+        r = self.ops.probe("direct" if uid == "direct" else "up:" + uid)
         if r.get("ok"):
             cc = r.get("cc") or ""
             text = tr(L, "pr_ok", name=name, ip=r.get("ip") or "?", cc=f"({cc})" if cc else "",

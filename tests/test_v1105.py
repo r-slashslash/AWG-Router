@@ -161,7 +161,7 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
     def test_polls_with_notifications_off(self):
         self.run_loop_once(cfg(enabled=False, control=True))
         self.assertIn("getUpdates", self.tg.methods())
-        self.assertTrue(any("AWG Router remote" in t for t in self.tg.texts()))
+        self.assertTrue(any("Total traffic" in t for t in self.tg.texts()))
         self.assertEqual(self.bot.state, "ok")
 
     def test_off_without_control(self):
@@ -212,17 +212,18 @@ class NoDuplicateMenuTest(unittest.TestCase):
         return [b.get("callback_data") or b.get("url") for row in (p.get("reply_markup") or {}).get("inline_keyboard", []) for b in row]
 
     def test_screens_have_only_their_buttons(self):
-        """Экран — только свои кнопки и «‹ Меню» (1.12.0: всё управление в одном сообщении)."""
+        """Экран — только свои кнопки и «назад» (1.13.0: состояние и выходы — внутри «Сервера»)."""
         for i, cmd in enumerate(("/status", "/clients", "/exits")):
             self.tg.updates = [msg(cmd, uid=i + 1)]
             self.bot.poll_once(cfg(), timeout=0)
             cbs = self.inline(self.tg.last("sendMessage"))
-            menu = {"add", "rt", "bk"} | ({"ex"} if cmd != "/exits" else set())  # «ex» в выходах — «Обновить»
+            menu = {"rt", "bk"} | ({"add"} if cmd != "/clients" else set()) \
+                | ({"ex"} if cmd != "/exits" else set())          # «ex» в выходах — «Обновить»
             self.assertFalse(menu & set(cbs), (cmd, cbs))
-            self.assertEqual(cbs[-1], "m")
+            self.assertEqual(cbs[-1], "m" if cmd == "/clients" else "sv")
         self.tg.updates = [msg("/status", uid=9)]
         self.bot.poll_once(cfg(), timeout=0)
-        self.assertEqual(self.inline(self.tg.last("sendMessage")), ["st", "m"])
+        self.assertEqual(self.inline(self.tg.last("sendMessage")), ["st", "sv"])
 
     def test_start_and_help_list_commands(self):
         """/start — меню кнопками в сообщении, /help — список команд и «‹ Меню»; клавиатуры внизу нет."""
@@ -241,4 +242,4 @@ class NoDuplicateMenuTest(unittest.TestCase):
         self.tg.updates = [{"update_id": 1, "callback_query": {"id": "q", "data": "m",
                             "message": {"message_id": 5, "chat": {"id": int(CHAT)}}}}]
         self.bot.poll_once(cfg(), timeout=0)
-        self.assertIn("st", self.inline(self.tg.last("sendMessage")))
+        self.assertIn("sv", self.inline(self.tg.last("sendMessage")))

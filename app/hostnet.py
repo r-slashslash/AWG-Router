@@ -50,3 +50,28 @@ def udp6_listening(port: int, path: str = "/proc/net/udp6") -> bool:
         except ValueError:
             continue
     return False
+
+
+def uptime(path: str = "/proc/uptime") -> int | None:
+    """Сколько секунд работает сервер (pid: host — /proc общий с хостом)."""
+    try:
+        with open(path) as f:
+            return int(float(f.read().split()[0]))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def memory(path: str = "/proc/meminfo") -> tuple[int, int] | None:
+    """Память сервера в байтах: (занято, всего). Занято — всего минус MemAvailable."""
+    vals = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                if k in ("MemTotal", "MemAvailable"):
+                    vals[k] = int(v.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    if "MemTotal" not in vals or "MemAvailable" not in vals:
+        return None
+    return vals["MemTotal"] - vals["MemAvailable"], vals["MemTotal"]

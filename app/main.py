@@ -17,7 +17,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from . import awgconf, awgserver, config, cps, domains, limits, lists, notify, selfupdate, system, tgbot, totp
+from . import awgconf, awgserver, config, cps, domains, hostnet, limits, lists, notify, selfupdate, system, tgbot, totp
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -1097,6 +1097,7 @@ def get_state(req):
         "tg_bot": bot.view(),
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
         "direct_traffic": engine.traffic.out_view("direct"),
+        "server_traffic": engine.traffic.server_view(),
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),
@@ -1783,8 +1784,23 @@ def _bot_status() -> dict:
     ts = tls.status()
     return {"host": notifier.host_fn(st), "server_ok": bool(t and t.exists and not engine.target_error),
             "month_bytes": sum(engine.traffic.used(c["public_key"], "month") for c in engine.clients),
+            "server_traffic": engine.traffic.server_view(),
             "version": updates.status(),
             "cert_until": ts.get("expires") if ts.get("active") == "letsencrypt" else None}
+
+
+def _bot_host_info() -> dict:
+    """Экран бота «Сервер › Состояние»: версия AWG, адреса, время работы и память хоста."""
+    awg, v4, v6 = "", None, []
+    try:
+        sv = engine.srv.server_view()
+        awg = sv.get("version") or ""
+        addrs = sv.get("addrs") or {}
+        v4, v6 = addrs.get("v4"), addrs.get("v6") or []
+    except Exception as e:  # noqa: BLE001 — сервер не найден: показываем то, что есть
+        log.info("bot host info: %s", e)
+    return {"awg": awg, "v4": v4 or engine.public_v4, "v6": v6[0] if v6 else None,
+            "uptime": hostnet.uptime(), "memory": hostnet.memory()}
 
 
 def _bot_backup(c: dict) -> None:
@@ -1799,6 +1815,7 @@ bot_ops = SimpleNamespace(
     version=VERSION,
     snapshot=store.snapshot,
     status=_bot_status,
+    host_info=_bot_host_info,
     clients=lambda: list(engine.clients),
     refresh_clients=engine.reconcile_soon,
     resolve=engine.resolve,
@@ -1806,6 +1823,8 @@ bot_ops = SimpleNamespace(
     over_quota=engine.over_quota,
     traffic_month=lambda pk: engine.traffic.used(pk, "month"),
     traffic_view=engine.traffic.view,
+    out_view=engine.traffic.out_view,
+    acct_ok=lambda: engine.acct_state == "ok",
     used=engine.traffic.used,
     client_out=lambda pk: engine.policy_for(store.snapshot(), pk)["default"],
     set_enabled=set_client_enabled,
