@@ -52,7 +52,13 @@ function download(name, text) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
-function qrSvg(text) {
+/** Растровая картинка, где каждый модуль — целое число физических пикселей (не меньше 3):
+ *  SVG с дробным или даже целым размером сканер AmneziaWG на Android читает плохо или не читает.
+ *  Размер подбирается после вёрстки по ширине .connect, чтобы белая рамка .qr-box не сжималась. */
+const QR_TARGET_CSS_PX = 300, QR_MIN_MODULE_PX = 3, QR_MIN_PAD_CSS_PX = 12, QR_QUIET_MODULES = 4;
+const qrCodes = new WeakMap();
+let qrSeq = 0, qrLayoutWidth = 0;
+function qrImage(text) {
   if (typeof qrcode === "undefined") return "";
   qrcode.stringToBytes = qrcode.stringToBytesFuncs["UTF-8"];
   let qr = null;
@@ -60,11 +66,41 @@ function qrSvg(text) {
     try { qr = qrcode(0, lvl); qr.addData(text, "Byte"); qr.make(); break; } catch { qr = null; }
   }
   if (!qr) return `<p class="muted small">${esc(t("cl.qr_too_big"))}</p>`;
-  const n = qr.getModuleCount(), m = 4;
-  let d = "";
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + m},${r + m}h1v1h-1z`;
-  return `<svg class="qr" viewBox="0 0 ${n + 2 * m} ${n + 2 * m}" role="img" aria-label="QR" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+  const id = `qr-${++qrSeq}`;
+  requestAnimationFrame(() => {
+    const img = document.getElementById(id);
+    if (img) { qrCodes.set(img, qr); drawQr(img); }
+  });
+  return `<img class="qr" id="${id}" alt="QR">`;
 }
+function drawQr(img) {
+  const qr = qrCodes.get(img), box = img.parentElement;
+  const n = qr.getModuleCount(), m = QR_QUIET_MODULES, size = n + 2 * m;
+  const dpr = window.devicePixelRatio || 1;
+  box.style.padding = "";
+  const style = getComputedStyle(box);
+  const pad = parseFloat(style.paddingLeft), border = 2 * parseFloat(style.borderLeftWidth);
+  const room = box.parentElement.clientWidth - border;
+  const fitPx = Math.floor(Math.min(QR_TARGET_CSS_PX, room - 2 * pad) * dpr / size);
+  const modulePx = Math.max(QR_MIN_MODULE_PX, fitPx);
+  const cssPx = size * modulePx / dpr;
+  if (cssPx + 2 * pad > room) box.style.padding = `${Math.max(QR_MIN_PAD_CSS_PX, Math.floor((room - cssPx) / 2))}px`;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size * modulePx;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) ctx.fillRect((c + m) * modulePx, (r + m) * modulePx, modulePx, modulePx);
+  img.src = canvas.toDataURL("image/png");
+  img.style.width = `${cssPx}px`;
+}
+window.addEventListener("resize", () => {
+  const w = document.documentElement.clientWidth;
+  if (w === qrLayoutWidth) return;
+  qrLayoutWidth = w;
+  document.querySelectorAll("img.qr").forEach((img) => { if (qrCodes.has(img)) drawQr(img); });
+});
 
 const TOKEN = location.pathname.split("/").filter(Boolean).pop();
 let D = null, ERR = null;
@@ -105,7 +141,7 @@ function render() {
         ${cfg ? `
         <ol class="share-steps"><li>${esc(t("share.step1"))}</li><li>${esc(t("share.step2"))}</li></ol>
         <div class="connect">
-          <div class="qr-box">${qrSvg(cfg.conf)}</div>
+          <div class="qr-box">${qrImage(cfg.conf)}</div>
           <div class="connect-actions">
             <button class="btn" id="s-dl">${esc(t("cl.download"))}</button>
             <button class="btn" id="s-link">${esc(t("cl.copy_link"))}</button>
