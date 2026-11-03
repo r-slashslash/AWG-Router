@@ -3,6 +3,23 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.13.0 — 2026-11-03
+
+- **Server traffic in the header.** A **TRAFFIC: N** badge next to the panel name shows all traffic
+  through the server since the panel was installed (hover for the download/upload split). It replaces
+  "rules applied …". It doesn't go down when clients are deleted; on panels updated from an earlier
+  version it starts from the totals of the current clients. Stored in `traffic.json` (`"server"`,
+  format unchanged) and carried over by restore.
+- **New Telegram menu.** `/start` sends the panel logo with a summary under it: host, panel version,
+  clients, clients online and all-time traffic. Buttons: **Server**, **Clients**, **Panel**, **Backup**
+  and a wide **Refresh**. Other screens change the text under the logo in the same message; a screen
+  too long for a photo caption comes as text.
+- **Server → Status:** host, panel and AWG versions, IPv4 and IPv6, server uptime, RAM, clients
+  online, traffic this month and status. **Server → Exits:** exits as buttons (direct first, ⭐ marks
+  the default); an exit opens its own screen with **Check exit** and **Make default** and its traffic
+  this month.
+- **Clients** start with a **New client** button above the list.
+
 ## 1.12.2 — 2026-11-02
 
 - **Exit window keeps your rules.** Saving the routing part of an exit window no longer rewrites every
