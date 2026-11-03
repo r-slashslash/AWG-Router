@@ -249,13 +249,21 @@ $("#tabs").addEventListener("click", (e) => {
   window.scrollTo(0, 0);
 });
 
+// итог всего сервера за всё время: сумма в шапке, разбивка по направлениям во всплывающей подсказке
+function trafficStatus() {
+  const x = S.server_traffic;
+  if (!x) return "";
+  const sum = (x.total_rx || 0) + (x.total_tx || 0);
+  return `<span title="${esc(t("status.traffic_hint") + ": " + arrowsText(x, "total"))}">${esc(t("status.traffic"))} <b>${esc(fmtBytes(sum))}</b></span>`;
+}
+
 function renderStatus() {
   const tg = S.target;
   const online = S.clients.filter((c) => c.live && c.live.handshake && S.now - c.live.handshake < 180).length;
   $("#status").innerHTML = tg
     ? `<span class="state"><span class="dot ${tg.exists === false ? "warn" : "ok"}"></span><b>${esc(tg.kind === "host" ? t("srv.kind_host") : tg.container)}</b> · ${esc(tg.iface)}</span>
        <span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>
-       <span>${esc(t("status.applied", { time: fmtTime(S.engine.last_apply) }))}</span>`
+       ${trafficStatus()}`
     : `<span class="state"><span class="dot bad"></span>${esc(t("status.no_target"))}</span>`;
   // новая версия: метка в строке состояния (видна и на телефоне) и точка на вкладке «Система»
   const v = S.version || {};
@@ -479,6 +487,10 @@ function trafficCell(c) {
 }
 /* трафик по выходам: месячные итоги, квоты выходов */
 function acctOn() { return !!(S.acct && S.acct.state === "ok"); }
+function arrowsText(x, period = "month") {
+  x = x || {};
+  return `↓ ${fmtBytes(x[period + "_tx"])} ↑ ${fmtBytes(x[period + "_rx"])}`;
+}
 function arrows(x, period = "month") {
   x = x || {};
   return `↓ ${esc(fmtBytes(x[period + "_tx"]))} ↑ ${esc(fmtBytes(x[period + "_rx"]))}`;

@@ -207,7 +207,8 @@ class BotTest(unittest.TestCase):
                for b in row]
         self.assertTrue(any(d.startswith("c:") for d in cbs))
         self.assertIn("m", cbs)                           # 1.12.0: «‹ Меню» — назад в меню
-        self.assertFalse({"add", "ex"} & set(cbs))
+        self.assertFalse({"ex"} & set(cbs))
+        self.assertEqual(cbs[0], "add")                   # 1.13.0: «Новый клиент» — над списком
 
     def test_turn_off_and_on(self):
         self.run_updates(button("off:" + self.pk))

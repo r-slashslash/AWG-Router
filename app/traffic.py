@@ -18,7 +18,9 @@ tx — отправлено клиенту (загрузка клиента).
 счётчик на каждую пару «адрес клиента + интерфейс». Выход — "direct" или id выхода.
 "outs" — итоги выходов по всем клиентам (не уменьшаются при удалении клиента: по ним
 работают квоты выходов), "by_out" у клиента — {месяц: {выход: [rx, tx]}}, "acct" —
-последние значения счётчиков, "sni" — {"pid", "vals"}: последние байты sniproxy.py по
+последние значения счётчиков, "server" — {"total", "months"}: итог всего сервера (с 1.13.0:
+сумма прироста всех клиентов; не уменьшается при удалении клиента; при первом запуске
+версии с ним — сумма итогов текущих клиентов), "sni" — {"pid", "vals"}: последние байты sniproxy.py по
 «клиент|выход» (его соединения не транзитные, nftables их не считает). Номер формата прежний: новые ключи старые версии
 просто не читают, и откат панели не обнуляет итоги клиентов.
 """
@@ -94,6 +96,7 @@ class Traffic:
         self.acct: dict[str, list[int]] = {}   # последние значения счётчиков nftables
         self.acct_synced = False               # acct соответствует таблице (есть в файле)
         self.sni: dict = {}                    # {"pid", "vals"} — последние байты sniproxy.py
+        self.server: dict = {"total": [0, 0], "months": {}}   # итог всего сервера
         self._saved = 0.0
         self._dirty = False
         try:
@@ -106,6 +109,11 @@ class Traffic:
             self.outs, self.acct = self._clean_outs(d.get("outs")), self._clean_acct(d.get("acct"))
             self.acct_synced = isinstance(d.get("acct"), dict)
             self.sni = self._clean_sni(d.get("sni"))
+            if isinstance(d.get("server"), dict):
+                self.server = self._clean_server(d["server"])
+            else:
+                self.server = self._seed_server(self.data)
+                self._dirty = True
         elif isinstance(d, dict):
             # данные 1.2.0: итоги завышены, оставляем только точки отсчёта
             self.data = {k: {**_rec(), "last": v.get("last")} for k, v in d.items()
@@ -141,6 +149,10 @@ class Traffic:
                 if not any(delta):
                     continue
                 d["total"] = [d["total"][i] + delta[i] for i in (0, 1)]
+                srv = self.server
+                srv["total"] = [srv["total"][i] + delta[i] for i in (0, 1)]
+                _add(srv["months"], mk, delta)
+                _trim(srv["months"])
                 m = d["months"].setdefault(mk, [0, 0])
                 d["months"][mk] = [m[i] + delta[i] for i in (0, 1)]
                 if len(d["months"]) > KEEP_MONTHS:
@@ -253,7 +265,7 @@ class Traffic:
             try:
                 with open(tmp, "w") as f:
                     json.dump({"_v": FORMAT, "clients": self.data, "outs": self.outs, "acct": self.acct,
-                               "sni": self.sni}, f)
+                               "sni": self.sni, "server": self.server}, f)
                 os.replace(tmp, self.path)
                 self._dirty = False
                 self._saved = time.time()
@@ -269,9 +281,11 @@ class Traffic:
     def replace(self, data: dict) -> None:
         """Восстановление из резервной копии. Итоги берём из копии, а точки отсчёта —
         текущие: счётчики интерфейса на этом сервере продолжают идти как шли."""
-        outs = {}
+        outs, server = {}, None
         if isinstance(data, dict) and data.get("_v") == FORMAT:
             outs = self._clean_outs(data.get("outs"))
+            if isinstance(data.get("server"), dict):
+                server = self._clean_server(data["server"])
             data = data.get("clients") or {}
         elif isinstance(data, dict):
             data = {}                   # копия из 1.2.0: итоги в ней завышены
@@ -290,6 +304,7 @@ class Traffic:
                 out[str(k)[:64]] = rec
             self.data = out
             self.outs = outs
+            self.server = server or self._seed_server(out)
             self._dirty = True
         self.save()
 
@@ -300,6 +315,24 @@ class Traffic:
             if isinstance(k, str) and OUT_RE.match(k) and isinstance(o, dict) and _pair(o.get("total")):
                 out[k] = {"total": _pair(o["total"]), "months": _clean_months(o.get("months"))}
         return out
+
+    @staticmethod
+    def _clean_server(v) -> dict:
+        return {"total": _pair(v.get("total")) or [0, 0], "months": _clean_months(v.get("months"))}
+
+    @staticmethod
+    def _seed_server(clients: dict) -> dict:
+        """Итог сервера, которого ещё не было в файле: сумма итогов клиентов (трафик уже удалённых
+        клиентов взять неоткуда)."""
+        srv = {"total": [0, 0], "months": {}}
+        for d in clients.values():
+            t = _pair(d.get("total"))
+            if t:
+                srv["total"] = [srv["total"][i] + t[i] for i in (0, 1)]
+            for mk, v in _clean_months(d.get("months")).items():
+                _add(srv["months"], mk, v)
+        _trim(srv["months"])
+        return srv
 
     @staticmethod
     def _clean_acct(v) -> dict:
@@ -341,6 +374,13 @@ class Traffic:
         return {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1],
                 "history": [[k, v[0], v[1]] for k, v in hist]}
 
+    def server_view(self) -> dict:
+        """Трафик всего сервера: за текущий месяц и за всё время."""
+        m = (self.server.get("months") or {}).get(month_key()) or [0, 0]
+        t = self.server.get("total") or [0, 0]
+        return {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1]}
+
     def export(self) -> dict:
         with self.lock:
-            return json.loads(json.dumps({"_v": FORMAT, "clients": self.data, "outs": self.outs}))
+            return json.loads(json.dumps({"_v": FORMAT, "clients": self.data, "outs": self.outs,
+                                          "server": self.server}))

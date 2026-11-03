@@ -49,15 +49,16 @@ class BotUiTest(unittest.TestCase):
     def test_start_opens_full_menu(self):
         """/start — меню кнопками в одном сообщении (1.12.0), без клавиатуры внизу экрана."""
         self.run_updates(msg("/start"))
-        self.assertIn("AWG Router remote", self.sent()[-1]["text"])
+        self.assertIn("Total traffic", self.sent()[-1]["text"])
         self.assertNotIn("keyboard", self.sent()[-1]["reply_markup"])
         m = self.menu()
         self.assertEqual([[t for t, _ in row] for row in m],
-                         [["📊 Status", "👥 Clients"], ["🌐 Exits", "➕ New client"], ["🖥 Panel", "💾 Backup"]])
-        self.assertEqual(m[2][0][1], main.panel_url())          # «Панель» — сразу ссылка
+                         [["🗄 Server", "👥 Clients"], ["🖥 Panel", "💾 Backup"], ["🔄 Refresh"]])   # 1.13.0
+        self.assertEqual(m[1][0][1], main.panel_url())          # «Панель» — сразу ссылка
+        self.assertEqual(m[2][0][1], "m")                        # «Обновить» — заново рисует меню
         self.c["lang"] = "ru"
         self.run_updates(msg("/start", uid=2))
-        self.assertEqual(self.menu()[0][0][0], "📊 Состояние")
+        self.assertEqual(self.menu()[0][0][0], "🗄 Сервер")
 
     def test_keyboard_buttons(self):
         """Надписи старой клавиатуры (1.10–1.11) понятны, а сама клавиатура убирается один раз."""
@@ -83,7 +84,7 @@ class BotUiTest(unittest.TestCase):
 
     def test_old_menu_button(self):
         self.run_updates(msg("☰ Меню"))           # кнопка из 1.10.0
-        self.assertIn("AWG Router remote", self.sent()[-1]["text"])
+        self.assertIn("Total traffic", self.sent()[-1]["text"])
         self.assertIn("inline_keyboard", self.sent()[-1]["reply_markup"])
 
     def test_menu_button_cancels_question(self):

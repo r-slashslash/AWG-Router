@@ -55,22 +55,23 @@ class BotTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- меню
     def test_start_is_short(self):
-        for lang, title in (("ru", "Пульт AWG Router"), ("en", "AWG Router remote")):
+        # 1.13.0: шапка — хост, версия, клиенты, в сети и трафик за всё время
+        for lang, title in (("ru", "Общий трафик"), ("en", "Total traffic")):
             self.c["lang"] = lang
             self.run_updates(msg("/start", uid=len(self.tg.calls) + 1))
             p = self.sent()[-1]
-            self.assertEqual(p["text"].count("\n"), 1, p["text"])
+            self.assertEqual(p["text"].count("\n"), 5, p["text"])
             self.assertIn(title, p["text"])
             self.assertIn(main.bot_ops.panel()["host"], p["text"])   # адрес сервера
             self.assertIn("inline_keyboard", p["reply_markup"])
 
     def test_menu_layout_in_every_language(self):
-        rows = {"ru": [["📊 Состояние", "👥 Клиенты"], ["🌐 Выходы", "➕ Новый клиент"], ["🖥 Панель", "💾 Копия"]]}
+        rows = {"ru": [["🗄 Сервер", "👥 Клиенты"], ["🖥 Панель", "💾 Копия"], ["🔄 Обновить"]]}
         for i, lang in enumerate(tgbot.TEXTS):
             self.c["lang"] = lang
             self.run_updates(msg("/start", uid=i + 1))
             kbd = [[b["text"] for b in row] for row in self.sent()[-1]["reply_markup"]["inline_keyboard"]]
-            self.assertEqual([len(r) for r in kbd], [2, 2, 2])
+            self.assertEqual([len(r) for r in kbd], [2, 2, 1])
             flat = [t for r in kbd for t in r]
             self.assertNotIn(tgbot.TEXTS[lang]["b_route"], flat)
             self.assertIn(tgbot.TEXTS[lang]["b_panel"], flat)
