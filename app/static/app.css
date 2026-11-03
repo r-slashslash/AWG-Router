@@ -71,6 +71,13 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 .brand-mark::before { left: 0; background: var(--l1); }
 .brand-mark::after { right: 0; border: 3px solid var(--l2); background: var(--surface); }
 .brand-lg { font-size: 1.4rem; }
+/* трафик сервера за всё время — справа от названия */
+.brand-traffic {
+  margin-inline-start: 6px; padding: 3px 10px; border: 1px solid var(--rule); border-radius: 999px;
+  background: var(--surface); font-size: .76rem; font-weight: 600; letter-spacing: .04em;
+  color: var(--muted); white-space: nowrap;
+}
+.brand-traffic b { color: var(--ink); font-weight: 700; letter-spacing: 0; }
 
 /* ---------- layout ---------- */
 .top {

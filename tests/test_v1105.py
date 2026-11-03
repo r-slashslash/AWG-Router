@@ -216,21 +216,21 @@ class NoDuplicateMenuTest(unittest.TestCase):
         for i, cmd in enumerate(("/status", "/clients", "/exits")):
             self.tg.updates = [msg(cmd, uid=i + 1)]
             self.bot.poll_once(cfg(), timeout=0)
-            cbs = self.inline(self.tg.last("sendMessage"))
+            cbs = self.inline(self.tg.screen())
             menu = {"rt", "bk"} | ({"add"} if cmd != "/clients" else set()) \
                 | ({"ex"} if cmd != "/exits" else set())          # «ex» в выходах — «Обновить»
             self.assertFalse(menu & set(cbs), (cmd, cbs))
             self.assertEqual(cbs[-1], "m" if cmd == "/clients" else "sv")
         self.tg.updates = [msg("/status", uid=9)]
         self.bot.poll_once(cfg(), timeout=0)
-        self.assertEqual(self.inline(self.tg.last("sendMessage")), ["st", "sv"])
+        self.assertEqual(self.inline(self.tg.screen()), ["st", "sv"])
 
     def test_start_and_help_list_commands(self):
         """/start — меню кнопками в сообщении, /help — список команд и «‹ Меню»; клавиатуры внизу нет."""
         self.tg.updates = [msg("/start"), msg("/help", uid=2)]
         self.bot.poll_once(cfg(), timeout=0)
-        start, full = [p for m, p in self.tg.calls if m == "sendMessage"][-2:]
-        self.assertIn("AWG Router", start["text"])
+        start, full = self.tg.sent()[-2:]
+        self.assertIn("Total traffic", start["text"])
         self.assertIn("/clients", full["text"])
         for p in (start, full):
             self.assertNotIn("keyboard", p["reply_markup"])
@@ -242,4 +242,4 @@ class NoDuplicateMenuTest(unittest.TestCase):
         self.tg.updates = [{"update_id": 1, "callback_query": {"id": "q", "data": "m",
                             "message": {"message_id": 5, "chat": {"id": int(CHAT)}}}}]
         self.bot.poll_once(cfg(), timeout=0)
-        self.assertIn("sv", self.inline(self.tg.last("sendMessage")))
+        self.assertIn("sv", self.inline(self.tg.screen()))

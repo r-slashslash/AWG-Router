@@ -523,17 +523,17 @@ class BotMenuTest(unittest.TestCase):
         self.run_updates(button(data, uid=uid, mid=self.menu_id()))
 
     def last_screen(self):
-        return next(p for m, p in reversed(self.tg.calls) if m in ("sendMessage", "editMessageText"))
+        return self.tg.screen()
 
     def test_navigation_edits_one_message(self):
         from tests.test_v19 import msg
         self.run_updates(msg("/start"))
         mid = self.menu_id()
-        n_sent = self.tg.methods().count("sendMessage")
+        n_sent = len(self.tg.sent())
         for i, data in enumerate(("cl:0", "c:" + self.pk, "cl:0", "m", "st", "m", "ex", "m")):
             self.press(data, uid=i + 2)
-            self.assertEqual(self.tg.last("editMessageText")["message_id"], mid, data)
-        self.assertEqual(self.tg.methods().count("sendMessage"), n_sent)    # ни одного нового сообщения
+            self.assertEqual(self.tg.edited()["message_id"], mid, data)
+        self.assertEqual(len(self.tg.sent()), n_sent)                      # ни одного нового сообщения
         self.assertEqual(self.menu_id(), mid)
 
     def test_back_buttons(self):
@@ -566,13 +566,13 @@ class BotMenuTest(unittest.TestCase):
         self.run_updates(msg("/start"))
         mid = self.menu_id()
         self.press("sh:" + self.pk, uid=2)
-        e = self.tg.last("editMessageText")
+        e = self.tg.edited()
         self.assertEqual(e["message_id"], mid)
         self.assertIn("/s/", e["text"])                                  # личная ссылка — в карточке
         uid = main.store.snapshot()["upstreams"][0]["id"] if main.store.snapshot()["upstreams"] else None
         if uid:
             self.press("pr:" + uid, uid=3)
-            e = self.tg.last("editMessageText")
+            e = self.tg.edited()
             self.assertEqual(e["message_id"], mid)
             self.assertIn("🔍", e["text"])
 

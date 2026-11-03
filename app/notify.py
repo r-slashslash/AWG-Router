@@ -299,7 +299,7 @@ def send(token: str, chat_id: str, text: str, via: str = "direct", markup: dict 
 
 def _send_file(method: str, field: str, token: str, chat_id: str, filename: str, data: bytes,
                caption: str, via: str, markup: dict | None = None, html: bool = False,
-               ctype: str = "application/octet-stream") -> None:
+               ctype: str = "application/octet-stream") -> dict:
     """Файл multipart/form-data (urllib сам этого не умеет)."""
     boundary = "awgr" + uuid.uuid4().hex
     fields = [("chat_id", chat_id), ("caption", caption[:1000])]
@@ -313,7 +313,7 @@ def _send_file(method: str, field: str, token: str, chat_id: str, filename: str,
     parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
                  f'Content-Type: {ctype}\r\n\r\n'.encode() + data + b"\r\n")
     parts.append(f"--{boundary}--\r\n".encode())
-    _post(token, method, b"".join(parts), f"multipart/form-data; boundary={boundary}", 120, via)
+    return _post(token, method, b"".join(parts), f"multipart/form-data; boundary={boundary}", 120, via)
 
 
 def send_document(token: str, chat_id: str, filename: str, data: bytes, caption: str,
@@ -322,9 +322,9 @@ def send_document(token: str, chat_id: str, filename: str, data: bytes, caption:
 
 
 def send_photo(token: str, chat_id: str, png: bytes, caption: str, via: str = "direct",
-               html: bool = False) -> None:
-    _send_file("sendPhoto", "photo", token, chat_id, "qr.png", png, caption, via, html=html,
-               ctype="image/png")
+               html: bool = False, markup: dict | None = None, filename: str = "qr.png") -> dict:
+    return _send_file("sendPhoto", "photo", token, chat_id, filename, png, caption, via, markup, html=html,
+                      ctype="image/png")
 
 
 # Шифрование копии: openssl есть в образе, а AES в стандартной библиотеке Python нет.

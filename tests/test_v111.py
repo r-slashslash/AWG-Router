@@ -47,7 +47,7 @@ class BotTest(unittest.TestCase):
         self.bot.poll_once(self.c, timeout=0)
 
     def sent(self):
-        return [p for m, p in self.tg.calls if m == "sendMessage"]
+        return self.tg.sent()
 
     def inline(self, p):
         return [b.get("callback_data") or b.get("url") for row in (p.get("reply_markup") or {}).get(
@@ -60,7 +60,7 @@ class BotTest(unittest.TestCase):
             self.c["lang"] = lang
             self.run_updates(msg("/start", uid=len(self.tg.calls) + 1))
             p = self.sent()[-1]
-            self.assertEqual(p["text"].count("\n"), 5, p["text"])
+            self.assertEqual(p["text"].count("\n"), 4, p["text"])   # подпись под логотипом: 5 строк
             self.assertIn(title, p["text"])
             self.assertIn(main.bot_ops.panel()["host"], p["text"])   # адрес сервера
             self.assertIn("inline_keyboard", p["reply_markup"])
@@ -106,7 +106,7 @@ class BotTest(unittest.TestCase):
         real = self.tg
 
         def picky(token, method, data, ctype, timeout, via):
-            if method == "sendMessage" and b'"url"' in data:
+            if method in ("sendMessage", "sendPhoto") and b'"url"' in data:
                 raise notify.NotifyError("Bad Request: BUTTON_URL_INVALID")
             return real(token, method, data, ctype, timeout, via)
         with mock.patch.object(notify, "_post", picky):

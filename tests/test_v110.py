@@ -38,7 +38,7 @@ class BotUiTest(unittest.TestCase):
         self.bot.poll_once(self.c, timeout=0)
 
     def sent(self):
-        return [p for m, p in self.tg.calls if m == "sendMessage"]
+        return self.tg.sent()
 
     def menu(self):
         """Кнопки меню из последнего сообщения: [[(текст, данные или ссылка)]]."""

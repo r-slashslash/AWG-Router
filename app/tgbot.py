@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 
@@ -30,6 +31,8 @@ ONLINE = 180              # handshake не старше — «в сети»
 OLD = 600                 # сообщения старше (например, пока панель была выключена) не выполняем
 ASK_TTL = 900             # сколько ждём ответа на «как назвать клиента?»
 DAY = 86400
+LOGO = os.path.join(os.path.dirname(__file__), "static", "icons", "tg-logo.png")   # фото главного меню
+CAPTION_MAX = 1024         # длиннее подпись к фото Telegram не примет — такой экран идёт текстом
 GB = 1024 ** 3
 COMMANDS = ("status", "clients", "add", "exits", "route", "backup", "panel", "help")
 
@@ -99,7 +102,7 @@ TEXTS = {
         "gone": "Такого клиента больше нет.", "gone_exit": "Такого выхода больше нет.",
         "fail": "⚠️ Не получилось: {error}", "cancelled": "Отменено.",
         "unknown": "Не знаю такой команды. /help — что я умею.",
-        "start": "🔵🟢 <b>AWG Router</b>\n🌍 Хост: <code>{host}</code>\n🏷 Версия панели: {version}\n👥 Клиенты: {clients}\n🟢 Клиенты онлайн: {online}\n📶 Общий трафик: {traffic}",
+        "start": "🌍 Хост: <code>{host}</code>\n🏷 Версия панели: {version}\n👥 Клиенты: {clients}\n🟢 Клиенты онлайн: {online}\n📶 Общий трафик: {traffic}",
         "b_menu": "‹ Меню", "bk_done": "💾 Копия отправлена (файл выше).", "cfg_done": "📱 Конфиг отправлен (QR и файл выше).", "help_title": "<b>Команды</b>",
         "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
         "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
@@ -188,7 +191,7 @@ TEXTS = {
         "gone": "This client no longer exists.", "gone_exit": "This exit no longer exists.",
         "fail": "⚠️ That didn't work: {error}", "cancelled": "Cancelled.",
         "unknown": "I don't know this command. /help — what I can do.",
-        "start": "🔵🟢 <b>AWG Router</b>\n🌍 Host: <code>{host}</code>\n🏷 Panel version: {version}\n👥 Clients: {clients}\n🟢 Clients online: {online}\n📶 Total traffic: {traffic}",
+        "start": "🌍 Host: <code>{host}</code>\n🏷 Panel version: {version}\n👥 Clients: {clients}\n🟢 Clients online: {online}\n📶 Total traffic: {traffic}",
         "b_menu": "‹ Menu", "bk_done": "💾 Backup sent (the file is above).", "cfg_done": "📱 Config sent (QR and file above).", "help_title": "<b>Commands</b>",
         "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
         "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
@@ -275,7 +278,7 @@ TEXTS = {
         "gone": "该客户端已不存在。", "gone_exit": "该出口已不存在。",
         "fail": "⚠️ 操作失败：{error}", "cancelled": "已取消。",
         "unknown": "不认识这个命令。/help — 我能做什么。",
-        "start": "🔵🟢 <b>AWG Router</b>\n🌍 主机：<code>{host}</code>\n🏷 面板版本：{version}\n👥 客户端：{clients}\n🟢 在线客户端：{online}\n📶 总流量：{traffic}",
+        "start": "🌍 主机：<code>{host}</code>\n🏷 面板版本：{version}\n👥 客户端：{clients}\n🟢 在线客户端：{online}\n📶 总流量：{traffic}",
         "b_menu": "‹ 菜单", "bk_done": "💾 备份已发送（文件在上方）。", "cfg_done": "📱 配置已发送（二维码和文件在上方）。", "help_title": "<b>命令</b>",
         "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
         "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
@@ -363,7 +366,7 @@ TEXTS = {
         "gone": "این کلاینت دیگر وجود ندارد.", "gone_exit": "این خروجی دیگر وجود ندارد.",
         "fail": "⚠️ انجام نشد: {error}", "cancelled": "لغو شد.",
         "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
-        "start": "🔵🟢 <b>AWG Router</b>\n🌍 میزبان: <code>{host}</code>\n🏷 نسخهٔ پنل: {version}\n👥 کلاینت‌ها: {clients}\n🟢 کلاینت‌های آنلاین: {online}\n📶 ترافیک کل: {traffic}",
+        "start": "🌍 میزبان: <code>{host}</code>\n🏷 نسخهٔ پنل: {version}\n👥 کلاینت‌ها: {clients}\n🟢 کلاینت‌های آنلاین: {online}\n📶 ترافیک کل: {traffic}",
         "b_menu": "منو ›", "bk_done": "💾 پشتیبان فرستاده شد (فایل بالاتر است).", "cfg_done": "📱 پیکربندی فرستاده شد (QR و فایل بالاتر است).", "help_title": "<b>دستورها</b>",
         "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
         "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
@@ -650,14 +653,53 @@ class Bot:
     # ------------------------------------------------------------- отправка
     def _send(self, c: dict, text: str, markup: dict | None = None, panel: bool = False) -> dict:
         r = notify.send(c["token"], c["chat_id"], text, c["via"], markup, html=True)
-        if panel and isinstance(r, dict) and r.get("message_id"):
-            # управление — в одном сообщении: прежнее меню убираем
-            for mid in self._panel_msgs:
-                self._delete(c, mid)
-            self._panel_msgs = [r["message_id"]]
-            self._st["panel"] = self._panel_msgs
-            self._save()
+        if panel:
+            self._set_panel(c, r, photo=False)
         return r
+
+    def _set_panel(self, c: dict, r, photo: bool) -> None:
+        """Управление — в одном сообщении: новое становится меню, прежнее убираем."""
+        if not (isinstance(r, dict) and r.get("message_id")):
+            return
+        for mid in self._panel_msgs:
+            self._delete(c, mid)
+        self._panel_msgs = [r["message_id"]]
+        self._st["panel"] = self._panel_msgs
+        if photo:
+            self._st["photo"] = r["message_id"]
+        else:
+            self._st.pop("photo", None)
+        self._save()
+
+    def _send_logo(self, c: dict, caption: str, markup: dict | None) -> dict:
+        """Меню — фото с логотипом и подписью. Файл загружаем один раз, дальше — по file_id
+        (он свой у каждого бота: другой токен — загружаем заново)."""
+        fid = self._st.get("logo")
+        if fid and self._st.get("logo_bot") == c["token"].split(":", 1)[0]:
+            try:
+                r = notify._call(c["token"], "sendPhoto", {"chat_id": c["chat_id"], "photo": fid, "caption": caption,
+                                                           "parse_mode": "HTML", "reply_markup": markup},
+                                 via=c["via"])
+                self._set_panel(c, r, photo=True)
+                return r
+            except notify.NotifyError as e:
+                if "url" in str(e).lower():
+                    raise                   # кнопку «Панель» не приняли — решает show_menu
+                log.info("telegram: logo file_id refused (%s), uploading again", e)
+        with open(LOGO, "rb") as f:
+            png = f.read()
+        r = notify.send_photo(c["token"], c["chat_id"], png, caption, c["via"], html=True, markup=markup,
+                              filename="awg-router.png")
+        sizes = (r or {}).get("photo") if isinstance(r, dict) else None
+        if sizes and isinstance(sizes, list) and isinstance(sizes[-1], dict) and sizes[-1].get("file_id"):
+            self._st["logo"] = sizes[-1]["file_id"]
+            self._st["logo_bot"] = c["token"].split(":", 1)[0]
+        self._set_panel(c, r, photo=True)
+        return r
+
+    def _is_photo(self, msg: dict | None) -> bool:
+        mid = (msg or {}).get("message_id")
+        return bool((msg or {}).get("photo")) or (mid is not None and mid == self._st.get("photo"))
 
     def _delete(self, c: dict, mid) -> None:
         try:
@@ -672,11 +714,17 @@ class Bot:
     def _show(self, c: dict, text: str, markup: dict | None, msg: dict | None) -> None:
         """Экран меню: если кнопку нажали в сообщении-меню — меняем его на месте."""
         mid = (msg or {}).get("message_id")
-        if mid and mid in self._panel_msgs:
-            p = {"chat_id": c["chat_id"], "message_id": mid, "text": text, "parse_mode": "HTML",
-                 "disable_web_page_preview": True, "reply_markup": markup or {"inline_keyboard": []}}
+        photo = self._is_photo(msg)
+        # меню-фото: экраны меняют подпись под логотипом; слишком длинный экран — текстом
+        if mid and mid in self._panel_msgs and not (photo and len(_plain(text)) > CAPTION_MAX):
+            p = {"chat_id": c["chat_id"], "message_id": mid, "parse_mode": "HTML",
+                 "reply_markup": markup or {"inline_keyboard": []}}
+            if photo:
+                p["caption"] = text
+            else:
+                p.update(text=text, disable_web_page_preview=True)
             try:
-                notify._call(c["token"], "editMessageText", p, via=c["via"])
+                notify._call(c["token"], "editMessageCaption" if photo else "editMessageText", p, via=c["via"])
                 return
             except notify.NotifyError as e:
                 if "not modified" in str(e):
@@ -926,7 +974,17 @@ class Bot:
                   clients=len(clients), online=sum(1 for x in clients if self._online(x, now)),
                   traffic=fmt_size(tv.get("total_rx", 0) + tv.get("total_tx", 0), L))
         text += f"\n\n{note}" if note else ""
-        show = self._move if move else (lambda c_, t_, m_: self._show(c_, t_, m_, msg))
+
+        def show(c_, t_, m_):
+            mid = (msg or {}).get("message_id")
+            if not move and mid in self._panel_msgs and self._is_photo(msg):
+                self._show(c_, t_, m_, msg)          # меню уже фото — меняем подпись на месте
+                return
+            try:
+                self._send_logo(c_, t_, m_)          # фото с логотипом новым сообщением
+            except OSError as e:
+                log.warning("telegram logo: %s", e)
+                self._send(c_, "<b>AWG Router</b>\n" + t_, m_, panel=True)
         try:
             show(c, text, self._menu_kb(c))
         except notify.NotifyError as e:
@@ -1327,6 +1385,11 @@ class Bot:
         self._save()
         self.ops.audit(Msg("tg.act_update", version=v["latest"]))
         self._show(c, tr(L, "up_started", version=v["latest"]), kb(self._back(c)), msg)
+
+
+def _plain(text: str) -> str:
+    """Текст без разметки HTML — так Telegram считает длину подписи."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
 
 
 def _tunnel_num(st: dict, out: str):
