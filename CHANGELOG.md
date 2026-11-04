@@ -23,12 +23,12 @@ it grows, so every user-visible change gets a new version.
   through the web server; on any error it removes the file. Works for nginx on the host and in Docker
   when its config folder is mounted from the host, and Apache on the host; for others it shows the
   block to add by hand. Before, the panel stayed on a temporary certificate. Removed by **Remove from
-  the web server** and `awg-router uninstall`. Thanks to @Neborya (#4).
+  the web server** and `awg-router uninstall`. Thanks to Neborya (#4).
 - **QR codes scan reliably in AmneziaWG on Android.** QR codes in the panel and on a client's page are
   now drawn as a sharp picture where every square has the same whole number of screen pixels; before,
   squares came out of different sizes and blurred, and the scanner often failed. In the dark theme the
   white margin around a QR code is wider (the camera overexposes a thin one), but only from free space:
-  the code itself keeps its size. Thanks to @koo-pub.
+  the code itself keeps its size. Thanks to koo-pub.
 
 ## 1.13.0 — 2026-11-03
 
