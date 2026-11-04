@@ -10,6 +10,8 @@ it grows, so every user-visible change gets a new version.
   a second time below it. A client that had the same template chosen as its own still sees it until
   it is switched to the default. The icloud.com template is called "DNS response: icloud.com"
   everywhere.
+- **Client route: "Default “name”".** The first item of a client's route list was "Same as everyone
+  (now: …)"; it is now "Default “…”", like the masking list.
 
 ## 1.14.0 — 2026-11-04
 
