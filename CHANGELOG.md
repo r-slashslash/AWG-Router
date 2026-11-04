@@ -3,6 +3,14 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.13.1 — 2026-11-04
+
+- **QR codes scan reliably in AmneziaWG on Android.** QR codes in the panel and on a client's page are
+  now drawn as a sharp picture where every square has the same whole number of screen pixels; before,
+  squares came out of different sizes and blurred, and the scanner often failed. In the dark theme the
+  white margin around a QR code is wider (the camera overexposes a thin one), but only from free space:
+  the code itself keeps its size. Thanks to @koo-pub.
+
 ## 1.13.0 — 2026-11-03
 
 - **Server traffic in the header.** A **TRAFFIC: N** badge next to the panel name shows all traffic

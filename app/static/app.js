@@ -582,9 +582,15 @@ function addClient() {
 
 /** Растровая картинка, где каждый модуль — целое число физических пикселей (не меньше 3):
  *  SVG с дробным или даже целым размером сканер AmneziaWG на Android читает плохо или не читает.
- *  Размер подбирается после вёрстки по ширине .connect, чтобы белая рамка .qr-box не сжималась. */
-const QR_TARGET_CSS_PX = 300, QR_MIN_MODULE_PX = 3, QR_MIN_PAD_CSS_PX = 12, QR_QUIET_MODULES = 4;
+ *  Размер подбирается после вёрстки по ширине .connect: сначала сам код (до QR_TARGET_CSS_PX),
+ *  потом белое поле из оставшегося места — поле никогда не уменьшает код.
+ *  На тёмном фоне камера пересвечивает тонкое белое поле, и сканер теряет «тихую зону», поэтому
+ *  в тёмной теме тихая зона внутри картинки шире (QR_QUIET_MODULES_DARK, растёт вместе с кодом),
+ *  а рамка .qr-box добирает до QR_DARK_PAD_CSS_PX, если хватает места. */
+const QR_TARGET_CSS_PX = 300, QR_MIN_MODULE_PX = 3, QR_QUIET_MODULES = 4, QR_QUIET_MODULES_DARK = 6,
+  QR_DARK_PAD_CSS_PX = 64;
 const qrCodes = new WeakMap();
+const qrDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 let qrSeq = 0, qrLayoutWidth = 0;
 function qrImage(text) {
   qrcode.stringToBytes = qrcode.stringToBytesFuncs["UTF-8"];
@@ -602,7 +608,8 @@ function qrImage(text) {
 }
 function drawQr(img) {
   const qr = qrCodes.get(img), box = img.parentElement;
-  const n = qr.getModuleCount(), m = QR_QUIET_MODULES, size = n + 2 * m;
+  const dark = !!(qrDark && qrDark.matches);
+  const n = qr.getModuleCount(), m = dark ? QR_QUIET_MODULES_DARK : QR_QUIET_MODULES, size = n + 2 * m;
   const dpr = window.devicePixelRatio || 1;
   box.style.padding = "";
   const style = getComputedStyle(box);
@@ -611,7 +618,7 @@ function drawQr(img) {
   const fitPx = Math.floor(Math.min(QR_TARGET_CSS_PX, room - 2 * pad) * dpr / size);
   const modulePx = Math.max(QR_MIN_MODULE_PX, fitPx);
   const cssPx = size * modulePx / dpr;
-  if (cssPx + 2 * pad > room) box.style.padding = `${Math.max(QR_MIN_PAD_CSS_PX, Math.floor((room - cssPx) / 2))}px`;
+  if (dark) box.style.padding = `${Math.max(pad, Math.min(QR_DARK_PAD_CSS_PX, Math.floor((room - cssPx) / 2)))}px`;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size * modulePx;
   const ctx = canvas.getContext("2d");
@@ -622,12 +629,16 @@ function drawQr(img) {
   img.src = canvas.toDataURL("image/png");
   img.style.width = `${cssPx}px`;
 }
+function redrawQrs() {
+  document.querySelectorAll("img.qr").forEach((img) => { if (qrCodes.has(img)) drawQr(img); });
+}
 window.addEventListener("resize", () => {
   const w = document.documentElement.clientWidth;
   if (w === qrLayoutWidth) return;
   qrLayoutWidth = w;
-  document.querySelectorAll("img.qr").forEach((img) => { if (qrCodes.has(img)) drawQr(img); });
+  redrawQrs();
 });
+if (qrDark && qrDark.addEventListener) qrDark.addEventListener("change", redrawQrs);
 
 // application/octet-stream: с text/plain Chrome на Android дописывает к имени «.txt»,
 // и приложение AmneziaVPN не принимает файл «client.conf.txt»

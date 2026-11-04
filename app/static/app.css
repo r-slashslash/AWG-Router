@@ -379,8 +379,6 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 .connect-actions .btn { justify-content: flex-start; }
 .connect-actions details pre { margin-top: 8px; max-height: 220px; }
 @media (max-width: 560px) { .qr-box { margin-inline: auto; } }
-/* на тёмном фоне камера телефона пересвечивает белое поле QR, и сканер AmneziaWG не читает код */
-@media (prefers-color-scheme: dark) { .qr-box { padding: 64px; } }
 .manage-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid var(--rule); }
 .btn.danger { color: var(--bad); }
 .btn.danger:hover { border-color: var(--bad); }
