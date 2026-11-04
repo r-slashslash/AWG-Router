@@ -3,6 +3,14 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.14.1 — 2026-11-05
+
+- **Client masking list without a duplicate.** The default item is now named after the server's
+  template, for example "DNS response: icloud.com (default)", and that template is no longer listed
+  a second time below it. A client that had the same template chosen as its own still sees it until
+  it is switched to the default. The icloud.com template is called "DNS response: icloud.com"
+  everywhere.
+
 ## 1.14.0 — 2026-11-04
 
 1.13.1 was not released; its QR code fix is part of this version.

@@ -724,11 +724,15 @@ function editClient(pk, section = null) {
     let info;
     try { info = await api("GET", "cps"); } catch { return; }
     const cur = c.cps ? c.cps.preset : "server";
-    const srvName = cpsName(info.server_match);
+    // шаблон сервера — это и есть пункт «по умолчанию»: отдельно его не показываем
+    // (кроме клиента, за которым он закреплён раньше, чтобы его выбор было видно)
+    const srv = info.server_match;
+    const srvLabel = srv ? t("cl.cps_server", { name: cpsName(srv) }) : t("cl.cps_server_custom");
+    const presets = info.presets.filter((p) => p.id !== srv || p.id === cur);
     box.innerHTML = `
       <label class="field"><span>${esc(t("cl.cps"))}</span>
-        <select id="c-cps"><option value="server" ${cur === "server" ? "selected" : ""}>${esc(t("cl.cps_server", { name: srvName }))}</option>
-          ${info.presets.map((p) => `<option value="${p.id}" ${cur === p.id ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
+        <select id="c-cps"><option value="server" ${cur === "server" ? "selected" : ""}>${esc(srvLabel)}</option>
+          ${presets.map((p) => `<option value="${p.id}" ${cur === p.id ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
           <option value="custom" ${cur === "custom" ? "selected" : ""}>${esc(t("cps.custom"))}</option></select>
         <span class="hint">${esc(t("cl.cps_hint"))}</span></label>
       <div id="c-cps-custom" hidden></div>`;

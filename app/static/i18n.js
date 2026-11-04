@@ -1633,7 +1633,7 @@ Object.assign(I18N.fa, {
 
 // 1.5.0: маскировка I1–I5 — шаблоны, проверка, свои значения клиента
 Object.assign(I18N.ru, {
-  "cps.amnezia": "DNS-ответ icloud.com (фиксированный)",
+  "cps.amnezia": "DNS-ответ: icloud.com",
   "cps.stun": "STUN — звонки, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS-запрос",
@@ -1646,9 +1646,10 @@ Object.assign(I18N.ru, {
   "cps.big": "{n} байт — больше 1200, пакет может фрагментироваться",
   "cps.bad": "ошибка в тегах",
   "srv.cps_template": "Шаблон",
-  "srv.cps_template_hint": "Заполняет I1–I5 готовой маскировкой. Попадёт в новые конфиги клиентов, у которых маскировка «как на сервере».",
+  "srv.cps_template_hint": "Заполняет I1–I5 готовой маскировкой. Попадёт в новые конфиги клиентов, у которых маскировка по умолчанию.",
   "cl.cps": "Маскировка",
-  "cl.cps_server": "Как на сервере: {name}",
+  "cl.cps_server": "{name} (по умолчанию)",
+  "cl.cps_server_custom": "Значения сервера (по умолчанию)",
   "cl.cps_hint": "Какой протокол изображают пакеты перед рукопожатием. Только для этого клиента; после смены отдайте ему новый QR-код или файл.",
   "cl.cps_apply": "Применить",
   "cl.cps_saved": "Маскировка изменена — отдайте клиенту новый конфиг",
@@ -1660,7 +1661,7 @@ Object.assign(I18N.ru, {
   "srv.cps_size": "{key}: пакет {size} байт, больше {max} — он будет фрагментирован",
 });
 Object.assign(I18N.en, {
-  "cps.amnezia": "DNS response icloud.com (fixed)",
+  "cps.amnezia": "DNS response: icloud.com",
   "cps.stun": "STUN — calls, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS query",
@@ -1673,9 +1674,10 @@ Object.assign(I18N.en, {
   "cps.big": "{n} bytes — over 1200, the packet may be fragmented",
   "cps.bad": "tag error",
   "srv.cps_template": "Template",
-  "srv.cps_template_hint": "Fills I1–I5 with a ready-made imitation. Goes into new configs of clients whose masking is “as on the server”.",
+  "srv.cps_template_hint": "Fills I1–I5 with a ready-made imitation. Goes into new configs of clients whose masking is the default.",
   "cl.cps": "Masking",
-  "cl.cps_server": "As on the server: {name}",
+  "cl.cps_server": "{name} (default)",
+  "cl.cps_server_custom": "Server values (default)",
   "cl.cps_hint": "Which protocol the packets before the handshake imitate. For this client only; after a change, give them the new QR code or file.",
   "cl.cps_apply": "Apply",
   "cl.cps_saved": "Masking changed — give the client the new config",
@@ -1687,7 +1689,7 @@ Object.assign(I18N.en, {
   "srv.cps_size": "{key}: the packet is {size} bytes, over {max} — it would be fragmented",
 });
 Object.assign(I18N.zh, {
-  "cps.amnezia": "DNS 响应 icloud.com（固定）",
+  "cps.amnezia": "DNS 响应：icloud.com",
   "cps.stun": "STUN——通话、WebRTC",
   "cps.quic": "QUIC——HTTP/3",
   "cps.dns": "DNS 查询",
@@ -1700,9 +1702,10 @@ Object.assign(I18N.zh, {
   "cps.big": "{n} 字节——超过 1200，数据包可能被分片",
   "cps.bad": "标签错误",
   "srv.cps_template": "模板",
-  "srv.cps_template_hint": "用现成的伪装填写 I1–I5，会写入伪装设置为「与服务器相同」的客户端的新配置。",
+  "srv.cps_template_hint": "用现成的伪装填写 I1–I5，会写入使用默认伪装的客户端的新配置。",
   "cl.cps": "伪装",
-  "cl.cps_server": "与服务器相同：{name}",
+  "cl.cps_server": "{name}（默认）",
+  "cl.cps_server_custom": "服务器的值（默认）",
   "cl.cps_hint": "握手前的数据包伪装成哪种协议。仅对此客户端生效；更改后请把新的二维码或文件发给对方。",
   "cl.cps_apply": "应用",
   "cl.cps_saved": "伪装已更改——请把新配置发给客户端",
@@ -1714,7 +1717,7 @@ Object.assign(I18N.zh, {
   "srv.cps_size": "{key}：数据包 {size} 字节，超过 {max}——会被分片",
 });
 Object.assign(I18N.fa, {
-  "cps.amnezia": "پاسخ DNS ‏icloud.com (ثابت)",
+  "cps.amnezia": "پاسخ DNS: ‏icloud.com",
   "cps.stun": "STUN — تماس‌ها، WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "درخواست DNS",
@@ -1727,9 +1730,10 @@ Object.assign(I18N.fa, {
   "cps.big": "{n} بایت — بیش از ۱۲۰۰، بسته ممکن است تکه‌تکه شود",
   "cps.bad": "خطا در برچسب‌ها",
   "srv.cps_template": "الگو",
-  "srv.cps_template_hint": "I1 تا I5 را با یک پوشش آماده پر می‌کند و در پیکربندی‌های تازهٔ کلاینت‌هایی که پوششان «مانند سرور» است قرار می‌گیرد.",
+  "srv.cps_template_hint": "I1 تا I5 را با یک پوشش آماده پر می‌کند و در پیکربندی‌های تازهٔ کلاینت‌هایی که پوشش پیش‌فرض دارند قرار می‌گیرد.",
   "cl.cps": "پوشش",
-  "cl.cps_server": "مانند سرور: {name}",
+  "cl.cps_server": "{name} (پیش‌فرض)",
+  "cl.cps_server_custom": "مقادیر سرور (پیش‌فرض)",
   "cl.cps_hint": "بسته‌های پیش از دست‌دهی شبیه کدام پروتکل باشند. فقط برای این کلاینت؛ پس از تغییر، کد QR یا فایل تازه را به او بدهید.",
   "cl.cps_apply": "اعمال",
   "cl.cps_saved": "پوشش تغییر کرد — پیکربندی تازه را به کلاینت بدهید",
