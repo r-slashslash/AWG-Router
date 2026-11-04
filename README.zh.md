@@ -69,7 +69,7 @@ AWG Router 让你的 AmneziaWG 服务器成为级联的入口（中转服务器�
 </p>
 
 **面板**
-- 使用为服务器 IP 签发的 Let's Encrypt 证书提供 HTTPS。证书有效期 6 天，会自动续期。
+- 使用为服务器 IP 或你的域名签发的 Let's Encrypt 证书提供 HTTPS，证书自动续期；也可以使用自有证书（例如 certbot 签发的）。如果 80 端口已被 nginx 或 Apache 占用，验证会通过它们进行。
 - 也可以设置为只能通过 SSH 隧道访问面板。
 - 地址包含随机端口和秘密路径，登录需要密码，并有防暴力破解保护。登录有效期为 4 小时。
 - 可选的第二重验证：身份验证器应用（Google Authenticator、Aegis、2FAS…）中的 6 位代码。在 **系统** 选项卡中启用。
@@ -98,12 +98,15 @@ AWG Router 让你的 AmneziaWG 服务器成为级联的入口（中转服务器�
 curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/install.sh | bash
 ```
 
-安装程序会把面板下载到 `/opt/awg-router`。它使用英文界面，会问两个问题：
+安装程序会把面板下载到 `/opt/awg-router`。它使用英文界面，会问几个问题：
 
 1. **管理什么。**
    - 如果找到 AmneziaVPN 容器，会让你选择管理该容器，或主机上单独的 AmneziaWG 服务器。
    - 如果服务器上没有 AmneziaWG，会提供安装：可以像 AmneziaVPN 那样装进 Docker 容器（应用也能识别），也可以作为 systemd 服务直接装在主机上。会推荐一个随机 UDP 端口。
 2. **如何打开面板。** 通过浏览器 HTTPS 访问，或仅通过 SSH 隧道访问。
+3. **面板域名**（仅浏览器方式）。按 Enter 则通过 IP 打开面板；域名必须指向本服务器。
+
+如果 80 端口已被 nginx 或 Apache 占用，安装程序会显示它可以为 Let's Encrypt 验证添加的小文件，并在添加前征求你的同意（见 [80 端口被网页服务器占用](#80-端口被网页服务器占用)）。
 
 其余全部自动完成：随机 4 位端口、密码、构建和证书。最后会显示链接和密码：
 
@@ -141,12 +144,20 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 
 ## 证书
 
-Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配置）。
-- 面板通过 [lego](https://go-acme.github.io/lego/) 获取证书，经 80 端口验证，大约每 3 天续期一次，无需重启。
+- 面板通过 [lego](https://go-acme.github.io/lego/) 为服务器 IP 或面板域名获取 Let's Encrypt 证书，经 80 端口验证，并在不重启的情况下续期。Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配置），因此面板大约每 3 天续期一次。
+- **系统 → 域名和证书**：设置面板域名（留空则通过 IP）并选择 Let's Encrypt 或自有证书。使用自有证书时，填写服务器上证书（完整链）和私钥的路径，例如 certbot 的 `/etc/letsencrypt/live/example.com/fullchain.pem` 和 `privkey.pem`。面板会检查证书是否签发给面板地址、私钥是否匹配；certbot 续期后，面板会在几分钟内加载新证书。
+- 域名只是面板的地址：客户端配置仍使用 **服务器** 选项卡中的服务器地址。
 - 如果签发失败，面板会使用临时自签名证书运行，浏览器会显示警告。每 30 分钟重试一次。
 - 状态和 **立即获取证书** 按钮位于 **系统** 选项卡。
 
-如果服务器有域名，在 `/opt/awg-router/.env` 中写入 `TLS_DOMAIN=example.com`，然后运行 `awg-router update`。
+### 80 端口被网页服务器占用
+
+如果服务器上已有 nginx 或 Apache 在运行网站，Let's Encrypt 会通过它们验证面板。安装程序和 **系统 → 设置通过网页服务器验证** 会先显示文件内容，只有在你同意后才添加：
+- 主机上或 Docker 中的 nginx（以及 Angie、OpenResty；Docker 中要求配置文件夹从主机挂载）：在你的配置旁添加 `awg-router-acme.conf`（`conf.d`、`sites-enabled`）。主机上的 Apache：站点 `awg-router-acme.conf`。
+- 该文件只响应 `/.well-known/acme-challenge/`，且只针对面板地址，内容来自文件夹 `/var/lib/awg-router/acme`。你的网站和其他配置文件不变。
+- 重新加载前会检查配置（`nginx -t`、`apachectl configtest`），之后面板会通过网页服务器请求一个测试文件。出现任何错误都会删除该文件，网页服务器恢复原先的设置。
+- Caddy、其他网页服务器以及配置位于镜像内部的容器：面板会显示需要手动添加的配置块，添加后点击 **检查**。
+- **从网页服务器移除** 和 `awg-router uninstall` 会删除该文件。
 
 ## 服务器模式
 

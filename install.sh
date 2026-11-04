@@ -8,6 +8,8 @@
 # Non-interactive:
 #   AWGR_MODE=container|host  AWGR_ACCESS=public|ssh  bash install.sh
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
+#   panel domain:              AWGR_DOMAIN=panel.example.com (empty — by IP)
+#   port 80 taken by nginx or Apache: AWGR_WEB=yes adds the Let's Encrypt validation file to it
 set -uo pipefail
 
 REPO="${AWGR_REPO:-r-slashslash/AWG-Router}"
@@ -173,11 +175,17 @@ import json, sys, time
 s = json.load(open(sys.argv[1])).get("tls", {})
 exp = s.get("expires")
 d = time.strftime("%Y-%m-%d %H:%M", time.localtime(exp)) if exp else "?"
+err = s.get("error") or ""
+if isinstance(err, dict):   # a message for the panel: {"$t": key, "p": params}
+    p = err.get("p") or {}
+    err = (f"port 80 is used by {p.get('server')} — System → Set up validation through the web server"
+           if err.get("$t") == "tls.port80" else "see System in the panel")
 if s.get("active") == "letsencrypt":
     print(f"Let's Encrypt certificate valid until {d}, renews automatically")
+elif s.get("active") == "custom":
+    print(f"Own certificate valid until {d}")
 elif s.get("active") == "selfsigned":
-    print("Temporary self-signed certificate (the browser will warn). Let's Encrypt: "
-          + (s.get("error") or "")[:160])
+    print("Temporary self-signed certificate (the browser will warn). Let's Encrypt: " + str(err)[:160])
 PY
 )
     [ -n "$tls_line" ] && printf '  %s\n' "$tls_line"
@@ -356,12 +364,15 @@ case "$INSTALL_AWG" in
 esac
 
 # ------------------------------------------------------------------ panel access
+ASK_DOMAIN=0
 if { [ "$RECONF" = 1 ] && [ -z "${AWGR_ACCESS:-}" ]; } || [ -z "$ACCESS" ]; then
   choose "How will you open the panel?" \
          "In a browser over HTTPS with a Let's Encrypt certificate (recommended)" \
          "Only through an SSH tunnel — the panel is hidden from the internet"
   [ "$CHOICE" = 1 ] && ACCESS=public || ACCESS=ssh
+  ASK_DOMAIN=1
 fi
+[ -z "$(envget PANEL_ACCESS)" ] && ASK_DOMAIN=1    # a new install
 
 # ------------------------------------------------------------------ settings
 step "Preparing settings"
@@ -385,9 +396,43 @@ PANEL_BASE_PATH="$(envget PANEL_BASE_PATH)"
 if [ "$ACCESS" = ssh ]; then PANEL_HOST=127.0.0.1; TLS_MODE=off; else PANEL_HOST=0.0.0.0; TLS_MODE=letsencrypt; fi
 ok "Panel port: $PANEL_PORT"
 
-if [ "$TLS_MODE" = letsencrypt ] && port_busy 80 && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$NAME"; then
-  warn "Port 80 is used by another program — Let's Encrypt cannot validate, a temporary certificate will be used"
+# Panel domain: asked on a new install and with --reconfigure; Enter — the panel opens by IP.
+# Kept by the panel in data/tls.json (System → Domain and certificate changes it too).
+cur_domain() {
+  local d=""
+  [ -f "$DIR/data/tls.json" ] && d=$(sed -n 's/.*"domain": *"\([^"]*\)".*/\1/p' "$DIR/data/tls.json" | head -1)
+  [ -f "$DIR/data/tls.json" ] && grep -q '"domain"' "$DIR/data/tls.json" || d="$TLS_DOMAIN"
+  echo "$d"
+}
+valid_domain() { [[ "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]; }
+PANEL_DOMAIN="$(cur_domain)"; SET_DOMAIN=0
+if [ "$ACCESS" = public ] && [ -n "${AWGR_DOMAIN+x}" ]; then
+  PANEL_DOMAIN="$(echo "$AWGR_DOMAIN" | tr 'A-Z' 'a-z')"; SET_DOMAIN=1
+elif [ "$ACCESS" = public ] && [ "$ASK_DOMAIN" = 1 ]; then
+  printf '\n%sPanel domain%s — only if you have one and it points to this server (an A record).\n' "$B" "$N"
+  while true; do
+    if [ -n "$PANEL_DOMAIN" ]; then
+      ask "Domain (Enter — keep $PANEL_DOMAIN, type ip — open by IP $PUBLIC_HOST): " "$PANEL_DOMAIN"
+    else
+      ask "Domain (Enter — open the panel by IP $PUBLIC_HOST): " ""
+    fi
+    d="$(echo "$REPLY" | tr 'A-Z' 'a-z' | tr -d '[:space:]')"; d="${d%.}"
+    [ "$d" = ip ] && d=""
+    if [ -z "$d" ] || valid_domain "$d"; then PANEL_DOMAIN="$d"; break; fi
+    echo "  Not a domain name, try again (for example panel.example.com)"
+  done
+  SET_DOMAIN=1
 fi
+if [ "$ACCESS" = public ] && [ -n "$PANEL_DOMAIN" ]; then
+  dns=$(getent ahostsv4 "$PANEL_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+  if [ -z "$dns" ]; then
+    warn "$PANEL_DOMAIN is not found in DNS yet — the panel uses a temporary certificate until it is"
+  elif [[ " $dns" != *" $PUBLIC_HOST "* ]]; then
+    warn "$PANEL_DOMAIN points to ${dns% }, this server is $PUBLIC_HOST — Let's Encrypt fails until DNS is fixed"
+  fi
+  ok "Panel domain: $PANEL_DOMAIN"
+fi
+TLS_HOST="${PANEL_DOMAIN:-$PUBLIC_HOST}"
 
 # ------------------------------------------------------------------ firewall
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -519,6 +564,36 @@ if [ "$INSTALL_AWG" = container ]; then
   docker ps --format '{{.Names}}' | grep -qx "$SRV_NAME" \
     || { docker logs --tail 20 "$SRV_NAME" 2>&1; die "The AmneziaWG container did not start"; }
   ok "AmneziaWG is running: container $SRV_NAME, UDP port $AWG_PORT"
+fi
+
+# ------------------------------------------------------------------ port 80
+# Let's Encrypt validates the panel address on port 80. If a web server already holds it, the
+# panel can add its own small file there that serves only the validation for the panel address.
+panel_cli() { docker compose run --rm --no-deps -T awg-router python3 -m app.webfront "$@" 2>>"$DIR/data/up.log"; }
+have_tty() { { : </dev/tty; } 2>/dev/null; }
+if [ "$SET_DOMAIN" = 1 ]; then
+  panel_cli domain "$PANEL_DOMAIN" >/dev/null || warn "Could not save the panel domain"
+fi
+if [ "$ACCESS" = public ] && port_busy 80; then
+  step "Port 80"
+  out="$(panel_cli check "$TLS_HOST")"; rc=$?
+  case "$rc" in
+    3) ok "$(echo "$out" | head -1)" ;;
+    0) echo "$out" | sed 's/^/  /'
+       ans="${AWGR_WEB:-}"
+       if [ -z "$ans" ]; then
+         if have_tty; then ask "Add it automatically? [Y/n]: " Y; ans="$REPLY"; else ans=n; fi
+       fi
+       if [[ "$ans" =~ ^[Yy] ]]; then
+         res="$(panel_cli add "$TLS_HOST")" && ok "$res" \
+           || warn "$res — the panel uses a temporary certificate; add the text above by hand"
+       else
+         warn "Not added. You can do it later in the panel: System → Set up validation through the web server"
+       fi ;;
+    2) echo "$out" | sed 's/^/  /'
+       warn "Until then the panel uses a temporary certificate (the browser will warn)" ;;
+    *) [ -n "$out" ] && echo "$out" | sed 's/^/  /' ;;
+  esac
 fi
 
 # ------------------------------------------------------------------ start

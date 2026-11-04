@@ -29,6 +29,8 @@ TLS_DOMAIN = os.environ.get("TLS_DOMAIN", "").strip()       # пусто = PUBLI
 ACME_EMAIL = os.environ.get("ACME_EMAIL", "").strip()
 ACME_SERVER = os.environ.get("ACME_SERVER", "https://acme-v02.api.letsencrypt.org/directory")
 ACME_HTTP_PORT = int(os.environ.get("ACME_HTTP_PORT", "80"))
+# Корень файловой системы хоста, как его видит панель (pid: host). Пусто — свой корень (демо, тесты)
+HOST_ROOT = os.environ.get("HOST_ROOT", "" if DRY_RUN else "/proc/1/root").rstrip("/")
 
 # Контейнер Amnezia: пусто = автопоиск (amnezia-awg2, затем amnezia-awg)
 AWG_CONTAINER = os.environ.get("AWG_CONTAINER", "").strip()

@@ -17,7 +17,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-from . import awgconf, awgserver, config, cps, domains, hostnet, limits, lists, notify, selfupdate, system, tgbot, totp
+from . import (awgconf, awgserver, config, cps, domains, hostnet, limits, lists, notify, selfupdate, system, tgbot,
+               tlsconf, tlsmgr, totp, webfront)
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -1081,7 +1082,7 @@ def get_state(req):
         "target": {"container": t.container, "kind": t.kind, "pid": t.pid, "iface": t.iface,
                    "conf": t.conf_path, "exists": t.exists} if t else None,
         "panel": {"url": panel_url(), "access": "ssh" if config.PANEL_HOST.startswith("127.") else "public",
-                  "tls": tls.status(), "mode": config.AWG_MODE},
+                  "tls": tls.status(), "mode": config.AWG_MODE, "ip": engine.srv.public_host(st)},
         "target_error": engine.target_error,
         "backend": config.UPSTREAM_BACKEND,
         "engine": {"last_apply": engine.last_apply, "last_reconcile": engine.last_reconcile,
@@ -1757,10 +1758,102 @@ def init_server(req):
 
 @app.post("/api/tls/renew")
 def tls_renew(req):
-    if tls.mode != "letsencrypt":
+    if tls.source() != "letsencrypt":
         bad("err.bad_value")
     ok = tls.renew_now()
     return {"ok": ok, "tls": tls.status()}
+
+
+HOSTNAME_RE = re.compile(r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]")
+
+
+def _server_ips() -> list[str]:
+    """Адреса этого сервера: внешний IPv4 (проверка «напрямую»), адрес из настроек, IPv6 интерфейсов."""
+    ips = [engine.public_v4, engine.srv.public_host(store.snapshot()), config.PUBLIC_HOST]
+    ips += hostnet.global_ipv6()
+    return [a for a in ips if a and tlsmgr._is_ip(a)]
+
+
+def _need_web(host: str) -> dict | None:
+    """Порт 80 занят веб-сервером, а проверка Let's Encrypt через него для host не настроена."""
+    web = tlsconf.load().get("web")
+    if web and web.get("host") == host:
+        return None
+    if not (config.DRY_RUN or webfront.listeners()):
+        return None
+    return webfront.info(host)
+
+
+@app.put("/api/tls")
+def tls_set(req):
+    """Домен панели и откуда сертификат: Let's Encrypt или свой (файлы на хосте)."""
+    if not tls.enabled:
+        bad("tls.off")
+    body = req.json()
+    domain = str(body.get("domain") or "").strip().lower().rstrip(".")
+    if domain and not (HOSTNAME_RE.fullmatch(domain) or tlsmgr._is_ip(domain)):
+        bad("tls.bad_domain")
+    src = body.get("source")
+    if src not in tlsconf.SOURCES:
+        bad("err.bad_value")
+    cert, key = str(body.get("cert") or "").strip(), str(body.get("key") or "").strip()
+    host = domain or engine.srv.public_host(store.snapshot())
+    if not host:
+        bad("tls.no_host")
+    if domain and not tlsmgr._is_ip(domain) and not body.get("force"):
+        m = tlsmgr.check_dns(domain, _server_ips())
+        if m:
+            return {"ok": False, "confirm": m}
+    if src == "custom":
+        m = tlsmgr.check_custom(cert, key, host)
+        if m:
+            bad(m)
+    old_host = tls.host()
+    tlsconf.update(domain=domain, source=src, cert=cert if src == "custom" else None,
+                   key=key if src == "custom" else None)
+    warn = None
+    if host != old_host:
+        try:
+            webfront.reinstall_for(host)
+        except webfront.WebError as e:
+            warn = e.msg
+        engine.event("info", Msg("ev.panel_host", host=host))
+    tls.reconfigure()
+    write_status()
+    return {"ok": True, "tls": tls.status(), "url": panel_url(), "warn": warn,
+            "web": _need_web(host) if src == "letsencrypt" else None}
+
+
+@app.get("/api/tls/web")
+def tls_web(req):
+    if not tls.enabled:
+        bad("tls.off")
+    return webfront.info(tls.host())
+
+
+@app.post("/api/tls/web")
+def tls_web_set(req):
+    """Проверка Let's Encrypt через веб-сервер на порту 80: add — наш файл, manual — вставили сами."""
+    if not tls.enabled:
+        bad("tls.off")
+    action = req.json().get("action")
+    host = tls.host()
+    try:
+        if action == "add":
+            web = webfront.install(host)
+        elif action == "manual":
+            web = webfront.manual(host)
+        elif action == "remove":
+            web = None
+            webfront.remove()
+        else:
+            bad("err.bad_value")
+    except webfront.WebError as e:
+        bad(e.msg)
+    if web:
+        engine.event("info", Msg("ev.web_added", server=web.get("process") or "web", file=web.get("file") or ""))
+    tls.reconfigure()
+    return {"ok": True, "tls": tls.status()}
 
 
 # --------------------------------------------------- управление из Telegram
@@ -1786,7 +1879,7 @@ def _bot_status() -> dict:
             "month_bytes": sum(engine.traffic.used(c["public_key"], "month") for c in engine.clients),
             "server_traffic": engine.traffic.server_view(),
             "version": updates.status(),
-            "cert_until": ts.get("expires") if ts.get("active") == "letsencrypt" else None}
+            "cert_until": ts.get("expires") if ts.get("active") in ("letsencrypt", "custom") else None}
 
 
 def _bot_host_info() -> dict:
@@ -1863,8 +1956,8 @@ def panel_url() -> str:
 def write_status() -> None:
     p = os.path.join(config.DATA_DIR, "status.json")
     with open(p + ".tmp", "w") as f:
-        json.dump({"ready": True, "url": panel_url(), "tls": tls.status(),
-                   "time": time.time()}, f)
+        json.dump(to_json({"ready": True, "url": panel_url(), "tls": tls.status(),
+                           "time": time.time()}), f)
     os.replace(p + ".tmp", p)
 
 

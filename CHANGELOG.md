@@ -3,8 +3,27 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.13.1 — 2026-11-04
+## 1.14.0 — 2026-11-04
 
+1.13.1 was not released; its QR code fix is part of this version.
+
+- **Panel domain.** The installer asks for a domain for the panel (Enter — open it by IP), and
+  **System → Domain and certificate** changes it later. The panel checks that the domain points to this
+  server before using it. The domain is only the panel's address: client configs keep the server
+  address. It is kept in `data/tls.json`, not in backups; `TLS_DOMAIN` in `.env` still works until a
+  domain is set.
+- **Own certificate.** In the same window: paths on the server to a certificate (full chain) and key,
+  for example from certbot. The panel checks that it is for the panel address and that the key
+  matches, and picks up a renewed certificate within a few minutes, without a restart.
+- **Port 80 taken by a web server.** If nginx (also Angie, OpenResty) or Apache already serves sites,
+  Let's Encrypt validates the panel through it: the panel adds its own file `awg-router-acme.conf` that
+  answers only `/.well-known/acme-challenge/` for the panel address from `/var/lib/awg-router/acme`.
+  It shows the file and asks first (the installer and **System → Set up validation through the web
+  server**), tests the config (`nginx -t`, `apachectl configtest`), reloads, and requests a test file
+  through the web server; on any error it removes the file. Works for nginx on the host and in Docker
+  when its config folder is mounted from the host, and Apache on the host; for others it shows the
+  block to add by hand. Before, the panel stayed on a temporary certificate. Removed by **Remove from
+  the web server** and `awg-router uninstall`. Thanks to @Neborya (#4).
 - **QR codes scan reliably in AmneziaWG on Android.** QR codes in the panel and on a client's page are
   now drawn as a sharp picture where every square has the same whole number of screen pixels; before,
   squares came out of different sizes and blurred, and the scanner often failed. In the dark theme the

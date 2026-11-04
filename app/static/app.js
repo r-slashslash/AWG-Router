@@ -1597,9 +1597,16 @@ bind.server = () => {
 function viewSystem() {
   const tg = S.target;
   const P = S.panel || {}, T = P.tls || {};
+  const pub = P.access !== "ssh" && (T.mode === "letsencrypt" || T.mode === "selfsigned");
   const tlsLine = P.access === "ssh" ? t("sy.tls_ssh")
+    : T.busy ? t("sy.tls_busy")
     : T.active === "letsencrypt" ? t("sy.tls_le", { date: fmtTime(T.expires) })
+    : T.active === "custom" ? t("sy.tls_custom", { date: fmtTime(T.expires) })
     : T.active === "selfsigned" ? t("sy.tls_self") : t("sy.tls_off");
+  const W = T.web;
+  const webLine = !W ? "" : W.kind === "manual" ? t("web.manual_set", { server: webLabel(W) })
+    : t("sy.tls_web_file", { server: webLabel(W) });
+  const fallback = T.error && T.active !== T.source && !T.busy;
   return `
   <section class="section">
     <div class="section-head"><h2>${esc(t("sy.access"))}</h2></div>
@@ -1608,12 +1615,17 @@ function viewSystem() {
         <div><span>${esc(t("sy.url"))}</span><b><bdi>${esc(P.url || "—")}</bdi></b></div>
         <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b></div>
         <div><span>${esc(t("sy.cert"))}</span><b>${esc(tlsLine)}</b></div>
+        ${pub && W && T.source === "letsencrypt" ? `<div><span>${esc(t("sy.tls_web"))}</span><b style="word-break:normal">${esc(webLine)}</b>${W.file ? `<span class="muted small" dir="ltr" style="display:block;overflow-wrap:anywhere">${esc(W.file)}</span>` : ""}</div>` : ""}
         <div><span>${esc(t("sy.version"))}</span><b>${esc((S.version || {}).current || "—")}</b></div>
       </div>
       ${updateNotice()}
-      ${T.error && T.active !== "letsencrypt" && P.access !== "ssh" ? `<p class="err small" style="margin-bottom:0">${esc(t("sy.tls_error"))}: ${esc(T.error)}</p>` : ""}
+      ${pub && fallback && !T.port80 ? `<p class="err small" style="margin-bottom:0">${esc(t(T.source === "custom" ? "tls.src_custom" : "sy.tls_error"))}: ${esc(tm(T.error))}</p>` : ""}
+      ${pub && T.port80 && T.source === "letsencrypt" && !W ? `<p class="warn-text small" style="margin-bottom:0">${esc(t("sy.tls_port80", { server: webLabel(T.port80) }))}</p>` : ""}
       <div class="actions" style="margin-top:12px">
-        ${T.mode === "letsencrypt" ? `<button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button>` : ""}
+        ${pub ? `<button class="btn sm" id="tls-setup">${esc(t("sy.tls_setup"))}</button>` : ""}
+        ${pub && T.port80 && T.source === "letsencrypt" && !W ? `<button class="btn sm primary" id="tls-web">${esc(t("sy.tls_port80_btn"))}</button>` : ""}
+        ${pub && T.source === "letsencrypt" && !T.port80 ? `<button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button>` : ""}
+        ${pub && W ? `<button class="btn sm ghost" id="tls-web-rm">${esc(t("sy.tls_web_remove"))}</button>` : ""}
         <button class="btn sm" id="upd-check">${esc(t("sy.check_updates"))}</button>
         ${standalone() ? "" : `<button type="button" class="btn sm" id="app-phone">${esc(t("app.btn"))}</button>`}
       </div>
@@ -1674,6 +1686,21 @@ bind.system = () => {
     catch (e) { toast(e.message, true); }
     refresh();
   };
+  const ts = $("#tls-setup");
+  if (ts) ts.onclick = tlsModal;
+  const tw = $("#tls-web");
+  if (tw) tw.onclick = async () => {
+    tw.disabled = true;
+    try { webModal(await api("GET", "tls/web")); } catch (e) { toast(e.message, true); }
+    tw.disabled = false;
+  };
+  const tr = $("#tls-web-rm");
+  if (tr) tr.onclick = async () => {
+    const W = S.panel.tls.web;
+    if (!confirm(t("web.remove_confirm", { file: W.file || webLabel(W), server: webLabel(W) }))) return;
+    try { await api("POST", "tls/web", { action: "remove" }); toast(t("web.removed")); } catch (e) { toast(e.message, true); }
+    refresh();
+  };
   bindTelegram();
   bindSecurity();
   bindBackup();
@@ -1690,6 +1717,85 @@ bind.system = () => {
     } catch (e) { toast(e.message, true); }
   };
 };
+
+/* ================================================ домен и сертификат панели */
+/** «nginx на этом сервере» / «nginx в контейнере web» — кто держит порт 80. */
+function webLabel(w) {
+  const name = w.process || "?";
+  return w.where === "docker" ? t("web.in_docker", { name, container: w.container || "?" }) : t("web.on_host", { name });
+}
+function tlsModal() {
+  const T = S.panel.tls || {};
+  const ip = S.panel.ip || "";
+  let src = T.source === "custom" ? "custom" : "letsencrypt";
+  const certPh = "/etc/letsencrypt/live/example.com/fullchain.pem", keyPh = "/etc/letsencrypt/live/example.com/privkey.pem";
+  const body = `
+    <label class="field"><span>${esc(t("tls.domain"))}</span><input type="text" id="tls-domain" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.domain || "")}" placeholder="panel.example.com">
+      <span class="hint">${esc(t("tls.domain_hint", { ip: ip || "IP" }))}</span></label>
+    <div class="field"><span>${esc(t("tls.source"))}</span>
+      <div class="seg" id="tls-src"><button type="button" data-v="letsencrypt">${esc(t("tls.src_le"))}</button><button type="button" data-v="custom">${esc(t("tls.src_custom"))}</button></div>
+      <span class="hint" id="tls-src-hint"></span></div>
+    <div id="tls-files">
+      <label class="field"><span>${esc(t("tls.cert"))}</span><input type="text" id="tls-cert" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.cert || "")}" placeholder="${esc(certPh)}"></label>
+      <label class="field"><span>${esc(t("tls.key"))}</span><input type="text" id="tls-key" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.key || "")}" placeholder="${esc(keyPh)}"></label>
+    </div>`;
+  openModal(t("tls.title"), body, `<button class="btn ghost" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="tls-apply">${esc(t("tls.apply"))}</button>`);
+  const paths = () => {
+    const d = $("#tls-domain").value.trim().toLowerCase() || "example.com";
+    return { cert: `/etc/letsencrypt/live/${d}/fullchain.pem`, key: `/etc/letsencrypt/live/${d}/privkey.pem` };
+  };
+  const seg = () => {
+    $$("#tls-src button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === src));
+    $("#tls-files").hidden = src !== "custom";
+    const p = paths();
+    $("#tls-src-hint").innerHTML = src === "custom" ? th("tls.custom_hint", { cert: `<bdi dir="ltr">${esc(p.cert)}</bdi>`, key: `<bdi dir="ltr">${esc(p.key)}</bdi>` }) : esc(t("tls.le_hint"));
+    $("#tls-cert").placeholder = p.cert; $("#tls-key").placeholder = p.key;
+  };
+  $$("#tls-src button").forEach((b) => b.onclick = () => { src = b.dataset.v; seg(); });
+  $("#tls-domain").oninput = seg;
+  seg();
+  const apply = async (force) => {
+    const btn = $("#tls-apply"); btn.disabled = true;
+    const before = S.panel.url;
+    try {
+      const r = await api("PUT", "tls", { domain: $("#tls-domain").value.trim(), source: src,
+        cert: $("#tls-cert").value.trim(), key: $("#tls-key").value.trim(), force: !!force });
+      if (r.confirm) {
+        btn.disabled = false;
+        if (confirm(tm(r.confirm) + "\n\n" + t("tls.dns_force"))) return apply(true);
+        return;
+      }
+      if (r.warn) toast(tm(r.warn), true);
+      else toast(r.url && r.url !== before ? t("tls.moved", { url: r.url }) : t("tls.applying"));
+      if (r.web && r.web.kind !== "none") webModal(r.web);
+      else closeModal();
+      refresh();
+    } catch (e) { toast(e.message, true); btn.disabled = false; }
+  };
+  $("#tls-apply").onclick = () => apply(false);
+}
+/** Порт 80 занят веб-сервером: добавить наш файл (auto) или показать текст для вставки вручную. */
+function webModal(w) {
+  if (!w || w.kind === "none") { toast(t("web.free")); closeModal(); refresh(); return; }
+  const server = webLabel(w);
+  const text = w.auto ? t("web.auto", { file: w.file || "", host: w.host || "" })
+    : `${tm(w.reason)}. ${t("web.manual", { dir: "/var/lib/awg-router/acme" })}`;
+  const body = `<p>${esc(t("web.busy", { server }))}</p><p>${esc(text)}</p>
+    <pre class="code" dir="ltr" id="web-snippet">${esc(w.snippet || "")}</pre>`;
+  const foot = `<button class="btn ghost" data-close>${esc(t("btn.cancel"))}</button>
+    <button class="btn" id="web-copy">${esc(t("web.copy"))}</button>
+    <button class="btn primary" id="web-go">${esc(w.auto ? t("web.add", { server: w.process || "" }) : t("web.check"))}</button>`;
+  openModal(t("web.title"), body, foot);
+  $("#web-copy").onclick = () => copyText(w.snippet || "");
+  $("#web-go").onclick = async () => {
+    const b = $("#web-go"); b.disabled = true; toast(t("toast.applying"));
+    try {
+      await api("POST", "tls/web", { action: w.auto ? "add" : "manual" });
+      closeModal(); toast(t("web.added", { server }));
+    } catch (e) { toast(e.message, true); b.disabled = false; }
+    refresh();
+  };
+}
 
 /* ============================================ иконка на главный экран телефона */
 let installPrompt = null;   // Chrome/Edge: событие, которое показывает системное окно установки

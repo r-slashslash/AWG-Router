@@ -69,7 +69,7 @@ Details are in [How routing works](#how-routing-works).
 </p>
 
 **Panel**
-- HTTPS with a Let's Encrypt certificate issued for the server's IP. The certificate lasts 6 days and renews itself.
+- HTTPS with a Let's Encrypt certificate for the server's IP or your domain, renewed by itself, or with your own certificate (for example, from certbot). If nginx or Apache already holds port 80, validation goes through it.
 - Alternatively, the panel can be reachable only through an SSH tunnel.
 - The address uses a random port and a secret path, and login is password-protected with brute-force protection. A sign-in lasts 4 hours.
 - Optional second factor: a 6-digit code from an authenticator app (Google Authenticator, Aegis, 2FAS…). Turned on in **System**.
@@ -98,12 +98,15 @@ You need an **Ubuntu or Debian** server. Run this as root (if you log in as anot
 curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/install.sh | bash
 ```
 
-The installer downloads the panel into `/opt/awg-router` and asks two questions:
+The installer downloads the panel into `/opt/awg-router` and asks a few questions:
 
 1. **What to manage.**
    - If it finds an AmneziaVPN container, it offers to manage that container or a separate AmneziaWG server on the host.
    - If there's no AmneziaWG on the server, it offers to install one, either in a Docker container like AmneziaVPN does (the app will see it too) or directly on the host as a systemd service. It suggests a random UDP port.
 2. **How to open the panel.** Choose a browser over HTTPS, or an SSH tunnel only.
+3. **Panel domain** (browser only). Press Enter to open the panel by IP; a domain must point to this server.
+
+If port 80 is already taken by nginx or Apache, the installer shows the small file it can add there for the Let's Encrypt validation and asks before adding it (see [Port 80 is taken by a web server](#port-80-is-taken-by-a-web-server)).
 
 The rest is automatic: a random 4-digit port, a password, the build, the certificate. At the end it prints the link and password:
 
@@ -141,12 +144,20 @@ Keep it running and open `http://127.0.0.1:PORT/secret-path/`. Run `awg-router i
 
 ## Certificate
 
-Let's Encrypt issues certificates for IP addresses only with a 6-day lifetime (the `shortlived` profile).
-- The panel gets the certificate with [lego](https://go-acme.github.io/lego/), validating over port 80, and renews it about every 3 days without a restart.
+- The panel gets a Let's Encrypt certificate with [lego](https://go-acme.github.io/lego/) for the server's IP or the panel domain, validating over port 80, and renews it without a restart. For an IP address Let's Encrypt issues only 6-day certificates (the `shortlived` profile), so the panel renews about every 3 days.
+- **System → Domain and certificate** sets the panel domain (empty — by IP) and chooses Let's Encrypt or your own certificate. For your own, give the paths on the server to the certificate (full chain) and the key, for example certbot's `/etc/letsencrypt/live/example.com/fullchain.pem` and `privkey.pem`. The panel checks that the certificate is for the panel address and that the key matches; when certbot renews it, the panel picks up the new one within a few minutes.
+- The domain is only the panel's address: client configs keep the server address from the **Server** tab.
 - If issuance fails, the panel runs with a temporary self-signed certificate, so the browser will show a warning. It retries every 30 minutes.
 - Status and a **Get a certificate now** button are on the **System** tab.
 
-If the server has a domain name, put `TLS_DOMAIN=example.com` into `/opt/awg-router/.env` and run `awg-router update`.
+### Port 80 is taken by a web server
+
+If nginx or Apache already serves sites on this server, Let's Encrypt validates the panel through it. The installer and **System → Set up validation through the web server** show the file first and add it only when you agree:
+- nginx (also Angie and OpenResty) on the host or in Docker when its config folder is mounted from the host: `awg-router-acme.conf` next to your configs (`conf.d`, `sites-enabled`). Apache on the host: a site `awg-router-acme.conf`.
+- The file answers only `/.well-known/acme-challenge/` and only for the panel address, from the folder `/var/lib/awg-router/acme`. Your sites and other config files don't change.
+- Before the reload the config is tested (`nginx -t`, `apachectl configtest`), then the panel requests a test file through the web server. On any error the file is removed and the web server goes back to its previous settings.
+- Caddy, other web servers, and containers with the config inside the image: the panel shows the block to add by hand, then press **Check**.
+- **Remove from the web server** and `awg-router uninstall` delete the file.
 
 ## Server modes
 
