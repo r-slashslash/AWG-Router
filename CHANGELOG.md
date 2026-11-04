@@ -28,7 +28,7 @@ it grows, so every user-visible change gets a new version.
   now drawn as a sharp picture where every square has the same whole number of screen pixels; before,
   squares came out of different sizes and blurred, and the scanner often failed. In the dark theme the
   white margin around a QR code is wider (the camera overexposes a thin one), but only from free space:
-  the code itself keeps its size. Thanks to koo-pub.
+  the code itself keeps its size. Thanks to @koo-pub.
 
 ## 1.13.0 — 2026-11-03
 
