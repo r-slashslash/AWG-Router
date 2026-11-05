@@ -707,6 +707,7 @@ Object.assign(I18N.ru, {
   "p.I1": "Пакет перед рукопожатием, например имитация DNS/QUIC", "p.I2": "", "p.I3": "", "p.I4": "", "p.I5": "",
   "ev.user_added": "Клиент «{name}» создан ({ip})", "ev.user_deleted": "Клиент «{name}» удалён",
   "ev.user_enabled": "Клиент «{name}» включён", "ev.user_disabled": "Клиент «{name}» отключён",
+  "ev.cps_upgraded": "I1 сервера: одинаковый у всех пакет AmneziaVPN заменён на «DNS-ответ: icloud.com» — отдайте клиентам новые конфиги",
   "ev.server_updated": "Настройки сервера обновлены", "ev.server_restarted": "Настройки сервера изменены, сервер перезапущен",
   "ev.server_created": "Сервер AmneziaWG создан, порт {port}", "ev.server_start_failed": "Сервер AmneziaWG не запускается: {error}",
   "ev.runtime_failed": "Не удалось обновить AmneziaWG на хосте: {error}",
@@ -796,6 +797,7 @@ Object.assign(I18N.en, {
   "p.I1": "Packet sent before the handshake, e.g. a DNS/QUIC imitation", "p.I2": "", "p.I3": "", "p.I4": "", "p.I5": "",
   "ev.user_added": "Client “{name}” created ({ip})", "ev.user_deleted": "Client “{name}” deleted",
   "ev.user_enabled": "Client “{name}” enabled", "ev.user_disabled": "Client “{name}” disabled",
+  "ev.cps_upgraded": "Server I1: AmneziaVPN’s packet, the same for everyone, was replaced with “DNS response: icloud.com” — give clients their new configs",
   "ev.server_updated": "Server settings updated", "ev.server_restarted": "Server settings changed, the server restarted",
   "ev.server_created": "AmneziaWG server created, port {port}", "ev.server_start_failed": "The AmneziaWG server won't start: {error}",
   "ev.runtime_failed": "Couldn't update AmneziaWG on the host: {error}",
@@ -885,6 +887,7 @@ Object.assign(I18N.zh, {
   "p.I1": "握手前发送的包，例如模仿 DNS/QUIC", "p.I2": "", "p.I3": "", "p.I4": "", "p.I5": "",
   "ev.user_added": "已创建客户端「{name}」（{ip}）", "ev.user_deleted": "已删除客户端「{name}」",
   "ev.user_enabled": "已启用客户端「{name}」", "ev.user_disabled": "已停用客户端「{name}」",
+  "ev.cps_upgraded": "服务器 I1：所有人都相同的 AmneziaVPN 数据包已替换为「DNS 响应：icloud.com」——请把新配置发给客户端",
   "ev.server_updated": "服务器设置已更新", "ev.server_restarted": "服务器设置已更改，服务器已重启",
   "ev.server_created": "已创建 AmneziaWG 服务器，端口 {port}", "ev.server_start_failed": "AmneziaWG 服务器无法启动：{error}",
   "ev.runtime_failed": "无法更新主机上的 AmneziaWG：{error}",
@@ -974,6 +977,7 @@ Object.assign(I18N.fa, {
   "p.I1": "بسته‌ای پیش از دست‌دهی، مثلاً تقلید DNS/QUIC", "p.I2": "", "p.I3": "", "p.I4": "", "p.I5": "",
   "ev.user_added": "کلاینت «{name}» ساخته شد ({ip})", "ev.user_deleted": "کلاینت «{name}» حذف شد",
   "ev.user_enabled": "کلاینت «{name}» فعال شد", "ev.user_disabled": "کلاینت «{name}» غیرفعال شد",
+  "ev.cps_upgraded": "I1 سرور: بستهٔ AmneziaVPN که برای همه یکسان بود با «پاسخ DNS: ‏icloud.com» جایگزین شد — پیکربندی‌های تازه را به کلاینت‌ها بدهید",
   "ev.server_updated": "تنظیمات سرور به‌روز شد", "ev.server_restarted": "تنظیمات سرور تغییر کرد و سرور راه‌اندازی مجدد شد",
   "ev.server_created": "سرور AmneziaWG ساخته شد، پورت {port}", "ev.server_start_failed": "سرور AmneziaWG اجرا نمی‌شود: {error}",
   "ev.runtime_failed": "به‌روزرسانی AmneziaWG روی میزبان ممکن نشد: {error}",
@@ -1634,8 +1638,6 @@ Object.assign(I18N.fa, {
 // 1.5.0: маскировка I1–I5 — шаблоны, проверка, свои значения клиента
 Object.assign(I18N.ru, {
   "cps.icloud": "DNS-ответ: icloud.com",
-  "cps.amnezia": "DNS-ответ AmneziaVPN — одинаковый у всех",
-  "cps.amnezia_warn": "Этот пакет одинаковый у всех серверов AmneziaVPN, и в нём icloud.com указывает на адрес Яндекса — DPI легко его узнать. Лучше выбрать «{name}»: там случайные поля и настоящий адрес Apple.",
   "cps.stun": "STUN — звонки, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS-запрос",
@@ -1664,8 +1666,6 @@ Object.assign(I18N.ru, {
 });
 Object.assign(I18N.en, {
   "cps.icloud": "DNS response: icloud.com",
-  "cps.amnezia": "AmneziaVPN DNS response — the same for everyone",
-  "cps.amnezia_warn": "This packet is the same on every AmneziaVPN server, and in it icloud.com points to a Yandex address, so DPI can easily spot it. Better choose “{name}”: it has random fields and Apple’s real address.",
   "cps.stun": "STUN — calls, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS query",
@@ -1694,8 +1694,6 @@ Object.assign(I18N.en, {
 });
 Object.assign(I18N.zh, {
   "cps.icloud": "DNS 响应：icloud.com",
-  "cps.amnezia": "AmneziaVPN 的 DNS 响应——所有人都相同",
-  "cps.amnezia_warn": "这个数据包在所有 AmneziaVPN 服务器上都相同，而且其中 icloud.com 指向 Yandex 的地址，DPI 很容易识别。建议选择「{name}」：它带有随机字段和 Apple 的真实地址。",
   "cps.stun": "STUN——通话、WebRTC",
   "cps.quic": "QUIC——HTTP/3",
   "cps.dns": "DNS 查询",
@@ -1724,8 +1722,6 @@ Object.assign(I18N.zh, {
 });
 Object.assign(I18N.fa, {
   "cps.icloud": "پاسخ DNS: ‏icloud.com",
-  "cps.amnezia": "پاسخ DNS ‏AmneziaVPN — برای همه یکسان",
-  "cps.amnezia_warn": "این بسته روی همهٔ سرورهای AmneziaVPN یکسان است و در آن icloud.com به نشانی یاندکس اشاره می‌کند، پس DPI به‌آسانی آن را می‌شناسد. بهتر است «{name}» را برگزینید: فیلدهای تصادفی و نشانی واقعی Apple دارد.",
   "cps.stun": "STUN — تماس‌ها، WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "درخواست DNS",

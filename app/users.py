@@ -362,6 +362,14 @@ class ServerManager:
                     "server_side_changed": awgserver.server_side_changed(old, sc.params()),
                     "host_changed": host_changed}
 
+    def upgrade_masking(self, t: system.Target) -> None:
+        """Один раз на сервер: старый I1 AmneziaVPN → новый DNS-ответ icloud.com."""
+        with self.e.lock:
+            sc, _ = self.load(t)
+            if awgserver.upgrade_i1(sc):
+                self._write(t, sc)
+                self.e.event("info", Msg("ev.cps_upgraded"))
+
     def regenerate_params(self) -> dict[str, str]:
         """Новые параметры обфускации (не применяет — возвращает для формы)."""
         return awgserver.generate_params(True)

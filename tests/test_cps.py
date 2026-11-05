@@ -2,6 +2,7 @@
 
 python3 -m unittest discover tests
 """
+import json
 import os
 import random
 import re
@@ -86,14 +87,32 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(raw[40:44], bytes([17, 253, 144, 10]))
         self.assertEqual(raw[44:], bytes.fromhex("00" "0029" "04d0" "00" "00" "0000" "0000"))
 
-    def test_legacy(self):
-        # одинаковый у всех I1 AmneziaVPN узнаём, но в списки выбора он попадает только помеченным
-        self.assertEqual([p["id"] for p in cps.catalog() if p.get("legacy")], ["amnezia"])
-        self.assertEqual(cps.match({"I1": cps.AMNEZIA_I1}), "amnezia")
+    def test_amnezia_upgrade(self):
+        # одинаковый у всех I1 AmneziaVPN в шаблонах больше нет: сервер и клиенты получают новый
+        self.assertIsNone(cps.match({"I1": cps.AMNEZIA_I1}))
+        conf = "[Interface]\nPrivateKey = x\nAddress = 10.8.1.0/24\nListenPort = 51820\n"
+        sc = awgserver.parse(conf + "I1 = " + cps.AMNEZIA_I1 + "\nI2 = <r 4>\n")
+        self.assertTrue(awgserver.upgrade_i1(sc))
+        self.assertEqual((sc.get("I1"), sc.get("I2")), (cps.ICLOUD_I1, "<r 4>"))
+        self.assertFalse(awgserver.upgrade_i1(sc))
+        sc = awgserver.parse(conf + "I1 = <r 2>\n")
+        self.assertFalse(awgserver.upgrade_i1(sc))
+        self.assertEqual(sc.get("I1"), "<r 2>")
+
+    def test_store_renames_preset(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            with open(path, "w") as f:
+                json.dump({"cps": {"A": {"preset": "amnezia"}, "B": {"preset": "quic"}}}, f)
+            from app import store
+            self.assertEqual(store.Store(path).snapshot()["cps"],
+                             {"A": {"preset": "icloud"}, "B": {"preset": "quic"}})
+            with open(path) as f:
+                self.assertEqual(json.load(f)["cps"]["A"], {"preset": "icloud"})
 
     def test_all_valid(self):
         sizes = {p["id"]: p["sizes"] for p in cps.catalog()}
-        self.assertEqual(list(sizes), ["icloud", "stun", "quic", "dns", "sip", "none", "amnezia"])
+        self.assertEqual(list(sizes), ["icloud", "stun", "quic", "dns", "sip", "none"])
         self.assertEqual((sizes["quic"]["I1"], sizes["dns"]["I1"], sizes["stun"]["I1"]), (1200, 128, 88))
         self.assertEqual(sizes["none"], {})
         for name in cps.PRESETS:
@@ -205,6 +224,8 @@ class ApiTest(unittest.TestCase):
         s = test_api.good_state()
         s["cps"] = {PUB: {"preset": "sip", "junk": 1}}
         self.assertEqual(main.clean_backup_state(s)["cps"], {PUB: {"preset": "sip"}})
+        s["cps"] = {PUB: {"preset": "amnezia"}}      # копия старой версии
+        self.assertEqual(main.clean_backup_state(s)["cps"], {PUB: {"preset": "icloud"}})
         for bad in ({PUB: {"preset": "custom", "values": {"I1": "<c>"}}}, {PUB: {"preset": "x"}},
                     {"not-a-key": {"preset": "sip"}}):
             s["cps"] = bad

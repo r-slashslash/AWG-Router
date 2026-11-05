@@ -55,6 +55,15 @@ DISABLED_MARK = "#awgr:disabled"
 DEFAULT_I1 = cps.ICLOUD_I1         # DNS-ответ icloud.com со случайными ID и TTL
 
 
+def upgrade_i1(sc: "ServerConf") -> bool:
+    """Одинаковый у всех I1 AmneziaVPN → DNS-ответ icloud.com со случайными полями.
+    I1 — параметр клиента: сервер не перезапускается, старые конфиги клиентов работают."""
+    if not cps.is_amnezia(sc.get("I1") or ""):
+        return False
+    sc.set("I1", cps.ICLOUD_I1)
+    return True
+
+
 class ServerConfError(MsgError, ValueError):
     pass
 

@@ -141,7 +141,8 @@ ICLOUD_I1 = _icloud()
 
 # I1, который ставит AmneziaVPN: одинаковый на всех серверах (случайны только 2 байта ID),
 # и в нём icloud.com указывает на 77.88.55.55 — адрес Яндекса, а не Apple. DPI легко его узнать.
-# Новым его не предлагаем, но узнаём на уже настроенных серверах и у клиентов.
+# Панель сама заменяет его на ICLOUD_I1: в конфиге сервера (Engine, восстановление из копии)
+# и у клиентов с шаблоном «amnezia» (RENAMED).
 AMNEZIA_I1 = ("<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c0001000100"
               "00105a00044d583737>")
 
@@ -153,10 +154,14 @@ PRESETS: dict[str, dict[str, str]] = {
     "dns": {"I1": _dns()},
     "sip": {"I1": _sip()},
     "none": {},
-    "amnezia": {"I1": AMNEZIA_I1},
 }
-# устаревшие: в списках выбора только там, где уже стоят
-LEGACY = ("amnezia",)
+# прежние имена шаблонов → нынешние (state.json и резервные копии старых версий)
+RENAMED = {"amnezia": "icloud"}
+
+
+def is_amnezia(value: str) -> bool:
+    """I1 — тот самый одинаковый у всех пакет AmneziaVPN."""
+    return " ".join(str(value or "").split()) == AMNEZIA_I1
 
 
 def preset(name: str) -> dict[str, str]:
@@ -190,6 +195,5 @@ def match(values: dict) -> str | None:
 
 def catalog() -> list[dict]:
     """Шаблоны для браузера: значения и размеры пакетов."""
-    return [{"id": n, "values": preset(n), "sizes": {k: size(v, k) for k, v in preset(n).items() if v},
-             **({"legacy": True} if n in LEGACY else {})}
+    return [{"id": n, "values": preset(n), "sizes": {k: size(v, k) for k, v in preset(n).items() if v}}
             for n in PRESETS]

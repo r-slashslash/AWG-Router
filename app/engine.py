@@ -96,6 +96,7 @@ class Engine:
         self.public_v4: str | None = None      # внешний IPv4, найденный проверкой «напрямую»
         self.srv = ServerManager(self)
         self._runtime_checked = False
+        self._masking_checked = None     # Target.key, на котором уже проверен старый I1
         self._last_start_try = 0.0
         self.domain_matcher = domains.Matcher()
         self.sni: HelperRT | None = None
@@ -969,6 +970,12 @@ class Engine:
                 self.applied_hash = None
                 self._sysctl(t)
 
+            if self._masking_checked != t.key:
+                self._masking_checked = t.key
+                try:
+                    self.srv.upgrade_masking(t)
+                except Exception:  # noqa: BLE001
+                    log.exception("masking upgrade")
             try:
                 self.clients = self.srv.list_clients(t)
             except Exception as e:  # noqa: BLE001

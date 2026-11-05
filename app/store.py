@@ -55,9 +55,21 @@ class Store:
                 self.state = json.load(f)
             for k, v in DEFAULT_STATE.items():
                 self.state.setdefault(k, copy.deepcopy(v))
+            if self._upgrade():
+                self._write()
         else:
             self.state = copy.deepcopy(DEFAULT_STATE)
             self._write()
+
+    def _upgrade(self) -> bool:
+        """Прежние имена шаблонов маскировки у клиентов (cps.RENAMED). True — что-то поменялось."""
+        from .cps import RENAMED
+        changed = False
+        for e in (self.state.get("cps") or {}).values():
+            if isinstance(e, dict) and e.get("preset") in RENAMED:
+                e["preset"] = RENAMED[e["preset"]]
+                changed = True
+        return changed
 
     def _write(self) -> None:
         tmp = self.path + ".tmp"

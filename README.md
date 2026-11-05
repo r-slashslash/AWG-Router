@@ -49,7 +49,7 @@ Details are in [How routing works](#how-routing-works).
 
 **Server**
 - Every AmneziaWG parameter: Jc/Jmin/Jmax, S1–S4, H1–H4, I1–I5, HeaderProtectionKey, ContentPaddingAddition, AWG 3 timings, RandomTrailers and DisableCookies.
-- Ready-made masking for the signature packets I1–I5: STUN (calls, WebRTC), QUIC (HTTP/3), DNS query, SIP and a DNS response for icloud.com with Apple’s real address, with random parts so no two handshakes look alike. The packet AmneziaVPN puts in by default (the same everywhere, with icloud.com pointing to a Yandex address) is recognised, and the panel suggests replacing it. I1–I5 are checked strictly (only tags every AmneziaWG understands, packet size shown) and can be set per client: if a client's provider starts blocking, give that one client another masking.
+- Ready-made masking for the signature packets I1–I5: STUN (calls, WebRTC), QUIC (HTTP/3), DNS query, SIP and a DNS response for icloud.com with Apple’s real address, with random parts so no two handshakes look alike. The packet AmneziaVPN puts in by default (the same everywhere, with icloud.com pointing to a Yandex address) is replaced with this one by the panel itself. I1–I5 are checked strictly (only tags every AmneziaWG understands, packet size shown) and can be set per client: if a client's provider starts blocking, give that one client another masking.
 - Fresh parameters on demand, generated the same way as the AmneziaVPN installer does for AWG 3.1.
 - Port, subnet, client DNS/MTU/keepalive, public address and the address in client configs (IPv4 or IPv6).
 - Adding or removing a client is applied live without dropping anyone. Server-side parameters restart the interface, which takes a few seconds.

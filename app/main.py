@@ -732,8 +732,9 @@ def clean_backup_state(new: dict) -> dict:
     for pk, e in obj("cps").items():
         if not awgconf.KEY_RE.match(pk) or not isinstance(e, dict):
             fail(f"cps.{pk[:12]}")
-        if e.get("preset") in cps.PRESETS:
-            st["cps"][pk] = {"preset": e["preset"]}
+        p = cps.RENAMED.get(e.get("preset"), e.get("preset"))
+        if p in cps.PRESETS:
+            st["cps"][pk] = {"preset": p}
         elif e.get("preset") == "custom":
             try:
                 st["cps"][pk] = {"preset": "custom", "values": cps.validate(e.get("values") or {})}
@@ -875,6 +876,7 @@ def restore_backup(req):
             cur = engine.srv.load(t)[0] if t.read_file(t.conf_path) else None
             if t.kind != "host" and cur is not None:
                 sc.set("ListenPort", str(cur.port))   # порт контейнера задан Docker'ом
+            awgserver.upgrade_i1(sc)                  # старый I1 AmneziaVPN в копии
             t.write_file(t.conf_path, sc.render())
             for name, text in srv_files.items():
                 t.write_file(f"{t.dir}/{name}", text, 0o644 if name == "clientsTable" else 0o600)

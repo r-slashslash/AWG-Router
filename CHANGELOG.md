@@ -3,15 +3,18 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.14.1 — 2026-11-05
+## 1.14.2 — 2026-11-05
 
-- **New icloud.com masking.** The I1 that AmneziaVPN puts in by default is the same on every server
-  (only the 2-byte DNS ID is random) and answers icloud.com with 77.88.55.55, a Yandex address. The
-  new template "DNS response: icloud.com" is a recursive resolver's answer with the real address
-  17.253.144.10, a random ID and TTL and EDNS0, like the "DNS query" template. It is the default for
-  new parameters. The old packet is still recognised, as "AmneziaVPN DNS response — the same for
-  everyone", is listed only where it is already used, and shows a warning that suggests the new one.
-  The panel does not change the server's I1 by itself.
+1.14.1 was withdrawn soon after publishing; its changes are part of this version.
+
+- **New icloud.com masking, and the panel switches to it.** The I1 that AmneziaVPN puts in by default
+  is the same on every server (only the 2-byte DNS ID is random) and answers icloud.com with
+  77.88.55.55, a Yandex address. The template "DNS response: icloud.com" is now a recursive
+  resolver's answer with the real address 17.253.144.10, a random ID and TTL and EDNS0, like the
+  "DNS query" template; it is also the default for new parameters. The panel replaces the old packet
+  by itself, once: in the server's I1 when it finds it (also in a restored backup; an event in the
+  log, no restart: I1 is a client parameter) and for clients that had the old template as their own
+  (`cps.RENAMED`). Old client configs keep working; new configs carry the new packet.
 - **Client masking list without a duplicate.** The default item is now named after the server's
   template, for example "DNS response: icloud.com (default)", and that template is no longer listed
   a second time below it. A client that had the same template chosen as its own still sees it until

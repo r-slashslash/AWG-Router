@@ -728,15 +728,13 @@ function editClient(pk, section = null) {
     // (кроме клиента, за которым он закреплён раньше, чтобы его выбор было видно)
     const srv = info.server_match;
     const srvLabel = srv ? t("cl.cps_server", { name: cpsName(srv) }) : t("cl.cps_server_custom");
-    const presets = info.presets.filter((p) => p.id === cur || (p.id !== srv && !p.legacy));
-    const warnFor = (v) => cpsLegacyWarn(v === "server" ? srv : v);
+    const presets = info.presets.filter((p) => p.id === cur || p.id !== srv);
     box.innerHTML = `
       <label class="field"><span>${esc(t("cl.cps"))}</span>
         <select id="c-cps"><option value="server" ${cur === "server" ? "selected" : ""}>${esc(srvLabel)}</option>
           ${presets.map((p) => `<option value="${p.id}" ${cur === p.id ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
           <option value="custom" ${cur === "custom" ? "selected" : ""}>${esc(t("cps.custom"))}</option></select>
-        <span class="hint">${esc(t("cl.cps_hint"))}</span>
-        <span class="hint" id="c-cps-warn">${warnFor(cur)}</span></label>
+        <span class="hint">${esc(t("cl.cps_hint"))}</span></label>
       <div id="c-cps-custom" hidden></div>`;
     const sel = $("#c-cps"), custom = $("#c-cps-custom");
     const save = async (body) => {
@@ -761,7 +759,6 @@ function editClient(pk, section = null) {
     };
     if (cur === "custom") showCustom();
     sel.onchange = () => {
-      $("#c-cps-warn").innerHTML = warnFor(sel.value);
       if (sel.value === "custom") { showCustom(); return; }
       custom.hidden = true;
       save({ preset: sel.value });
@@ -1368,7 +1365,7 @@ function editList(id, kind, onSaved = null) {
 
 /* ===================================================== сигнатурные пакеты I1–I5 */
 const CPS_KEYS = ["I1", "I2", "I3", "I4", "I5"];
-const CPS_SHORT = { icloud: "DNS icloud", amnezia: "DNS AmneziaVPN", stun: "STUN", quic: "QUIC", dns: "DNS", sip: "SIP" };
+const CPS_SHORT = { icloud: "DNS icloud", stun: "STUN", quic: "QUIC", dns: "DNS", sip: "SIP" };
 /** размер пакета в байтах (как app/cps.py) или null, если теги неверные */
 function cpsSize(v) {
   v = (v || "").trim();
@@ -1398,10 +1395,6 @@ function cpsMatch(presets, values) {
   return p ? p.id : null;
 }
 function cpsName(id) { return id ? t("cps." + id) : t("cps.custom"); }
-/** предупреждение для устаревшего шаблона (одинаковый у всех I1 AmneziaVPN) */
-function cpsLegacyWarn(id) {
-  return id === "amnezia" ? `<span class="warn-text">${esc(t("cps.amnezia_warn", { name: t("cps.icloud") }))}</span>` : "";
-}
 function cpsTag(cps) { return cps ? (CPS_SHORT[cps.preset] || t("cps.s_" + cps.preset)) : ""; }
 /** поля I1–I5 с размером под каждым (для своих значений клиента) */
 function cpsFields(prefix, values) {
@@ -1504,10 +1497,9 @@ function sigTemplate(d) {
   const presets = SRV.cps_presets || [];
   const cur = cpsMatch(presets, d);
   return `<label class="field" style="max-width:420px"><span>${esc(t("srv.cps_template"))}</span>
-    <select id="s-cps">${presets.filter((p) => !p.legacy || p.id === cur).map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
+    <select id="s-cps">${presets.map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
       <option value="" ${cur ? "" : "selected"} disabled>${esc(t("cps.custom"))}</option></select>
-    <span class="hint">${esc(t("srv.cps_template_hint"))}</span>
-    <span class="hint" id="s-cps-warn">${cpsLegacyWarn(cur)}</span></label>`;
+    <span class="hint">${esc(t("srv.cps_template_hint"))}</span></label>`;
 }
 /* Адрес сервера в конфигах клиентов: внешний адрес или найденный IPv4/IPv6 */
 function clientHostOptions() {
@@ -1562,7 +1554,6 @@ bind.server = () => {
     const sel = $("#s-cps"); if (!sel) return;
     const m = cpsMatch(SRV.cps_presets, srvDraft);
     sel.value = m || "";
-    const w = $("#s-cps-warn"); if (w) w.innerHTML = cpsLegacyWarn(m);
     CPS_KEYS.forEach((k) => { const el = $("#sz-" + k); if (el) el.innerHTML = cpsSizeHtml(srvDraft[k]); });
   };
   $$("[data-p]").forEach((el) => el.oninput = el.onchange = () => { srvDraft[el.dataset.p] = el.value.trim(); showBar(); if (/^I[1-5]$/.test(el.dataset.p)) syncTpl(); });
