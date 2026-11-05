@@ -126,18 +126,37 @@ def _stun() -> str:
             + _b(bytes.fromhex("80280004")) + "<r 4>")
 
 
+def _icloud() -> str:
+    # RFC 1035 ответ рекурсивного резолвера (QR, RD, RA) на запрос A icloud.com с EDNS0
+    # (RFC 6891, UDP 1232, как у запроса в шаблоне «DNS-запрос»). Адрес — настоящий адрес
+    # icloud.com в сети Apple 17.0.0.0/8; ID и оставшийся TTL (до 65535 с) — случайные.
+    name = b"\x06icloud\x03com\x00"
+    return ("<r 2>" + _b(bytes.fromhex("8180" "0001" "0001" "0000" "0001") + name + bytes.fromhex("00010001")
+                         + bytes.fromhex("c00c" "0001" "0001" "0000"))
+            + "<r 2>" + _b(bytes.fromhex("0004") + bytes([17, 253, 144, 10])
+                           + b"\x00" + bytes.fromhex("0029" "04d0" "00" "00" "0000" "0000")))
+
+
+ICLOUD_I1 = _icloud()
+
+# I1, который ставит AmneziaVPN: одинаковый на всех серверах (случайны только 2 байта ID),
+# и в нём icloud.com указывает на 77.88.55.55 — адрес Яндекса, а не Apple. DPI легко его узнать.
+# Новым его не предлагаем, но узнаём на уже настроенных серверах и у клиентов.
 AMNEZIA_I1 = ("<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c0001000100"
               "00105a00044d583737>")
 
 # порядок — как в списке выбора
 PRESETS: dict[str, dict[str, str]] = {
-    "amnezia": {"I1": AMNEZIA_I1},
+    "icloud": {"I1": ICLOUD_I1},
     "stun": {"I1": _stun()},
     "quic": {"I1": _quic()},
     "dns": {"I1": _dns()},
     "sip": {"I1": _sip()},
     "none": {},
+    "amnezia": {"I1": AMNEZIA_I1},
 }
+# устаревшие: в списках выбора только там, где уже стоят
+LEGACY = ("amnezia",)
 
 
 def preset(name: str) -> dict[str, str]:
@@ -171,5 +190,6 @@ def match(values: dict) -> str | None:
 
 def catalog() -> list[dict]:
     """Шаблоны для браузера: значения и размеры пакетов."""
-    return [{"id": n, "values": preset(n), "sizes": {k: size(v, k) for k, v in preset(n).items() if v}}
+    return [{"id": n, "values": preset(n), "sizes": {k: size(v, k) for k, v in preset(n).items() if v},
+             **({"legacy": True} if n in LEGACY else {})}
             for n in PRESETS]

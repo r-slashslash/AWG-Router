@@ -4,6 +4,7 @@ python3 -m unittest discover tests
 """
 import os
 import random
+import re
 import string
 import struct
 import sys
@@ -51,7 +52,7 @@ class Req:
 class SizeTest(unittest.TestCase):
     def test_valid(self):
         for v, n in (("<b 0x0102><r 4>", 6), ("<rc 5> <rd 3><t>", 12), ("<b 0xAABB>", 2),
-                     (cps.AMNEZIA_I1, 44), ("", 0)):
+                     (cps.AMNEZIA_I1, 44), (cps.ICLOUD_I1, 55), ("", 0)):
             self.assertEqual(cps.size(v), n, v)
 
     def test_invalid(self):
@@ -71,13 +72,28 @@ class SizeTest(unittest.TestCase):
         with self.assertRaises(awgserver.ServerConfError) as cm:
             awgserver.validate_params({"I3": "<c>"})
         self.assertEqual(cm.exception.msg.key, "srv.cps_unsupported")
-        self.assertEqual(awgserver.DEFAULT_I1, cps.AMNEZIA_I1)
+        self.assertEqual(awgserver.DEFAULT_I1, cps.ICLOUD_I1)
 
 
 class PresetTest(unittest.TestCase):
+    def test_icloud_packet(self):
+        # случайные теги → байты: ответ резолвера (QR RD RA), 1 вопрос, 1 ответ, EDNS0, адрес Apple
+        raw = b"".join(bytes.fromhex(a[2:]) if n == "b" else b"\x00" * int(a)
+                       for n, a in re.findall(r"<(\w+) (\S+)>", cps.ICLOUD_I1))
+        self.assertEqual(len(raw), 55)
+        self.assertEqual(raw[2:12], bytes.fromhex("8180" "0001" "0001" "0000" "0001"))
+        self.assertEqual(raw[12:24], b"\x06icloud\x03com\x00")
+        self.assertEqual(raw[40:44], bytes([17, 253, 144, 10]))
+        self.assertEqual(raw[44:], bytes.fromhex("00" "0029" "04d0" "00" "00" "0000" "0000"))
+
+    def test_legacy(self):
+        # одинаковый у всех I1 AmneziaVPN узнаём, но в списки выбора он попадает только помеченным
+        self.assertEqual([p["id"] for p in cps.catalog() if p.get("legacy")], ["amnezia"])
+        self.assertEqual(cps.match({"I1": cps.AMNEZIA_I1}), "amnezia")
+
     def test_all_valid(self):
         sizes = {p["id"]: p["sizes"] for p in cps.catalog()}
-        self.assertEqual(list(sizes), ["amnezia", "stun", "quic", "dns", "sip", "none"])
+        self.assertEqual(list(sizes), ["icloud", "stun", "quic", "dns", "sip", "none", "amnezia"])
         self.assertEqual((sizes["quic"]["I1"], sizes["dns"]["I1"], sizes["stun"]["I1"]), (1200, 128, 88))
         self.assertEqual(sizes["none"], {})
         for name in cps.PRESETS:

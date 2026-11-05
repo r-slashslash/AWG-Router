@@ -52,7 +52,7 @@ _CANON = {k.lower(): k for k in list(AWG_PARAMS) + [
 KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")
 DISABLED_MARK = "#awgr:disabled"
 
-DEFAULT_I1 = cps.AMNEZIA_I1        # как у AmneziaVPN
+DEFAULT_I1 = cps.ICLOUD_I1         # DNS-ответ icloud.com со случайными ID и TTL
 
 
 class ServerConfError(MsgError, ValueError):

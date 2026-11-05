@@ -1633,7 +1633,9 @@ Object.assign(I18N.fa, {
 
 // 1.5.0: маскировка I1–I5 — шаблоны, проверка, свои значения клиента
 Object.assign(I18N.ru, {
-  "cps.amnezia": "DNS-ответ: icloud.com",
+  "cps.icloud": "DNS-ответ: icloud.com",
+  "cps.amnezia": "DNS-ответ AmneziaVPN — одинаковый у всех",
+  "cps.amnezia_warn": "Этот пакет одинаковый у всех серверов AmneziaVPN, и в нём icloud.com указывает на адрес Яндекса — DPI легко его узнать. Лучше выбрать «{name}»: там случайные поля и настоящий адрес Apple.",
   "cps.stun": "STUN — звонки, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS-запрос",
@@ -1661,7 +1663,9 @@ Object.assign(I18N.ru, {
   "srv.cps_size": "{key}: пакет {size} байт, больше {max} — он будет фрагментирован",
 });
 Object.assign(I18N.en, {
-  "cps.amnezia": "DNS response: icloud.com",
+  "cps.icloud": "DNS response: icloud.com",
+  "cps.amnezia": "AmneziaVPN DNS response — the same for everyone",
+  "cps.amnezia_warn": "This packet is the same on every AmneziaVPN server, and in it icloud.com points to a Yandex address, so DPI can easily spot it. Better choose “{name}”: it has random fields and Apple’s real address.",
   "cps.stun": "STUN — calls, WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "DNS query",
@@ -1689,7 +1693,9 @@ Object.assign(I18N.en, {
   "srv.cps_size": "{key}: the packet is {size} bytes, over {max} — it would be fragmented",
 });
 Object.assign(I18N.zh, {
-  "cps.amnezia": "DNS 响应：icloud.com",
+  "cps.icloud": "DNS 响应：icloud.com",
+  "cps.amnezia": "AmneziaVPN 的 DNS 响应——所有人都相同",
+  "cps.amnezia_warn": "这个数据包在所有 AmneziaVPN 服务器上都相同，而且其中 icloud.com 指向 Yandex 的地址，DPI 很容易识别。建议选择「{name}」：它带有随机字段和 Apple 的真实地址。",
   "cps.stun": "STUN——通话、WebRTC",
   "cps.quic": "QUIC——HTTP/3",
   "cps.dns": "DNS 查询",
@@ -1717,7 +1723,9 @@ Object.assign(I18N.zh, {
   "srv.cps_size": "{key}：数据包 {size} 字节，超过 {max}——会被分片",
 });
 Object.assign(I18N.fa, {
-  "cps.amnezia": "پاسخ DNS: ‏icloud.com",
+  "cps.icloud": "پاسخ DNS: ‏icloud.com",
+  "cps.amnezia": "پاسخ DNS ‏AmneziaVPN — برای همه یکسان",
+  "cps.amnezia_warn": "این بسته روی همهٔ سرورهای AmneziaVPN یکسان است و در آن icloud.com به نشانی یاندکس اشاره می‌کند، پس DPI به‌آسانی آن را می‌شناسد. بهتر است «{name}» را برگزینید: فیلدهای تصادفی و نشانی واقعی Apple دارد.",
   "cps.stun": "STUN — تماس‌ها، WebRTC",
   "cps.quic": "QUIC — HTTP/3",
   "cps.dns": "درخواست DNS",
