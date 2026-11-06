@@ -1,0 +1,84 @@
+# Сквозная проверка обновления: опубликованный релиз → установка → `awg-router update` → последний
+# релиз (tests/e2e/upgrade.sh). Ловит то, что юнит-тесты не видят: архив релиза, готовые образы,
+# путь обновления, который проходит пользователь (issue #8).
+#
+# Когда: после публикации релиза, раз в неделю (реестр, Docker и сборочные машины меняются без нас)
+# и вручную (Actions → E2E → Run workflow).
+#
+# Задания:
+# - github: машины GitHub, одноразовые; прошлая версия → последняя; сервер AWG в контейнере и на хосте.
+# - russia: свой сервер в России (self-hosted runner с меткой russia) — настоящая фильтрация. Включается
+#   переменной репозитория RU_RUNNER=on (Settings → Secrets and variables → Actions → Variables), чтобы
+#   выключенный сервер не держал задание в очереди. Машина не одноразовая: cleanup.sh до и после.
+#   Код берётся архивом codeload, а не git: git поверх HTTPS к GitHub в России рвётся (#8).
+#   На чужие pull request это не запускается: триггеров pull_request здесь нет.
+name: E2E
+
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Start from: previous, latest or a tag (vX.Y.Z)"
+        default: previous
+      russia:
+        description: "Also run on the Russian server (needs RU_RUNNER=on)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e
+  cancel-in-progress: false
+
+jobs:
+  github:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [container, host]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Upgrade ${{ inputs.from || 'previous' }} → latest (AmneziaWG ${{ matrix.mode }})
+        run: sudo E2E_MODE=${{ matrix.mode }} E2E_FROM="${{ inputs.from || 'previous' }}" E2E_LOGS="$RUNNER_TEMP/e2e" bash tests/e2e/upgrade.sh
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-github-${{ matrix.mode }}
+          path: ${{ runner.temp }}/e2e
+
+  russia:
+    if: vars.RU_RUNNER == 'on' && (github.event_name != 'workflow_dispatch' || inputs.russia)
+    runs-on: [self-hosted, russia]
+    timeout-minutes: 45
+    steps:
+      - name: Code (archive, not git)
+        run: |
+          rm -rf e2e-src && mkdir e2e-src
+          curl -fsSL --retry 3 "https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${GITHUB_SHA}" \
+            | tar -xz --strip-components=1 -C e2e-src
+
+      # прошлые версии без IMAGES собираются на месте, а сборка в России не проходит — поэтому здесь
+      # по умолчанию latest: установка последней версии и обновление на неё же, без сборки
+      - name: Install and update in Russia (AmneziaWG container)
+        run: |
+          from="${{ inputs.from || 'latest' }}"
+          [ "$from" = previous ] && from=latest
+          sudo E2E_MODE=container E2E_FROM="$from" E2E_CLEANUP=1 E2E_LOGS="$RUNNER_TEMP/e2e" bash e2e-src/tests/e2e/upgrade.sh
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-russia
+          path: ${{ runner.temp }}/e2e
