@@ -1110,12 +1110,8 @@ class Engine:
         if config.DRY_RUN:
             return {"ok": True, "ip": "203.0.113.%d" % (10 + (eff if eff != "direct" else 0)),
                     "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
-        hosts = []
-        for h in PROBE_HOSTS:           # имена разбираем в сети панели — в сети контейнера может не быть DNS
-            try:
-                hosts.append(f"{h}={awgconf.resolve_host(h, 4)}")
-            except awgconf.ConfigError:
-                pass
+        # имена разбираем в сети панели — в сети контейнера может не быть DNS
+        hosts = [f"{h}={ip}" for h, ip in awgconf.resolve_many(PROBE_HOSTS, 4).items()]
         p = t.ns(["python3", PROBE, str(mark), *hosts], check=False, timeout=25)
         try:
             res = json.loads(p.stdout)

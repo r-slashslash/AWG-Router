@@ -373,6 +373,23 @@ def resolve_host(host: str, timeout: float | None = None) -> str:
     return out[0]
 
 
+def resolve_many(hosts, timeout: float) -> dict[str, str]:
+    """Несколько имён сразу, параллельно: общее ожидание — не больше timeout. Не разобранных в ответе нет."""
+    res: dict[str, str] = {}
+
+    def one(h):
+        try:
+            res[h] = resolve_host(h, timeout)
+        except ConfigError:
+            pass
+    ths = [threading.Thread(target=one, args=(h,), daemon=True) for h in hosts]
+    for th in ths:
+        th.start()
+    for th in ths:
+        th.join(timeout + 1)
+    return dict(res)
+
+
 def setconf_resolved(pc: UpstreamConf) -> str:
     """Текст для `awg setconf` с IP-адресом вместо имени в Endpoint. Исходный конфиг (`pc.raw`) не
     меняется: имя разбирается при каждом запуске туннеля, поэтому смена записи DNS подхватывается."""

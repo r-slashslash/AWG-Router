@@ -144,6 +144,18 @@ class StartUpTest(unittest.TestCase):
 
 
 class ProbeHostsTest(unittest.TestCase):
+    def test_many_in_parallel(self):
+        def gai(host, *a):
+            time.sleep(0.5)
+            if host == "bad.example.com":
+                raise socket.gaierror(-2, "x")
+            return answer("203.0.113.9")
+        with mock.patch("socket.getaddrinfo", side_effect=gai):
+            t0 = time.monotonic()
+            res = awgconf.resolve_many(("a.example.com", "b.example.com", "bad.example.com"), 3)
+            self.assertLess(time.monotonic() - t0, 1.4)     # по очереди было бы 1.5 с и больше
+        self.assertEqual(res, {"a.example.com": "203.0.113.9", "b.example.com": "203.0.113.9"})
+
     def test_probe_gets_addresses(self):
         eng = engine.Engine.__new__(engine.Engine)
         eng.target = mock.Mock(pid=1)
