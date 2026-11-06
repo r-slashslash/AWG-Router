@@ -1301,6 +1301,13 @@ class Engine:
             raise system.SysError(Msg("tg.via_down", name=name))
         return t.pid, nftgen.mark_for(eff)
 
+    def alt_routes(self, via: str) -> list[str]:
+        """Другие пути к Telegram, когда выбранный не работает: выходы, которые сейчас работают
+        (кроме выбранного), в порядке списка выходов. «Напрямую» добавляет вызывающий."""
+        return [f"up:{u['id']}" for u in self.store.snapshot()["upstreams"]
+                if f"up:{u['id']}" != via and u.get("enabled", True)
+                and (self.health.get(u["id"]) or {}).get("healthy")]
+
     def probe(self, out: str) -> dict:
         """Проверка выхода: внешний IP, страна, задержка."""
         t = self.target

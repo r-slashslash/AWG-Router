@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import collections
 import email.utils
 import json
 import logging
@@ -27,6 +28,8 @@ TGREQ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tgreq.py")
 # Путь запросов: via ("direct" | "up:<id>") → None (напрямую из панели) или (PID, fwmark) —
 # через туннель выхода в сети сервера AWG. Задаёт main.py; может бросить NotifyError.
 router = None
+# Другие пути к Telegram, когда выбранный выход не работает: alt_routes(via) → список «up:<id>»
+alt_routes = None
 LANGS = ("ru", "en", "zh", "fa")
 # категории событий, которые можно включать по отдельности
 KINDS = ("exit", "server", "clients", "login", "tls", "update")
@@ -34,6 +37,7 @@ KINDS = ("exit", "server", "clients", "login", "tls", "update")
 TEXTS = {
     "ru": {
         "test": "✅ Тестовое сообщение. Уведомления работают.",
+        "late": "🕓 Событие произошло {time}: сообщение ждало, пока появится связь с Telegram.",
         "exit_down": "⚠️ Выход «{name}» перестал работать. Клиенты, которые шли через него, переключены на резервный выход.",
         "exit_up": "✅ Выход «{name}» снова работает.",
         "exit_quota": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца трафик идёт через «{to}».",
@@ -62,6 +66,7 @@ TEXTS = {
     },
     "en": {
         "test": "✅ Test message. Notifications are working.",
+        "late": "🕓 This happened at {time}: the message waited until Telegram became reachable.",
         "exit_down": "⚠️ Exit “{name}” stopped working. Clients that used it have been switched to the fallback exit.",
         "exit_up": "✅ Exit “{name}” is working again.",
         "exit_quota": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Until next month traffic goes through “{to}”.",
@@ -90,6 +95,7 @@ TEXTS = {
     },
     "zh": {
         "test": "✅ 测试消息。通知功能正常。",
+        "late": "🕓 事件发生于 {time}：消息一直等到能连上 Telegram 才发出。",
         "exit_down": "⚠️ 出口“{name}”已停止工作。经由它的客户端已切换到备用出口。",
         "exit_up": "✅ 出口“{name}”已恢复工作。",
         "exit_quota": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量经由“{to}”。",
@@ -118,6 +124,7 @@ TEXTS = {
     },
     "fa": {
         "test": "✅ پیام آزمایشی. اعلان‌ها کار می‌کنند.",
+        "late": "🕓 این رویداد در {time} رخ داد: پیام تا برقراری ارتباط با تلگرام منتظر ماند.",
         "exit_down": "⚠️ خروجی «{name}» از کار افتاد. کلاینت‌هایی که از آن می‌رفتند به خروجی پشتیبان منتقل شدند.",
         "exit_up": "✅ خروجی «{name}» دوباره کار می‌کند.",
         "exit_quota": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک از «{to}» می‌رود.",
@@ -170,11 +177,14 @@ ENGINE_EVENTS = {
 
 class NotifyError(Exception):
     """Ошибка отправки. msg — Msg для интерфейса (переводит браузер), если она наша,
-    а не техническая строка от сети или Telegram."""
+    а не техническая строка от сети или Telegram. net — сбой пути, а не отказ Telegram (нет
+    маршрута, таймаут, 429/5xx): можно пробовать другой путь и повторить позже. Отказ вроде
+    неверного токена или чата повтором не лечится."""
 
-    def __init__(self, text: str, msg: Msg | None = None):
+    def __init__(self, text: str, msg: Msg | None = None, net: bool = False):
         super().__init__(text)
         self.msg = msg
+        self.net = net
 
 
 BACKUP_PERIODS = {"off": 0, "daily": 86400, "weekly": 7 * 86400}
@@ -269,15 +279,17 @@ def _post(token: str, method: str, data: bytes, ctype: str, timeout: float, via:
         else:
             code, raw = _post_via(route, url, data, ctype, timeout)
     except (urllib.error.URLError, OSError) as e:
-        raise NotifyError(f"api.telegram.org: {getattr(e, 'reason', e)}"[:300]) from None
+        raise NotifyError(f"api.telegram.org: {getattr(e, 'reason', e)}"[:300], net=True) from None
     try:
         res = json.loads(raw.decode(errors="replace") or "{}")
     except ValueError:
         res = None
     if not isinstance(res, dict):
-        raise NotifyError(f"api.telegram.org: HTTP {code}")
+        raise NotifyError(f"api.telegram.org: HTTP {code}", net=True)
     if not res.get("ok"):
-        raise NotifyError(str(res.get("description") or "Telegram error")[:300])
+        ec = res.get("error_code") or 0
+        raise NotifyError(str(res.get("description") or "Telegram error")[:300],
+                          net=ec == 429 or (isinstance(ec, int) and ec >= 500))
     return res.get("result") or {}
 
 
@@ -362,14 +374,22 @@ def detect_chat(token: str, via: str = "direct") -> dict | None:
 
 
 class Notifier:
-    """Очередь отправки: события ставятся мгновенно, сеть — в отдельном потоке."""
+    """Очередь отправки: события ставятся мгновенно, сеть — в отдельном потоке.
+    Если путь к Telegram не работает, сообщение пробует другие пути (остальные рабочие выходы,
+    затем «напрямую»), а не дошедшее копится и уходит, когда связь вернётся: канал оповещения
+    не должен отказывать именно тогда, когда рассказывает о поломке."""
 
     COOLDOWN = 300          # одинаковые сообщения — не чаще раза в 5 минут
+    RETRY_PAUSES = (30, 60, 120, 300)   # паузы между повторами, когда путь не работает
+    MAX_PENDING = 50                    # сколько не дошедших сообщений храним (старые выбрасываем)
+    MAX_AGE = 86400                     # старше суток не отправляем: новости протухли
+    LATE_AFTER = 90                     # опоздавшее дольше этого — с пометкой о времени события
 
     def __init__(self, store, host_fn):
         self.store = store
         self.host_fn = host_fn
         self.q: queue.Queue = queue.Queue(maxsize=100)
+        self.pending: collections.deque = collections.deque()    # не дошедшее: (…, markup, время события)
         self._sent: dict[str, float] = {}
         self.last_error: str | None = None
         self._target_lost = False
@@ -401,7 +421,7 @@ class Notifier:
                 log.exception("notify buttons")
         try:
             self.q.put_nowait((c["token"], c["chat_id"], render(c["lang"], key, host, **params),
-                               c["via"], markup))
+                               c["via"], markup, now))
         except queue.Full:
             log.warning("notify queue is full, message dropped")
 
@@ -421,15 +441,87 @@ class Notifier:
             self._target_lost = False
             self.event("server", "target_back")
 
-    def _worker(self) -> None:
+    def routes(self, via: str) -> list[str]:
+        """Пути по порядку: выбранный, затем (если это выход) остальные работающие выходы и
+        «напрямую». Выбранный «напрямую» остаётся единственным: его человек выбрал сам."""
+        out = [via]
+        if via != "direct":
+            try:
+                out += [v for v in (alt_routes(via) if alt_routes else []) if v not in out]
+            except Exception:  # noqa: BLE001
+                log.exception("notify alt routes")
+            out.append("direct")
+        return out
+
+    def deliver(self, token: str, chat: str, text: str, via: str, markup: dict | None) -> None:
+        """Отправка по очереди путей. Если сбой пути на всех, бросает ошибку первого (выбранного)
+        пути: она лучше всего объясняет, что не так. Отказ Telegram (токен, чат) — сразу."""
+        first = None
+        for v in self.routes(via):
+            try:
+                send(token, chat, text, v, markup)
+                return
+            except NotifyError as e:
+                if not e.net:
+                    raise
+                first = first or e
+                log.warning("telegram via %s: %s", v, e)
+        raise first or NotifyError("no route", net=True)
+
+    def _take(self, wait: float | None) -> None:
+        """Забрать новые сообщения в хвост очереди отложенных (ждать не дольше wait секунд)."""
+        try:
+            self.pending.append(self.q.get(timeout=wait))
+        except queue.Empty:
+            return
         while True:
-            token, chat, text, via, markup = self.q.get()
-            for attempt in range(3):
-                try:
-                    send(token, chat, text, via, markup)
-                    self.last_error = None
-                    break
-                except NotifyError as e:
-                    self.last_error = e.msg or str(e)
-                    log.warning("telegram: %s", e)
-                    time.sleep(5 * (attempt + 1))
+            try:
+                self.pending.append(self.q.get_nowait())
+            except queue.Empty:
+                break
+        while len(self.pending) > self.MAX_PENDING:
+            self.pending.popleft()
+
+    def flush(self, now: float | None = None) -> bool:
+        """Отправить накопленное по порядку. True — очередь пуста, False — путь не работает,
+        остаток ждёт следующей попытки. Токен, чат и путь берутся из текущих настроек:
+        так сообщение уходит и после того, как человек поправил «Отправлять через»."""
+        c = cfg_of(self.store.snapshot())
+        if not (c["enabled"] and c["token"] and c["chat_id"]):
+            self.pending.clear()
+            return True
+        while self.pending:
+            item = self.pending[0]
+            text, markup, ts = item[2], item[4], (item[5] if len(item) > 5 else 0.0)
+            t = time.time() if now is None else now
+            if ts and t - ts > self.MAX_AGE:
+                self.pending.popleft()
+                log.warning("telegram: message is older than a day, dropped")
+                continue
+            if ts and t - ts > self.LATE_AFTER:
+                note = (TEXTS.get(c["lang"]) or TEXTS["en"])["late"].replace(
+                    "{time}", time.strftime("%d.%m %H:%M UTC", time.gmtime(ts)))
+                text = note + "\n\n" + text
+            try:
+                self.deliver(c["token"], c["chat_id"], text, c["via"], markup)
+            except NotifyError as e:
+                self.last_error = e.msg or str(e)
+                log.warning("telegram: %s", e)
+                if e.net:
+                    return False
+                self.pending.popleft()       # Telegram отказал: повтор не поможет, пропускаем
+                continue
+            self.pending.popleft()
+            self.last_error = None
+        return True
+
+    def _worker(self) -> None:
+        fails = 0
+        while True:
+            pause = self.RETRY_PAUSES[min(fails, len(self.RETRY_PAUSES) - 1)] if self.pending else None
+            self._take(pause)           # новое сообщение будит и повтор: вдруг связь уже есть
+            try:
+                fails = 0 if self.flush() else fails + 1
+            except Exception:  # noqa: BLE001
+                log.exception("notify flush")
+                fails += 1

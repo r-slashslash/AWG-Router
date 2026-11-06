@@ -6,12 +6,16 @@
 метка fwmark → своя таблица маршрутизации → default dev awgrN. Собственные соединения
 hev-socks5-tunnel к прокси без метки и идут напрямую, поэтому в петлю не попадают.
 
-Здоровье выхода: раз в минуту панель подключается к прокси сама, проходит вход по логину
-и просит соединение с 1.1.1.1:443 (или 8.8.8.8:443). Ответ «успешно» — выход работает.
+Здоровье выхода: раз в минуту панель подключается к прокси сама, проходит вход по логину,
+просит соединение с 1.1.1.1:443 (или 8.8.8.8:443) и посылает туда начало TLS-рукопожатия.
+Выход работает, только если из-за прокси пришёл ответ. Ответа «соединение открыто» мало: прокси на
+этом же сервере (Xray и подобные) отвечает так до того, как дозвонился дальше, и всегда успешно,
+даже когда за ним ничего нет.
 """
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 import struct
 import time
@@ -85,9 +89,24 @@ def _recv(s: socket.socket, n: int) -> bytes:
     return buf
 
 
+def client_hello() -> bytes:
+    """Начало TLS 1.2 (ClientHello без имени сервера): любой сервер на 443 отвечает на него
+    рукопожатием или TLS-ошибкой, то есть байтами, которых от закрытого пути не бывает."""
+    ciphers = bytes.fromhex("c02bc02fc02cc030cca9cca8009c009d002f0035")
+    exts = (struct.pack("!HH", 0x000A, 8) + struct.pack("!H", 6) + bytes.fromhex("001d00170018")
+            + struct.pack("!HH", 0x000D, 8) + struct.pack("!H", 6) + bytes.fromhex("040308040401"))
+    body = (b"\x03\x03" + os.urandom(32) + b"\x00" + struct.pack("!H", len(ciphers)) + ciphers
+            + b"\x01\x00" + struct.pack("!H", len(exts)) + exts)
+    hs = b"\x01" + len(body).to_bytes(3, "big") + body
+    return b"\x16\x03\x01" + struct.pack("!H", len(hs)) + hs
+
+
 def connect_check(host: str, port: int, user: str = "", password: str = "",
-                  target: tuple[str, int] = CHECK_TARGETS[0], timeout: float = 8) -> float:
-    """Вход на прокси и CONNECT к target. Возвращает время в мс или бросает SocksError."""
+                  target: tuple[str, int] = CHECK_TARGETS[0], timeout: float = 8,
+                  data: bool = False) -> float:
+    """Вход на прокси и CONNECT к target. Возвращает время в мс или бросает SocksError.
+    data — после CONNECT послать начало TLS и дождаться ответа цели (`socks.no_data`, если из-за
+    прокси ничего не пришло): так видно, что за прокси что-то есть. Время тогда — до первого ответа."""
     t0 = time.monotonic()
     try:
         s = socket.create_connection((host, port), timeout=timeout)
@@ -117,6 +136,13 @@ def connect_check(host: str, port: int, user: str = "", password: str = "",
         atyp = head[3]
         _recv(s, {1: 4, 4: 16}.get(atyp) or _recv(s, 1)[0])
         _recv(s, 2)
+        if data:
+            try:
+                s.sendall(client_hello())
+                if not s.recv(1):
+                    raise SocksError(Msg("socks.no_data"))      # закрыли, ничего не ответив
+            except (socket.timeout, OSError):
+                raise SocksError(Msg("socks.no_data")) from None
         return round((time.monotonic() - t0) * 1000)
     except socket.timeout:
         raise SocksError(Msg("socks.timeout")) from None
@@ -129,12 +155,13 @@ def connect_check(host: str, port: int, user: str = "", password: str = "",
 
 
 def check(conf: dict) -> dict:
-    """Проверка выхода: {"ok", "ms", "error", "at"}. Успех — если ответила хоть одна цель."""
+    """Проверка выхода: {"ok", "ms", "error", "at"}. Успех — если хоть одна цель ответила из-за
+    прокси (не просто открыла соединение, см. `connect_check(data=True)`)."""
     err = None
     for target in CHECK_TARGETS:
         try:
             ms = connect_check(conf["host"], conf["port"], conf.get("user", ""),
-                               conf.get("password", ""), target)
+                               conf.get("password", ""), target, data=True)
             return {"ok": True, "ms": ms, "error": None, "at": time.time()}
         except SocksError as e:
             err = e.msg

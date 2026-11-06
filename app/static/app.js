@@ -301,6 +301,8 @@ function banners() {
   if (!S.target) h += `<div class="banner bad"><b>${esc(t("banner.no_target_title"))}</b> ${esc(tm(S.target_error))}<br><span class="small">${th("banner.no_target_hint", { a: code("pid: host"), b: code("privileged: true") })}</span></div>`;
   else if (serverMissing() && tab !== "server") h += `<div class="banner info"><b>${esc(t("srv.missing"))}</b> <button class="btn sm" data-goto="server">${esc(t("srv.create_title"))}</button></div>`;
   if (S.engine.last_error) h += `<div class="banner bad"><b>${esc(t("banner.apply_error"))}</b> ${esc(tm(S.engine.last_error))}</div>`;
+  const tg = S.settings.telegram || {};
+  if (tg.enabled && S.notify_error) h += `<div class="banner bad"><b>${esc(t("banner.tg_failed"))}</b> <bdi>${esc(tm(S.notify_error))}</bdi>${S.notify_pending ? ` <span class="small">${esc(t("banner.tg_pending", { n: S.notify_pending }))}</span>` : ""} <button class="btn sm" data-goto="system">${esc(t("tab.system"))}</button></div>`;
   return h;
 }
 const bind = {};

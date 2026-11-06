@@ -3,6 +3,26 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.16.1 — 2026-11-07
+
+- **SOCKS5 exit: a proxy with nothing behind it is no longer "working".** The check counted the
+  proxy's own "connection open" answer, but a proxy on this server (Xray, for example) gives it before
+  it has reached the foreign server. So an exit whose foreign address was blocked stayed green, stayed
+  in the fallback chain, and no "exit stopped working" message came. Now, after the connection, the panel
+  sends the start of a TLS handshake, and the exit works only if 1.1.1.1 or 8.8.8.8 answers from behind
+  the proxy; otherwise it is shown as not working ("the proxy accepted the connection, but nothing
+  answers behind it"), clients move to its fallback and the notification is sent. The time shown for the
+  exit is now the time to that answer. Thanks @LCF30 for the report (#9).
+- **Telegram: notifications no longer depend on the exit they report about.** If the exit chosen in
+  "Send through" doesn't work, the message tries the other working exits and then goes directly from the
+  server. If nothing works, it waits and is retried (after 30 seconds, then 1, 2 and 5 minutes; up to 50
+  messages, none older than a day) and goes out in order when Telegram is reachable again; a message that
+  waited more than 90 seconds says when the event happened. The queue lives in memory, so a panel restart
+  clears it. A refusal from Telegram itself (wrong token or chat) is not retried. A sending error is now a
+  red banner at the top of the panel with the number of waiting messages, not only a small line in the
+  Telegram settings. "Send test message" and backups still use exactly the chosen path. Thanks @LCF30
+  for the report (#10).
+
 ## 1.16.0 — 2026-11-06
 
 - **Encrypted DNS on the server.** A new setting under "DNS on the server": **DNS query encryption** —

@@ -153,10 +153,11 @@ def _tg_route(via: str):
     try:
         return engine.own_route(via)
     except MsgError as e:
-        raise notify.NotifyError(str(e.msg), e.msg) from None
+        raise notify.NotifyError(str(e.msg), e.msg, net=True) from None
 
 
 notify.router = _tg_route
+notify.alt_routes = engine.alt_routes
 tls.on_fail = lambda exp: notifier.event(
     "tls", "tls_fail", cooldown=12 * 3600,
     date=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp or 0)))
@@ -1101,6 +1102,7 @@ def get_state(req):
         "version": {**updates.status(), "update": selfupdate.status()},
         "month": month_key(),
         "notify_error": notifier.last_error,
+        "notify_pending": len(notifier.pending),
         "tg_bot": bot.view(),
         "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
         "direct_traffic": engine.traffic.out_view("direct"),
