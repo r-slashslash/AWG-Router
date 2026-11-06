@@ -199,8 +199,10 @@ With encryption, neither the entry server's ISP nor the exit's ISP can see which
 
 **The cascade catch.** A resolver on the entry server that asks the internet straight from there (this is how AmneziaDNS works) gets answers as seen from the entry country. CDNs judge where the client is by the resolver's address and return nodes near the entry server, while the traffic goes out through an exit in another country: sites and video load slowly, and services that check the region may refuse. AmneziaDNS encrypts its queries, so the ISP can't spoof the answers, but it can block the encrypted connection itself.
 
-Here a query takes the same way as the client's traffic, so clients that go out through another server get answers right for their country. Limits:
-- for a client whose main route is "direct", queries leave straight from the entry server, as with AmneziaDNS (encrypted, if encryption is on); a client with a block gets a refusal;
+Here a query takes the same way as the client's traffic, so clients that go out through another server get answers right for their country. For clients whose main route is "direct", queries leave straight from the entry server, as with AmneziaDNS. That's right for them: their traffic leaves from there too, and encryption protects the queries from the ISP.
+
+Limits:
+- a client with a block gets a refusal;
 - rules by addresses (for example, "local networks direct") don't affect DNS: names of such sites are also resolved through the client's main exit, and a CDN may return a node abroad for them;
 - the server only forwards queries and does not validate DNSSEC itself — the servers from the "DNS" field do;
 - while the panel is stopped or updating, clients ask the second DNS from their config.
