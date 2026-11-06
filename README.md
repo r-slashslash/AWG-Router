@@ -257,6 +257,22 @@ The panel has no Python dependencies outside the standard library. The Docker im
 
 ## Credits
 
+### People who helped
+
+They found problems, traced them down to the line of code and suggested solutions; a lot of this panel exists because of them.
+
+<table>
+<tr>
+<td align="center" valign="top" width="33%"><a href="https://github.com/Neborya"><img src="https://github.com/Neborya.png?size=128" width="72" alt=""><br><b>Neborya</b></a><br>🐛 💡<br><sub>Compose package on Debian 13 <a href="https://github.com/r-slashslash/AWG-Router/issues/1">#1</a>, traffic per exit <a href="https://github.com/r-slashslash/AWG-Router/issues/2">#2</a>, Telegram through an exit <a href="https://github.com/r-slashslash/AWG-Router/issues/3">#3</a>, port 80 shared with a web server <a href="https://github.com/r-slashslash/AWG-Router/issues/4">#4</a>, client names in configs <a href="https://github.com/r-slashslash/AWG-Router/issues/7">#7</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/koo-pub"><img src="https://github.com/koo-pub.png?size=128" width="72" alt=""><br><b>koo-pub</b></a><br>💻<br><sub>QR codes that scan reliably in AmneziaWG on Android <a href="https://github.com/r-slashslash/AWG-Router/issues/5">#5</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/LCF30"><img src="https://github.com/LCF30.png?size=128" width="72" alt=""><br><b>LCF30</b></a><br>🐛 🔍<br><sub>exits with a domain name in Endpoint <a href="https://github.com/r-slashslash/AWG-Router/issues/6">#6</a>, ready images for Russia, China and Iran <a href="https://github.com/r-slashslash/AWG-Router/issues/8">#8</a>, SOCKS5 exit health <a href="https://github.com/r-slashslash/AWG-Router/issues/9">#9</a>, Telegram alerts that don't depend on the failing exit <a href="https://github.com/r-slashslash/AWG-Router/issues/10">#10</a></sub></td>
+</tr>
+</table>
+
+🐛 found and explained problems · 💡 ideas · 💻 code · 🔍 testing on real servers
+
+### Projects
+
 - [AmneziaWG](https://github.com/amnezia-vpn) — the protocol, `amneziawg-go` and `amneziawg-tools`
 - [lego](https://github.com/go-acme/lego) — Let's Encrypt client
 - [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) — SOCKS5 exits (MIT)

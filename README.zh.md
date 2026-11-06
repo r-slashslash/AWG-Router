@@ -257,6 +257,22 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 
 ## 致谢
 
+### 帮助过项目的人
+
+他们发现问题、逐行分析并提出解决方案；这个面板的许多功能都源自他们。
+
+<table>
+<tr>
+<td align="center" valign="top" width="33%"><a href="https://github.com/Neborya"><img src="https://github.com/Neborya.png?size=128" width="72" alt=""><br><b>Neborya</b></a><br>🐛 💡<br><sub>Debian 13 上的 Compose 软件包 <a href="https://github.com/r-slashslash/AWG-Router/issues/1">#1</a>、按出口统计流量 <a href="https://github.com/r-slashslash/AWG-Router/issues/2">#2</a>、经由出口发送 Telegram <a href="https://github.com/r-slashslash/AWG-Router/issues/3">#3</a>、与 Web 服务器共用 80 端口 <a href="https://github.com/r-slashslash/AWG-Router/issues/4">#4</a>、配置中的客户端名称 <a href="https://github.com/r-slashslash/AWG-Router/issues/7">#7</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/koo-pub"><img src="https://github.com/koo-pub.png?size=128" width="72" alt=""><br><b>koo-pub</b></a><br>💻<br><sub>在 Android 版 AmneziaWG 中可稳定扫描的二维码 <a href="https://github.com/r-slashslash/AWG-Router/issues/5">#5</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/LCF30"><img src="https://github.com/LCF30.png?size=128" width="72" alt=""><br><b>LCF30</b></a><br>🐛 🔍<br><sub>Endpoint 使用域名的出口 <a href="https://github.com/r-slashslash/AWG-Router/issues/6">#6</a>、面向俄罗斯、中国和伊朗的现成镜像 <a href="https://github.com/r-slashslash/AWG-Router/issues/8">#8</a>、SOCKS5 出口健康检查 <a href="https://github.com/r-slashslash/AWG-Router/issues/9">#9</a>、不依赖故障出口的 Telegram 通知 <a href="https://github.com/r-slashslash/AWG-Router/issues/10">#10</a></sub></td>
+</tr>
+</table>
+
+🐛 发现并分析问题 · 💡 想法 · 💻 代码 · 🔍 在真实服务器上测试
+
+### 项目
+
 - [AmneziaWG](https://github.com/amnezia-vpn) — 协议、`amneziawg-go` 和 `amneziawg-tools`
 - [lego](https://github.com/go-acme/lego) — Let's Encrypt 客户端
 - [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) — SOCKS5 出口（MIT）
