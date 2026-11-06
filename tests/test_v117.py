@@ -238,7 +238,17 @@ class WorkflowImagesTest(unittest.TestCase):
         self.assertIn("context: awg-server\n", server)
         self.assertIn("platforms: linux/amd64\n", server)
         for b in (panel, server):
-            self.assertIn("push: true", b)
+            self.assertIn("push: ${{ steps.v.outputs.state != 'published' }}", b)
+
+    def test_check_run_publishes_nothing(self):
+        """Ручной запуск check собирает образы, но не пушит их и не трогает архив и черновик."""
+        self.assertIn("      check:\n", self.text)
+        for name in ("Panel image (amd64, arm64)", "AmneziaWG server image (amd64)"):
+            self.assertIn("|| inputs.check", self.steps[name])
+        for name in ("Anyone can pull the images", "Build the archive", "Create or refresh the draft",
+                     "Release notes (4 languages)"):
+            self.assertIn("if: steps.v.outputs.state != 'published'\n", self.steps[name])
+            self.assertNotIn("inputs.check", self.steps[name])
 
     def test_archive_after_images_and_carries_them(self):
         names = list(self.steps)

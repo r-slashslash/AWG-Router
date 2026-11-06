@@ -17,6 +17,9 @@
 # Архив проверяется по .sha256, digest — сам по себе отпечаток содержимого, так что образ тот же,
 # что собрал workflow. Пакет в GHCR должен быть публичным; если анонимно он не скачивается,
 # workflow предупреждает, а install.sh собирает образ на месте, как раньше.
+#
+# Ручной запуск с галочкой check, когда версия уже выпущена, собирает образы и ничего не публикует:
+# так проверяется сам workflow (например, после смены версий actions) без нового релиза.
 # Релиз, опубликованный вручную, проверяется: тег должен совпадать с VERSION, архив прикладывается,
 # если его нет.
 name: Release
@@ -27,6 +30,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      check:
+        description: "Only check: build the images, publish nothing (for a version that is already released)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -44,9 +52,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -81,44 +89,44 @@ jobs:
           cp "$f" notes.md
 
       - name: Image name
-        if: steps.v.outputs.state != 'published'
+        if: steps.v.outputs.state != 'published' || inputs.check
         id: img
         run: echo "repo=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/awg-router" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v3
-        if: steps.v.outputs.state != 'published'
+      - uses: docker/setup-qemu-action@v4
+        if: steps.v.outputs.state != 'published' || inputs.check
 
-      - uses: docker/setup-buildx-action@v3
-        if: steps.v.outputs.state != 'published'
+      - uses: docker/setup-buildx-action@v4
+        if: steps.v.outputs.state != 'published' || inputs.check
 
-      - uses: docker/login-action@v3
-        if: steps.v.outputs.state != 'published'
+      - uses: docker/login-action@v4
+        if: steps.v.outputs.state != 'published' || inputs.check
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
       - name: Panel image (amd64, arm64)
-        if: steps.v.outputs.state != 'published'
+        if: steps.v.outputs.state != 'published' || inputs.check
         id: panel
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ steps.v.outputs.state != 'published' }}   # проверка (check) ничего не публикует
           provenance: false     # без манифестов аттестации: индекс читают и старые Docker
           tags: ${{ steps.img.outputs.repo }}:${{ steps.v.outputs.ver }}
           cache-from: type=gha,scope=panel
           cache-to: type=gha,scope=panel,mode=max
 
       - name: AmneziaWG server image (amd64)
-        if: steps.v.outputs.state != 'published'
+        if: steps.v.outputs.state != 'published' || inputs.check
         id: server
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: awg-server
           platforms: linux/amd64
-          push: true
+          push: ${{ steps.v.outputs.state != 'published' }}   # проверка (check) ничего не публикует
           provenance: false
           tags: ${{ steps.img.outputs.repo }}:server-${{ steps.v.outputs.ver }}
           cache-from: type=gha,scope=server
@@ -183,7 +191,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ github.event.release.tag_name }}
 
