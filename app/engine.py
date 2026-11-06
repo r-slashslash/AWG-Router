@@ -23,7 +23,7 @@ from . import awgconf, config, domains, limits, lists, nftgen, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
-from .users import ServerManager, client_dns
+from .users import ServerManager, client_dns, dns_encrypt
 
 log = logging.getLogger("awgr.engine")
 
@@ -1008,11 +1008,12 @@ class Engine:
             return
         listen, net = la
         if config.DRY_RUN:
-            self.dns_state = {"state": "on", "listen": listen}
+            self.dns_state = {"state": "on", "listen": listen, "encrypt": dns_encrypt(st["settings"])}
             return
         default, routes = self.dns_routes(st)
         cfg = {"listen": listen, "port": DNS_PORT, "clients": net, "stats": DNS_STATS,
-               "upstreams": client_dns(st["settings"]), "default": default, "routes": routes}
+               "upstreams": client_dns(st["settings"]), "encrypt": dns_encrypt(st["settings"]),
+               "default": default, "routes": routes}
         h = _sha(json.dumps(cfg, sort_keys=True))
         key = f"{t.key}|{listen}"
         d = self.dns
@@ -1048,7 +1049,7 @@ class Engine:
         elif d.cfg_hash != h:
             d.proc.send_signal(signal.SIGHUP)       # перечитать пути и серверы
             d.cfg_hash = h
-        self.dns_state = {"state": "on", "listen": listen}
+        self.dns_state = {"state": "on", "listen": listen, "encrypt": cfg["encrypt"]}
 
     def dns_view(self) -> dict | None:
         """Для интерфейса: состояние и счётчики dnsproxy.py."""
@@ -1061,6 +1062,10 @@ class Engine:
                     s = json.load(f)
                 if s.get("pid") == self.dns.proc.pid:
                     v.update({k: s.get(k) for k in ("queries", "cached", "errors", "refused", "cache")})
+                    # серверы DNS не отвечают: последняя ошибка свежее последнего ответа (за 5 минут)
+                    err_at = float(s.get("last_error_at") or 0)
+                    if err_at > float(s.get("last_ok") or 0) and time.time() - err_at < 300:
+                        v["upstream_error"] = s.get("last_error") or "?"
             except (OSError, ValueError):
                 pass
         return v

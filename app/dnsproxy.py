@@ -10,8 +10,15 @@
 отказ (REFUSED).
 
 Ответы кэшируются отдельно для каждого пути (ответы CDN зависят от страны) на срок их TTL,
-отдаются с уменьшенным TTL. Через выходы SOCKS5 запросы идут по TCP (UDP через прокси часто
-не работает), иначе — UDP, а при обрезанном ответе — TCP.
+отдаются с уменьшенным TTL.
+
+Шифрование (настройка encrypt): «doh» — DNS поверх HTTPS (порт 443, RFC 8484), «dot» — поверх TLS
+(порт 853, RFC 7858), «plain» — без шифрования. С шифрованием сертификат сервера проверяется (по имени
+сервиса для известных адресов — KNOWN_NAMES — или по IP-адресу), открытый DNS вместо него не
+используется: сервер не ответил — клиент получает SERVFAIL и спрашивает второй DNS из конфига.
+TLS-соединения держатся открытыми (пул на пару «путь, сервер»), чтобы не делать рукопожатие на
+каждый запрос. Без шифрования через выходы SOCKS5 запросы идут по TCP (UDP через прокси часто не
+работает), иначе — UDP, а при обрезанном ответе — TCP.
 
 SIGHUP — перечитать настройки. Счётчики — в файл stats раз в 15 секунд (по свежести файла
 панель видит, что процесс не завис).
@@ -25,6 +32,7 @@ import os
 import random
 import signal
 import socket
+import ssl
 import struct
 import sys
 import time
@@ -40,6 +48,16 @@ NEG_TTL_MAX = 300           # «нет такого имени» / «нет за
 NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
 STATS_EVERY = 15
 MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
+
+DOT_PORT, DOH_PORT = 853, 443
+ENC_TIMEOUT = 5.0           # соединение и ответ по DoT/DoH
+POOL_SIZE = 4               # открытых TLS-соединений на пару «путь, сервер»
+POOL_IDLE = 50.0            # дольше без запросов — соединение закрываем (серверы сами закрывают через ~60 с)
+# Имя сервиса для известных адресов: с ним проверяется сертификат и его ждёт заголовок Host у DoH
+# (Google по голому IP DoH может не отвечать). Остальные адреса проверяются по IP в сертификате.
+KNOWN_NAMES = {"1.1.1.1": "cloudflare-dns.com", "1.0.0.1": "cloudflare-dns.com",
+               "8.8.8.8": "dns.google", "8.8.4.4": "dns.google",
+               "9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net"}
 
 T_OPT, T_SOA = 41, 6
 RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
@@ -160,6 +178,112 @@ def truncated(reply: bytes, q: dict) -> bytes:
     return reply[:2] + struct.pack("!H", flags) + struct.pack("!4H", 1, 0, 0, 0) + reply[12:q["qend"]]
 
 
+# ---------------------------------------------------------------- DoT / DoH
+class Conn:
+    """Открытое TLS-соединение к серверу DNS."""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        self.reader, self.writer = reader, writer
+        self.used = time.monotonic()
+        self.reusable = True
+
+    def close(self) -> None:
+        try:
+            self.writer.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class Pool:
+    """Соединения к одному серверу по одному пути: не больше POOL_SIZE, по одному запросу на соединение.
+    Сервер мог закрыть простаивавшее соединение — тогда запрос повторяется на новом."""
+
+    def __init__(self, open_fn):
+        self.open_fn = open_fn
+        self.idle: list[Conn] = []
+        self.sem = asyncio.Semaphore(POOL_SIZE)
+
+    async def run(self, fn):
+        async with self.sem:
+            conn = None
+            while self.idle and conn is None:
+                c = self.idle.pop()
+                if c.reusable and time.monotonic() - c.used < POOL_IDLE and not c.reader.at_eof():
+                    conn = c
+                else:
+                    c.close()
+            fresh = conn is None
+            if fresh:
+                conn = await self.open_fn()
+            try:
+                result = await fn(conn)
+            except Exception:
+                conn.close()
+                if fresh:
+                    raise
+                conn = await self.open_fn()          # старое соединение уже закрыто сервером
+                try:
+                    result = await fn(conn)
+                except Exception:
+                    conn.close()
+                    raise
+            conn.used = time.monotonic()
+            if conn.reusable:
+                self.idle.append(conn)
+            else:
+                conn.close()
+            return result
+
+    def close(self) -> None:
+        for c in self.idle:
+            c.close()
+        self.idle.clear()
+
+
+async def dot_query(conn: Conn, msg: bytes) -> bytes:
+    conn.writer.write(struct.pack("!H", len(msg)) + msg)
+    await conn.writer.drain()
+    n = struct.unpack("!H", await conn.reader.readexactly(2))[0]
+    return await conn.reader.readexactly(n)
+
+
+async def doh_query(conn: Conn, msg: bytes, host: str) -> bytes:
+    """POST /dns-query по HTTP/1.1 с keep-alive (RFC 8484)."""
+    conn.writer.write((f"POST /dns-query HTTP/1.1\r\nHost: {host}\r\nUser-Agent: awg-router\r\n"
+                       f"Content-Type: application/dns-message\r\nAccept: application/dns-message\r\n"
+                       f"Content-Length: {len(msg)}\r\n\r\n").encode() + msg)
+    await conn.writer.drain()
+    status = (await conn.reader.readline()).decode("latin-1").split()
+    if len(status) < 2:
+        raise OSError("DoH: no answer")
+    headers = {}
+    while True:
+        line = (await conn.reader.readline()).decode("latin-1")
+        if line in ("\r\n", "\n", ""):
+            break
+        k, _, v = line.partition(":")
+        headers[k.strip().lower()] = v.strip()
+    if headers.get("connection", "").lower() == "close":
+        conn.reusable = False
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        body = b""
+        while True:
+            size = int((await conn.reader.readline()).split(b";")[0].strip() or b"0", 16)
+            if size == 0:
+                await conn.reader.readline()
+                break
+            body += await conn.reader.readexactly(size)
+            await conn.reader.readline()
+    elif "content-length" in headers:
+        body = await conn.reader.readexactly(int(headers["content-length"]))
+    else:
+        conn.reusable = False
+        body = await conn.reader.read(65535)
+    if status[1] != "200":
+        raise OSError(f"DoH: HTTP {status[1]}")
+    return body
+
+
 # ---------------------------------------------------------------- сервер
 class Proxy:
     def __init__(self, conf_path: str):
@@ -168,7 +292,10 @@ class Proxy:
         self.net = None
         self.cache: dict[tuple, tuple[float, int, bytes, list[int]]] = {}
         self.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
+        self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
+        self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
+        self.pools: dict[tuple, Pool] = {}
         self.load()
 
     def load(self) -> None:
@@ -178,8 +305,13 @@ class Proxy:
         self.up_port = int(cfg.get("upstream_port") or PORT)     # не 53 — только в тестах
         old = self.cfg
         self.cfg = cfg
-        if old and (old.get("upstreams") != cfg.get("upstreams")):
+        if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")):
             self.cache.clear()                       # другие серверы — старые ответы не нужны
+        for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
+            p.close()
+        self.pools.clear()
+        self.ctx = ssl.create_default_context(cafile=cfg.get("ca_file") or None)   # ca_file — только в тестах
+        self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
 
     def route(self, ip: str) -> dict | None:
         """Путь запросов клиента: {"mark", "tcp"}; None — блок."""
@@ -229,22 +361,62 @@ class Proxy:
 
     async def forward(self, query: bytes, q: dict, mark: int, tcp: bool) -> bytes | None:
         """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ."""
+        mode = self.cfg.get("encrypt") or "plain"
         for server in self.cfg.get("upstreams") or []:
             qid = random.randrange(0, 65536)
             out = struct.pack("!H", qid) + query[2:]
             try:
-                reply = None if tcp else await self._udp(out, server, mark)
-                if reply is None or struct.unpack("!H", reply[2:4])[0] & 0x0200:
-                    reply = await self._tcp(out, server, mark)       # нет ответа по UDP или он обрезан
-            except (OSError, asyncio.TimeoutError, struct.error):
+                if mode in ("dot", "doh"):
+                    reply = await asyncio.wait_for(self._enc(out, server, mark, mode), ENC_TIMEOUT * 2)
+                else:
+                    reply = None if tcp else await self._udp(out, server, mark)
+                    if reply is None or struct.unpack("!H", reply[2:4])[0] & 0x0200:
+                        reply = await self._tcp(out, server, mark)   # нет ответа по UDP или он обрезан
+            except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError,
+                    ValueError, struct.error) as e:
+                self._fail(server, e)
                 continue
             if not reply or len(reply) < 12 or struct.unpack("!H", reply[:2])[0] != qid \
                     or reply[12:q["qend"]].lower() != query[12:q["qend"]].lower():
+                self._fail(server, "bad answer")
                 continue
             if reply[3] & 0xF == RC_SERVFAIL:
                 continue                                              # спросим следующий сервер
+            self.last_ok = time.time()
             return reply
         return None
+
+    def _fail(self, server: str, e) -> None:
+        if isinstance(e, asyncio.TimeoutError):
+            e = "timeout"
+        elif isinstance(e, ssl.SSLCertVerificationError):
+            e = f"certificate: {e.verify_message}"
+        self.last_error, self.last_error_at = f"{server}: {e}"[:200], time.time()
+
+    async def _enc(self, msg: bytes, server: str, mark: int, mode: str) -> bytes:
+        """Запрос по DoT или DoH через пул соединений этого пути и сервера."""
+        key = (mode, mark, server)
+        pool = self.pools.get(key)
+        if pool is None:
+            name = KNOWN_NAMES.get(server, server)
+            port = self.up_port if self.cfg.get("upstream_port") else (DOH_PORT if mode == "doh" else DOT_PORT)
+
+            async def open_conn():
+                loop = asyncio.get_running_loop()
+                s = self._sock(socket.SOCK_STREAM, mark)
+                try:
+                    await asyncio.wait_for(loop.sock_connect(s, (server, port)), ENC_TIMEOUT)
+                    r, w = await asyncio.wait_for(
+                        asyncio.open_connection(sock=s, ssl=self.ctx, server_hostname=name), ENC_TIMEOUT)
+                except BaseException:
+                    s.close()
+                    raise
+                return Conn(r, w)
+            pool = self.pools[key] = Pool(open_conn)
+            pool.host = name
+        if mode == "dot":
+            return await pool.run(lambda c: asyncio.wait_for(dot_query(c, msg), ENC_TIMEOUT))
+        return await pool.run(lambda c: asyncio.wait_for(doh_query(c, msg, pool.host), ENC_TIMEOUT))
 
     @staticmethod
     def _sock(kind: int, mark: int) -> socket.socket:
@@ -308,7 +480,10 @@ class Proxy:
         if p:
             try:
                 with open(p + ".tmp", "w") as f:
-                    json.dump({"pid": os.getpid(), "at": time.time(), "cache": len(self.cache), **self.stats}, f)
+                    json.dump({"pid": os.getpid(), "at": time.time(), "cache": len(self.cache),
+                               "encrypt": self.cfg.get("encrypt") or "plain", "last_ok": self.last_ok,
+                               "last_error": self.last_error, "last_error_at": self.last_error_at,
+                               **self.stats}, f)
                 os.replace(p + ".tmp", p)
             except OSError:
                 pass

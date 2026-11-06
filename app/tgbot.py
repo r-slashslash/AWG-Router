@@ -122,8 +122,10 @@ TEXTS = {
         "st_v4_fail": "🌐 IPv4: не определён — проверка «напрямую» не прошла, панель пробует снова раз в 10 минут",
         "st_v6_none": "🌐 IPv6: на сервере нет",
         "st_dns_off": "🧭 DNS на сервере: выключен",
-        "st_dns_on": "🧭 DNS на сервере: работает на <code>{addr}</code>",
+        "st_dns_on": "🧭 DNS на сервере: работает на <code>{addr}</code>, {mode}",
         "st_dns_stats": "   запросов {q}, из кэша {c}",
+        "st_dns_plain": "без шифрования",
+        "st_dns_upfail": "   ⚠️ серверы DNS не отвечают",
         "st_dns_err": "⚠️ DNS на сервере: не работает — подробности в панели, вкладка «Сервер»",
         "st_ram": "🧠 RAM: {used} из {total}", "st_online": "🟢 Клиентов онлайн: {online} из {total}",
         "st_traffic": "📶 Трафик за месяц: {size}", "st_ok": "✅ Статус: работает",
@@ -218,8 +220,10 @@ TEXTS = {
         "st_v4_fail": "🌐 IPv4: unknown — the “direct” check failed, the panel retries every 10 minutes",
         "st_v6_none": "🌐 IPv6: none on the server",
         "st_dns_off": "🧭 DNS on the server: off",
-        "st_dns_on": "🧭 DNS on the server: running on <code>{addr}</code>",
+        "st_dns_on": "🧭 DNS on the server: running on <code>{addr}</code>, {mode}",
         "st_dns_stats": "   {q} queries, {c} from cache",
+        "st_dns_plain": "no encryption",
+        "st_dns_upfail": "   ⚠️ DNS servers don't answer",
         "st_dns_err": "⚠️ DNS on the server: not working — details in the panel, Server tab",
         "st_ram": "🧠 RAM: {used} of {total}", "st_online": "🟢 Clients online: {online} of {total}",
         "st_traffic": "📶 Traffic this month: {size}", "st_ok": "✅ Status: running",
@@ -311,8 +315,10 @@ TEXTS = {
         "st_v4_fail": "🌐 IPv4：未知——「直连」检测失败，面板每 10 分钟重试一次",
         "st_v6_none": "🌐 IPv6：服务器上没有",
         "st_dns_off": "🧭 服务器上的 DNS：已关闭",
-        "st_dns_on": "🧭 服务器上的 DNS：运行于 <code>{addr}</code>",
+        "st_dns_on": "🧭 服务器上的 DNS：运行于 <code>{addr}</code>，{mode}",
         "st_dns_stats": "   查询 {q} 次，缓存命中 {c} 次",
+        "st_dns_plain": "不加密",
+        "st_dns_upfail": "   ⚠️ DNS 服务器无响应",
         "st_dns_err": "⚠️ 服务器上的 DNS：未运行——详情见面板的「服务器」选项卡",
         "st_ram": "🧠 内存：{used} / {total}", "st_online": "🟢 在线客户端：{online} / {total}",
         "st_traffic": "📶 本月流量：{size}", "st_ok": "✅ 状态：运行中",
@@ -407,8 +413,10 @@ TEXTS = {
         "st_v4_fail": "🌐 IPv4: نامشخص — بررسی «مستقیم» انجام نشد، پنل هر ۱۰ دقیقه دوباره تلاش می‌کند",
         "st_v6_none": "🌐 IPv6: روی سرور نیست",
         "st_dns_off": "🧭 DNS روی سرور: خاموش",
-        "st_dns_on": "🧭 DNS روی سرور: روی <code>{addr}</code> کار می‌کند",
+        "st_dns_on": "🧭 DNS روی سرور: روی <code>{addr}</code> کار می‌کند، {mode}",
         "st_dns_stats": "   {q} پرسش، {c} از حافظهٔ موقت",
+        "st_dns_plain": "بدون رمزگذاری",
+        "st_dns_upfail": "   ⚠️ سرورهای DNS پاسخ نمی‌دهند",
         "st_dns_err": "⚠️ DNS روی سرور: کار نمی‌کند — جزئیات در پنل، زبانهٔ «سرور»",
         "st_ram": "🧠 RAM: {used} از {total}", "st_online": "🟢 کلاینت‌های آنلاین: {online} از {total}",
         "st_traffic": "📶 ترافیک این ماه: {size}", "st_ok": "✅ وضعیت: در حال کار",
@@ -1092,9 +1100,13 @@ class Bot:
             return [tr(L, "st_dns_off")]
         if d.get("state") != "on":
             return [tr(L, "st_dns_err")]
-        out = [tr(L, "st_dns_on", addr=d.get("listen") or "—")]
+        enc = d.get("encrypt") or "plain"
+        mode = {"doh": "DoH", "dot": "DoT"}.get(enc) or tr(L, "st_dns_plain")
+        out = [tr(L, "st_dns_on", addr=d.get("listen") or "—", mode=mode)]
         if d.get("queries") is not None:
             out.append(tr(L, "st_dns_stats", q=d["queries"], c=d.get("cached") or 0))
+        if d.get("upstream_error"):
+            out.append(tr(L, "st_dns_upfail"))
         return out
 
     def _exit_line(self, c: dict, u: dict, st: dict) -> str:

@@ -18,7 +18,7 @@ import time
 from types import SimpleNamespace
 
 from . import (awgconf, awgserver, config, cps, domains, hostnet, limits, lists, notify, selfupdate, system, tgbot,
-               tlsconf, tlsmgr, totp, webfront)
+               tlsconf, tlsmgr, totp, users, webfront)
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -773,6 +773,8 @@ def clean_backup_state(new: dict) -> dict:
         out["client_dns"] = [str(d) for d in dns if ":" not in str(d)]
     if isinstance(s.get("panel_dns"), bool):
         out["panel_dns"] = s["panel_dns"]
+    if s.get("panel_dns_enc") in users.DNS_ENC:
+        out["panel_dns_enc"] = s["panel_dns_enc"]
     mtu = s.get("client_mtu")
     if mtu not in (None, ""):
         if not isinstance(mtu, int) or isinstance(mtu, bool) or not 1100 <= mtu <= 1500:

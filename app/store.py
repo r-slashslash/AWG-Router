@@ -62,13 +62,20 @@ class Store:
             self._write()
 
     def _upgrade(self) -> bool:
-        """Прежние имена шаблонов маскировки у клиентов (cps.RENAMED). True — что-то поменялось."""
+        """Прежние имена шаблонов маскировки у клиентов (cps.RENAMED), шифрование DNS на сервере у тех, кто
+        включил его до 1.16.0. True — что-то поменялось."""
         from .cps import RENAMED
         changed = False
         for e in (self.state.get("cps") or {}).values():
             if isinstance(e, dict) and e.get("preset") in RENAMED:
                 e["preset"] = RENAMED[e["preset"]]
                 changed = True
+        s = self.state.get("settings") or {}
+        if s.get("panel_dns") and "panel_dns_enc" not in s:
+            # DNS на сервере включили в 1.15.0, до шифрования: оставляем как было — DoH по умолчанию
+            # сломал бы DNS клиентов, если серверы в настройках его не умеют
+            s["panel_dns_enc"] = "plain"
+            changed = True
         return changed
 
     def _write(self) -> None:

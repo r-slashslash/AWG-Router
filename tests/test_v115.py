@@ -19,6 +19,8 @@ import json  # noqa: E402
 import shutil  # noqa: E402
 import signal  # noqa: E402
 import socketserver  # noqa: E402
+import ssl  # noqa: E402
+import http.server  # noqa: E402
 import struct  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
@@ -590,10 +592,215 @@ class BotStatusTest(unittest.TestCase):
 
     def test_dns(self):
         self.assertIn("DNS на сервере: выключен", self.screen(dns=None))
-        t = self.screen(dns={"state": "on", "listen": "10.8.1.1", "queries": 12, "cached": 5})
-        self.assertIn("DNS на сервере: работает на <code>10.8.1.1</code>", t)
+        t = self.screen(dns={"state": "on", "listen": "10.8.1.1", "queries": 12, "cached": 5, "encrypt": "doh"})
+        self.assertIn("DNS на сервере: работает на <code>10.8.1.1</code>, DoH", t)
         self.assertIn("запросов 12, из кэша 5", t)
+        self.assertNotIn("не отвечают", t)
+        t = self.screen(dns={"state": "on", "listen": "10.8.1.1", "encrypt": "plain", "upstream_error": "x: timeout"})
+        self.assertIn(", без шифрования", t)
+        self.assertIn("серверы DNS не отвечают", t)
         self.assertIn("DNS на сервере: не работает", self.screen(dns={"state": "error", "error": "x"}))
+
+
+def make_cert(d, san):
+    cert, key = os.path.join(d, san + ".crt"), os.path.join(d, san + ".key")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+                    "-nodes", "-days", "2", "-subj", "/CN=dns-test", "-addext", f"subjectAltName=IP:{san}",
+                    "-keyout", key, "-out", cert], capture_output=True, check=True)
+    return cert, key
+
+
+class TLSUpstreams:
+    """DoT и DoH на 127.0.0.1 с самоподписанным сертификатом; считают запросы и TLS-соединения."""
+
+    def __init__(self, cert, key):
+        self.queries, self.conns = 0, 0
+        self.one_shot = False           # закрывать соединение после первого ответа (как сервер по простою)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+        up = self
+
+        def answer(data):
+            up.queries += 1
+            return a_reply(data, ["203.0.113.44"], ttl=300)
+
+        class DoT(socketserver.BaseRequestHandler):
+            def setup(self):
+                up.conns += 1
+
+            def handle(self):
+                c = self.request
+                try:
+                    while True:
+                        head = c.recv(2)
+                        if len(head) < 2:
+                            return
+                        n, data = struct.unpack("!H", head)[0], b""
+                        while len(data) < n:
+                            data += c.recv(n - len(data))
+                        r = answer(data)
+                        c.sendall(struct.pack("!H", len(r)) + r)
+                        if up.one_shot:
+                            return
+                except OSError:
+                    pass
+
+        class DoH(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def setup(self):
+                up.conns += 1
+                super().setup()
+
+            def do_POST(self):
+                ok = self.path == "/dns-query" and self.headers["Content-Type"] == "application/dns-message"
+                data = self.rfile.read(int(self.headers["Content-Length"]))
+                body = answer(data) if ok else b"no"
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "application/dns-message")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        class TLSServer(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+            def get_request(self):
+                sock, addr = super().get_request()
+                try:
+                    return ctx.wrap_socket(sock, server_side=True), addr
+                except (ssl.SSLError, OSError):
+                    sock.close()
+                    raise
+
+        class HTTPSServer(http.server.ThreadingHTTPServer):
+            def get_request(self):
+                sock, addr = super().get_request()
+                return ctx.wrap_socket(sock, server_side=True), addr
+
+        self.dot = TLSServer(("127.0.0.1", 0), DoT)
+        self.doh = HTTPSServer(("127.0.0.1", 0), DoH)
+        for srv in (self.dot, self.doh):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        for srv in (self.dot, self.doh):
+            srv.shutdown()
+            srv.server_close()
+
+
+@unittest.skipUnless(shutil.which("openssl"), "нужен openssl")
+class DnsEncryptedTest(unittest.TestCase):
+    """dnsproxy.py с DoT и DoH: ответы, одно TLS-соединение на много запросов, чужой сертификат — отказ."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp()
+        cls.cert, key = make_cert(cls.dir, "127.0.0.1")
+        cls.wrong, _ = make_cert(cls.dir, "127.0.0.2")
+        cls.up = TLSUpstreams(cls.cert, key)
+        cls.conf = os.path.join(cls.dir, "dns.json")
+        cls.port = free_port()
+        cls.cfg = {"listen": "127.0.0.1", "port": cls.port, "clients": "127.0.0.0/8",
+                   "stats": os.path.join(cls.dir, "stats.json"), "upstreams": ["127.0.0.1"],
+                   "default": {"mark": 0, "tcp": False}, "routes": {}, "ca_file": cls.cert}
+        cls.apply(encrypt="dot", upstream_port=cls.up.dot.server_address[1])
+        cls.proc = subprocess.Popen([sys.executable, "-I", engine.DNSPROXY, cls.conf],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        for _ in range(50):
+            try:
+                with socket.create_connection(("127.0.0.1", cls.port), 0.2):
+                    break
+            except OSError:
+                time.sleep(0.1)
+
+    @classmethod
+    def apply(cls, **kw):
+        with open(cls.conf, "w") as f:
+            json.dump(dict(cls.cfg, **kw), f)
+        if getattr(cls, "proc", None):
+            cls.proc.send_signal(signal.SIGHUP)
+            time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        cls.proc.wait(5)
+        cls.up.close()
+
+    def ask(self, name):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(15)
+            s.sendto(q_msg(name), ("127.0.0.1", self.port))
+            return s.recv(4096)
+
+    def run_mode(self, mode, port):
+        self.apply(encrypt=mode, upstream_port=port)
+        q0, c0 = self.up.queries, self.up.conns
+        for i in range(4):
+            r = self.ask(f"{mode}{i}.example")
+            self.assertEqual(r[3] & 0xF, 0, mode)
+            self.assertIn(socket.inet_aton("203.0.113.44"), r)
+        self.assertEqual(self.up.queries - q0, 4)
+        self.assertEqual(self.up.conns - c0, 1, "одно TLS-соединение на все запросы")
+
+    def test_1_dot(self):
+        self.run_mode("dot", self.up.dot.server_address[1])
+
+    def test_2_doh(self):
+        self.run_mode("doh", self.up.doh.server_address[1])
+
+    def test_3_wrong_certificate_refused(self):
+        self.apply(encrypt="dot", upstream_port=self.up.dot.server_address[1], ca_file=self.wrong)
+        try:
+            q0 = self.up.queries
+            r = self.ask("mitm.example")
+            self.assertEqual(r[3] & 0xF, dnsproxy.RC_SERVFAIL)
+            self.assertEqual(self.up.queries, q0, "запрос не ушёл по непроверенному каналу")
+            self.assertEqual(r[6:8], b"\x00\x00")
+        finally:
+            self.apply(encrypt="dot", upstream_port=self.up.dot.server_address[1])
+
+    def test_5_server_closed_connection(self):
+        """Сервер закрыл соединение из пула — запрос повторяется на новом, клиент ничего не замечает."""
+        self.apply(encrypt="dot", upstream_port=self.up.dot.server_address[1])
+        self.up.one_shot = True
+        try:
+            for i in range(3):
+                time.sleep(0.2)
+                r = self.ask(f"closed{i}.example")
+                self.assertEqual(r[3] & 0xF, 0)
+        finally:
+            self.up.one_shot = False
+
+    def test_4_no_plain_fallback(self):
+        """Шифрованный канал недоступен — открытый DNS не используется, клиент получает SERVFAIL."""
+        self.apply(encrypt="doh", upstream_port=free_port())
+        try:
+            r = self.ask("down.example")
+            self.assertEqual(r[3] & 0xF, dnsproxy.RC_SERVFAIL)
+        finally:
+            self.apply(encrypt="dot", upstream_port=self.up.dot.server_address[1])
+
+
+class DnsEncSettingTest(unittest.TestCase):
+    def test_default_and_upgrade(self):
+        self.assertEqual(users.dns_encrypt({}), "doh")
+        self.assertEqual(users.dns_encrypt({"panel_dns_enc": "dot"}), "dot")
+        self.assertEqual(users.dns_encrypt({"panel_dns_enc": "bogus"}), "doh")
+        from app.store import Store
+        d = tempfile.mkdtemp()
+        for settings, want in (({"panel_dns": True}, "plain"),       # включили в 1.15.0 — как было
+                               ({"panel_dns": False}, None),         # не включали — по умолчанию DoH
+                               ({"panel_dns": True, "panel_dns_enc": "doh"}, "doh")):
+            path = os.path.join(d, "state.json")
+            with open(path, "w") as f:
+                json.dump({"settings": settings}, f)
+            self.assertEqual(Store(path).snapshot()["settings"].get("panel_dns_enc"), want)
 
 
 if __name__ == "__main__":

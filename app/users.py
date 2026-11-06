@@ -27,6 +27,15 @@ def client_dns(s: dict) -> list[str]:
     return dns or DEFAULT_DNS
 
 
+DNS_ENC = ("doh", "dot", "plain")
+
+
+def dns_encrypt(s: dict) -> str:
+    """Шифрование запросов DNS на сервере: doh (по умолчанию), dot или plain."""
+    v = s.get("panel_dns_enc")
+    return v if v in DNS_ENC else "doh"
+
+
 def panel_dns_addr(sc: ServerConf) -> str | None:
     """Адрес сервера в туннеле (на нём слушает DNS панели): IPv4 из Address сервера."""
     for a in re.split(r"[,\s]+", sc.get("Address") or ""):
@@ -276,6 +285,7 @@ class ServerManager:
             "panel_dns": bool(s.get("panel_dns")),
             "panel_dns_addr": self._dns_live() or panel_dns_addr(sc),
             "panel_dns_state": self.e.dns_view(),
+            "panel_dns_enc": dns_encrypt(s),
             "client_mtu": int(s.get("client_mtu") or DEFAULT_MTU),
             "client_keepalive": s.get("client_keepalive") or "",
             "keepalive_auto": awgserver.default_keepalive(params),
@@ -325,6 +335,10 @@ class ServerManager:
                 settings_patch["client_dns"] = dns[:4]
             if "panel_dns" in body:
                 settings_patch["panel_dns"] = bool(body["panel_dns"])
+            if "panel_dns_enc" in body:
+                if body["panel_dns_enc"] not in DNS_ENC:
+                    raise UserError(Msg("srv.bad_dns_enc"))
+                settings_patch["panel_dns_enc"] = body["panel_dns_enc"]
             if "client_mtu" in body:
                 try:
                     mtu = int(body["client_mtu"])

@@ -3,6 +3,24 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.16.0 — 2026-11-06
+
+- **Encrypted DNS on the server.** A new setting under "DNS on the server": **DNS query encryption** —
+  DoH (DNS over HTTPS, port 443, the default), DoT (DNS over TLS, port 853) or none. Queries to the
+  servers from the "DNS" field are encrypted, so neither the entry server's ISP nor the exit's ISP
+  can read or spoof them; the server's certificate is checked (by the service name for Cloudflare,
+  Google and Quad9 addresses, otherwise by the IP address in the certificate). TLS connections are
+  kept open per exit and server, so a query doesn't cost a handshake; a connection the server closed
+  is replaced transparently. There is no fallback to plain DNS: if the encrypted channel is down,
+  clients get SERVFAIL and ask the second DNS from their config, and the panel and the bot show
+  "DNS servers don't answer". Panels that turned DNS on the server on in 1.15.0 keep it unencrypted
+  until it is changed, so a server in the "DNS" field without DoH can't break clients' DNS.
+- **Bot: Server › Status** shows the DNS encryption mode and a warning when the DNS servers don't answer.
+- **Wording.** The description of the cascade catch said that with AmneziaDNS the local ISP can spoof
+  answers. AmneziaDNS encrypts its queries, so the ISP can't spoof them, only block the connection;
+  the real catch is that answers are fetched from the entry country. Fixed in the interface hint and
+  the README.
+
 ## 1.15.0 — 2026-11-06
 
 - **DNS on the server (optional).** **Server → Client settings → DNS on the server** runs a small
@@ -10,9 +28,9 @@ it grows, so every user-visible change gets a new version.
   Client configs get its address as the first DNS and the first server from the "DNS" field as the
   second (it answers while the panel restarts). Queries are forwarded to the servers from the "DNS"
   field through the client's main exit, with its fallback, like the client's traffic: the answer
-  comes from the exit's country, so the local ISP can't spoof it and CDNs return nodes near the exit,
-  not near the entry server, which is the catch with a resolver on the entry server such as
-  AmneziaDNS. Clients whose main route is direct get answers fetched directly; clients with a block
+  comes from the exit's country, so CDNs return nodes near the exit, not near the entry server,
+  which is the catch with a resolver on the entry server such as AmneziaDNS (its queries are
+  encrypted, so the ISP can't spoof them, but it can block the connection). Clients whose main route is direct get answers fetched directly; clients with a block
   get REFUSED. Answers are cached per exit for their TTL; through SOCKS5 exits queries go over TCP.
   The setting is kept in backups. README: new section "DNS on the server".
 - **Exit with a domain name in Endpoint.** An exit whose config had `Endpoint = name:port` instead of
