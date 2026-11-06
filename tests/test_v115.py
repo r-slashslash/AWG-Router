@@ -1,4 +1,4 @@
-"""1.15.0: имя в Endpoint выхода разбирает панель, повторный разбор, resolv.conf для помощников, DNS на сервере.
+"""1.15.0: имя в Endpoint выхода разбирает панель, повторный разбор, DNS на сервере.
 
 python3 -m unittest discover tests
 """
@@ -23,7 +23,7 @@ import struct  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
 
-from app import awgconf, config, dnsproxy, engine, system, users  # noqa: E402
+from app import awgconf, config, dnsproxy, engine, system, tgbot, users  # noqa: E402
 
 KEY = "A" * 42 + "E="
 
@@ -167,13 +167,13 @@ class ProbeHostsTest(unittest.TestCase):
     def test_probe_gets_addresses(self):
         eng = engine.Engine.__new__(engine.Engine)
         eng.target = mock.Mock(pid=1)
-        eng.target.helper.return_value = mock.Mock(stdout='{"ok": true, "ip": "198.51.100.1"}', stderr="")
+        eng.target.ns.return_value = mock.Mock(stdout='{"ok": true, "ip": "198.51.100.1"}', stderr="")
         eng.store = mock.Mock()
         eng.resolve = lambda out, st: 3
         with mock.patch.object(config, "DRY_RUN", False), \
                 mock.patch("socket.getaddrinfo", return_value=answer("203.0.113.9")):
             res = eng.probe("up:x")
-        cmd = eng.target.helper.call_args.args[0]
+        cmd = eng.target.ns.call_args.args[0]
         self.assertEqual(cmd[0], "python3")
         self.assertIn("ip-api.com=203.0.113.9", cmd)
         self.assertIn("ifconfig.me=203.0.113.9", cmd)
@@ -245,60 +245,6 @@ class ReresolveTest(unittest.TestCase):
             t.ns.return_value = mock.Mock(returncode=0, stdout=dump % int(now - 900))
             eng._update_health(t, {"upstreams": [dict(u, enabled=True)]})
             eng._reresolve.assert_called_once()
-
-
-class HelperResolvTest(unittest.TestCase):
-    def setUp(self):
-        self.d = tempfile.mkdtemp()
-        p = mock.patch.object(system, "RESOLV_DIR", self.d)
-        p.start()
-        self.addCleanup(p.stop)
-        self.t = system.ContainerTarget("amnezia-awg2", 4321, "awg0", "/opt/amnezia/awg/awg0.conf", "x")
-
-    def fake_proc(self, text):
-        real = open
-        return mock.patch("builtins.open", side_effect=lambda p, *a, **k: real(
-            os.path.join(self.d, "src") if p == "/proc/4321/root/etc/resolv.conf" else p, *a, **k)), text
-
-    def test_argv_shape(self):
-        with open(os.path.join(self.d, "src"), "w") as f:
-            f.write("nameserver 192.0.2.53\n")
-        patch, _ = self.fake_proc("")
-        with patch, mock.patch("shutil.which", return_value="/usr/bin/unshare"):
-            argv = self.t.helper_argv(["python3", "probe.py", "0"])
-        self.assertEqual(argv[:6], ["nsenter", "-t", "4321", "-n", "--", "unshare"])
-        copy = os.path.join(self.d, "resolv-4321.conf")
-        self.assertIn(copy, argv)
-        with open(copy) as f:
-            self.assertEqual(f.read(), "nameserver 192.0.2.53\n")
-        self.assertEqual(argv[-3:], ["python3", "probe.py", "0"])
-
-    def test_falls_back(self):
-        plain = ["nsenter", "-t", "4321", "-n", "--", "true"]
-        with mock.patch("shutil.which", return_value=None):
-            self.assertEqual(self.t.helper_argv(["true"]), plain)          # нет unshare
-        self.assertEqual(self.t.helper_argv(["true"]), plain)              # нет файла контейнера
-
-    @unittest.skipUnless(os.geteuid() == 0 and shutil.which("unshare") and shutil.which("nsenter"), "нужен root")
-    def test_real_namespace(self):
-        """Настоящий «контейнер» со своим resolv.conf: помощник видит его, а у панели файл не меняется."""
-        d = tempfile.mkdtemp()
-        rc = os.path.join(d, "rc")
-        with open(rc, "w") as f:
-            f.write("nameserver 192.0.2.53\n")
-        with open("/etc/resolv.conf") as f:
-            before = f.read()
-        box = subprocess.Popen(["unshare", "-m", "sh", "-c", f"mount --bind {rc} /etc/resolv.conf && exec sleep 30"])
-        try:
-            time.sleep(0.5)
-            t = system.ContainerTarget("box", box.pid, "awg0", "/x", "x")
-            p = t.helper(["cat", "/etc/resolv.conf"], check=False, timeout=10)
-            self.assertEqual(p.stdout, "nameserver 192.0.2.53\n")
-            with open("/etc/resolv.conf") as f:
-                self.assertEqual(f.read(), before)
-        finally:
-            box.kill()
-            box.wait()
 
 
 # ---------------------------------------------------------------- DNS на сервере
@@ -574,6 +520,80 @@ class PanelDnsConfigTest(unittest.TestCase):
         self.assertEqual(users.profile_dns({"panel_dns": True}, sc, "10.8.1.1")[0], "10.8.1.1")   # где слушает
         sc.get = lambda k: ""
         self.assertEqual(users.profile_dns({"panel_dns": True}, sc), users.DEFAULT_DNS)
+
+
+class DetectHostTest(unittest.TestCase):
+    """Внешний IPv4: не сдаётся после первых неудач и помнит, ищет он ещё или уже не нашёл."""
+
+    def run_detect(self, answers):
+        eng = engine.Engine.__new__(engine.Engine)
+        eng.public_v4, eng.public_v4_state = None, "pending"
+        eng.target = mock.Mock(exists=True)
+        eng.srv = mock.Mock()
+        eng.srv.public_host.return_value = "203.0.113.5"
+        eng.store = mock.Mock()
+        it = iter(answers)
+        seen, waits = [], []
+
+        def probe(out):
+            a = next(it, None)
+            if a is None:
+                eng.stop_ev.set()
+                return {"ok": True, "ip": None}
+            return a
+
+        eng.probe = probe
+        eng.stop_ev = threading.Event()
+        real_wait = eng.stop_ev.wait
+        eng.stop_ev.wait = lambda t: (waits.append(t), seen.append(eng.public_v4_state), real_wait(0))[-1]
+        with mock.patch.object(engine, "HOST_FAST_TRIES", 3):
+            eng._detect_host()
+        return eng, seen, waits
+
+    def test_keeps_trying_then_finds(self):
+        no = {"ok": True, "ip": None, "warn": "no_ip"}
+        eng, seen, waits = self.run_detect([no, no, no, no, {"ok": True, "ip": "198.51.100.7"}])
+        self.assertEqual(seen[:4], ["pending", "pending", "failed", "failed"])
+        self.assertEqual(waits[:4], [engine.HOST_FAST_WAIT] * 2 + [engine.HOST_SLOW_WAIT] * 2)  # 3 частые попытки
+        self.assertEqual((eng.public_v4, eng.public_v4_state), ("198.51.100.7", "ok"))
+        self.assertEqual(waits[4], engine.HOST_RECHECK)
+
+    def test_recheck_failure_keeps_address(self):
+        eng, seen, waits = self.run_detect([{"ok": True, "ip": "198.51.100.7"}, {"ok": False}])
+        self.assertEqual((eng.public_v4, eng.public_v4_state), ("198.51.100.7", "ok"))
+        self.assertEqual(waits[1], engine.HOST_SLOW_WAIT)
+
+
+class BotStatusTest(unittest.TestCase):
+    """Экран бота «Сервер › Состояние»: IPv4 и IPv6 без голого прочерка, строка DNS на сервере."""
+
+    def screen(self, **host):
+        b = tgbot.Bot.__new__(tgbot.Bot)
+        b.ops = mock.Mock(version="1.15.0")
+        b.ops.status.return_value = {"host": "203.0.113.5", "server_ok": True, "version": {}}
+        b.ops.host_info.return_value = {"awg": "3.1", "uptime": 60, "memory": None, **host}
+        b.ops.clients.return_value = []
+        b._show = mock.Mock()
+        b._back_server = lambda c: []
+        b.show_status({"lang": "ru"}, None)
+        return b._show.call_args.args[1]
+
+    def test_addresses(self):
+        t = self.screen(v4="198.51.100.7", v4_state="ok", v6=None)
+        self.assertIn("IPv4: <code>198.51.100.7</code>", t)
+        self.assertIn("IPv6: на сервере нет", t)
+        self.assertIn("определяется", self.screen(v4=None, v4_state="pending"))
+        self.assertIn("не определён", self.screen(v4=None, v4_state="failed"))
+        for t in (self.screen(v4=None, v4_state="failed"), self.screen(v4=None, v6=None)):
+            self.assertNotIn("IPv4: —", t)
+            self.assertNotIn("IPv6: —", t)
+
+    def test_dns(self):
+        self.assertIn("DNS на сервере: выключен", self.screen(dns=None))
+        t = self.screen(dns={"state": "on", "listen": "10.8.1.1", "queries": 12, "cached": 5})
+        self.assertIn("DNS на сервере: работает на <code>10.8.1.1</code>", t)
+        self.assertIn("запросов 12, из кэша 5", t)
+        self.assertIn("DNS на сервере: не работает", self.screen(dns={"state": "error", "error": "x"}))
 
 
 if __name__ == "__main__":

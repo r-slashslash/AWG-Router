@@ -1896,7 +1896,8 @@ def _bot_host_info() -> dict:
         v4, v6 = addrs.get("v4"), addrs.get("v6") or []
     except Exception as e:  # noqa: BLE001 — сервер не найден: показываем то, что есть
         log.info("bot host info: %s", e)
-    return {"awg": awg, "v4": v4 or engine.public_v4, "v6": v6[0] if v6 else None,
+    return {"awg": awg, "v4": v4 or engine.public_v4, "v4_state": engine.public_v4_state,
+            "v6": v6[0] if v6 else None, "dns": engine.dns_view(),
             "uptime": hostnet.uptime(), "memory": hostnet.memory()}
 
 

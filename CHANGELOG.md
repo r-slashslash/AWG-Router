@@ -27,10 +27,15 @@ it grows, so every user-visible change gets a new version.
   answering, the panel resolves the name again (at most once a minute) and, if the address changed,
   switches the peer to it with `awg set … endpoint` without restarting the tunnel; an event in the
   log. A working tunnel is never touched, so a DNS failure or a spoofed answer can't move it.
-- **Exit check without "external IP unknown".** The check resolved `ip-api.com` and `ifconfig.me`
-  in the same broken network. The panel now resolves them itself, both at once, and the check runs
-  with the Amnezia container's own `resolv.conf` (a copy, mounted in a private mount namespace), so
-  name lookups inside it work too.
+- **Exit check and the server's IPv4.** The check resolved `ip-api.com` and `ifconfig.me` in the
+  same broken network, so it showed "external IP unknown", and the server's own IPv4 (Server tab, bot
+  status) was never found: the panel gave up after 30 tries until it was restarted. The panel now
+  resolves these names itself, both at once, and passes the addresses to the check. The IPv4 search no
+  longer gives up: 30 tries every 20 seconds, then every 10 minutes, and a found address is checked
+  again every 6 hours.
+- **Bot: Server › Status.** IPv4 shows "detecting…" or "unknown" instead of a dash, IPv6 shows "none
+  on the server" when there is none, and a new line shows DNS on the server: off, running on its
+  address with query and cache counters, or not working.
 
 ## 1.14.2 — 2026-11-05
 

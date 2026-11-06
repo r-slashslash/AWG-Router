@@ -118,6 +118,13 @@ TEXTS = {
         "st_panel": "🏷 Версия панели: {version}", "st_panel_up": "🏷 Версия панели: {version} (доступна {latest})",
         "st_awg": "🛡 Версия AWG: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Время работы сервера: {time}",
+        "st_v4_wait": "🌐 IPv4: определяется…",
+        "st_v4_fail": "🌐 IPv4: не определён — проверка «напрямую» не прошла, панель пробует снова раз в 10 минут",
+        "st_v6_none": "🌐 IPv6: на сервере нет",
+        "st_dns_off": "🧭 DNS на сервере: выключен",
+        "st_dns_on": "🧭 DNS на сервере: работает на <code>{addr}</code>",
+        "st_dns_stats": "   запросов {q}, из кэша {c}",
+        "st_dns_err": "⚠️ DNS на сервере: не работает — подробности в панели, вкладка «Сервер»",
         "st_ram": "🧠 RAM: {used} из {total}", "st_online": "🟢 Клиентов онлайн: {online} из {total}",
         "st_traffic": "📶 Трафик за месяц: {size}", "st_ok": "✅ Статус: работает",
         "st_bad": "⚠️ Статус: сервер AmneziaWG недоступен", "up_dh": "{d} дн. {h} ч",
@@ -207,6 +214,13 @@ TEXTS = {
         "st_panel": "🏷 Panel version: {version}", "st_panel_up": "🏷 Panel version: {version} ({latest} available)",
         "st_awg": "🛡 AWG version: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Server uptime: {time}",
+        "st_v4_wait": "🌐 IPv4: detecting…",
+        "st_v4_fail": "🌐 IPv4: unknown — the “direct” check failed, the panel retries every 10 minutes",
+        "st_v6_none": "🌐 IPv6: none on the server",
+        "st_dns_off": "🧭 DNS on the server: off",
+        "st_dns_on": "🧭 DNS on the server: running on <code>{addr}</code>",
+        "st_dns_stats": "   {q} queries, {c} from cache",
+        "st_dns_err": "⚠️ DNS on the server: not working — details in the panel, Server tab",
         "st_ram": "🧠 RAM: {used} of {total}", "st_online": "🟢 Clients online: {online} of {total}",
         "st_traffic": "📶 Traffic this month: {size}", "st_ok": "✅ Status: running",
         "st_bad": "⚠️ Status: AmneziaWG server unavailable", "up_dh": "{d} d {h} h",
@@ -293,6 +307,13 @@ TEXTS = {
         "st_panel": "🏷 面板版本：{version}", "st_panel_up": "🏷 面板版本：{version}（可更新至 {latest}）",
         "st_awg": "🛡 AWG 版本：{version}", "st_v4": "🌐 IPv4：<code>{ip}</code>",
         "st_v6": "🌐 IPv6：<code>{ip}</code>", "st_uptime": "⏱ 服务器运行时间：{time}",
+        "st_v4_wait": "🌐 IPv4：正在检测…",
+        "st_v4_fail": "🌐 IPv4：未知——「直连」检测失败，面板每 10 分钟重试一次",
+        "st_v6_none": "🌐 IPv6：服务器上没有",
+        "st_dns_off": "🧭 服务器上的 DNS：已关闭",
+        "st_dns_on": "🧭 服务器上的 DNS：运行于 <code>{addr}</code>",
+        "st_dns_stats": "   查询 {q} 次，缓存命中 {c} 次",
+        "st_dns_err": "⚠️ 服务器上的 DNS：未运行——详情见面板的「服务器」选项卡",
         "st_ram": "🧠 内存：{used} / {total}", "st_online": "🟢 在线客户端：{online} / {total}",
         "st_traffic": "📶 本月流量：{size}", "st_ok": "✅ 状态：运行中",
         "st_bad": "⚠️ 状态：AmneziaWG 服务器不可用", "up_dh": "{d} 天 {h} 小时",
@@ -382,6 +403,13 @@ TEXTS = {
         "st_panel": "🏷 نسخهٔ پنل: {version}", "st_panel_up": "🏷 نسخهٔ پنل: {version} (نسخهٔ {latest} موجود است)",
         "st_awg": "🛡 نسخهٔ AWG: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ مدت کارکرد سرور: {time}",
+        "st_v4_wait": "🌐 IPv4: در حال تشخیص…",
+        "st_v4_fail": "🌐 IPv4: نامشخص — بررسی «مستقیم» انجام نشد، پنل هر ۱۰ دقیقه دوباره تلاش می‌کند",
+        "st_v6_none": "🌐 IPv6: روی سرور نیست",
+        "st_dns_off": "🧭 DNS روی سرور: خاموش",
+        "st_dns_on": "🧭 DNS روی سرور: روی <code>{addr}</code> کار می‌کند",
+        "st_dns_stats": "   {q} پرسش، {c} از حافظهٔ موقت",
+        "st_dns_err": "⚠️ DNS روی سرور: کار نمی‌کند — جزئیات در پنل، زبانهٔ «سرور»",
         "st_ram": "🧠 RAM: {used} از {total}", "st_online": "🟢 کلاینت‌های آنلاین: {online} از {total}",
         "st_traffic": "📶 ترافیک این ماه: {size}", "st_ok": "✅ وضعیت: در حال کار",
         "st_bad": "⚠️ وضعیت: سرور AmneziaWG در دسترس نیست", "up_dh": "{d} روز {h} ساعت",
@@ -1042,8 +1070,10 @@ class Bot:
                  tr(L, "st_host", host=s.get("host") or "—"),
                  tr(L, "st_panel_up", version=cur, latest=v["latest"]) if upd else tr(L, "st_panel", version=cur),
                  tr(L, "st_awg", version=h.get("awg") or "—"),
-                 tr(L, "st_v4", ip=h.get("v4") or "—"),
-                 tr(L, "st_v6", ip=h.get("v6") or "—"),
+                 tr(L, "st_v4", ip=h["v4"]) if h.get("v4") else
+                 tr(L, "st_v4_fail" if h.get("v4_state") == "failed" else "st_v4_wait"),
+                 tr(L, "st_v6", ip=h["v6"]) if h.get("v6") else tr(L, "st_v6_none"),
+                 *self._dns_lines(L, h.get("dns")),
                  tr(L, "st_uptime", time=fmt_uptime(h.get("uptime"), L)),
                  tr(L, "st_ram", used=fmt_size(mem[0], L) if mem else "—", total=fmt_size(mem[1], L) if mem else "—"),
                  tr(L, "st_online", online=online, total=len(clients)),
@@ -1054,6 +1084,18 @@ class Bot:
             rows.append([(tr(L, "b_update", False, version=v["latest"]), "up")])
         rows.append([(tr(L, "b_refresh"), "st")] + self._back_server(c))
         self._show(c, "\n".join(lines), kb(*rows), msg)
+
+    @staticmethod
+    def _dns_lines(L: str, d: dict | None) -> list[str]:
+        """Строки «DNS на сервере» для экрана состояния: выключен, работает (со счётчиками) или ошибка."""
+        if not d:
+            return [tr(L, "st_dns_off")]
+        if d.get("state") != "on":
+            return [tr(L, "st_dns_err")]
+        out = [tr(L, "st_dns_on", addr=d.get("listen") or "—")]
+        if d.get("queries") is not None:
+            out.append(tr(L, "st_dns_stats", q=d["queries"], c=d.get("cached") or 0))
+        return out
 
     def _exit_line(self, c: dict, u: dict, st: dict) -> str:
         L = c["lang"]

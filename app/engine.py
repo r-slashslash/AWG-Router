@@ -32,6 +32,9 @@ SOCK_DIR = "/var/run/amneziawg"
 LOG_DIR = os.path.join(config.DATA_DIR, "logs")
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe.py")
 PROBE_HOSTS = ("ip-api.com", "ifconfig.me")     # те же имена, что в probe.py
+HOST_FAST_TRIES, HOST_FAST_WAIT = 30, 20     # внешний IPv4: сначала 30 попыток раз в 20 секунд,
+HOST_SLOW_WAIT = 600                        # потом раз в 10 минут, пока не найдётся;
+HOST_RECHECK = 6 * 3600                     # найденный перепроверяем раз в 6 часов
 RERESOLVE_AFTER = 30     # туннель с именем в Endpoint не отвечает столько секунд после запуска — разбираем заново
 RERESOLVE_EVERY = 60     # и потом не чаще, чем раз в столько секунд
 SNIPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sniproxy.py")
@@ -102,6 +105,7 @@ class Engine:
         self._parsed: dict[str, awgconf.UpstreamConf] = {}
         self._fake = system.DemoTarget() if config.DRY_RUN else None
         self.public_v4: str | None = None      # внешний IPv4, найденный проверкой «напрямую»
+        self.public_v4_state = "pending"        # pending — ещё ищем, ok — найден, failed — не нашли
         self.srv = ServerManager(self)
         self._runtime_checked = False
         self._masking_checked = None     # Target.key, на котором уже проверен старый I1
@@ -140,22 +144,33 @@ class Engine:
         threading.Thread(target=self._detect_host, name="public-ip", daemon=True).start()
 
     def _detect_host(self) -> None:
-        """Внешний IPv4 сервера: показывается на вкладке «Сервер» и становится внешним
-        адресом, если его не задали."""
-        for _ in range(30):
-            if self.stop_ev.is_set():
-                return
+        """Внешний IPv4 сервера: показывается на вкладке «Сервер» и в боте и становится внешним
+        адресом, если его не задали. Сначала частые попытки, потом — реже, но не сдаёмся (раньше
+        после 30 неудач адрес не искался до перезапуска панели). Найденный адрес перепроверяем:
+        у VPS он может смениться."""
+        tries = 0
+        while not self.stop_ev.is_set():
             if self.target and self.target.exists:
+                tries += 1
+                ip = None
                 try:
                     r = self.probe("direct")
-                    if r.get("ok") and r.get("ip"):
-                        self.public_v4 = r["ip"]
-                        if not self.srv.public_host(self.store.snapshot()):
-                            self.store.mutate(lambda st: st["settings"].setdefault("public_host", r["ip"]))
-                        return
+                    ip = r.get("ip") if r.get("ok") else None
                 except Exception:  # noqa: BLE001
                     pass
-            self.stop_ev.wait(20)
+                wait = HOST_FAST_WAIT if tries < HOST_FAST_TRIES else HOST_SLOW_WAIT
+                if ip:
+                    self.public_v4, self.public_v4_state = ip, "ok"
+                    if not self.srv.public_host(self.store.snapshot()):
+                        self.store.mutate(lambda st: st["settings"].setdefault("public_host", ip))
+                    tries, wait = 0, HOST_RECHECK
+                elif self.public_v4:
+                    wait = HOST_SLOW_WAIT       # перепроверка не прошла — оставляем прежний адрес
+                elif tries >= HOST_FAST_TRIES:
+                    self.public_v4_state = "failed"
+            else:
+                wait = HOST_FAST_WAIT             # сервера AWG пока нет — ждём его
+            self.stop_ev.wait(wait)
 
     def _loop(self) -> None:
         while not self.stop_ev.is_set():
@@ -1297,7 +1312,7 @@ class Engine:
                     "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
         # имена разбираем в сети панели — в сети контейнера может не быть DNS
         hosts = [f"{h}={ip}" for h, ip in awgconf.resolve_many(PROBE_HOSTS, 4).items()]
-        p = t.helper(["python3", PROBE, str(mark), *hosts], check=False, timeout=25)
+        p = t.ns(["python3", PROBE, str(mark), *hosts], check=False, timeout=25)
         try:
             res = json.loads(p.stdout)
         except ValueError:
