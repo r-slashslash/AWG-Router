@@ -6,6 +6,7 @@ digest и собирает его сам, только если скачать �
 
 python3 -m unittest discover tests
 """
+import json
 import os
 import re
 import shutil
@@ -148,8 +149,8 @@ class InstallerImagesTest(unittest.TestCase):
             step() { echo "STEP $1"; }; ok() { echo "OK $1"; }; warn() { echo "WARN $1"; }
             die() { echo "DIE $1"; exit 1; }; buildx_ver() { echo 0.38.1; }
             """)
-        body = stubs + "".join(func(n) for n in ("build_image", "image_ref", "pull_image", "last_line",
-                                                 "with_spinner")) + image_section()
+        body = stubs + "".join(func(n) for n in ("build_image", "image_ref", "no_ready_image", "pull_image",
+                                                 "last_line", "with_spinner")) + image_section()
         r, calls = self.bash(body, **env)
         return r, [c.split()[1] for c in calls if c.split()[1] != "image"]
 
@@ -169,9 +170,25 @@ class InstallerImagesTest(unittest.TestCase):
         self.assertIn("STEP Building the panel", r.stdout)
 
     def test_builds_without_images(self):
+        """1.17.1: сборка без IMAGES не молчит — иначе обновление «висит» на apk без объяснений (#8)."""
         r, calls = self.run_section()
         self.assertEqual(calls, ["build"])
-        self.assertNotIn("WARN", r.stdout)                        # ветка — не повод для тревоги
+        self.assertIn("WARN This download has no ready image of the panel (no IMAGES file", r.stdout)
+        self.assertIn("dl-cdn.alpinelinux.org", r.stdout)
+
+    def test_asked_to_build_is_quiet(self):
+        self.images(f"PANEL_IMAGE={PANEL}\n")
+        r, calls = self.run_section(AWGR_BUILD="1")
+        self.assertEqual(calls, ["build"])
+        self.assertNotIn("WARN", r.stdout)
+        os.remove(os.path.join(self.tmp, "IMAGES"))
+        r, calls = self.run_section(AWGR_BUILD="1")
+        self.assertNotIn("WARN", r.stdout)
+
+    def test_ready_image_is_quiet(self):
+        self.images(f"PANEL_IMAGE={PANEL}\n")
+        r, _ = self.run_section()
+        self.assertNotIn("WARN", r.stdout)
 
 
 @unittest.skipUnless(shutil.which("bash") and shutil.which("tar"), "needs bash and tar")
@@ -238,6 +255,31 @@ class WorkflowImagesTest(unittest.TestCase):
         wf_re = re.search(r"=~ \^(\S+)\$ \]\]", self.steps["Build the archive"]).group(1)
         sh_re = re.search(r"grep -E '\^(\S+)\$'", func("image_ref")).group(1)
         self.assertEqual(wf_re, sh_re)
+
+    def published_job(self) -> str:
+        return self.text[self.text.index("  published:"):]
+
+    @unittest.skipUnless(shutil.which("jq"), "needs jq")
+    def test_published_job_keeps_the_draft_archive(self):
+        """1.17.1: при публикации архив черновика (с IMAGES) не перезаливается (#8). До этого case
+        требовал два пробела между именами, никогда не срабатывал, и архив заменялся архивом без IMAGES."""
+        flt = re.search(r"ASSETS_PRESENT: '(.+)'", self.published_job()).group(1)
+
+        def present(*names):
+            doc = json.dumps({"assets": [{"name": n} for n in names]})
+            return subprocess.run(["jq", "-r", flt], input=doc, capture_output=True, text=True,
+                                  check=True).stdout.strip()
+        self.assertEqual(present("awg-router.tar.gz", "awg-router.tar.gz.sha256"), "true")
+        self.assertEqual(present("awg-router.tar.gz.sha256", "awg-router.tar.gz"), "true")
+        self.assertEqual(present("awg-router.tar.gz"), "false")
+        self.assertEqual(present("awg-router.tar.gz.sha256"), "false")       # не путать с префиксом
+        self.assertEqual(present(), "false")
+        self.assertNotIn('case " $have "', self.published_job())
+
+    def test_published_job_checks_images(self):
+        job = self.published_job()
+        self.assertIn("gh release download", job)
+        self.assertIn("awg-router/IMAGES", job)
 
     def test_dockerfiles_name_the_repository(self):
         for p in ("Dockerfile", os.path.join("awg-server", "Dockerfile")):

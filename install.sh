@@ -540,6 +540,13 @@ image_ref() { # $1 key in IMAGES → the reference, or nothing
     | grep -E '^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$' || true
 }
 
+# Why the image is built here although nobody asked (AWGR_BUILD=1 is asking): the build needs
+# dl-cdn.alpinelinux.org and git over HTTPS to github.com, so it is said aloud, not left to a silent wait
+no_ready_image() { # $1 what (the panel / AmneziaWG)
+  [ "${AWGR_BUILD:-}" = 1 ] && return 0
+  warn "This download has no ready image of $1 (no IMAGES file: a branch, AWGR_SRC_URL or an old release) — building it here; this needs dl-cdn.alpinelinux.org and github.com"
+}
+
 pull_image() { # $1 reference, $2 local tag, $3 log
   [ -n "$1" ] || return 1
   local rc
@@ -576,6 +583,7 @@ if [ -n "$PANEL_REF" ]; then
 fi
 if [ -z "$PANEL_REF" ]; then
   step "Building the panel (first time takes 3–10 minutes)"
+  [ -f "$DIR/IMAGES" ] || no_ready_image "the panel"
   with_spinner build_image "$IMAGE" "$DIR" "$LOG" || { tail -n 25 "$LOG"; die "Build failed, see $LOG"; }
   ok "Done"
 fi
@@ -588,6 +596,7 @@ if [ "$INSTALL_AWG" = container ]; then
       python3 -m app.initserver --out /out --port "$AWG_PORT" >"$DIR/data/awg-init.log" 2>&1 \
     || { cat "$DIR/data/awg-init.log"; die "Failed to create the server config"; }
   SRV_REF="$(image_ref SERVER_IMAGE)"
+  [ -f "$DIR/IMAGES" ] || no_ready_image "AmneziaWG"
   if ! pull_image "$SRV_REF" "$SRV_NAME" "$DIR/data/awg-pull.log"; then
     [ -n "$SRV_REF" ] && warn "Could not download the ready AmneziaWG image ($(last_line "$DIR/data/awg-pull.log")) — building it here"
     build_image "$SRV_NAME" "$DIR/awg-server" "$DIR/data/awg-build.log" \

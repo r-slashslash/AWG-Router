@@ -3,6 +3,19 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.17.1 — 2026-11-07
+
+- **Ready images actually used.** In 1.17.0 the installer still built the image on the server: when the
+  release was published, the workflow replaced the release archive with one without the `IMAGES` file,
+  because its check "the archive is already attached" never matched (the pattern needed two spaces
+  between the file names). So `awg-router update` and **System → Update** silently went to the build
+  and hung on Alpine packages where they are filtered. The check is fixed, and after publishing the
+  workflow now checks that the archive carries `IMAGES` and warns if not.
+- **The installer says why it builds.** When the downloaded archive has no ready image (a branch,
+  `AWGR_SRC_URL` or an older release), the installer now warns that it builds the image on the server and
+  that this needs dl-cdn.alpinelinux.org and github.com; before, it said nothing. With `AWGR_BUILD=1` it
+  stays quiet: the build was asked for. Thanks @LCF30 for finding and explaining both (#8).
+
 ## 1.17.0 — 2026-11-07
 
 - **Ready images instead of building on the server.** Installing and updating used to build the image

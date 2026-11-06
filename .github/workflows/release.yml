@@ -192,14 +192,30 @@ jobs:
           ver=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/version.py)
           [ "v$ver" = "$TAG" ] || { echo "::error::app/version.py says $ver, tag is $TAG"; exit 1; }
 
-      # Сюда попадают только релизы, опубликованные мимо черновика: в таком архиве нет IMAGES,
-      # и install.sh собирает образ на сервере.
+      # Архив черновика (с IMAGES) здесь не трогается. Свой архив прикладывается, только если его нет
+      # совсем — релиз опубликован мимо черновика; в таком архиве нет IMAGES, и install.sh собирает
+      # образ на сервере. (До 1.17.1 проверка «архив есть» не срабатывала никогда — шаблон case требовал
+      # два пробела между именами — и архив черновика молча заменялся архивом без IMAGES.)
       - name: Attach the archive if it is missing
         run: |
-          have=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
-          case " $have " in *" awg-router.tar.gz "*" awg-router.tar.gz.sha256 "*|*" awg-router.tar.gz.sha256 "*" awg-router.tar.gz "*)
-            echo "archive is attached"; exit 0 ;;
-          esac
+          have=$(gh release view "$TAG" --json assets --jq "$ASSETS_PRESENT")
+          if [ "$have" = true ]; then
+            echo "archive is attached"; exit 0
+          fi
           git archive --format=tar.gz --prefix=awg-router/ -o awg-router.tar.gz HEAD
           sha256sum awg-router.tar.gz > awg-router.tar.gz.sha256
           gh release upload "$TAG" awg-router.tar.gz awg-router.tar.gz.sha256 --clobber
+        env:
+          ASSETS_PRESENT: '[.assets[].name] | (index("awg-router.tar.gz") != null and index("awg-router.tar.gz.sha256") != null)'
+
+      - name: The published archive carries the ready images
+        run: |
+          rm -rf check && mkdir check
+          gh release download "$TAG" -p awg-router.tar.gz -D check
+          if tar -tzf check/awg-router.tar.gz awg-router/IMAGES >/dev/null 2>&1; then
+            tar -xzOf check/awg-router.tar.gz awg-router/IMAGES
+          else
+            msg="$TAG: the archive has no IMAGES, so panels will build the image on the server instead of downloading it."
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
