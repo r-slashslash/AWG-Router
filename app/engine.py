@@ -31,6 +31,7 @@ RUN_DIR = "/run/awgr" if not config.DRY_RUN else os.path.join(config.DATA_DIR, "
 SOCK_DIR = "/var/run/amneziawg"
 LOG_DIR = os.path.join(config.DATA_DIR, "logs")
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe.py")
+PROBE_HOSTS = ("ip-api.com", "ifconfig.me")     # те же имена, что в probe.py
 SNIPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sniproxy.py")
 SNI_CONF = os.path.join(RUN_DIR, "sni.json")
 SNI_STATS = os.path.join(RUN_DIR, "sni-stats.json")
@@ -253,7 +254,14 @@ class Engine:
             t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
             self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
             return
+        setconf = pc.setconf
         if not config.DRY_RUN:
+            # имя из Endpoint разбираем здесь, в сети панели, до создания интерфейса: в сети
+            # контейнера Amnezia свой резолвер не работает (127.0.0.53 от systemd-resolved)
+            try:
+                setconf = awgconf.setconf_resolved(pc)
+            except awgconf.ConfigError as e:
+                raise system.SysError(e.msg) from None
             if config.UPSTREAM_BACKEND == "kernel":
                 t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
             else:
@@ -285,7 +293,7 @@ class Engine:
         path = os.path.join(RUN_DIR, f"{ifn}.conf")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            f.write(pc.setconf)
+            f.write(setconf)
         try:
             t.ns(["awg", "setconf", ifn, path])
         finally:
@@ -1102,7 +1110,13 @@ class Engine:
         if config.DRY_RUN:
             return {"ok": True, "ip": "203.0.113.%d" % (10 + (eff if eff != "direct" else 0)),
                     "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
-        p = t.ns(["python3", PROBE, str(mark)], check=False, timeout=25)
+        hosts = []
+        for h in PROBE_HOSTS:           # имена разбираем в сети панели — в сети контейнера может не быть DNS
+            try:
+                hosts.append(f"{h}={awgconf.resolve_host(h, 4)}")
+            except awgconf.ConfigError:
+                pass
+        p = t.ns(["python3", PROBE, str(mark), *hosts], check=False, timeout=25)
         try:
             res = json.loads(p.stdout)
         except ValueError:

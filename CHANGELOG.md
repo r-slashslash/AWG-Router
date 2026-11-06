@@ -3,6 +3,21 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.14.3 — 2026-11-06
+
+- **Exit with a domain name in Endpoint.** An exit whose config had `Endpoint = name:port` instead of an
+  IP address never came up: `awg setconf` waited 30 seconds and failed, and every retry did the same.
+  The cause was DNS: the command runs in the network of the Amnezia container, but the resolver
+  settings stay those of the panel, and on hosts with systemd-resolved they point to 127.0.0.53,
+  where nobody listens inside that network. The panel now resolves the name itself, in its own
+  network, before the tunnel is created, and gives `awg setconf` the address. The config keeps the
+  name, so the name is resolved again every time the tunnel is brought up: changing the DNS record
+  moves the exit to the new server at the next restart of the tunnel. If the name cannot be resolved,
+  the exit shows a clear error instead of a 30-second timeout.
+- **Exit check without "external IP unknown".** The check ran `ip-api.com` and `ifconfig.me`
+  lookups in the same broken network, so the external IP was often not found. The panel now
+  resolves these names itself and passes the addresses to the check.
+
 ## 1.14.2 — 2026-11-05
 
 1.14.1 was withdrawn soon after publishing; its changes are part of this version.

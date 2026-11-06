@@ -5,6 +5,8 @@ import base64
 import ipaddress
 import json
 import re
+import socket
+import threading
 import urllib.parse
 import zlib
 from dataclasses import dataclass, field
@@ -25,6 +27,10 @@ KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")
 
 class ConfigError(MsgError, ValueError):
     pass
+
+
+# Сколько ждать ответа DNS при разборе имени из Endpoint (секунды)
+RESOLVE_TIMEOUT = 8
 
 
 # Параметры, по которым определяем поколение протокола AmneziaWG
@@ -331,3 +337,53 @@ def parse_server_conf(text: str) -> dict:
                     break
             res["peers"].append({"public_key": d.get("publickey", ""), "ip": ip})
     return res
+
+
+def split_endpoint(endpoint: str) -> tuple[str, str]:
+    """«host:port» или «[v6]:port» → (host, port). Порт остаётся строкой, как в конфиге."""
+    host, _, port = endpoint.strip().rpartition(":")
+    return host.strip("[]"), port
+
+
+def _lookup(host: str, out: list) -> None:
+    """Разбор имени в отдельном потоке: getaddrinfo нельзя прервать, а ждать его без предела нельзя."""
+    for fam in (socket.AF_INET, socket.AF_INET6):
+        try:
+            out.append(socket.getaddrinfo(host, None, fam, socket.SOCK_STREAM)[0][4][0])
+            return
+        except OSError:
+            continue
+
+
+def resolve_host(host: str, timeout: float | None = None) -> str:
+    """IP-адрес для имени из Endpoint: IPv4, а если его нет — IPv6. Разбор идёт в сети панели
+    (её resolv.conf): внутри сети контейнера Amnezia нет ни резолвера из конфига Docker, ни
+    127.0.0.53 от systemd-resolved, и `awg setconf` с именем ждал бы тайм-аута."""
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    out: list[str] = []
+    th = threading.Thread(target=_lookup, args=(host, out), daemon=True)
+    th.start()
+    th.join(RESOLVE_TIMEOUT if timeout is None else timeout)
+    if not out:
+        raise ConfigError(Msg("cfg.endpoint_resolve", host=host))
+    return out[0]
+
+
+def setconf_resolved(pc: UpstreamConf) -> str:
+    """Текст для `awg setconf` с IP-адресом вместо имени в Endpoint. Исходный конфиг (`pc.raw`) не
+    меняется: имя разбирается при каждом запуске туннеля, поэтому смена записи DNS подхватывается."""
+    host, port = split_endpoint(pc.endpoint)
+    ip = resolve_host(host)
+    if ip == host:
+        return pc.setconf
+    addr = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
+    out = []
+    for line in pc.setconf.split("\n"):
+        if line.split("=", 1)[0].strip().lower() == "endpoint" and "=" in line:
+            line = f"{line.split('=', 1)[0].rstrip()} = {addr}"
+        out.append(line)
+    return "\n".join(out)

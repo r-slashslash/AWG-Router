@@ -1,5 +1,5 @@
 """Проверка выхода. Запускается внутри сети контейнера Amnezia:
-    nsenter -t PID -n -- python3 probe.py <fwmark>
+    nsenter -t PID -n -- python3 probe.py <fwmark> [имя=IP ...]
 Помечает свои сокеты fwmark'ом, поэтому идёт тем же путём, что и трафик клиентов.
 Печатает JSON: внешний IP, страна, задержка TCP-соединения."""
 import json
@@ -9,11 +9,13 @@ import time
 
 SO_MARK = 36
 MARK = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+# Адреса, которые панель разобрала сама: резолвера контейнера Amnezia может не быть
+HOSTS = dict(a.split("=", 1) for a in sys.argv[2:] if "=" in a)
 
 
 def sock(host, port, timeout=6):
     last = None
-    for fam, typ, proto, _, addr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+    for fam, typ, proto, _, addr in socket.getaddrinfo(HOSTS.get(host, host), port, socket.AF_INET, socket.SOCK_STREAM):
         s = socket.socket(fam, typ, proto)
         if MARK:
             s.setsockopt(socket.SOL_SOCKET, SO_MARK, MARK)
