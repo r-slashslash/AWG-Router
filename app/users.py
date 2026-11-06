@@ -25,6 +25,29 @@ def client_dns(s: dict) -> list[str]:
     в конфиги не попадают: такой DNS у клиента не ответит."""
     dns = [d for d in s.get("client_dns") or [] if ":" not in d]
     return dns or DEFAULT_DNS
+
+
+def panel_dns_addr(sc: ServerConf) -> str | None:
+    """Адрес сервера в туннеле (на нём слушает DNS панели): IPv4 из Address сервера."""
+    for a in re.split(r"[,\s]+", sc.get("Address") or ""):
+        try:
+            ip = ipaddress.ip_interface(a)
+        except ValueError:
+            continue
+        if ip.version == 4:
+            return str(ip.ip)
+    return None
+
+
+def profile_dns(s: dict, sc: ServerConf, live: str | None = None) -> list[str]:
+    """DNS в конфиге клиента. С DNS панели — сначала адрес сервера в туннеле, вторым — первый сервер
+    из настроек: пока панель перезапускается или обновляется, клиент спросит его (тоже через туннель).
+    live — адрес, на котором DNS панели уже слушает (с интерфейса); пока его нет — из Address сервера."""
+    dns = client_dns(s)
+    addr = (live or panel_dns_addr(sc)) if s.get("panel_dns") else None
+    return [addr] + [d for d in dns if d != addr][:1] if addr else dns
+
+
 DEFAULT_MTU = 1376
 NAME_MAX = 60
 
@@ -73,6 +96,11 @@ class ServerManager:
         return {"v4": self.e.public_v4, "v6": hostnet.global_ipv6(),
                 "v6_listen": hostnet.udp6_listening(port)}
 
+    def _dns_live(self) -> str | None:
+        """Адрес, на котором сейчас слушает DNS панели (None — не запущен)."""
+        d = getattr(self.e, "dns_state", None) or {}
+        return d.get("listen") if d.get("state") == "on" else None
+
     def profile(self, st: dict, sc: ServerConf) -> awgserver.ClientProfile:
         s = st["settings"]
         params = sc.params()
@@ -80,7 +108,7 @@ class ServerManager:
             host=self.client_host(st) or "SERVER_IP",
             port=sc.port,
             server_pub=self.server_pub(sc),
-            dns=client_dns(s),
+            dns=profile_dns(s, sc, self._dns_live()),
             mtu=int(s.get("client_mtu") or DEFAULT_MTU),
             keepalive=s.get("client_keepalive") or awgserver.default_keepalive(params),
         )
@@ -245,6 +273,9 @@ class ServerManager:
             "client_host": s.get("client_host") or "",
             "addrs": self.host_addrs(sc.port),
             "client_dns": client_dns(s),
+            "panel_dns": bool(s.get("panel_dns")),
+            "panel_dns_addr": self._dns_live() or panel_dns_addr(sc),
+            "panel_dns_state": self.e.dns_view(),
             "client_mtu": int(s.get("client_mtu") or DEFAULT_MTU),
             "client_keepalive": s.get("client_keepalive") or "",
             "keepalive_auto": awgserver.default_keepalive(params),
@@ -292,6 +323,8 @@ class ServerManager:
                     if a.version != 4:
                         raise UserError(Msg("srv.dns_v6", value=d))
                 settings_patch["client_dns"] = dns[:4]
+            if "panel_dns" in body:
+                settings_patch["panel_dns"] = bool(body["panel_dns"])
             if "client_mtu" in body:
                 try:
                     mtu = int(body["client_mtu"])
@@ -348,9 +381,11 @@ class ServerManager:
                     drop_nat = old_net
                 restart = True
             host_before = self.client_host(self.e.store.snapshot())
+            dns_before = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live())
             if settings_patch:
                 self.e.store.mutate(lambda st: st["settings"].update(settings_patch))
             host_changed = self.client_host(self.e.store.snapshot()) != host_before
+            dns_changed = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live()) != dns_before
             changed_conf = sc.render() != (t.read_file(t.conf_path) or "")
             if changed_conf:
                 self._write(t, sc, None, restart=restart)
@@ -360,7 +395,7 @@ class ServerManager:
                              Msg("ev.server_restarted" if restart else "ev.server_updated"))
             return {"restarted": restart and changed_conf,
                     "server_side_changed": awgserver.server_side_changed(old, sc.params()),
-                    "host_changed": host_changed}
+                    "host_changed": host_changed, "dns_changed": dns_changed}
 
     def upgrade_masking(self, t: system.Target) -> None:
         """Один раз на сервер: старый I1 AmneziaVPN → новый DNS-ответ icloud.com."""

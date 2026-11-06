@@ -52,6 +52,7 @@ Details are in [How routing works](#how-routing-works).
 - Ready-made masking for the signature packets I1–I5: STUN (calls, WebRTC), QUIC (HTTP/3), DNS query, SIP and a DNS response for icloud.com with Apple’s real address, with random parts so no two handshakes look alike. The packet AmneziaVPN puts in by default (the same everywhere, with icloud.com pointing to a Yandex address) is replaced with this one by the panel itself. I1–I5 are checked strictly (only tags every AmneziaWG understands, packet size shown) and can be set per client: if a client's provider starts blocking, give that one client another masking.
 - Fresh parameters on demand, generated the same way as the AmneziaVPN installer does for AWG 3.1.
 - Port, subnet, client DNS/MTU/keepalive, public address and the address in client configs (IPv4 or IPv6).
+- **DNS on the server** (optional): clients ask the server for DNS, and it asks the servers from the settings the same way the client's traffic goes, with a cache. See [DNS on the server](#dns-on-the-server).
 - Adding or removing a client is applied live without dropping anyone. Server-side parameters restart the interface, which takes a few seconds.
 
 **Routing**
@@ -182,6 +183,27 @@ If the AWG Router installer created the container, its configs live on the host 
 The panel installs `awg`, `awg-quick`, `amneziawg-go` (AWG 3.1) and the `awg-quick@awg0` service.
 - The config is at `/etc/amnezia/amneziawg/awg0.conf`.
 - NAT and forwarding are set up in `PostUp`, so the VPN keeps working even when the panel is stopped. When you change the subnet, the panel moves NAT to the new one.
+
+## DNS on the server
+
+Turned on in **Server → Client settings → DNS on the server**; off by default. It is similar to AmneziaDNS in the AmneziaVPN app, but built with the cascade in mind.
+
+**How it works.** The panel runs a small DNS server in the AWG server's network (`dnsproxy.py`, port 53 on the server's tunnel address, for example `10.8.1.1`). Clients get its address in the `DNS` line of their config, and the first server from the "DNS" field as the second one. The server does not resolve names itself: it forwards the query to the servers from the "DNS" field **through this client's main exit** (if the exit is down, through its fallback, like the traffic). Answers are cached for their TTL separately for each exit, so a repeated query does not cross the cascade. Through SOCKS5 exits queries go over TCP.
+
+**The cascade catch.** An ordinary resolver on the entry server (this is how AmneziaDNS works) asks the internet straight from that server. That causes two problems:
+- the local ISP sees the queries and can spoof or block the answers;
+- CDNs judge where the client is by the resolver's address and return nodes near the entry server, while the traffic goes out through an exit in another country. Sites and video load slowly or not at all.
+
+Here a query takes the same way as the client's traffic, so clients that go out through another server don't have these problems. Limits:
+- a client whose main route is "direct" gets answers fetched directly from the entry server, with all the problems above; a client with a block gets a refusal;
+- rules by addresses (for example, "local networks direct") don't affect DNS: names of such sites are also resolved through the client's main exit, and a CDN may return a node abroad for them;
+- while the panel is stopped or updating, clients ask the second DNS from their config.
+
+**How to use it best.**
+1. In the "DNS" field, put public servers that work well from the exit's country, for example `1.1.1.1, 8.8.8.8`. Your local ISP's servers don't fit: queries to them go through the exit anyway.
+2. Turn it on if most clients' main route is through an exit. For clients who go direct it is no protection from the ISP.
+3. After turning it on or off, give clients new configs (QR codes or files): old ones keep asking the previous DNS.
+4. A separate AmneziaDNS is not needed then; if it is installed, the panel leaves it alone.
 
 ## How routing works
 

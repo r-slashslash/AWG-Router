@@ -771,6 +771,8 @@ def clean_backup_state(new: dict) -> dict:
                 fail("settings.client_dns")
         # IPv6 DNS из старых копий не берём: в туннеле только IPv4
         out["client_dns"] = [str(d) for d in dns if ":" not in str(d)]
+    if isinstance(s.get("panel_dns"), bool):
+        out["panel_dns"] = s["panel_dns"]
     mtu = s.get("client_mtu")
     if mtu not in (None, ""):
         if not isinstance(mtu, int) or isinstance(mtu, bool) or not 1100 <= mtu <= 1500:

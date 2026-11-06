@@ -23,7 +23,7 @@ from . import awgconf, config, domains, limits, lists, nftgen, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
-from .users import ServerManager
+from .users import ServerManager, client_dns
 
 log = logging.getLogger("awgr.engine")
 
@@ -32,9 +32,15 @@ SOCK_DIR = "/var/run/amneziawg"
 LOG_DIR = os.path.join(config.DATA_DIR, "logs")
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe.py")
 PROBE_HOSTS = ("ip-api.com", "ifconfig.me")     # те же имена, что в probe.py
+RERESOLVE_AFTER = 30     # туннель с именем в Endpoint не отвечает столько секунд после запуска — разбираем заново
+RERESOLVE_EVERY = 60     # и потом не чаще, чем раз в столько секунд
 SNIPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sniproxy.py")
 SNI_CONF = os.path.join(RUN_DIR, "sni.json")
 SNI_STATS = os.path.join(RUN_DIR, "sni-stats.json")
+DNSPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dnsproxy.py")
+DNS_CONF = os.path.join(RUN_DIR, "dns.json")
+DNS_STATS = os.path.join(RUN_DIR, "dns-stats.json")
+DNS_PORT = 53
 
 
 def _sha(s: str) -> str:
@@ -56,6 +62,7 @@ class UpRT:
         self.proc: subprocess.Popen | None = None
         self.started = time.time()
         self.socks_ip: str | None = None        # адрес прокси SOCKS5 (имя разрешает панель)
+        self.reresolved = 0.0                   # когда последний раз заново разбирали имя из Endpoint
 
 
 class HelperRT:
@@ -103,8 +110,12 @@ class Engine:
         self.sni: HelperRT | None = None
         self.sni_state: dict | None = None      # для интерфейса: state, listen, error
         self._sni_retry = 0.0
+        self.dns: HelperRT | None = None        # dnsproxy.py — DNS панели для клиентов
+        self.dns_state: dict | None = None      # для интерфейса: state, listen, error
+        self._dns_retry = 0.0
         self._socks_res: dict[str, dict] = {}   # uid → результат последней проверки прокси
         self._socks_busy: set[str] = set()
+        self._rr_busy: set[str] = set()          # выходы, у которых сейчас заново разбирается имя
         self._up_fail: dict[str, dict] = {}     # uid → {"n", "next", "sig", "err"}: неудачные запуски
         os.makedirs(RUN_DIR, exist_ok=True)
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -462,6 +473,8 @@ class Engine:
                 self.event("info" if healthy else "warn",
                            Msg("ev.upstream_ok" if healthy else "ev.upstream_failed",
                                name=u["name"], uid=uid))
+            if not healthy and now - r.started >= RERESOLVE_AFTER and peer and not config.DRY_RUN:
+                self._reresolve(t, u, r, peer, now)
             self.health[uid] = {
                 "state": "up" if healthy else ("connecting" if now - r.started < 30 and not hs else "stale"),
                 "healthy": healthy, "handshake_age": age, "iface": r.iface,
@@ -469,6 +482,43 @@ class Engine:
                 "endpoint": peer["endpoint"] if peer else None,
                 "since": r.started,
             }
+
+    def _reresolve(self, t: system.Target, u: dict, r: UpRT, peer: dict, now: float) -> None:
+        """Туннель с именем в Endpoint не отвечает: разбираем имя заново и, если адрес сменился,
+        меняем его у пира (`awg set … endpoint`) без перезапуска. Работающий туннель не трогаем:
+        сбой DNS или подменённый ответ не должны уводить живой туннель на чужой адрес.
+        Разбор идёт в фоне, чтобы не задерживать цикл, и не чаще раза в RERESOLVE_EVERY."""
+        uid = u["id"]
+        if now - r.reresolved < RERESOLVE_EVERY or uid in self._rr_busy:
+            return
+        try:
+            pc = self.parsed(u)
+        except awgconf.ConfigError:
+            return
+        host, port = awgconf.split_endpoint(pc.endpoint)
+        try:
+            ipaddress.ip_address(host)
+            return                                  # в конфиге адрес, а не имя — разбирать нечего
+        except ValueError:
+            pass
+        r.reresolved = now
+        self._rr_busy.add(uid)
+
+        def run():
+            try:
+                ip = awgconf.resolve_host(host)
+                addr = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
+                cur = peer.get("endpoint")
+                if cur == addr or uid not in self.rt or self.rt[uid] is not r:
+                    return
+                t.ns(["awg", "set", r.iface, "peer", pc.peer_public_key, "endpoint", addr], timeout=15)
+                self.event("info", Msg("ev.endpoint_changed", name=u["name"], host=host,
+                                       old=cur or "—", new=addr))
+            except Exception as e:  # noqa: BLE001
+                log.info("reresolve %s: %s", host, e)
+            finally:
+                self._rr_busy.discard(uid)
+        threading.Thread(target=run, name=f"reresolve-{uid}", daemon=True).start()
 
     def _socks_health(self, t: system.Target, u: dict, r: UpRT, now: float) -> None:
         """Выход SOCKS5 работает, если жив hev-socks5-tunnel и недавняя проверка прокси прошла.
@@ -771,21 +821,24 @@ class Engine:
             except Exception:  # noqa: BLE001
                 log.exception("sni traffic")
 
-    def _input_rule(self, t: system.Target, op: str) -> None:
-        """Перенаправленные соединения клиентов — входящие для сервера (а не транзитные).
-        Файрвол на iptables (ufw и т. п.) их бы отбросил: разрешаем порт sniproxy.py на
-        интерфейсе клиентов. op: "add" | "del". Нет iptables — ничего не делаем."""
-        ifn, port = t.iface, int(config.SNI_PROXY_PORT)
-        rule = f"INPUT -i {ifn} -p tcp --dport {port} -j ACCEPT"
-        if op == "add":
-            cmd = f"iptables -C {rule} 2>/dev/null || iptables -I {rule}"
-        else:
-            cmd = f"while iptables -C {rule} 2>/dev/null; do iptables -D {rule}; done"
+    def _input_rule(self, t: system.Target, op: str, ports=None) -> None:
+        """Перенаправленные соединения клиентов и запросы к DNS панели — входящие для сервера
+        (а не транзитные). Файрвол на iptables (ufw и т. п.) их бы отбросил: разрешаем порт на
+        интерфейсе клиентов. op: "add" | "del"; ports — [(протокол, порт)], по умолчанию порт
+        sniproxy.py. Нет iptables — ничего не делаем."""
+        ifn = t.iface
+        cmds = []
+        for proto, port in ports or [("tcp", int(config.SNI_PROXY_PORT))]:
+            rule = f"INPUT -i {ifn} -p {proto} --dport {int(port)} -j ACCEPT"
+            if op == "add":
+                cmds.append(f"{{ iptables -C {rule} 2>/dev/null || iptables -I {rule}; }}")
+            else:
+                cmds.append(f"while iptables -C {rule} 2>/dev/null; do iptables -D {rule}; done")
         try:
-            t.native(["sh", "-c", f"command -v iptables >/dev/null 2>&1 || exit 0; {cmd}"],
+            t.native(["sh", "-c", "command -v iptables >/dev/null 2>&1 || exit 0; " + "; ".join(cmds)],
                      check=False, timeout=30)
         except Exception as e:  # noqa: BLE001
-            log.info("sni input rule: %s", e)
+            log.info("input rule: %s", e)
 
     def _sni_hung(self) -> bool:
         """Процесс жив, но цикл событий стоит: счётчики (пишет каждые 15 с) давно не обновлялись."""
@@ -873,6 +926,129 @@ class Engine:
             d.cfg_hash = h
         self.sni_state = {"state": "on", "listen": listen}
         return config.SNI_PROXY_PORT
+
+    # ------------------------------------------------------ DNS для клиентов
+    def dns_routes(self, st: dict) -> tuple[dict | None, dict]:
+        """Путь запросов DNS: основной выход политики клиента (с резервированием, как у его
+        трафика). → (путь по умолчанию, {IP клиента: путь}) — только отличающиеся от общего.
+        Путь — {"mark", "tcp"} (метка выхода; через SOCKS5 — по TCP) или None — блок. Выход,
+        которого сейчас нет среди запущенных, — тоже блок: метка без правила ip rule ушла бы
+        напрямую."""
+        gp, cps = self._policies(st)
+        running = {r.num for r in self.rt.values()}
+        kinds = {}
+        for u in st["upstreams"]:
+            try:
+                kinds[u["num"]] = self.parsed(u).kind
+            except Exception:  # noqa: BLE001
+                pass
+
+        def route(eff):
+            if eff == "direct":
+                return {"mark": 0, "tcp": False}
+            if isinstance(eff, int) and (eff in running or config.DRY_RUN):
+                return {"mark": nftgen.mark_for(eff), "tcp": kinds.get(eff) == "socks5"}
+            return None
+        default = route(gp["default"])
+        routes = {}
+        for ip, pol in cps.items():
+            r = route(pol["default"])
+            if r != default:
+                routes[ip] = r
+        return default, routes
+
+    def _stop_dns(self) -> None:
+        d, self.dns = self.dns, None
+        if d and d.proc.poll() is None:
+            d.proc.terminate()
+            try:
+                d.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                d.proc.kill()
+
+    def _dns_hung(self) -> bool:
+        """Процесс жив, но цикл событий стоит: счётчики (пишет каждые 15 с) давно не обновлялись."""
+        d = self.dns
+        if not d or time.time() - d.started < 120:
+            return False
+        try:
+            with open(DNS_STATS) as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            return False
+        return s.get("pid") == d.proc.pid and time.time() - float(s.get("at") or 0) > 120
+
+    def _sync_dns(self, t: system.Target, st: dict) -> None:
+        """Держит dnsproxy.py запущенным, пока DNS панели включён в настройках."""
+        if not st["settings"].get("panel_dns"):
+            if self.dns:
+                self._stop_dns()
+                self._input_rule(t, "del", [("udp", DNS_PORT), ("tcp", DNS_PORT)])
+            self.dns_state = None
+            return
+        la = self.tunnel_addr(t)
+        if not la:
+            self._stop_dns()
+            self.dns_state = {"state": "error", "error": Msg("dns.no_addr", iface=t.iface)}
+            return
+        listen, net = la
+        if config.DRY_RUN:
+            self.dns_state = {"state": "on", "listen": listen}
+            return
+        default, routes = self.dns_routes(st)
+        cfg = {"listen": listen, "port": DNS_PORT, "clients": net, "stats": DNS_STATS,
+               "upstreams": client_dns(st["settings"]), "default": default, "routes": routes}
+        h = _sha(json.dumps(cfg, sort_keys=True))
+        key = f"{t.key}|{listen}"
+        d = self.dns
+        if d and (d.key != key or d.proc.poll() is not None or self._dns_hung()):
+            if d.key == key:
+                self.event("warn", Msg("ev.dns_died"))
+            self._stop_dns()
+            d = None
+        if d is None or d.cfg_hash != h:
+            with open(DNS_CONF + ".tmp", "w") as f:
+                json.dump(cfg, f)
+            os.replace(DNS_CONF + ".tmp", DNS_CONF)
+        if d is None:
+            if time.time() - self._dns_retry < 60:
+                return
+            self._dns_retry = time.time()
+            logp = os.path.join(LOG_DIR, "dnsproxy.log")
+            with open(logp, "a") as logf:
+                proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", "python3", DNSPROXY, DNS_CONF],
+                                        stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                try:
+                    with open(logp) as f:
+                        tail = f.read()[-300:].strip()
+                except OSError:
+                    tail = ""
+                self.dns_state = {"state": "error", "listen": listen, "error": Msg("dns.start_failed", detail=tail)}
+                self.event("error", Msg("ev.dns_failed", detail=tail))
+                return
+            self.dns = HelperRT(proc, key, h)
+            self._input_rule(t, "add", [("udp", DNS_PORT), ("tcp", DNS_PORT)])
+        elif d.cfg_hash != h:
+            d.proc.send_signal(signal.SIGHUP)       # перечитать пути и серверы
+            d.cfg_hash = h
+        self.dns_state = {"state": "on", "listen": listen}
+
+    def dns_view(self) -> dict | None:
+        """Для интерфейса: состояние и счётчики dnsproxy.py."""
+        if not self.dns_state:
+            return None
+        v = dict(self.dns_state)
+        if self.dns and not config.DRY_RUN:
+            try:
+                with open(DNS_STATS) as f:
+                    s = json.load(f)
+                if s.get("pid") == self.dns.proc.pid:
+                    v.update({k: s.get(k) for k in ("queries", "cached", "errors", "refused", "cache")})
+            except (OSError, ValueError):
+                pass
+        return v
 
     def sni_view(self) -> dict | None:
         """Для интерфейса: состояние и счётчики sniproxy.py."""
@@ -974,6 +1150,7 @@ class Engine:
                     self.event("warn", Msg("ev.target_restarted"))
                 self._stop_all()
                 self._stop_sni()
+                self._stop_dns()
                 self.target = t
                 self.applied_hash = None
                 self._sysctl(t)
@@ -1011,6 +1188,11 @@ class Engine:
                 log.exception("sniproxy")
                 self.sni_state = {"state": "error", "error": msg_of(e)}
                 sniff = None        # правила по доменам не действуют, по адресам — как обычно
+            try:
+                self._sync_dns(t, st)
+            except Exception as e:  # noqa: BLE001
+                log.exception("dnsproxy")
+                self.dns_state = {"state": "error", "error": msg_of(e)}
 
             text = self.build_ruleset(t, st, sniff)
             h = _sha(text)
@@ -1036,10 +1218,12 @@ class Engine:
             t = self.target
             self._stop_all()
             self._stop_sni()
+            self._stop_dns()
             if t:
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
                 t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
                 self._input_rule(t, "del")
+                self._input_rule(t, "del", [("udp", DNS_PORT), ("tcp", DNS_PORT)])
                 self._acct_key = None
                 p = t.ns(["ip", "-j", "rule", "show"], check=False)
                 try:
@@ -1063,6 +1247,7 @@ class Engine:
         else:
             with self.lock:
                 self._stop_all()
+                self._stop_dns()        # клиенты переходят на второй DNS из конфига (сервер из настроек)
                 if self.sni:
                     self._stop_sni()
                     t = self.target
@@ -1112,7 +1297,7 @@ class Engine:
                     "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
         # имена разбираем в сети панели — в сети контейнера может не быть DNS
         hosts = [f"{h}={ip}" for h, ip in awgconf.resolve_many(PROBE_HOSTS, 4).items()]
-        p = t.ns(["python3", PROBE, str(mark), *hosts], check=False, timeout=25)
+        p = t.helper(["python3", PROBE, str(mark), *hosts], check=False, timeout=25)
         try:
             res = json.loads(p.stdout)
         except ValueError:

@@ -132,11 +132,13 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                 main.put_limits(R({"expires": 2_000_000_000, "quota_gb": 4, "period": "total"}), pk)
                 main.ensure_share(pk)
                 main.put_client_cps(R({"preset": "stun"}), pk)
+                main.store.mutate(lambda s: s["settings"].update(panel_dns=True))
                 st = main.store.snapshot()
                 new = main.clean_backup_state(st)
             finally:
                 main.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],
                                                      shares=st0["shares"], cps=st0["cps"]))
+                main.store.mutate(lambda s: s["settings"].pop("panel_dns", None))
                 main.del_upstream(R({"replace": "direct"}), x)
 
         def walk(a, b, path=""):

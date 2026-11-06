@@ -1474,6 +1474,12 @@ function viewServer() {
       <div class="panel panel-pad">
         <label class="field"><span>${esc(t("srv.client_host"))}</span><select id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
         <label class="field"><span>DNS</span><input type="text" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
+        <div class="field">
+          <label class="check"><input type="checkbox" id="s-pdns" ${SRV.panel_dns ? "checked" : ""}><span>${esc(t("srv.panel_dns"))}</span></label>
+          <span class="hint">${esc(t("srv.panel_dns_hint", { addr: SRV.panel_dns_addr || "—" }))}</span>
+          ${panelDnsStatus()}
+          <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_how", "srv.panel_dns_cascade", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
+        </div>
         <div class="row2">
           <label class="field"><span>MTU</span><input type="number" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
           <label class="field"><span>PersistentKeepalive</span><input type="text" id="s-ka" dir="ltr" value="${esc(SRV.client_keepalive)}" placeholder="${esc(t("srv.auto", { v: SRV.keepalive_auto }))}"><span class="hint">${esc(t("srv.ka_hint"))}</span></label>
@@ -1521,7 +1527,9 @@ function clientHostHint(val) {
 }
 function srvDirty() {
   if (!SRV || !srvDraft) return false;
+  const pdns = $("#s-pdns");
   return Object.keys(SRV.params).some((k) => (srvDraft[k] || "") !== (SRV.params[k] || "")) ||
+    (pdns && pdns.checked !== !!SRV.panel_dns) ||
     ["#s-host", "#s-ch", "#s-dns", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
@@ -1549,6 +1557,7 @@ bind.server = () => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar;
   });
+  if ($("#s-pdns")) $("#s-pdns").onchange = showBar;
 
   const syncTpl = () => {
     const sel = $("#s-cps"); if (!sel) return;
@@ -1583,7 +1592,7 @@ bind.server = () => {
     const restart = serverSide || (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
     if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
     const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, client_dns: $("#s-dns").value,
-      client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
+      panel_dns: $("#s-pdns").checked, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
     if (!SRV.port_locked) body.port = port;
     if (!SRV.subnet_locked) body.address = addr;
@@ -1591,11 +1600,20 @@ bind.server = () => {
     try {
       const r = await api("PUT", "server", body);
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
-      if (r.server_side_changed || r.host_changed) toast(t("toast.reimport"));
+      if (r.server_side_changed || r.host_changed || r.dns_changed) toast(t("toast.reimport"));
       SRV = null; srvDraft = null; await refresh(); loadServer();
     } catch (e) { toast(e.message, true); $("#s-save").disabled = false; }
   };
 };
+
+// состояние DNS панели под переключателем (вкладка «Сервер»)
+function panelDnsStatus() {
+  const d = SRV.panel_dns_state;
+  if (!SRV.panel_dns || !d) return "";
+  if (d.state === "error") return `<div class="small warn-text">${esc(tm(d.error))}</div>`;
+  const n = d.queries != null ? t("srv.panel_dns_stats", { q: d.queries, c: d.cached || 0 }) : "";
+  return `<div class="small muted">${esc(t("srv.panel_dns_on", { addr: d.listen }))}${n ? " · " + esc(n) : ""}</div>`;
+}
 
 /* ================================================================ система */
 function viewSystem() {

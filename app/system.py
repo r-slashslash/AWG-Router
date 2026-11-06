@@ -140,6 +140,9 @@ def pubkey(priv: str) -> str:
 
 
 # ======================================================================= цели
+# копии resolv.conf контейнеров для наших помощников (Target.helper)
+RESOLV_DIR = "/run/awgr" if not config.DRY_RUN else os.path.join(config.DATA_DIR, "run")
+
 class Target:
     kind = "?"
 
@@ -174,6 +177,13 @@ class Target:
     # наши бинарники в сети цели
     def ns(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
         return run(["nsenter", "-t", str(self.pid), "-n", "--"] + cmd, **kw)
+
+    # наши программы, которым в сети цели нужен DNS (probe.py)
+    def helper_argv(self, cmd: list[str]) -> list[str]:
+        return ["nsenter", "-t", str(self.pid), "-n", "--"] + cmd
+
+    def helper(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
+        return run(self.helper_argv(cmd), **kw)
 
     # бинарники и сокеты самой цели
     def native(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -239,6 +249,42 @@ class ContainerTarget(Target):
         return run(["nsenter", "-t", str(self.pid), "-m", "-n", "--"] + cmd, **kw)
 
     ns_container = native
+
+    def helper_argv(self, cmd: list[str]) -> list[str]:
+        """Наша программа в сети контейнера, но с его resolv.conf. `nsenter -n` меняет только сеть,
+        и программа читала бы resolv.conf панели: у панели сеть хоста, и при systemd-resolved там
+        127.0.0.53, где в сети контейнера никто не слушает. Поэтому — своё пространство монтирования
+        (unshare -m, изменения не видны снаружи) с копией resolv.conf контейнера поверх нашего.
+        Копия, а не сам файл: смонтировать файл из чужого пространства монтирования ядро не даёт, а
+        mount сводит /proc/PID/root/… к нашему же пути. Не вышло — программа запускается, как раньше."""
+        copy = self._resolv_copy()
+        if not copy or not shutil.which("unshare"):
+            return super().helper_argv(cmd)
+        return ["nsenter", "-t", str(self.pid), "-n", "--", "unshare", "-m", "--",
+                "sh", "-c", 'mount --bind "$1" /etc/resolv.conf 2>/dev/null; shift; exec "$@"',
+                "sh", copy] + cmd
+
+    def _resolv_copy(self) -> str | None:
+        """resolv.conf контейнера → файл панели (переписывается, только когда изменился)."""
+        try:
+            with open(self.host_path("/etc/resolv.conf")) as f:
+                text = f.read(65536)
+        except OSError:
+            return None
+        if "nameserver" not in text:
+            return None
+        os.makedirs(RESOLV_DIR, exist_ok=True)
+        path = os.path.join(RESOLV_DIR, f"resolv-{self.pid}.conf")
+        try:
+            with open(path) as f:
+                if f.read() == text:
+                    return path
+        except OSError:
+            pass
+        with open(path + ".tmp", "w") as f:
+            f.write(text)
+        os.replace(path + ".tmp", path)
+        return path
 
     @property
     def awg_bin(self) -> str:
