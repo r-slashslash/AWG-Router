@@ -15,6 +15,10 @@ it grows, so every user-visible change gets a new version.
   the registry doesn't answer within 10 minutes (`AWGR_PULL_TIMEOUT`), an archive of a branch, or
   `AWGR_BUILD=1`. An update also removes the previous panel image, and `awg-router uninstall` removes
   a downloaded image too. Thanks @LCF30 for the report (#8).
+- **More problems at the top of the panel.** Two problems that were only visible on the System tab now
+  also get a red banner on every other tab, with a button to System: an HTTPS certificate that wasn't
+  obtained (the panel serves a temporary one and browsers warn), or one that can't be renewed with less
+  than two days left; and an update that failed.
 - **SOCKS5 exit: a proxy with nothing behind it is no longer "working".** The check counted the
   proxy's own "connection open" answer, but a proxy on this server (Xray, for example) gives it before
   it has reached the foreign server. So an exit whose foreign address was blocked stayed green, stayed

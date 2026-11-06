@@ -301,9 +301,32 @@ function banners() {
   if (!S.target) h += `<div class="banner bad"><b>${esc(t("banner.no_target_title"))}</b> ${esc(tm(S.target_error))}<br><span class="small">${th("banner.no_target_hint", { a: code("pid: host"), b: code("privileged: true") })}</span></div>`;
   else if (serverMissing() && tab !== "server") h += `<div class="banner info"><b>${esc(t("srv.missing"))}</b> <button class="btn sm" data-goto="server">${esc(t("srv.create_title"))}</button></div>`;
   if (S.engine.last_error) h += `<div class="banner bad"><b>${esc(t("banner.apply_error"))}</b> ${esc(tm(S.engine.last_error))}</div>`;
+  const goSys = `<button class="btn sm" data-goto="system">${esc(t("tab.system"))}</button>`;
+  // Сертификат и обновление подробно показаны первыми на вкладке «Система» — там полоса не нужна
+  if (tab !== "system") {
+    const tls = tlsProblem();
+    if (tls) h += `<div class="banner bad"><b>${esc(t(tls.key, tls.p))}</b> <bdi>${esc(tm(tls.error))}</bdi> ${goSys}</div>`;
+    const u = updState(), v = S.version || {};
+    if (!updatingTo && u.state === "failed" && v.available)
+      h += `<div class="banner bad"><b>${esc(t("sy.update_failed", { version: u.to || v.latest }))}</b> ${goSys}</div>`;
+  }
   const tg = S.settings.telegram || {};
-  if (tg.enabled && S.notify_error) h += `<div class="banner bad"><b>${esc(t("banner.tg_failed"))}</b> <bdi>${esc(tm(S.notify_error))}</bdi>${S.notify_pending ? `<br><span class="small">${esc(t("banner.tg_pending", { n: S.notify_pending }))}</span>` : ""} <button class="btn sm" data-goto="system">${esc(t("tab.system"))}</button></div>`;
+  if (tg.enabled && S.notify_error) h += `<div class="banner bad"><b>${esc(t("banner.tg_failed"))}</b> <bdi>${esc(tm(S.notify_error))}</bdi>${S.notify_pending ? `<br><span class="small">${esc(t("banner.tg_pending", { n: S.notify_pending }))}</span>` : ""} ${goSys}</div>`;
   return h;
+}
+
+// Беда с сертификатом HTTPS, заметная пользователю: Let's Encrypt или свой сертификат не встал и панель
+// отдаёт временный (браузер предупреждает), или продлить не удаётся, а до конца срока меньше
+// TLS_WARN_BEFORE (столько же ждёт уведомление tls_fail в tlsmgr.py). Ошибка без последствий — когда
+// действующий сертификат ещё долго годен, а повтор впереди, — полосы не даёт.
+const TLS_WARN_BEFORE = 2 * 86400;
+function tlsProblem() {
+  const P = S.panel || {}, T = P.tls || {};
+  if (P.access === "ssh" || !(T.mode === "letsencrypt" || T.mode === "selfsigned") || !T.error || T.busy) return null;
+  if (T.source && T.active !== T.source) return { key: "banner.tls_fallback", p: {}, error: T.error };
+  if (T.expires && T.expires - Date.now() / 1000 < TLS_WARN_BEFORE)
+    return { key: "banner.tls_expiring", p: { date: fmtTime(T.expires) }, error: T.error };
+  return null;
 }
 const bind = {};
 
