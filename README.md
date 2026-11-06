@@ -29,6 +29,10 @@ AWG Router makes your AmneziaWG server the entry point of a cascade. Clients con
 - exits, lists and rules are set up in the panel instead of hand-written iptables and ipset scripts;
 - if an exit goes down, traffic doesn't slip past it: it goes direct, is blocked or moves to another exit, as you choose.
 
+A fallback helps only when it fails separately from the main exit. Two exits to the same server are one path, not two: if its address is blocked entirely, a SOCKS5 proxy over that address and a direct AmneziaWG tunnel to it stop working at the same moment.
+
+So put an exit on a different server in the fallback — a different address, a different host, a different autonomous system. And where possible don't reach the final server directly from a country that blocks: if it is only reached from abroad, its address is not visible there.
+
 Details are in [How routing works](#how-routing-works).
 
 ## Features
