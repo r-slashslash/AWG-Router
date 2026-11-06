@@ -3,8 +3,18 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.16.1 — 2026-11-07
+## 1.17.0 — 2026-11-07
 
+- **Ready images instead of building on the server.** Installing and updating used to build the image
+  on the server, and the build reaches dl-cdn.alpinelinux.org and GitHub over git, which are filtered in
+  Russia, China and Iran, so the panel could not be installed or updated there. Now the release workflow
+  builds the panel image (amd64, arm64) and the AmneziaWG server image (amd64) from the release commit and
+  publishes them to ghcr.io/r-slashslash/awg-router; the release archive carries their digests in a file
+  `IMAGES`, and `install.sh` (also `awg-router update` and **System → Update**) downloads the image by
+  digest. It builds on the server, as before, only when there is no ready image: no image for this CPU,
+  the registry doesn't answer within 10 minutes (`AWGR_PULL_TIMEOUT`), an archive of a branch, or
+  `AWGR_BUILD=1`. An update also removes the previous panel image, and `awg-router uninstall` removes
+  a downloaded image too. Thanks @LCF30 for the report (#8).
 - **SOCKS5 exit: a proxy with nothing behind it is no longer "working".** The check counted the
   proxy's own "connection open" answer, but a proxy on this server (Xray, for example) gives it before
   it has reached the foreign server. So an exit whose foreign address was blocked stayed green, stayed

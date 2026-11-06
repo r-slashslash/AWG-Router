@@ -3,7 +3,8 @@
 # увидит этот сервер при «сканировании», а AWG Router управляет им как обычно.
 FROM amneziavpn/amneziawg-go:latest
 
-LABEL maintainer="AWG Router"
+LABEL maintainer="AWG Router" \
+      org.opencontainers.image.source="https://github.com/r-slashslash/AWG-Router"
 RUN apk add --no-cache bash curl dumb-init iptables && apk --update upgrade --no-cache
 RUN mkdir -p /opt/amnezia/awg
 COPY start.sh /opt/amnezia/start.sh

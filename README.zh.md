@@ -109,7 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 
 如果 80 端口已被 nginx 或 Apache 占用，安装程序会显示它可以为 Let's Encrypt 验证添加的小文件，并在添加前征求你的同意（见 [80 端口被网页服务器占用](#80-端口被网页服务器占用)）。
 
-其余全部自动完成：随机 4 位端口、密码、构建和证书。最后会显示链接和密码：
+其余全部自动完成：随机 4 位端口、密码、面板镜像和证书。镜像从 GitHub 的镜像仓库（ghcr.io）直接下载现成的，因此服务器无需访问在某些国家被过滤的 Alpine 和 GitHub 源；如果下载失败，镜像会像以前一样在服务器上构建（`AWGR_BUILD=1` 表示始终构建）。最后会显示链接和密码：
 
 ```
   AWG Router is ready

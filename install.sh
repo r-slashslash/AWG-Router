@@ -10,6 +10,8 @@
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
 #   panel domain:              AWGR_DOMAIN=panel.example.com (empty — by IP)
 #   port 80 taken by nginx or Apache: AWGR_WEB=yes adds the Let's Encrypt validation file to it
+#   build the images here instead of downloading the ready ones: AWGR_BUILD=1
+#   how long to wait for a ready image before building it here: AWGR_PULL_TIMEOUT=600 (seconds)
 set -uo pipefail
 
 REPO="${AWGR_REPO:-r-slashslash/AWG-Router}"
@@ -51,7 +53,8 @@ fetch_code() {
   if [ "$ok" != 1 ]; then
     rm -rf "$tmp"; echo "Could not download https://github.com/$REPO" >&2; return 1
   fi
-  mkdir -p "$1" && tar -xzf "$tmp/src.tgz" --strip-components=1 -C "$1"
+  # IMAGES of an earlier release must not outlive it: a branch archive has none, so it is built here
+  mkdir -p "$1" && rm -f "$1/IMAGES" && tar -xzf "$tmp/src.tgz" --strip-components=1 -C "$1"
   local rc=$?; rm -rf "$tmp"; return $rc
 }
 
@@ -524,17 +527,58 @@ build_image() { # $1 tag, $2 context dir, $3 log (the classic attempt goes to $3
   DOCKER_BUILDKIT=0 docker build -t "$1" "$2" >"$3.classic" 2>&1
 }
 
-step "Building the panel (first time takes 3–10 minutes)"
+# A release archive carries IMAGES: the ready images the release workflow built from the same commit,
+# pinned by digest (the archive itself passed its .sha256 check, and a digest names exactly one image).
+# Downloading one needs only the registry, so an update works where the build cannot reach its
+# sources (Alpine packages and git over HTTPS are filtered in Russia, China, Iran). The image is built
+# here when there is no IMAGES (a branch or AWGR_SRC_URL), AWGR_BUILD=1, no image for this CPU, or
+# the registry does not answer within AWGR_PULL_TIMEOUT seconds.
+image_ref() { # $1 key in IMAGES → the reference, or nothing
+  [ "${AWGR_BUILD:-}" = 1 ] && return 0
+  [ -f "$DIR/IMAGES" ] || return 0
+  grep -E "^$1=" "$DIR/IMAGES" | tail -1 | cut -d= -f2- \
+    | grep -E '^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$' || true
+}
+
+pull_image() { # $1 reference, $2 local tag, $3 log
+  [ -n "$1" ] || return 1
+  local rc
+  timeout "${AWGR_PULL_TIMEOUT:-600}" docker pull "$1" >"$3" 2>&1; rc=$?
+  [ "$rc" = 124 ] && echo "no answer in ${AWGR_PULL_TIMEOUT:-600} s" >>"$3"
+  [ "$rc" = 0 ] && docker tag "$1" "$2" >>"$3" 2>&1
+}
+
+# Last line of a log, for a one-line reason
+last_line() { tail -n 1 "$1" 2>/dev/null | cut -c1-200; }
+
+# Runs "$@" in the background; a spinner only on a terminal (an update from the panel writes to a log)
+with_spinner() {
+  "$@" &
+  local pid=$! spin='|/-\' i=0
+  if [ -t 1 ]; then
+    while kill -0 "$pid" 2>/dev/null; do printf '\r  %s ' "${spin:i++%4:1}"; sleep 0.5; done
+    printf '\r    \r'
+  fi
+  wait "$pid"
+}
+
+OLD_IMAGE_ID="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
 LOG="$DIR/data/build.log"
-build_image "$IMAGE" "$DIR" "$LOG" &
-BPID=$!
-spin='|/-\'; i=0
-if [ -t 1 ]; then   # spinner only on a terminal: an update from the panel writes to a log
-  while kill -0 "$BPID" 2>/dev/null; do printf '\r  %s ' "${spin:i++%4:1}"; sleep 0.5; done
-  printf '\r    \r'
+PANEL_REF="$(image_ref PANEL_IMAGE)"
+if [ -n "$PANEL_REF" ]; then
+  step "Downloading the panel"
+  if with_spinner pull_image "$PANEL_REF" "$IMAGE" "$DIR/data/pull.log"; then
+    ok "Done"
+  else
+    warn "Could not download the ready image ($(last_line "$DIR/data/pull.log")) — building it here"
+    PANEL_REF=""
+  fi
 fi
-wait "$BPID" || { tail -n 25 "$LOG"; die "Build failed, see $LOG"; }
-ok "Done"
+if [ -z "$PANEL_REF" ]; then
+  step "Building the panel (first time takes 3–10 minutes)"
+  with_spinner build_image "$IMAGE" "$DIR" "$LOG" || { tail -n 25 "$LOG"; die "Build failed, see $LOG"; }
+  ok "Done"
+fi
 
 # ------------------------------------------------------------------ AmneziaWG in a container
 if [ "$INSTALL_AWG" = container ]; then
@@ -543,8 +587,12 @@ if [ "$INSTALL_AWG" = container ]; then
   docker run --rm --network none -v "$SRV_DATA:/out" "$IMAGE" \
       python3 -m app.initserver --out /out --port "$AWG_PORT" >"$DIR/data/awg-init.log" 2>&1 \
     || { cat "$DIR/data/awg-init.log"; die "Failed to create the server config"; }
-  build_image "$SRV_NAME" "$DIR/awg-server" "$DIR/data/awg-build.log" \
-    || { tail -n 20 "$DIR/data/awg-build.log"; die "Failed to build the AmneziaWG container"; }
+  SRV_REF="$(image_ref SERVER_IMAGE)"
+  if ! pull_image "$SRV_REF" "$SRV_NAME" "$DIR/data/awg-pull.log"; then
+    [ -n "$SRV_REF" ] && warn "Could not download the ready AmneziaWG image ($(last_line "$DIR/data/awg-pull.log")) — building it here"
+    build_image "$SRV_NAME" "$DIR/awg-server" "$DIR/data/awg-build.log" \
+      || { tail -n 20 "$DIR/data/awg-build.log"; die "Failed to build the AmneziaWG container"; }
+  fi
   if docker ps -a --format '{{.Names}}' | grep -qx "$SRV_NAME"; then
     # an old container that would not start may still hold client configs — keep it, just rename
     OLD="$SRV_NAME-old-$(date +%Y%m%d-%H%M%S)"
@@ -606,6 +654,10 @@ for _ in $(seq 1 300); do
   sleep 1
 done
 [ -f "$DIR/data/status.json" ] || { docker logs --tail 30 "$NAME"; die "The panel did not start"; }
+# The previous panel image is not used any more: each update would otherwise leave ~100 MB behind
+if [ -n "$OLD_IMAGE_ID" ] && [ "$OLD_IMAGE_ID" != "$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" ]; then
+  docker image rm "$OLD_IMAGE_ID" >/dev/null 2>&1 || true
+fi
 
 # ------------------------------------------------------------------ helper command
 cat > /usr/local/bin/awg-router <<EOF
@@ -628,7 +680,8 @@ case "\${1:-info}" in
                read -r A </dev/tty; [ "\$A" = yes ] || exit 1
                cd "\$DIR" && docker compose down
                docker compose run --rm --no-deps awg-router python3 -m app.uninstall
-               docker image rm awg-router:latest >/dev/null 2>&1
+               I=\$(docker image inspect -f '{{.Id}}' awg-router:latest 2>/dev/null)
+               [ -n "\$I" ] && docker image rm -f "\$I" >/dev/null 2>&1
                rm -f /usr/local/bin/awg-router
                echo "Done. Settings are kept in \$DIR — delete the folder to remove them too." ;;
   *) echo "awg-router info | restart | logs | password | 2fa-off | update | reconfigure | uninstall" ;;

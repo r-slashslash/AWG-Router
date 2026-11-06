@@ -16,3 +16,5 @@ __pycache__/
 
 # development notes are kept by the owner outside the repo
 CLAUDE.md
+# готовые образы релиза: файл появляется только в архиве релиза (release.yml)
+/IMAGES

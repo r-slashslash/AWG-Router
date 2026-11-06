@@ -35,6 +35,8 @@ RUN git clone --depth 1 --branch "${HEV_REF}" --recurse-submodules --shallow-sub
  && install -D -m 0755 /src/bin/hev-socks5-tunnel /out/hev-socks5-tunnel
 
 FROM python:3.13-alpine
+# по этой метке GHCR связывает готовый образ с репозиторием
+LABEL org.opencontainers.image.source="https://github.com/r-slashslash/AWG-Router"
 RUN apk add --no-cache iproute2 nftables util-linux-misc procps-ng ca-certificates openssl bash
 COPY --from=awg-go /out/amneziawg-go /usr/bin/amneziawg-go
 COPY --from=awg-tools /out/awg /usr/bin/awg

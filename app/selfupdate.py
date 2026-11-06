@@ -143,7 +143,7 @@ def _demo_run() -> None:
         steps = ["Downloading AWG Router from github.com/r-slashslash/AWG-Router …",
                  "▸ Checking the system", "  ✓ Ubuntu 24.04 LTS", "▸ Docker",
                  "  ✓ Docker 29.9.2, Compose 5.6.1, buildx 0.38.1",
-                 "▸ Building the panel (first time takes 3–10 minutes)", "  ✓ Done", "▸ Starting"]
+                 "▸ Downloading the panel", "  ✓ Done", "▸ Starting"]
         with open(LOG, "w") as f:
             f.write("Update from the panel (demo)\n")
         for ln in steps:

@@ -8,6 +8,15 @@
 #
 # install.sh скачивает именно этот архив (releases/latest/download/awg-router.tar.gz), поэтому у
 # файла растёт счётчик скачиваний: установки и обновления панелей.
+#
+# Готовые образы: из того же коммита собираются образ панели (amd64, arm64) и образ сервера AWG
+# (только amd64: базовый amneziavpn/amneziawg-go другим не бывает) и уходят в
+# ghcr.io/<владелец>/awg-router с тегами <VERSION> и server-<VERSION>. Их digest записывается в файл
+# IMAGES внутри архива: install.sh скачивает образ по digest вместо сборки на сервере (сборка ходит
+# в dl-cdn.alpinelinux.org и в GitHub по git, а они фильтруются в России, Китае, Иране — issue #8).
+# Архив проверяется по .sha256, digest — сам по себе отпечаток содержимого, так что образ тот же,
+# что собрал workflow. Пакет в GHCR должен быть публичным; если анонимно он не скачивается,
+# workflow предупреждает, а install.sh собирает образ на месте, как раньше.
 # Релиз, опубликованный вручную, проверяется: тег должен совпадать с VERSION, архив прикладывается,
 # если его нет.
 name: Release
@@ -21,6 +30,7 @@ on:
 
 permissions:
   contents: write
+  packages: write           # образы в ghcr.io
 
 concurrency:
   group: release
@@ -60,14 +70,6 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "state=$state" >> "$GITHUB_OUTPUT"
 
-      - name: Build the archive
-        if: steps.v.outputs.state != 'published'
-        run: |
-          git archive --format=tar.gz --prefix=awg-router/ -o awg-router.tar.gz HEAD
-          tar -tzf awg-router.tar.gz awg-router/install.sh awg-router/docker-compose.yml >/dev/null
-          sha256sum awg-router.tar.gz > awg-router.tar.gz.sha256
-          ls -l awg-router.tar.gz*
-
       - name: Release notes (4 languages)
         if: steps.v.outputs.state != 'published'
         run: |
@@ -77,6 +79,87 @@ jobs:
             grep -q "$a" "$f" || { echo "::error::$f has no $a section"; exit 1; }
           done
           cp "$f" notes.md
+
+      - name: Image name
+        if: steps.v.outputs.state != 'published'
+        id: img
+        run: echo "repo=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/awg-router" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.v.outputs.state != 'published'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.v.outputs.state != 'published'
+
+      - uses: docker/login-action@v3
+        if: steps.v.outputs.state != 'published'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Panel image (amd64, arm64)
+        if: steps.v.outputs.state != 'published'
+        id: panel
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false     # без манифестов аттестации: индекс читают и старые Docker
+          tags: ${{ steps.img.outputs.repo }}:${{ steps.v.outputs.ver }}
+          cache-from: type=gha,scope=panel
+          cache-to: type=gha,scope=panel,mode=max
+
+      - name: AmneziaWG server image (amd64)
+        if: steps.v.outputs.state != 'published'
+        id: server
+        uses: docker/build-push-action@v6
+        with:
+          context: awg-server
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.img.outputs.repo }}:server-${{ steps.v.outputs.ver }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max
+
+      - name: Anyone can pull the images
+        if: steps.v.outputs.state != 'published'
+        env:
+          REPO: ${{ steps.img.outputs.repo }}
+          DIGEST: ${{ steps.panel.outputs.digest }}
+        run: |
+          name="${REPO#ghcr.io/}"
+          tok=$(curl -sS "https://ghcr.io/token?scope=repository:$name:pull" | jq -r '.token // empty')
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+            "https://ghcr.io/v2/$name/manifests/$DIGEST")
+          if [ "$code" = 200 ]; then
+            echo "$REPO is public"
+          else
+            msg="The package $REPO is not public (HTTP $code): panels will build the image themselves. Make it public once: github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/awg-router/settings → Change visibility → Public."
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build the archive
+        if: steps.v.outputs.state != 'published'
+        env:
+          PANEL: ${{ steps.img.outputs.repo }}@${{ steps.panel.outputs.digest }}
+          SERVER: ${{ steps.img.outputs.repo }}@${{ steps.server.outputs.digest }}
+        run: |
+          # тот же формат проверяет install.sh (image_ref)
+          for r in "$PANEL" "$SERVER"; do
+            [[ "$r" =~ ^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad image reference '$r'"; exit 1; }
+          done
+          printf 'PANEL_IMAGE=%s\nSERVER_IMAGE=%s\n' "$PANEL" "$SERVER" > "$RUNNER_TEMP/IMAGES"
+          git archive --format=tar.gz --prefix=awg-router/ --add-file="$RUNNER_TEMP/IMAGES" \
+            -o awg-router.tar.gz HEAD
+          tar -tzf awg-router.tar.gz awg-router/install.sh awg-router/docker-compose.yml awg-router/IMAGES >/dev/null
+          sha256sum awg-router.tar.gz > awg-router.tar.gz.sha256
+          ls -l awg-router.tar.gz*
+          cat "$RUNNER_TEMP/IMAGES"
 
       - name: Create or refresh the draft
         if: steps.v.outputs.state != 'published'
@@ -109,6 +192,8 @@ jobs:
           ver=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/version.py)
           [ "v$ver" = "$TAG" ] || { echo "::error::app/version.py says $ver, tag is $TAG"; exit 1; }
 
+      # Сюда попадают только релизы, опубликованные мимо черновика: в таком архиве нет IMAGES,
+      # и install.sh собирает образ на сервере.
       - name: Attach the archive if it is missing
         run: |
           have=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
