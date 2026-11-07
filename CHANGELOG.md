@@ -21,8 +21,9 @@ it grows, so every user-visible change gets a new version.
   for all clients together (**Server** tab), per client (client card, next to the traffic limit) and per
   exit (exit settings). Within the common limit the speed is split evenly between those downloading right
   now. The strictest limit applies. Limits are `tc` HTB queues with fq_codel, so latency stays low under
-  load; incoming traffic goes through an `ifb` device. If the kernel can't create one, the panel says so
-  and the other limits still work. A SOCKS5 exit's limit is shared by both of its paths: sites from domain
+  load; incoming traffic goes through an `ifb` device. The installer (and so `awg-router update`) installs
+  `linux-modules-extra` for the running kernel and its flavour when the kernel has no `ifb` module, as on
+  many cloud kernels; if there is no such package, the panel says so and the other limits still work. A SOCKS5 exit's limit is shared by both of its paths: sites from domain
   rules go to the proxy past the exit's tunnel, so the domain-rule handler measures itself and the tunnel
   every second and splits the limit — each path gets what the other leaves, but at least half.
 - **Current speed of each exit** on the Exits tab and the overview, with its limit next to it.

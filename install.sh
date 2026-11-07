@@ -221,11 +221,14 @@ step "Checking the system"
 mkdir -p "$DIR/data"; chmod 700 "$DIR/data"
 APT_LOG="$DIR/data/apt.log"
 APT_UPDATED=0
-apt_install() {
+apt_update() {
   command -v apt-get >/dev/null || return 1
   # a fresh VM often runs unattended-upgrades for a few minutes: wait for the lock instead of failing
   [ "$APT_UPDATED" = 1 ] || {
     DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -qq >>"$APT_LOG" 2>&1; APT_UPDATED=1; }
+}
+apt_install() {
+  apt_update || return 1
   DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y -qq "$@" >>"$APT_LOG" 2>&1
 }
 apt_has() { LC_ALL=C apt-cache policy "$1" 2>/dev/null | grep -q 'Candidate: [0-9]'; }
@@ -249,6 +252,23 @@ for b in curl openssl ss python3; do
     ss) apt_install iproute2 ;; *) apt_install "$b" ;;
   esac
 done
+
+# Speed limits shape incoming traffic (client upload, download from an exit) through an ifb device.
+# Cloud kernels (aws, azure, gcp, oracle…) often ship ifb only in linux-modules-extra: install it for
+# the running kernel and, through the flavour's meta package, for the kernels that come later.
+# Without ifb the panel says so and still limits download to clients and upload to exits.
+ifb_ok() { modprobe -nq ifb 2>/dev/null || modinfo ifb >/dev/null 2>&1 || [ -d /sys/module/ifb ]; }
+ensure_ifb() {
+  ifb_ok && return 0
+  local kr flavour pkgs=()
+  kr="$(uname -r)"; flavour="${kr##*-}"
+  apt_update || return 1
+  apt_has "linux-modules-extra-$kr" && pkgs+=("linux-modules-extra-$kr")
+  [ "$flavour" != "$kr" ] && apt_has "linux-modules-extra-$flavour" && pkgs+=("linux-modules-extra-$flavour")
+  [ "${#pkgs[@]}" -gt 0 ] && apt_install "${pkgs[@]}" && ifb_ok
+}
+if ensure_ifb; then ok "Kernel module ifb (speed limits)"
+else warn "Kernel module ifb is not available: client upload and exit download speed limits will not work"; fi
 
 # Binaries from GitHub releases: the names differ between buildx and compose
 case "$(uname -m)" in

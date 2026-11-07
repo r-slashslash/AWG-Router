@@ -634,5 +634,83 @@ class SharedLimitTest(unittest.TestCase):
                 main.del_upstream(Req({"replace": "direct"}), uid)
 
 
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+
+def install_part(start: str, end: str) -> str:
+    """Кусок install.sh от строки, начинающейся со start, до строки, начинающейся с end, включительно."""
+    with open(os.path.join(ROOT, "install.sh"), encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    i = next(n for n, x in enumerate(lines) if x.startswith(start))
+    j = next(n for n in range(i, len(lines)) if lines[n].startswith(end))
+    return "\n".join(lines[i:j + 1]) + "\n"
+
+
+def install_line(start: str) -> str:
+    """Однострочная функция из install.sh (`f() { …; }`)."""
+    with open(os.path.join(ROOT, "install.sh"), encoding="utf-8") as f:
+        return next(x for x in f if x.startswith(start))
+
+
+@unittest.skipUnless(shutil.which("bash"), "needs bash")
+class InstallerIfbTest(unittest.TestCase):
+    """install.sh ставит linux-modules-extra, если в ядре нет модуля ifb (ограничение скорости)."""
+    FAKES = {
+        # модуль есть, если он «встроен» (IFB=yes) или пакет для этого ядра уже поставили
+        "modprobe": '[ "${IFB:-}" = yes ] || [ -f "$T/extra-$KR" ]',
+        "modinfo": "exit 1",
+        "uname": 'echo "$KR"',
+        "apt-cache": 'for p in $CANDS; do [ "$2" = "$p" ] && { echo "  Candidate: 1.0"; exit 0; }; done; '
+                     'echo "  Candidate: (none)"',
+        "apt-get": 'echo "apt-get $*" >> "$T/apt.log"; for a in "$@"; do case "$a" in '
+                   'linux-modules-extra-$KR) touch "$T/extra-$KR" ;; esac; done',
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        b = os.path.join(self.tmp, "bin")
+        os.makedirs(b)
+        for name, body in self.FAKES.items():
+            with open(os.path.join(b, name), "w") as f:
+                f.write("#!/usr/bin/env bash\n" + body + "\n")
+            os.chmod(os.path.join(b, name), 0o755)
+        self.env = {**os.environ, "PATH": f"{b}:{os.environ['PATH']}", "T": self.tmp, "KR": "6.8.0-1015-aws"}
+        self.code = ("ok() { echo \"OK $1\"; }\nwarn() { echo \"WARN $1\"; }\n"
+                     f'APT_LOG="{self.tmp}/apt-out.log"\nAPT_UPDATED=0\n'
+                     + install_part("apt_update() {", "}") + install_part("apt_install() {", "}")
+                     + install_line("apt_has() {")
+                     + install_part("ifb_ok() {", "else warn \"Kernel module ifb"))
+
+    def run_sh(self, **env):
+        r = subprocess.run(["bash", "-uo", "pipefail", "-c", self.code], env={**self.env, **env},
+                           capture_output=True, text=True, timeout=30)
+        try:
+            with open(os.path.join(self.tmp, "apt.log")) as f:
+                apt = [x.strip() for x in f if x.strip()]
+        except OSError:
+            apt = []
+        return r, apt
+
+    def test_module_present_no_apt(self):
+        r, apt = self.run_sh(IFB="yes", CANDS="linux-modules-extra-6.8.0-1015-aws")
+        self.assertIn("OK Kernel module ifb", r.stdout)
+        self.assertEqual(apt, [])                       # ничего не ставим и даже не обновляем списки
+
+    def test_cloud_kernel_gets_extra_modules(self):
+        r, apt = self.run_sh(CANDS="linux-modules-extra-6.8.0-1015-aws linux-modules-extra-aws")
+        self.assertIn("OK Kernel module ifb", r.stdout, r.stderr)
+        inst = [a for a in apt if " install " in a]
+        self.assertEqual(len(inst), 1)
+        self.assertIn("linux-modules-extra-6.8.0-1015-aws", inst[0])
+        self.assertIn("linux-modules-extra-aws", inst[0])   # и для будущих ядер этой линейки
+
+    def test_no_package_warns(self):
+        r, apt = self.run_sh(CANDS="")
+        self.assertIn("WARN Kernel module ifb is not available", r.stdout)
+        self.assertEqual(r.returncode, 0)                # установка идёт дальше
+        self.assertFalse([a for a in apt if " install " in a])
+
+
 if __name__ == "__main__":
     unittest.main()

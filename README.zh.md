@@ -247,7 +247,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 - 域名规则只能看到 HTTPS 和 HTTP（443 和 80 端口），浏览器隐藏名称时（Encrypted Client Hello）看不到网站，这类连接按地址规则走。在“主机上的 AWG”模式下，如果防火墙只用 nftables（例如 firewalld），请允许客户端接口上 TCP 10443 端口的入站流量；使用 iptables 或 ufw 时面板会自动处理。
 - SOCKS5 出口需要内核支持 IPv6（除了以 `ipv6.disable=1` 启动的服务器，都具备）。
 - 国家列表基于注册数据生成。针对特定服务，ASN 列表更准确。
-- 限制客户端上传和出口下载需要内核的 `ifb` 模块（云服务器内核有时只在 `linux-modules-extra` 中提供）；没有该模块时面板会提示，其他限制照常生效。
+- 限制客户端上传和出口下载需要内核的 `ifb` 模块。安装程序会自动安装（云服务器内核使用 `linux-modules-extra` 软件包）；如果该内核没有这样的软件包，面板会提示，其他限制照常生效。
 
 ## 开发
 
