@@ -33,7 +33,6 @@ jobs:
           nft --version
           PYTHONPATH="$RUNNER_TEMP/py" python -c "import pyroute2; print('pyroute2', pyroute2.__version__)"
           uname -r
-          sysctl net.core.devconf_inherit_init_net net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter || true
 
       - name: AmneziaWG and hev-socks5-tunnel from the Dockerfile stages
         run: |
