@@ -31,6 +31,8 @@ jobs:
           sudo apt-get install -y -qq nftables >/dev/null
           python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2
           nft --version
+          PYTHONPATH="$RUNNER_TEMP/py" python -c "import pyroute2; print('pyroute2', pyroute2.__version__)"
+          uname -r
 
       - name: AmneziaWG and hev-socks5-tunnel from the Dockerfile stages
         run: |

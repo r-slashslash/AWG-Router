@@ -128,8 +128,9 @@ def panel_apply(global_policy, clients, upstream_alive=True):
         if idx:
             try:
                 ip.route("replace", dst="0.0.0.0/0", oif=idx[0], table=table)
-            except Exception:  # интерфейс лежит — панель тоже игнорирует (check=False)
-                pass
+            except Exception as e:  # интерфейс лежит — панель тоже игнорирует (check=False)
+                if upstream_alive:  # а когда выход жив, это ошибка самого теста: не прятать её
+                    raise RuntimeError(f"route to awgr1 in table {table}: {e!r}") from e
 
 
 def acct():
