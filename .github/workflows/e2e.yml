@@ -49,14 +49,14 @@ jobs:
       matrix:
         mode: [container, host]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Upgrade ${{ inputs.from || 'previous' }} → latest (AmneziaWG ${{ matrix.mode }})
         run: sudo E2E_MODE=${{ matrix.mode }} E2E_FROM="${{ inputs.from || 'previous' }}" E2E_LOGS="$RUNNER_TEMP/e2e" bash tests/e2e/upgrade.sh
 
       - name: Logs
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: e2e-github-${{ matrix.mode }}
           path: ${{ runner.temp }}/e2e
@@ -82,7 +82,7 @@ jobs:
 
       - name: Logs
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: e2e-russia
           path: ${{ runner.temp }}/e2e
