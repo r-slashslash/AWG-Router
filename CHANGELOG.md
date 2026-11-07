@@ -13,7 +13,6 @@ it grows, so every user-visible change gets a new version.
   "name · server address", but the app shows the server address on its main screen anyway, so the address
   is no longer repeated in the name. Keys issued earlier keep their old name until they are imported again.
   The .conf file and the QR code carry no name at all: AmneziaWG takes it from the file name or asks for it.
-  Thanks @Neborya for the request (#7).
 - **One "Add exit" button.** With no exits yet, the Exits tab showed the button twice: at the top and in
   the empty card. Now it is only at the top, as on the Clients tab.
 
