@@ -306,19 +306,21 @@ function renderStatus() {
 }
 
 function render(force = false) {
-  const views = { overview: viewOverview, clients: viewClients, exits: viewExits, routing: viewRouting, server: viewServer, system: viewSystem };
+  // вкладка приходит из адреса (#…): Map вместо объекта, чтобы #toString или #__proto__ не доставали
+  // свойства Object.prototype
+  const views = new Map([["overview", viewOverview], ["clients", viewClients], ["exits", viewExits],
+                         ["routing", viewRouting], ["server", viewServer], ["system", viewSystem]]);
   if (!force && tab === "routing" && routingDraft && $("#g-rules")) {
     // правку правил не трогаем, а раздел списков обновляем (счётчики, ошибки, новые списки)
     $("#lists-sec").innerHTML = listsSection();
     bindLists();
     return;
   }
-  // вкладка приходит из адреса (#…): только свои ключи, иначе #toString или #__proto__ сломали бы страницу
-  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-  if (!own(views, tab)) tab = "overview";
+  if (!views.has(tab)) tab = "overview";
   const keepSearch = $("#client-search") ? $("#client-search").value : null;
-  $("#main").innerHTML = banners() + views[tab]();
-  if (own(bind, tab)) bind[tab]();
+  $("#main").innerHTML = banners() + views.get(tab)();
+  const bindTab = new Map(Object.entries(bind)).get(tab);
+  if (bindTab) bindTab();
   $$(".banner [data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
   if (keepSearch !== null && $("#client-search")) { $("#client-search").value = keepSearch; filterClients(); }
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));

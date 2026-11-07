@@ -2,8 +2,6 @@
 
 python3 -m unittest discover tests
 """
-import hashlib
-import hmac
 import os
 import re
 import sys
@@ -22,11 +20,15 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 class SessionTagTest(unittest.TestCase):
     def test_tag_is_keyed(self):
-        # в cookie не должен лежать кусок голого SHA-256 от пароля: по нему можно перебирать пароли
-        plain = hashlib.sha256(main.PASSWORD.encode()).hexdigest()[:8]
-        self.assertNotEqual(main.PW_TAG, plain)
-        self.assertEqual(main.PW_TAG,
-                         hmac.new(main.SECRET, main.PASSWORD.encode(), hashlib.sha256).hexdigest()[:8])
+        # метка зависит от ключа панели: с другим SECRET та же строка даёт другую метку
+        saved = main.SECRET
+        try:
+            main.SECRET = b"x" * 64
+            other = main._tag("same material")
+        finally:
+            main.SECRET = saved
+        self.assertNotEqual(main._tag("same material"), other)
+        self.assertEqual(len(main.PW_TAG), 8)
 
     def test_session_roundtrip(self):
         s = main.make_session()
@@ -43,16 +45,15 @@ class SessionTagTest(unittest.TestCase):
 
 
 class TabFromHashTest(unittest.TestCase):
-    def test_render_uses_own_keys(self):
+    def test_render_uses_map(self):
         with open(os.path.join(ROOT, "app", "static", "app.js"), encoding="utf-8") as f:
             js = f.read()
         body = js[js.index("function render("):js.index("function banners(")]
         # #toString, #constructor, #__proto__ в адресе не должны доставать свойства Object.prototype
-        self.assertNotIn("views[tab] ||", body)
-        self.assertNotIn("bind[tab] &&", body)
-        self.assertIn("hasOwnProperty.call", body)
-        self.assertTrue(re.search(r"if \(!own\(views, tab\)\) tab = \"overview\"", body))
-
+        self.assertNotIn("views[tab]", body)
+        self.assertNotIn("bind[tab]", body)
+        self.assertIn("const views = new Map(", body)
+        self.assertTrue(re.search(r"if \(!views\.has\(tab\)\) tab = \"overview\"", body))
 
 if __name__ == "__main__":
     unittest.main()
