@@ -9,6 +9,9 @@ it grows, so every user-visible change gets a new version.
   other panels; on the **Exits** tab the empty hint and the **Direct** card have a gap between them; the
   QR code is centred when the buttons wrap below it (always the case in the dark theme); **Everything
   else** on the Routing tab shows **Load balancing** without the scales emoji.
+- **Verifiable releases.** The images and the archive are now built with signed build attestations, and the
+  images have an SBOM (list of components): `gh attestation verify oci://ghcr.io/r-slashslash/awg-router:<version>
+  -R r-slashslash/AWG-Router`. Nothing changes for the panel itself.
 
 ## 1.19.0 — 2026-11-08
 

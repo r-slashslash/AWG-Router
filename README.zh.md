@@ -7,6 +7,7 @@
   <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml/badge.svg" alt="Network tests"></a>
   <a href="https://github.com/r-slashslash/AWG-Router/blob/main/LICENSE"><img src="https://img.shields.io/github/license/r-slashslash/AWG-Router" alt="License: MIT"></a>
   <a href="https://github.com/r-slashslash/AWG-Router/releases"><img src="https://img.shields.io/github/downloads/r-slashslash/AWG-Router/total" alt="Downloads"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/r-slashslash/AWG-Router"><img src="https://api.scorecard.dev/projects/github.com/r-slashslash/AWG-Router/badge" alt="OpenSSF Scorecard"></a>
 </p>
 
 # AWG Router
