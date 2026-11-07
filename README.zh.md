@@ -8,6 +8,14 @@
 
 它可以管理 AmneziaVPN 应用安装的服务器（Docker 容器 `amnezia-awg2`），也可以安装自己的 AmneziaWG 服务器——在 Docker 容器中或直接在主机上。协议最高支持 **AmneziaWG 3.1**。
 
+**快速开始**——在 Ubuntu 或 Debian 服务器上以 root 身份运行（没有 Docker 时安装程序会自动安装）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/install.sh | bash
+```
+
+安装程序会完成全部配置（包括 Docker Compose），并在结束时显示面板链接和密码。详情见[安装](#安装)。
+
 ```
 客户端 ──AWG──► 本服务器
   ├── RU / CN / IR ─────────► 互联网（本服务器 IP）

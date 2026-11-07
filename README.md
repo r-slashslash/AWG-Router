@@ -8,6 +8,14 @@ A web panel for **AmneziaWG**: users, tunnel settings, cascade routing and indiv
 
 It works with the server that the AmneziaVPN app installs (the `amnezia-awg2` Docker container), or installs its own AmneziaWG server — in a Docker container or on the host. Protocol support goes up to **AmneziaWG 3.1**.
 
+**Quick start** — on an Ubuntu or Debian server, as root (Docker is installed if it's missing):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/install.sh | bash
+```
+
+The installer sets up everything, including Docker Compose, and prints the panel link and password at the end. Details: [Install](#install).
+
 ```
                                ┌── RU / CN / IR ──────────► internet (this server's IP)
  clients ──AWG──► this server ─┤
