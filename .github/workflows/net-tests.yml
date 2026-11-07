@@ -6,10 +6,12 @@
 # awg, amneziawg-go и hev-socks5-tunnel собираются из стадий текущего Dockerfile — те же версии и флаги,
 # что попадут в образ следующего релиза. pyroute2 и nftables ставятся только на машину CI (в панель
 # не попадают: там по-прежнему только стандартная библиотека).
+# Идут на каждом пуше в main перед черновиком релиза (release.yml, задание net) и вручную.
 name: Network tests
 
 on:
-  workflow_dispatch:
+  workflow_call:        # из release.yml: перед образами и черновиком релиза
+  workflow_dispatch:    # вручную: Actions → Network tests → Run workflow
 
 permissions:
   contents: read

@@ -291,6 +291,15 @@ class WorkflowImagesTest(unittest.TestCase):
         self.assertIn("gh release download", job)
         self.assertIn("awg-router/IMAGES", job)
 
+    def test_network_tests_before_the_draft(self):
+        """Черновик собирается, только если сетевые тесты прошли (их workflow вызывается отсюда)."""
+        jobs = self.text[self.text.index("\njobs:"):]
+        self.assertIn("uses: ./.github/workflows/net-tests.yml", jobs[:jobs.index("  draft:")])
+        draft = jobs[jobs.index("  draft:"):jobs.index("    steps:", jobs.index("  draft:"))]
+        self.assertIn("needs: net", draft)
+        with open(os.path.join(ROOT, ".github", "workflows", "net-tests.yml"), encoding="utf-8") as f:
+            self.assertIn("workflow_call:", f.read())
+
     def test_dockerfiles_name_the_repository(self):
         for p in ("Dockerfile", os.path.join("awg-server", "Dockerfile")):
             with open(os.path.join(ROOT, p), encoding="utf-8") as f:

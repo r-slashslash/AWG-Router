@@ -45,8 +45,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Сетевые сквозные тесты (net-tests.yml: маршрутизация, настоящий туннель AWG, SOCKS5 и домены) — до
+  # образов и черновика. Упали — черновик не создаётся и не обновляется: сломанное не доходит до Publish.
+  net:
+    if: github.event_name != 'release'
+    uses: ./.github/workflows/net-tests.yml
+
   draft:
     if: github.event_name != 'release'
+    needs: net
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
