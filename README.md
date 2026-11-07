@@ -113,7 +113,7 @@ The installer downloads the panel into `/opt/awg-router` and asks a few question
 
 If port 80 is already taken by nginx or Apache, the installer shows the small file it can add there for the Let's Encrypt validation and asks before adding it (see [Port 80 is taken by a web server](#port-80-is-taken-by-a-web-server)).
 
-The rest is automatic: a random 4-digit port, a password, the panel image, the certificate. The image is downloaded ready-made from GitHub's registry (ghcr.io), so the server doesn't have to reach Alpine and GitHub sources, which are filtered in some countries; if the download fails, the image is built on the server as before (`AWGR_BUILD=1` always builds it). At the end it prints the link and password:
+It asks for the panel port (Enter — a random free 4-digit one); the rest is automatic: a password, the panel image, the certificate. The image is downloaded ready-made from GitHub's registry (ghcr.io), so the server doesn't have to reach Alpine and GitHub sources, which are filtered in some countries; if the download fails, the image is built on the server as before (`AWGR_BUILD=1` always builds it). At the end it prints the link and password:
 
 ```
   AWG Router is ready

@@ -8,6 +8,7 @@
 # Non-interactive:
 #   AWGR_MODE=container|host  AWGR_ACCESS=public|ssh  bash install.sh
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
+#   panel port:                AWGR_PORT=4821 (empty — a random free 4-digit one)
 #   panel domain:              AWGR_DOMAIN=panel.example.com (empty — by IP)
 #   port 80 taken by nginx or Apache: AWGR_WEB=yes adds the Let's Encrypt validation file to it
 #   build the images here instead of downloading the ready ones: AWGR_BUILD=1
@@ -128,6 +129,21 @@ port_busy() { ss -Hltnu 2>/dev/null | awk '{print $5}' | grep -Eq "[:.]$1\$"; }
 # Ports that Chrome, Firefox and Safari refuse to open (ERR_UNSAFE_PORT)
 UNSAFE_PORTS=" 1 7 9 11 13 15 17 19 20 21 22 23 25 37 42 43 53 69 77 79 87 95 101 102 103 104 109 110 111 113 115 117 119 123 135 137 139 143 161 179 389 427 465 512 513 514 515 526 530 531 532 540 548 554 556 563 587 601 636 989 990 993 995 1719 1720 1723 2049 3659 4045 4190 5060 5061 6000 6566 6665 6666 6667 6668 6669 6679 6697 10080 "
 unsafe_port() { [[ "$UNSAFE_PORTS" == *" $1 "* ]]; }
+
+# Why a port can't be the panel's (nothing — it can): $1 port, $2 the panel's current port, which is
+# "in use" by the panel itself and stays allowed on --reconfigure
+panel_port_problem() {
+  local p="$1"
+  if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1024 ] || [ "$p" -gt 65535 ]; then
+    echo "A number from 1024 to 65535 is required"
+  elif unsafe_port "$p"; then
+    echo "Browsers refuse to open port $p, pick another"
+  elif [ "$p" = 10443 ]; then
+    echo "Port 10443 is used by the panel for domain rules, pick another"
+  elif [ "$p" != "${2:-}" ] && port_busy "$p"; then
+    echo "Port $p is in use, pick another"
+  fi
+}
 
 random_port() { # $1 min, $2 max
   local p
@@ -385,10 +401,29 @@ PUBLIC_HOST="$(envget PUBLIC_HOST)"
 ok "Public address: $PUBLIC_HOST"
 
 PANEL_PORT="$(envget PANEL_PORT)"
+CUR_PORT="$PANEL_PORT"
 # the first version listened on 8080 — move to a random 4-digit port
 # browsers block some ports (6697 etc.) — pick another one
 if [ -z "$PANEL_PORT" ] || [ -z "$(envget AWGR_VERSION)" ] || [ "$PANEL_PORT" = 8080 ] || unsafe_port "$PANEL_PORT"; then
   PANEL_PORT="$(random_port 2000 9999)"
+fi
+# Asked on a new install and with --reconfigure (Enter — the random one above, or the current one);
+# an update keeps the port. Without a terminal: AWGR_PORT, or the default.
+if [ -z "$CUR_PORT" ] || [ "$RECONF" = 1 ]; then
+  if [ -n "${AWGR_PORT:-}" ]; then
+    why="$(panel_port_problem "$AWGR_PORT" "$CUR_PORT")"
+    [ -z "$why" ] || die "AWGR_PORT=$AWGR_PORT: $why"
+    PANEL_PORT="$AWGR_PORT"
+  else
+    def="$PANEL_PORT"
+    while true; do
+      ask "Panel port [$def]: " "$def"
+      why="$(panel_port_problem "$REPLY" "$CUR_PORT")"
+      [ -z "$why" ] && break
+      echo "  $why"
+    done
+    PANEL_PORT="$REPLY"
+  fi
 fi
 TLS_DOMAIN="$(envget TLS_DOMAIN)"; ACME_EMAIL="$(envget ACME_EMAIL)"
 PANEL_PASSWORD="$(envget PANEL_PASSWORD)"

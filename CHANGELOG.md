@@ -3,8 +3,12 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.17.2 — 2026-11-07
+## 1.18.0 — 2026-11-07
 
+- **The installer asks for the panel port.** Like the AmneziaWG port: Enter takes a random free 4-digit
+  port, as before, or type your own. It must be from 1024 to 65535, free, not one that browsers refuse to
+  open and not 10443 (domain rules); otherwise the installer says why and asks again. `--reconfigure`
+  offers the current port; an update keeps it without asking. Without a terminal: `AWGR_PORT=…`.
 - **The connection name in a vpn:// key is just the client's name.** AmneziaVPN showed the connection as
   "name · server address", but the app shows the server address on its main screen anyway, so the address
   is no longer repeated in the name. Keys issued earlier keep their old name until they are imported again.
