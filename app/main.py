@@ -17,8 +17,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-from . import (awgconf, awgserver, config, cps, domains, hostnet, limits, lists, notify, selfupdate, system, tgbot,
-               tlsconf, tlsmgr, totp, users, webfront)
+from . import (awgconf, awgserver, config, cps, domains, hostnet, limits, lists, notify, selfupdate, shaping, system,
+               tgbot, tlsconf, tlsmgr, totp, users, webfront)
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -234,6 +234,32 @@ def v_rules(st: dict, rules) -> list[dict]:
                     "enabled": bool(r.get("enabled", True)),
                     "comment": str(r.get("comment") or "")[:80]})
     return out
+
+
+def v_rate(v) -> float | None:
+    """Ограничение скорости из формы, Мбит/с ("" / None / 0 — без ограничения)."""
+    if v in (None, "", 0):
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        bad(Msg("err.rate", min=shaping.MIN_MBIT, max=shaping.MAX_MBIT))
+    if not shaping.MIN_MBIT <= v <= shaping.MAX_MBIT:
+        bad(Msg("err.rate", min=shaping.MIN_MBIT, max=shaping.MAX_MBIT))
+    return round(v, 3)
+
+
+def v_rates(body: dict, prefix: str = "rate_") -> dict:
+    """{rate_down, rate_up} из тела запроса — только те, что в нём есть."""
+    return {k: v_rate(body[prefix + k[5:]]) for k in ("rate_down", "rate_up") if prefix + k[5:] in body}
+
+
+def v_balance(st: dict, b) -> dict:
+    """Балансировка: {"on": bool, "skip": [id выходов, которые в ней не участвуют]}."""
+    if not isinstance(b, dict) or not isinstance(b.get("skip", []), list):
+        bad("err.bad_value")
+    skip = [x for x in dict.fromkeys(b.get("skip") or []) if isinstance(x, str) and Store.upstream(st, x)]
+    return {"on": bool(b.get("on")), "skip": skip}
 
 
 def v_name(v, maxlen: int = 40) -> str:
@@ -668,6 +694,11 @@ def clean_backup_state(new: dict) -> dict:
                                 "num": num, "config": pc.raw, "enabled": bool(u.get("enabled", True)),
                                 "fallback": "direct", "created": u.get("created") if _num(u.get("created")) else None,
                                 "quota": _int_or_none(u.get("quota")), "quota_action": "notify", **flags})
+        for k in ("rate_down", "rate_up"):
+            if u.get(k) not in (None, ""):
+                st["upstreams"][-1][k] = check(f"{f}.{k}", lambda: v_rate(u[k]))
+                if not st["upstreams"][-1][k]:
+                    del st["upstreams"][-1][k]
         # свой список сайтов выхода (окно выхода): только если это список доменов из этой же
         # копии и он ещё не принадлежит другому выходу
         own = u.get("own_list")
@@ -692,6 +723,8 @@ def clean_backup_state(new: dict) -> dict:
     r = obj("routing")
     st["routing"] = {"default": check("routing.default", lambda: v_outbound(st, r.get("default", "direct"))),
                      "rules": check("routing.rules", lambda: v_rules(st, r.get("rules", [])))}
+    if r.get("balance") is not None:
+        st["routing"]["balance"] = check("routing.balance", lambda: v_balance(st, r["balance"]))
 
     # политики клиентов
     for pk, c in obj("clients").items():
@@ -728,6 +761,10 @@ def clean_backup_state(new: dict) -> dict:
             "quota_done": qd if isinstance(qd, str) and QUOTA_KEY_RE.match(qd) else None,
             "exp_warned": _int_or_none(L.get("exp_warned")),
             "quota_warned": qw if isinstance(qw, str) and QUOTA_KEY_RE.match(qw) else None}
+        for k in ("rate_down", "rate_up"):
+            v = check(f"limits.{pk[:12]}.{k}", lambda: v_rate(L.get(k)))
+            if v:
+                st["limits"][pk][k] = v
 
     # свои I1–I5 клиентов
     for pk, e in obj("cps").items():
@@ -758,6 +795,13 @@ def clean_backup_state(new: dict) -> dict:
         out["list_update_hours"] = max(1, min(int(s["list_update_hours"]), 24 * 30))
     if s.get("on_stop") in ("keep", "restore"):
         out["on_stop"] = s["on_stop"]
+    sh = s.get("shaping")
+    if sh is not None:
+        if not isinstance(sh, dict):
+            fail("settings.shaping")
+        v = {k: x for k in ("down", "up") if (x := check("settings.shaping", lambda: v_rate(sh.get(k))))}
+        if v:
+            out["shaping"] = v
     h = s.get("public_host")
     if isinstance(h, str) and re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", h):
         out["public_host"] = h
@@ -925,10 +969,10 @@ def put_limits(req, pk):
     period = body.get("period") or "month"
     if period not in ("month", "total"):
         bad("err.bad_value")
-    return {"ok": True, "enabled": apply_limits(pk, exp, quota, period)}
+    return {"ok": True, "enabled": apply_limits(pk, exp, quota, period, v_rates(body))}
 
 
-def apply_limits(pk: str, exp: int | None, quota: int | None, period: str) -> bool:
+def apply_limits(pk: str, exp: int | None, quota: int | None, period: str, rates: dict | None = None) -> bool:
     """Срок и лимит клиента (из панели и из Telegram). Если клиента отключили по сроку или
     лимиту, а новые значения это снимают, — включает его. True — включили."""
     c = next((x for x in engine.clients if x["public_key"] == pk), None)
@@ -951,7 +995,13 @@ def apply_limits(pk: str, exp: int | None, quota: int | None, period: str) -> bo
         if enable:
             L["auto_off"] = None
         L.update(expires=exp, quota=quota, period=period)
-        if exp is None and quota is None and not L.get("auto_off"):
+        for k, v in (rates or {}).items():      # ограничение скорости: только если пришло
+            if v:
+                L[k] = v
+            else:
+                L.pop(k, None)
+        if exp is None and quota is None and not L.get("auto_off") and not L.get("rate_down") \
+                and not L.get("rate_up"):
             st["limits"].pop(pk, None)
         else:
             st["limits"][pk] = L
@@ -1041,7 +1091,11 @@ def share_data(req, token):
 
 
 # -------------------------------------------------------------------- state
-def _upstream_view(st: dict, u: dict) -> dict:
+def _upstream_view(st: dict, u: dict, bal_members: set | None = None, bal_counts: dict | None = None) -> dict:
+    if bal_members is None:
+        bal_members = {m["id"] for m in engine.balance_members(st)}
+    if bal_counts is None:
+        bal_counts = engine.balancer.counts()
     try:
         pc = engine.parsed(u)
         info = {"endpoint": pc.endpoint, "address": pc.address, "mtu": pc.mtu,
@@ -1058,17 +1112,26 @@ def _upstream_view(st: dict, u: dict) -> dict:
             "refs": Store.outbound_refs(st, "up:" + u["id"]),
             "quota": u.get("quota"), "quota_action": engine.quota_target(u) or "notify",
             "over_quota": bool(u.get("quota")) and engine.traffic.out_used(u["id"]) >= u["quota"],
-            "traffic": engine.traffic.out_view(u["id"])}
+            "traffic": engine.traffic.out_view(u["id"]),
+            "rate_down": u.get("rate_down"), "rate_up": u.get("rate_up"),
+            # сейчас, байт/с: [от клиентов, к клиентам]
+            "speed": [round(x) for x in engine.balancer.rate(u["id"])],
+            "balance": u["id"] in bal_members, "bal_clients": bal_counts.get(u["id"], 0)}
 
 
 @app.get("/api/state")
 def get_state(req):
     st = store.snapshot()
     t = engine.target
+    bal_members = {m["id"] for m in engine.balance_members(st)}
+    bal_counts = {}
+    for uid in engine.bal.values():
+        bal_counts[uid] = bal_counts.get(uid, 0) + 1
     clients = []
     for c in engine.clients:
         cp = st["clients"].get(c["public_key"], {})
         pol = engine.policy_for(st, c["public_key"])
+        out = engine.default_out(st, c["public_key"], pol)
         clients.append({
             **c,
             "traffic": engine.traffic.view(c["public_key"]),
@@ -1079,8 +1142,9 @@ def get_state(req):
             "policy": {"outbound": cp.get("outbound", "inherit"),
                        "rules_mode": cp.get("rules_mode", "inherit"),
                        "rules": cp.get("rules") or [], "note": cp.get("note", "")},
-            "default": pol["default"],
-            "effective": engine.resolve(pol["default"], st),
+            "default": out,
+            "balanced": pol["balanced"] and out != pol["default"],
+            "effective": engine.resolve(out, st),
         })
     clients.sort(key=lambda c: tuple(int(x) for x in (c.get("ip") or "255.255.255.255").split(".")))
     return {
@@ -1095,7 +1159,7 @@ def get_state(req):
         "engine": {"last_apply": engine.last_apply, "last_reconcile": engine.last_reconcile,
                    "last_error": engine.last_error, "ruleset_size": len(engine.ruleset)},
         "routing": st["routing"],
-        "global_effective": engine.resolve(st["routing"]["default"], st),
+        "global_effective": engine.resolve(engine.default_out(st, None), st),
         "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},
         "security": {"totp": bool(totp.load()), "session_hours": SESSION_TTL // 3600,
                      "password_custom": bool(custom_password())},
@@ -1104,7 +1168,9 @@ def get_state(req):
         "notify_error": notifier.last_error,
         "notify_pending": len(notifier.pending),
         "tg_bot": bot.view(),
-        "upstreams": [_upstream_view(st, u) for u in st["upstreams"]],
+        "upstreams": [_upstream_view(st, u, bal_members, bal_counts) for u in st["upstreams"]],
+        "balance": {"members": sorted(bal_members), "new": engine.bal_new},
+        "shaping": engine.shape_state and {k: v for k, v in engine.shape_state.items() if k != "sig"},
         "direct_traffic": engine.traffic.out_view("direct"),
         "server_traffic": engine.traffic.server_view(),
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
@@ -1235,6 +1301,7 @@ def _after_exit_routing(lists_changed: tuple) -> None:
 def add_upstream(req):
     body = req.json()
     quota = v_exit_quota(body)
+    rates = v_rates(body)
     try:
         pc = awgconf.parse_upstream(str(body.get("config", "")))
     except awgconf.ConfigError as e:
@@ -1246,6 +1313,7 @@ def add_upstream(req):
         u = {"id": new_id("u"), "name": name, "num": Store.free_num(st), "config": pc.raw,
              "enabled": True, "fallback": fb, "created": time.time(),
              "quota": quota, "quota_action": v_quota_action(st, body.get("quota_action"), None)}
+        u.update({k: v for k, v in rates.items() if v})
         st["upstreams"].append(u)
         if body.get("make_default") and st["routing"]["default"] in ("direct", "block"):
             st["routing"]["default"] = "up:" + u["id"]
@@ -1271,6 +1339,7 @@ def edit_upstream(req, uid):
     quota = None
     if "quota_gb" in body:
         quota = v_exit_quota(body)
+    rates = v_rates(body)
 
     def fn(st):
         u = Store.upstream(st, uid)
@@ -1306,6 +1375,11 @@ def edit_upstream(req, uid):
             if quota != u.get("quota") or action != (engine.quota_target(u) or "notify"):
                 u["quota_hit"] = u["quota_warned"] = None   # события квоты — заново
             u["quota"], u["quota_action"] = quota, action
+        for k, v in rates.items():
+            if v:
+                u[k] = v
+            else:
+                u.pop(k, None)
         if body.get("routing"):
             return apply_exit_routing(st, uid, body["routing"], u["name"])
         return None, None
@@ -1334,6 +1408,9 @@ def del_upstream(req, uid):
                 bad("err.bad_outbound")
             Store.replace_outbound(st, target, new, u.get("fallback"))
         st["upstreams"] = [x for x in st["upstreams"] if x["id"] != uid]
+        bal = st["routing"].get("balance")
+        if bal and uid in (bal.get("skip") or []):
+            bal["skip"] = [x for x in bal["skip"] if x != uid]
         # правила со списками доменов могут вести только на SOCKS5: если замена не SOCKS5 — убираем их
         dom = {l["id"] for l in st["lists"] if l["kind"] == "domains"}
         keep = lambda r: not (set(r.get("lists") or []) & dom) or is_socks_out(st, r.get("outbound"))
@@ -1371,8 +1448,11 @@ def put_routing(req):
     body = req.json()
 
     def fn(st):
+        bal = v_balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
         st["routing"] = {"default": v_outbound(st, body.get("default")),
                          "rules": v_rules(st, body.get("rules", []))}
+        if bal:
+            st["routing"]["balance"] = bal
     store.mutate(fn)
     engine.trigger()
     return {"ok": True}
@@ -1627,7 +1707,18 @@ def put_settings(req):
             if body["on_stop"] not in ("keep", "restore"):
                 bad("err.bad_value")
             s["on_stop"] = body["on_stop"]
+        if "shaping" in body:
+            sh = body["shaping"]
+            if not isinstance(sh, dict):
+                bad("err.bad_value")
+            v = {k: v_rate(sh.get(k)) for k in ("down", "up")}
+            if any(v.values()):
+                s["shaping"] = {k: x for k, x in v.items() if x}
+            else:
+                s.pop("shaping", None)
     store.mutate(fn)
+    if "shaping" in body:
+        engine.trigger()
     return {"ok": True}
 
 
@@ -1866,8 +1957,11 @@ def tls_web_set(req):
 
 # --------------------------------------------------- управление из Telegram
 def set_default_outbound(out: str) -> None:
+    """«Сделать основным» в боте: выход по умолчанию для всех — балансировка выключается."""
     def fn(st):
         st["routing"]["default"] = v_outbound(st, out)
+        if (st["routing"].get("balance") or {}).get("on"):
+            st["routing"]["balance"]["on"] = False
     store.mutate(fn)
     engine.trigger()
 
@@ -1928,7 +2022,8 @@ bot_ops = SimpleNamespace(
     out_view=engine.traffic.out_view,
     acct_ok=lambda: engine.acct_state == "ok",
     used=engine.traffic.used,
-    client_out=lambda pk: engine.policy_for(store.snapshot(), pk)["default"],
+    client_out=lambda pk: engine.default_out(store.snapshot(), pk),
+    balanced=lambda pk: engine.policy_for(store.snapshot(), pk)["balanced"] and pk in engine.bal,
     set_enabled=set_client_enabled,
     apply_limits=apply_limits,
     add_client=lambda name: _user_errors(lambda: engine.srv.add_client(name)),

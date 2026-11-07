@@ -45,6 +45,7 @@ Details are in [How routing works](#how-routing-works).
 - Traffic per client for the month and all time; it survives restarts. Sort by name, address, traffic or activity.
 - All-time traffic through the server next to the panel name (it stays when clients are deleted).
 - An end date and a traffic limit (per month or in total). When they run out, the client turns off by itself; a monthly limit resets on the 1st at 00:00 UTC (the panel shows when that is in your time) and the client turns back on. Three days before the end date and at 90% of the limit you get a warning, and **Ending soon** in the client list shows who is close.
+- Speed limits (off until you set them): a cap for all clients together, a personal cap per client and a cap per exit, download and upload separately. Within the common cap the speed is split evenly between those downloading right now. Connections don't drop, the internet just gets slower, and latency stays low under load.
 - A personal link: the person opens it, downloads their config or scans the QR code, and sees their traffic and end date — no panel sign-in.
 
 <p align="center">
@@ -66,6 +67,7 @@ Details are in [How routing works](#how-routing-works).
 - Domain rules for SOCKS5 exits: `example.com` on a list also covers all its subdomains; you can paste a link to a ready-made list (plain domains, dnsmasq, hosts, Adblock, v2ray). The server learns the site from its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself, so DNS spoofing by the ISP doesn't matter. Client DNS and configs don't change. Such rules are checked before address rules.
 - The exit window asks for the type first (AmneziaWG or SOCKS5). For SOCKS5 there are separate fields for the address, port, login and password (they make up the connection string; a pasted string fills them in), and the routing for that exit is set in the same window: sites (domains) to send through it, domain and network lists, or all traffic. This is saved as ordinary global rules; rules you turned off, rule names and their order stay as they are.
 - Each client can have its own exit and its own rules.
+- **Load balancing** (optional) instead of the default exit: each client gets the least busy of the chosen exits, measured against the exit's speed limit when one is set. If one exit is overloaded while another sits idle, some clients are moved over within a few minutes without dropping their open connections; a failed exit's clients move at once. Rules and clients' own exits still apply.
 - **Route check** shows which way an IP or domain would go.
 
 <p align="center">
@@ -225,6 +227,7 @@ The panel runs in its own container (`network_mode: host`, `pid: host`, `privile
 - Client packets are marked by nftables rules in the `ip awgr` table.
 - The tunnel address on the exit server is applied with SNAT, so it never clashes with your clients.
 - If a tunnel disappears, an `unreachable` route stays in its table, so traffic never leaks around the exit.
+- Load balancing pins each client to one exit, and each connection remembers its exit in conntrack (`ct mark`), so moving a client sends only its new connections through the new exit. Speed limits are `tc` HTB queues: on the clients' interface (`awg0`) for clients and on `awgrN` for exits; incoming traffic is shaped through an `ifb` device.
 
 Everything that's applied is visible on the **System** tab under **What's applied right now**.
 
@@ -244,6 +247,7 @@ The panel effectively has root access to the server.
 - Domain rules see only HTTPS and HTTP (ports 443 and 80) and can't see the site when the browser hides the name (Encrypted Client Hello); such connections follow the address rules. In host mode with an nftables-only firewall (for example, firewalld), allow incoming TCP port 10443 on the clients' interface; with iptables or ufw the panel does it itself.
 - SOCKS5 exits need IPv6 support in the kernel (always there, except on servers booted with `ipv6.disable=1`).
 - Country lists are built from registry data. For a specific service, an ASN list is more accurate.
+- Upload limits for clients and download limits for exits need the kernel's `ifb` module (cloud kernels sometimes ship it only in `linux-modules-extra`); without it the panel says so and the other limits still work. For a SOCKS5 exit, sites from domain rules are limited separately from the rest of its traffic, so together they can exceed the exit's limit.
 
 ## Development
 

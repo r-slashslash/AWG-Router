@@ -3,6 +3,29 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.19.0 — 2026-11-08
+
+- **Load balancing across exits.** On the Routing tab, **Everything else** can now be **Load balancing**
+  instead of one exit. Each client that follows the defaults gets the least busy of the checked exits (all
+  of them by default); load is measured against the exit's speed limit when one is set, otherwise in
+  Mbit/s, and when everything is idle new clients go where there are fewer of them. If one exit stays
+  overloaded for two minutes while another has room, one active client is moved, at most one every three
+  minutes and the same client at most every ten. A moved client's open connections stay on the old exit
+  (the exit is remembered per connection in conntrack); only new ones use the new exit. Clients of an exit
+  that fails, is turned off or runs out of quota move at once. When none of the checked exits works,
+  traffic takes the path chosen under **If all exits are unavailable** (the former default exit, so a
+  rollback to an older panel keeps working). Address and domain rules and clients' own exits work as
+  before. The client list, the trace, DNS on the server and the bot show the exit a client got; **Make
+  default** in the bot turns balancing off.
+- **Speed limits.** All off until a value is set, download and upload separately, in Mbit/s:
+  for all clients together (**Server** tab), per client (client card, next to the traffic limit) and per
+  exit (exit settings). Within the common limit the speed is split evenly between those downloading right
+  now. The strictest limit applies. Limits are `tc` HTB queues with fq_codel, so latency stays low under
+  load; incoming traffic goes through an `ifb` device. If the kernel can't create one, the panel says so
+  and the other limits still work. For SOCKS5 exits, sites from domain rules (which go to the proxy past
+  the exit's tunnel) are limited by the domain-rule handler itself.
+- **Current speed of each exit** on the Exits tab and the overview, with its limit next to it.
+
 ## 1.18.0 — 2026-11-07
 
 - **The installer asks for the panel port.** Like the AmneziaWG port: Enter takes a random free 4-digit

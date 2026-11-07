@@ -12,6 +12,9 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
     type route (hook output) проверяет обычные правила по адресам и ставит метку нужного выхода
     (AWG, SOCKS5 через hev-socks5-tunnel, напрямую или блок).
 Если выход правила не работает, панель передаёт его резервный путь (метку, напрямую или блок).
+Ограничение скорости выхода SOCKS5 (rates в настройках): соединения через CONNECT идут к прокси
+мимо туннеля выхода, и очередь tc на нём их не видит — их ограничивает общий для выхода «бак
+токенов» в каждую сторону.
 SIGHUP — перечитать настройки и списки. Счётчики и байты по «клиент|выход» — в файл stats
 раз в 15 секунд и при остановке (по ним панель считает трафик выходов).
 """
@@ -183,9 +186,29 @@ def keepalive(sock) -> None:
         pass
 
 
+class Bucket:
+    """Ограничение скорости, общее для всех соединений одного выхода в одну сторону: каждое
+    соединение берёт байты из бака и, уйдя в минус, ждёт, пока бак не наполнится."""
+
+    def __init__(self, rate: float):
+        self.rate = float(rate)                       # байт/с
+        self.burst = max(self.rate * 0.05, 65536.0)
+        self.tokens = self.burst
+        self.t = time.monotonic()
+
+    async def take(self, n: int) -> None:
+        now = time.monotonic()
+        self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
+        self.t = now
+        self.tokens -= n
+        if self.tokens < 0:
+            await asyncio.sleep(-self.tokens / self.rate)
+
+
 async def pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter, cnt: list | None = None,
-               i: int = 0, act: list | None = None) -> None:
-    """Копирует поток. cnt[i] — счётчик байт (учёт трафика выходов), act[0] — время последних данных."""
+               i: int = 0, act: list | None = None, bucket: Bucket | None = None) -> None:
+    """Копирует поток. cnt[i] — счётчик байт (учёт трафика выходов), act[0] — время последних данных,
+    bucket — ограничение скорости выхода."""
     try:
         while True:
             data = await r.read(BUF)
@@ -195,6 +218,8 @@ async def pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter, cnt: list | Non
                 cnt[i] += len(data)
             if act is not None:
                 act[0] = time.monotonic()
+            if bucket is not None:
+                await bucket.take(len(data))
             w.write(data)
             await w.drain()
     except (OSError, asyncio.IncompleteReadError):
@@ -251,6 +276,7 @@ class Sniffer:
         # байты по «клиент|выход» с запуска процесса: панель добавляет их к трафику выходов
         # (соединения через посредника — не транзитные, таблица учёта nftables их не видит)
         self.bytes: dict[str, list[int]] = {}
+        self.buckets: dict[tuple[str, int], Bucket] = {}   # (выход, 0 — отдача | 1 — загрузка)
         self.reload()
 
     def reload(self) -> None:
@@ -270,6 +296,14 @@ class Sniffer:
             except OSError as e:
                 log(f"cidrs {lid}: {e}")
         self.cfg, self.lists, self.nets = cfg, lists, nets
+        rates = {}
+        for out, pair in (cfg.get("rates") or {}).items():
+            for i in (0, 1):
+                v = pair[i] if isinstance(pair, list) and len(pair) == 2 else 0
+                if isinstance(v, (int, float)) and v > 0:
+                    rates[(out, i)] = float(v)
+        self.buckets = {k: b if (b := self.buckets.get(k)) and b.rate == r else Bucket(r)
+                        for k, r in rates.items()}
         self.net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
 
     def policy(self, client: str) -> dict:
@@ -354,7 +388,10 @@ class Sniffer:
                 if cnt is not None:
                     cnt[0] += len(data)
             act = [time.monotonic()]
-            both = asyncio.gather(pipe(reader, out_w, cnt, 0, act), pipe(out_r, writer, cnt, 1, act))
+            # через прокси — мимо туннеля выхода: его ограничение скорости — здесь
+            bk = [self.buckets.get((to.get("acct"), i)) if to.get("socks") else None for i in (0, 1)]
+            both = asyncio.gather(pipe(reader, out_w, cnt, 0, act, bk[0]),
+                                  pipe(out_r, writer, cnt, 1, act, bk[1]))
             while not both.done():
                 await asyncio.wait([both], timeout=min(60, IDLE_TIMEOUT))
                 if not both.done() and time.monotonic() - act[0] > IDLE_TIMEOUT:

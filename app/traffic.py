@@ -97,6 +97,9 @@ class Traffic:
         self.acct_synced = False               # acct соответствует таблице (есть в файле)
         self.sni: dict = {}                    # {"pid", "vals"} — последние байты sniproxy.py
         self.server: dict = {"total": [0, 0], "months": {}}   # итог всего сервера
+        # прирост по (выход, клиент) с прошлого take_recent(): по нему считается текущая скорость
+        # выходов (балансировка, карточки выходов); в файл не пишется
+        self.recent: dict[tuple[str, str | None], list[int]] = {}
         self._saved = 0.0
         self._dirty = False
         try:
@@ -201,7 +204,16 @@ class Traffic:
         if self._dirty and now - self._saved >= SAVE_EVERY:
             self.save()
 
+    def take_recent(self) -> dict[tuple[str, str | None], list[int]]:
+        """Прирост по (выход, клиент) с прошлого вызова — и обнуление."""
+        with self.lock:
+            r, self.recent = self.recent, {}
+        return r
+
     def _add_out(self, out: str, pk: str | None, delta: list[int], mk: str) -> None:
+        rc = self.recent.setdefault((out, pk), [0, 0])
+        rc[0] += delta[0]
+        rc[1] += delta[1]
         o = self.outs.setdefault(out, {"total": [0, 0], "months": {}})
         o["total"] = [o["total"][i] + delta[i] for i in (0, 1)]
         _add(o["months"], mk, delta)

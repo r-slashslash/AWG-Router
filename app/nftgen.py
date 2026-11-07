@@ -87,12 +87,38 @@ def parse_acct(data: dict, wg_iface: str) -> dict[tuple[str, str], list[int]] | 
     return out
 
 
+class Sticky(int):
+    """Выход N с запоминанием выхода у соединения (балансировка): первый пакет соединения
+    записывает метку выхода в conntrack (ct mark), следующие берут её оттуда, пока этот выход
+    среди рабочих выходов балансировки. Поэтому перенос клиента на другой выход не рвёт его открытые
+    соединения: новые идут через новый выход, старые доживают на прежнем. Во всём остальном — то же
+    число N (метка, таблица, учёт)."""
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return f"Sticky({int(self)})"
+
+
 def out_chain(out) -> str:
     if out == "direct":
         return "o_direct"
     if out == "block":
         return "o_block"
+    if isinstance(out, Sticky):
+        return f"ob_u{int(out)}"
     return f"o_u{int(out)}"
+
+
+def _okey(o):
+    """Выход в ключе политики: Sticky(N) и N — разные цепочки."""
+    return ("sticky", int(o)) if isinstance(o, Sticky) else o
+
+
+def _sticky_chain(name: str, num: int, alive: list[int]) -> str:
+    marks = ", ".join(f"{mark_for(n):#x}" for n in alive)
+    m = mark_for(num)
+    return (f"\tchain {name} {{\n\t\tct mark {{ {marks} }} meta mark set ct mark accept\n"
+            f"\t\tmeta mark set {m:#x} ct mark set {m:#x} accept\n\t}}")
 
 
 def mark_for(num: int) -> int:
@@ -100,7 +126,7 @@ def mark_for(num: int) -> int:
 
 
 def _policy_key(policy: dict) -> tuple:
-    return (tuple((tuple(l), o) for l, o in policy["rules"]), policy["default"],
+    return (tuple((tuple(l), o) for l, o in policy["rules"]), _okey(policy["default"]),
             tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()))
 
 
@@ -137,15 +163,19 @@ def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = Fa
     return "\n".join(lines)
 
 
-def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[int]) -> tuple[dict, dict]:
+def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[int],
+           balance: set[int] | frozenset = frozenset()) -> tuple[dict, dict]:
     """Уникальные политики и какому клиенту какая: ({имя: политика}, {IP клиента: имя}).
     Политика: {"rules": [(списки, выход)], "default": выход, "domain": [(списки доменов, выход)]}.
-    Ту же раскладку использует sniproxy.py (через engine), поэтому имена должны совпадать."""
+    Ту же раскладку использует sniproxy.py (через engine), поэтому имена должны совпадать.
+    balance — номера рабочих выходов балансировки: Sticky на другой выход становится обычным."""
     def norm(policy: dict) -> dict:
         # выход на несуществующий туннель → блок (безопасный вариант)
         fix = lambda o: o if o in ("direct", "block") or o in up_nums else "block"
         rules = [(l, fix(o)) for l, o in policy["rules"]]
         default = fix(policy["default"])
+        if isinstance(default, Sticky) and int(default) not in balance:
+            default = int(default)
         while rules and rules[-1][1] == default:  # хвостовые правила ничего не меняют
             rules.pop()
         return {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
@@ -172,12 +202,16 @@ def sniff_marks(policies: dict) -> dict[str, int]:
 
 
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
-             global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None) -> str:
+             global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
+             balance: set[int] | frozenset = frozenset()) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам для выходов SOCKS5);
-    None — посредника нет, правила по доменам не действуют, работают только правила по адресам."""
+    None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
+    balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
+    остаётся на нём (цепочки ob_u*, выход Sticky в политике)."""
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
-    policies, client_map = layout(global_policy, client_policies, up_nums)
+    alive = sorted(n for n in balance if n in up_nums)
+    policies, client_map = layout(global_policy, client_policies, up_nums, balance)
     marks = sniff_marks(policies) if sniff_port else {}
 
     used_lists = sorted({lid for p in policies.values() for l, _ in p["rules"] for lid in l})
@@ -212,6 +246,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     out.append(f"\tchain o_block {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept\n\t}}")
     for u in sorted(upstreams, key=lambda x: x["num"]):
         out.append(f"\tchain o_u{u['num']} {{\n\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
+    for n in alive:
+        out.append(_sticky_chain(f"ob_u{n}", n, alive))
 
     fwd = [
         "\tchain c_forward {",
@@ -236,7 +272,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 \t}}""")
         # соединения sniproxy.py без совпадения по домену: обычные правила политики клиента
         # (метка политики → цепочка q_*; смена метки в type route — новый выбор маршрута)
-        oq = lambda o: "oq_direct" if o == "direct" else "oq_block" if o == "block" else f"oq_u{int(o)}"
+        oq = lambda o: "oq_direct" if o == "direct" else "oq_block" if o == "block" else \
+            f"oqb_u{int(o)}" if isinstance(o, Sticky) else f"oq_u{int(o)}"
         vm = ", ".join(f"{m:#x} : goto q_{n}" for n, m in marks.items())
         out.append(f"""\tchain c_output {{
 \t\ttype route hook output priority mangle; policy accept;
@@ -249,6 +286,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         out.append("\tchain oq_block {\n\t\treject with tcp reset\n\t}")
         for u in sorted(upstreams, key=lambda x: x["num"]):
             out.append(f"\tchain oq_u{u['num']} {{\n\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
+        for n in alive:
+            out.append(_sticky_chain(f"oqb_u{n}", n, alive))
         # MSS clamp для соединений sniproxy.py: они локальные (output), а не транзитные, поэтому
         # правило из c_forward их не видит — без него SYN объявит MSS 1460 под MTU туннеля ~1280
         mss = [f'\t\toifname "{config.IFACE_PREFIX}{u["num"]}" tcp flags & (syn | rst) == syn '

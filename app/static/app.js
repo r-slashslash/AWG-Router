@@ -141,6 +141,34 @@ function outOptions(selected, { inherit = null, exclude = null, socksOnly = fals
   if (socksOnly && !opts.some(([v]) => v === selected)) opts.unshift([selected, t("re.need_socks")]);
   return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(l)}</option>`).join("");
 }
+/* балансировка и ограничение скорости */
+function balOn() { return !!(S.routing.balance && S.routing.balance.on); }
+function balMembers() { return (S.balance && S.balance.members) || []; }
+/** байт/с → Мбит/с для показа */
+function fmtMbps(bps) {
+  const m = (bps || 0) * 8 / 1e6;
+  return (m < 0.01 ? 0 : m).toLocaleString(LANG, { maximumSignificantDigits: m < 10 ? 2 : 3 });
+}
+/** части «↓ 12» «↑ 3» — каждая без переноса, числа слева направо (в fa тоже); единица — на языке интерфейса */
+const mbpsHtml = (parts) => parts.map((x) => `<bdi dir="ltr" class="nowrap">${esc(x)}</bdi>`).join(" ") +
+  ` <span class="nowrap">${esc(t("u.mbps"))}</span>`;
+/** ограничение скорости (Мбит/с) «↓ 80 ↑ 20 Мбит/с» (HTML); пусто — ничего не задано */
+function rateHtml(down, up) {
+  const parts = [];
+  if (down) parts.push("↓ " + fmtNum(down));
+  if (up) parts.push("↑ " + fmtNum(up));
+  return parts.length ? mbpsHtml(parts) : "";
+}
+/** скорость выхода сейчас (HTML); при ограничении — «12 / 80» */
+function speedHtml(u) {
+  const sp = u.speed || [0, 0];
+  const part = (v, cap) => fmtMbps(v) + (cap ? " / " + fmtNum(cap) : "");
+  return mbpsHtml([`↓ ${part(sp[1], u.rate_down)}`, `↑ ${part(sp[0], u.rate_up)}`]);
+}
+function shapingNotice() {
+  const s = S.shaping;
+  return s && s.state === "error" ? `<div class="notice warn">${esc(t("sh.error", { error: tm(s.error) || "?" }))}</div>` : "";
+}
 function rulesSummary(rules) {
   const rs = rules.filter((r) => r.enabled);
   if (!rs.length) return `<p class="muted small" style="margin:0">${esc(t("ov.no_rules"))}</p>`;
@@ -389,6 +417,8 @@ function viewOverview() {
       h.healthy ? `<span>${esc(u.kind === "socks5" ? t("ov.socks_ms", { ms: h.latency_ms ?? "?" }) : t("ov.handshake", { ago: fmtAge(h.handshake_age) }))}</span>` : "",
       acctOn() ? `<span>${esc(t("ex.month"))} ${arrows(u.traffic)}</span>`
         : h.rx != null && u.enabled ? `<span>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</span>` : "",
+      acctOn() && !dead && (u.rate_down || u.rate_up || Math.max(...(u.speed || [0])) >= 12500) ? `<span>${speedHtml(u)}</span>` : "",
+      balOn() && u.balance ? `<span>⚖️ ${esc(t("ex.bal_clients", { n: u.bal_clients }))}</span>` : "",
       dead ? `<span>${esc(na ? t("ov.assigned_now", { n: na }) : t("ov.traffic_goes"))} ${effChip(u.effective)}</span>` : "",
     ].join("");
     lines += track(dead ? "dead" : "", lineVar(u), `<h3><bdi>${esc(u.name)}</bdi></h3>${stateBadge(u)}`, meta,
@@ -418,7 +448,9 @@ function viewOverview() {
     <div class="ov-c2">
       <div class="panel panel-pad">
         ${rulesSummary(S.routing.rules)}
-        <div style="margin-top:10px">${th("ov.everything_else", { exit: effChip(S.global_effective, S.routing.default) })}</div>
+        <div style="margin-top:10px">${!balOn() ? th("ov.everything_else", { exit: effChip(S.global_effective, S.routing.default) })
+          : balMembers().length ? th("ov.everything_bal", { exits: balMembers().map((id) => outChip("up:" + id)).join(" ") })
+          : th("ov.everything_bal_down", { exit: effChip(S.global_effective, S.routing.default) })}</div>
       </div>
       <div class="section-head" style="margin-top:20px"><h2>${esc(t("ov.log"))}</h2></div>
       <div class="panel panel-pad ov-log">${ev}</div>
@@ -456,7 +488,7 @@ function viewClients() {
       (p.rules_mode === "custom" ? `<span class="tag">${esc(t("cl.custom_tag"))}</span>` : "") +
       (p.note ? `<span class="tag"><bdi>${esc(p.note)}</bdi></span>` : "") +
       (c.cps ? `<span class="tag" title="${esc(t("cl.cps"))}">${esc(cpsTag(c.cps))}</span>` : "") + limitTags(c);
-    const wanted = p.outbound !== "inherit" ? p.outbound : S.routing.default;
+    const wanted = p.outbound !== "inherit" ? p.outbound : c.default;
     const activity = !c.enabled ? `<span class="muted">—</span>`
       : `<span class="state"><span class="dot ${online ? "ok" : ""}"></span>${esc(online ? t("cl.online") : fmtAge(age))}</span>`;
     return `<tr class="click ${c.enabled ? "" : "row-off"}" ${endingSoon(c) ? 'data-soon="1"' : ""} data-pk="${esc(c.public_key)}" data-q="${esc((c.name + " " + c.ip + " " + p.note).toLowerCase())}">
@@ -464,7 +496,8 @@ function viewClients() {
       <td data-m="sub" class="nowrap"><bdi>${esc(c.ip || "—")}</bdi></td>
       <td data-m="sub">${activity}</td>
       <td data-m="month" class="nowrap muted"><span class="m-label">${esc(t("ex.month"))}: </span>${trafficCell(c)}</td>
-      <td data-m="right">${effChip(c.effective, wanted)}${p.outbound === "inherit" ? "" : `<div class="small muted" style="margin-top:3px">${esc(t("cl.manual"))}</div>`}</td>
+      <td data-m="right">${effChip(c.effective, wanted)}${p.outbound !== "inherit" ? `<div class="small muted" style="margin-top:3px">${esc(t("cl.manual"))}</div>`
+        : c.balanced ? `<div class="small muted" style="margin-top:3px">⚖️ ${esc(t("cl.balanced"))}</div>` : ""}</td>
     </tr>`;
   }).join("");
   const nSoon = S.clients.filter(endingSoon).length;
@@ -502,6 +535,7 @@ function limitTags(c) {
   else if ((L.auto_off || "").startsWith("quota:")) h += `<span class="tag tag-off">${esc(t("cl.tag_quota"))}</span>`;
   else if (L.expires && L.expires <= S.now) h += `<span class="tag tag-warn">${esc(t("cl.tag_expired"))}</span>`;
   else if (L.expires) h += `<span class="tag ${L.expires - S.now < 3 * 86400 ? "tag-warn" : ""}">${esc(t("cl.tag_until", { date: fmtDay(L.expires) }))}</span>`;
+  if (L.rate_down || L.rate_up) h += `<span class="tag" title="${esc(t("cl.rate"))}">${rateHtml(L.rate_down, L.rate_up)}</span>`;
   return h;
 }
 function trafficCell(c) {
@@ -726,6 +760,13 @@ function editClient(pk, section = null) {
             <select id="c-period" style="width:auto"><option value="month" ${L.period !== "total" ? "selected" : ""}>${esc(t("cl.per_month"))}</option><option value="total" ${L.period === "total" ? "selected" : ""}>${esc(t("cl.in_total"))}</option></select></div>
           <span class="hint">${esc(t("cl.quota_hint", { time: monthResetLocal() }))}</span></div>
       </div>
+      <div class="row2">
+        <label class="field"><span>${esc(t("cl.rate_down"))}</span>
+          <input type="number" id="c-rd" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${L.rate_down || ""}"></label>
+        <label class="field"><span>${esc(t("cl.rate_up"))}</span>
+          <input type="number" id="c-ru" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${L.rate_up || ""}"></label>
+      </div>
+      <p class="small muted" style="margin:-6px 0 14px">${esc(t("cl.rate_hint"))}</p>
       <div class="manage-row">
         <div style="min-width:0"><b>${esc(t("cl.share"))}</b><div class="small muted">${esc(t(S.panel && S.panel.access === "ssh" ? "cl.share_ssh" : "cl.share_hint"))}</div>
           ${c.share_url ? `<div class="mono small share-url" dir="ltr">${esc(c.share_url)}</div>` : ""}</div>
@@ -849,8 +890,11 @@ function editClient(pk, section = null) {
       const q = $("#c-quota").value.trim();
       const per = $("#c-period").value;
       const oldQ = L.quota ? String(+(L.quota / 1024 ** 3).toFixed(3)) : "";
-      if (exp !== (L.expires || null) || q !== oldQ || per !== (L.period || "month")) {
-        const r = await api("PUT", "limits/" + encodeURIComponent(pk), { expires: exp, quota_gb: q === "" ? null : +q, period: per });
+      const rd = $("#c-rd").value.trim(), ru = $("#c-ru").value.trim();
+      if (exp !== (L.expires || null) || q !== oldQ || per !== (L.period || "month")
+          || rd !== String(L.rate_down || "") || ru !== String(L.rate_up || "")) {
+        const r = await api("PUT", "limits/" + encodeURIComponent(pk), { expires: exp, quota_gb: q === "" ? null : +q, period: per,
+          rate_down: rd || null, rate_up: ru || null });
         if (r.enabled) toast(t("toast.client_enabled"));
       }
       await api("PUT", "clients/" + encodeURIComponent(pk), {
@@ -954,11 +998,28 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
 }
 
 /* ================================================================ правила */
+function routingNow() {
+  return { default: S.routing.default, rules: S.routing.rules,
+    balance: { on: balOn(), skip: (S.routing.balance && S.routing.balance.skip) || [] } };
+}
 function routingDirty() {
   if (!routingDraft) return false;
-  return JSON.stringify(routingDraft) !== JSON.stringify({ default: S.routing.default, rules: S.routing.rules });
+  return JSON.stringify(routingDraft) !== JSON.stringify(routingNow());
+}
+/** выходы балансировки: галочки и состояние каждого */
+function balBox(d) {
+  if (!S.upstreams.length) return `<p class="small muted" style="margin:0">${esc(t("bal.no_exits"))}</p>`;
+  const live = new Set(balMembers());
+  const row = (u) => {
+    const on = !d.balance.skip.includes(u.id);
+    const why = !on ? "" : live.has(u.id) ? t("ex.bal_clients", { n: u.bal_clients || 0 })
+      : !u.enabled ? t("bal.off") : quotaSwitched(u) ? t("bal.quota") : t("bal.down");
+    return `<label class="check"><input type="checkbox" data-bal="${esc(u.id)}" ${on ? "checked" : ""}><span><bdi>${esc(u.name)}</bdi>${why ? ` <span class="muted small">— ${esc(why)}</span>` : ""}</span></label>`;
+  };
+  return `<div class="field"><span>${esc(t("bal.exits"))}</span><div class="check-cols">${S.upstreams.map(row).join("")}</div></div>`;
 }
 function viewRouting() {
+  const rd = routingDraft || routingNow();
   return `
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("rt.title"))}</h2><p class="muted small">${esc(t("rt.subtitle"))}</p></div></div>
@@ -966,8 +1027,14 @@ function viewRouting() {
     <div class="default-row" style="margin-top:8px">
       <div class="rule-n" style="padding:0">∗</div>
       <div><b>${esc(t("rt.else"))}</b><div class="small muted">${esc(t("rt.else_sub"))}</div></div>
-      <select id="g-default">${outOptions((routingDraft || S.routing).default)}</select>
+      <select id="g-default"><option value="balance" ${rd.balance.on ? "selected" : ""}>⚖️ ${esc(t("bal.option"))}</option>${outOptions(rd.balance.on ? "" : rd.default)}</select>
       <div></div>
+    </div>
+    <div class="panel panel-pad bal-box" id="g-bal" ${rd.balance.on ? "" : "hidden"}>
+      <p class="small muted" style="margin-top:0">${esc(t("bal.hint"))}</p>
+      <div id="g-bal-exits">${balBox(rd)}</div>
+      <label class="field" style="margin-bottom:0"><span>${esc(t("bal.fallback"))}</span>
+        <select id="g-bal-fb">${outOptions(rd.default)}</select><span class="hint">${esc(t("bal.fallback_hint"))}</span></label>
     </div>
     <div class="savebar" id="savebar" hidden><span>${esc(t("rt.unsaved"))}</span>
       <span class="actions"><button class="btn sm" id="g-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="g-save">${esc(t("rt.save"))}</button></span></div>
@@ -986,14 +1053,28 @@ function viewRouting() {
   </section>`;
 }
 bind.routing = () => {
-  const draft = routingDraft || { default: S.routing.default, rules: structuredClone(S.routing.rules) };
+  const draft = routingDraft || structuredClone(routingNow());
   const upd = () => { routingDraft = draft; $("#savebar").hidden = !routingDirty(); };
   // новый список из правила: после сохранения он сразу в этом правиле (правка не теряется)
   rulesEditor($("#g-rules"), draft.rules, upd, { create: (kind, put) => editList(null, kind, (id) => { put(id); routingDraft = draft; render(true); }) });
   upd();
   bindLists();
   if (scrollToLists) { scrollToLists = false; $("#lists-sec").scrollIntoView(); }
-  $("#g-default").onchange = (e) => { draft.default = e.target.value; upd(); };
+  $("#g-default").onchange = (e) => {
+    const v = e.target.value;
+    draft.balance.on = v === "balance";
+    if (v !== "balance") draft.default = v;
+    $("#g-bal").hidden = !draft.balance.on;
+    $("#g-bal-fb").value = draft.default;
+    upd();
+  };
+  $("#g-bal-fb").onchange = (e) => { draft.default = e.target.value; upd(); };
+  $$("[data-bal]").forEach((i) => i.onchange = () => {
+    const id = i.dataset.bal;
+    draft.balance.skip = draft.balance.skip.filter((x) => x !== id);
+    if (!i.checked) draft.balance.skip.push(id);
+    upd();
+  });
   $("#g-reset").onclick = () => { routingDraft = null; render(); };
   $("#g-save").onclick = async () => {
     try {
@@ -1041,6 +1122,9 @@ function viewExits() {
             ? `<div><span>${esc(t("ex.month"))}</span><b>${arrows(u.traffic)}</b></div>
                <div><span>${esc(t("ex.all_time"))}</span><b>${arrows(u.traffic, "total")}</b></div>`
             : `<div><span>${esc(t("ex.traffic"))}</span><b>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</b></div>`}
+          ${acctOn() && u.enabled ? `<div><span>${esc(t("ex.speed"))}</span><b>${speedHtml(u)}</b></div>` : ""}
+          ${(u.rate_down || u.rate_up) && !(acctOn() && u.enabled) ? `<div><span>${esc(t("ex.rate"))}</span><b>${rateHtml(u.rate_down, u.rate_up)}</b></div>` : ""}
+          ${balOn() && u.balance ? `<div><span>${esc(t("ex.bal"))}</span><b>${esc(t("ex.bal_clients", { n: u.bal_clients }))}</b></div>` : ""}
           ${u.quota ? `<div><span>${esc(t(u.quota_action === "notify" ? "ex.limit_notify" : "ex.limit"))}</span><b>${exitQuota(u)}</b></div>` : ""}
           ${u.quota && u.quota_action !== "notify" ? `<div><span>${esc(t("ex.quota_action"))}</span><b>${outChip(u.quota_action)}</b></div>` : ""}
           <div><span>${esc(t("ex.on_fail"))}</span><b>${outChip(u.fallback)}</b></div>
@@ -1075,7 +1159,7 @@ function viewExits() {
       <div><h2>${esc(t("ex.title"))}</h2><p class="muted small">${esc(t("ex.subtitle"))}</p></div>
       <button class="btn primary" id="add-up">${esc(t("ov.add_exit"))}</button>
     </div>
-    ${off}
+    ${off}${shapingNotice()}
     ${cards || `<div class="panel empty"><p>${esc(t("ex.empty"))}</p><p class="small">${esc(t("ex.empty_hint"))}</p></div>`}
     ${direct}
   </section>`;
@@ -1204,6 +1288,13 @@ async function editUpstream(id) {
         <select id="u-qa">${quotaOptions(u)}</select></label>
     </div>
     <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.quota_hint", { time: monthResetLocal() }))}</p>
+    <div class="row2">
+      <label class="field"><span>${esc(t("ex.rate_down"))}</span>
+        <input type="number" id="u-rd" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_down ? u.rate_down : ""}"></label>
+      <label class="field"><span>${esc(t("ex.rate_up"))}</span>
+        <input type="number" id="u-ru" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_up ? u.rate_up : ""}"></label>
+    </div>
+    <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.rate_hint"))}</p>
     ${u ? "" : `<label class="check" id="u-defl"><input type="checkbox" id="u-def" ${S.routing.default === "direct" ? "checked" : ""}><span>${esc(t("ex.make_default"))}</span></label>`}
   `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`);
   const F = { host: $("#u-sh"), port: $("#u-sp"), user: $("#u-su"), pass: $("#u-sw") };
@@ -1251,7 +1342,8 @@ async function editUpstream(id) {
   draw();
   $("#u-save").onclick = async () => {
     const body = { name: $("#u-name").value.trim(), fallback: $("#u-fb").value,
-      quota_gb: $("#u-quota").value.trim(), quota_action: $("#u-qa").value };
+      quota_gb: $("#u-quota").value.trim(), quota_action: $("#u-qa").value,
+      rate_down: $("#u-rd").value.trim() || null, rate_up: $("#u-ru").value.trim() || null };
     const c = ta.value.trim();
     if (!u || c !== conf.trim()) body.config = c;
     if (kind === "socks5" && (routeTouched || !u)) {
@@ -1525,6 +1617,24 @@ function viewServer() {
     </div>
     <div class="savebar" id="s-bar" ${srvDirty() ? "" : "hidden"}><span id="s-bar-text">${esc(t("srv.save_hint"))}</span>
       <span class="actions"><button class="btn sm" id="s-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="s-save">${esc(t("btn.save"))}</button></span></div>
+  </section>
+  ${shapingSection()}`;
+}
+/** общее ограничение скорости клиентов (своё сохранение, без перезапуска интерфейса) */
+function shapingSection() {
+  const sh = S.settings.shaping || {};
+  return `
+  <section class="section">
+    <div class="section-head"><div><h2>${esc(t("sh.title"))}</h2><p class="muted small">${esc(t("sh.sub"))}</p></div></div>
+    <div class="panel panel-pad" style="max-width:560px">
+      ${shapingNotice()}
+      <div class="row2">
+        <label class="field"><span>${esc(t("sh.down"))}</span><input type="number" id="sh-down" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${sh.down || ""}"></label>
+        <label class="field"><span>${esc(t("sh.up"))}</span><input type="number" id="sh-up" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${sh.up || ""}"></label>
+      </div>
+      <p class="small muted" style="margin-top:-6px">${esc(t("sh.hint"))}</p>
+      <button class="btn primary" id="sh-save">${esc(t("btn.save"))}</button>
+    </div>
   </section>`;
 }
 function sigTemplate(d) {
@@ -1580,6 +1690,14 @@ bind.server = () => {
     return;
   }
   if (!SRV || !SRV.exists) return;
+  $("#sh-save").onclick = async () => {
+    const b = $("#sh-save"); b.disabled = true;
+    try {
+      await api("PUT", "settings", { shaping: { down: $("#sh-down").value.trim() || null, up: $("#sh-up").value.trim() || null } });
+      toast(t("toast.saved_applying")); await refresh();
+    } catch (e) { toast(e.message, true); }
+    b.disabled = false;
+  };
   const showBar = () => { $("#s-bar").hidden = !srvDirty(); };
   ["#s-host", "#s-ch", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
     const el = $(sel); if (!el) return;

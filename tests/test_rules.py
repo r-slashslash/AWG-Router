@@ -123,22 +123,27 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
             main.engine.reconcile()
             x = main.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080", "quota_gb": 5,
-                                     "quota_action": "direct", "routing": {"domains": "a.example"}}))["id"]
+                                     "quota_action": "direct", "routing": {"domains": "a.example"},
+                                     "rate_down": 80, "rate_up": 20}))["id"]
             pk = main.engine.clients[0]["public_key"]
             st0 = main.store.snapshot()
             try:
                 main.put_client(R({"outbound": "up:" + x, "rules_mode": "custom", "note": "n",
                                    "rules": [{"lists": ["ru"], "outbound": "direct"}]}), pk)
-                main.put_limits(R({"expires": 2_000_000_000, "quota_gb": 4, "period": "total"}), pk)
+                main.put_limits(R({"expires": 2_000_000_000, "quota_gb": 4, "period": "total",
+                                   "rate_down": 10, "rate_up": 2.5}), pk)
                 main.ensure_share(pk)
                 main.put_client_cps(R({"preset": "stun"}), pk)
-                main.store.mutate(lambda s: s["settings"].update(panel_dns=True, panel_dns_enc="dot"))
+                main.store.mutate(lambda s: s["settings"].update(panel_dns=True, panel_dns_enc="dot",
+                                                                 shaping={"down": 100, "up": 50}))
+                main.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}))
                 st = main.store.snapshot()
                 new = main.clean_backup_state(st)
             finally:
                 main.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],
                                                      shares=st0["shares"], cps=st0["cps"]))
-                main.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc")])
+                main.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping")])
+                main.store.mutate(lambda s: s["routing"].pop("balance", None))
                 main.del_upstream(R({"replace": "direct"}), x)
 
         def walk(a, b, path=""):

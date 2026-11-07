@@ -2,7 +2,9 @@
 #   tests/netns_e2e.py         — маршрутизация панели: клиент уходит в выход или напрямую по правилам;
 #   tests/awg_real_e2e.py      — настоящий туннель AmneziaWG: .conf и vpn:// подключаются, отключённый
 #                                клиент — нет;
-#   tests/domains_socks_e2e.py — выход SOCKS5 (hev-socks5-tunnel) и правила по доменам (sniproxy).
+#   tests/domains_socks_e2e.py — выход SOCKS5 (hev-socks5-tunnel) и правила по доменам (sniproxy);
+#   tests/shaping_e2e.py       — ограничение скорости (tc: клиенты, все вместе, выходы) и балансировка
+#                                (открытое соединение остаётся на прежнем выходе).
 # awg, amneziawg-go и hev-socks5-tunnel собираются из стадий текущего Dockerfile — те же версии и флаги,
 # что попадут в образ следующего релиза. pyroute2 и nftables ставятся только на машину CI (в панель
 # не попадают: там по-прежнему только стандартная библиотека).
@@ -35,6 +37,12 @@ jobs:
           nft --version
           PYTHONPATH="$RUNNER_TEMP/py" python -c "import pyroute2; print('pyroute2', pyroute2.__version__)"
           uname -r
+          # модули для ограничения скорости; у облачных ядер ifb бывает только в linux-modules-extra
+          sudo modprobe -a ifb sch_htb sch_fq_codel act_mirred cls_u32 cls_matchall 2>/dev/null || {
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null
+            sudo modprobe -a ifb sch_htb sch_fq_codel act_mirred cls_u32 cls_matchall
+          }
+          tc -V
 
       - name: AmneziaWG and hev-socks5-tunnel from the Dockerfile stages
         run: |
@@ -59,3 +67,7 @@ jobs:
       - name: SOCKS5 exit and domain rules (domains_socks_e2e.py)
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/domains_socks_e2e.py
+
+      - name: Speed limits and load balancing (shaping_e2e.py)
+        if: always()
+        run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/shaping_e2e.py

@@ -14,12 +14,13 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import threading
 import time
 
-from . import awgconf, config, domains, limits, lists, nftgen, socks, system
+from . import awgconf, balance, config, domains, limits, lists, nftgen, shaping, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
@@ -121,6 +122,14 @@ class Engine:
         self._socks_busy: set[str] = set()
         self._rr_busy: set[str] = set()          # выходы, у которых сейчас заново разбирается имя
         self._up_fail: dict[str, dict] = {}     # uid → {"n", "next", "sig", "err"}: неудачные запуски
+        self.balancer = balance.Balancer()      # скорости выходов и распределение клиентов
+        self.bal: dict[str, str] = {}           # балансировка: клиент → id выхода (пусто — выключена)
+        self.bal_new: str | None = None         # выход для нового клиента (ещё не в self.bal)
+        self.bal_nums: set[int] = set()         # номера рабочих выходов балансировки
+        self.shape_state: dict | None = None    # ограничение скорости: {"state": on | error, "error"}
+        self._shape: dict[str, str] = {}        # интерфейс → хеш применённой очереди; "ing:<if>" → ifb
+        self._shape_key: str | None = None      # цель, на которой уже убрано всё лишнее
+        self._shape_retry = 0.0
         os.makedirs(RUN_DIR, exist_ok=True)
         os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -709,7 +718,51 @@ class Engine:
             default = cp["outbound"]
         return {"rules": [r for r in rules if r.get("enabled", True) and r.get("lists")],
                 "default": default, "custom": bool(cp) and (
-                    cp.get("rules_mode") == "custom" or cp.get("outbound", "inherit") != "inherit")}
+                    cp.get("rules_mode") == "custom" or cp.get("outbound", "inherit") != "inherit"),
+                # выход по умолчанию — общий, и включена балансировка: выход выбирает она
+                "balanced": self.balance_on(st) and cp.get("outbound", "inherit") == "inherit"}
+
+    # ---------------------------------------------------------- балансировка
+    @staticmethod
+    def balance_on(st: dict) -> bool:
+        return bool((st["routing"].get("balance") or {}).get("on"))
+
+    def balance_members(self, st: dict) -> list[dict]:
+        """Рабочие выходы балансировки: включены, в списке, запущены, работают и не исчерпали квоту
+        (иначе resolve вёл бы на их резерв). Ограничения скорости — мощность для расчёта загрузки."""
+        if not self.balance_on(st):
+            return []
+        skip = set((st["routing"].get("balance") or {}).get("skip") or [])
+        return [{"id": u["id"], "num": u["num"], "up": shaping.mbit(u.get("rate_up")),
+                 "down": shaping.mbit(u.get("rate_down"))}
+                for u in st["upstreams"] if u["id"] not in skip and u["id"] in self.rt
+                and self.resolve("up:" + u["id"], st) == u["num"]]
+
+    def _balance(self, st: dict) -> None:
+        members = self.balance_members(st)
+        pks = [c["public_key"] for c in self.clients if c.get("ip")
+               and self.policy_for(st, c["public_key"])["balanced"]]
+        self.bal = self.balancer.plan(members, pks, time.time())
+        self.bal_new = self.balancer.pick(members)
+        self.bal_nums = {m["num"] for m in members}
+        mv = self.balancer.last_move
+        if mv and mv.get("logged") is None:
+            mv["logged"] = True
+            name = lambda uid: (Store.upstream(st, uid) or {}).get("name", uid)
+            c = next((x for x in self.clients if x["public_key"] == mv["pk"]), {})
+            self.event("info", Msg("ev.balance_move", client=c.get("name") or c.get("ip") or mv["pk"][:8],
+                                   **{"from": name(mv["from"])}, to=name(mv["to"])))
+
+    def default_out(self, st: dict, pk: str | None, pol: dict | None = None) -> str:
+        """Выход по умолчанию клиента в терминах настроек: при балансировке — выход, который она
+        назначила ('up:<id>'), иначе — из политики (а если все выходы балансировки лежат —
+        выход по умолчанию: он же запасной)."""
+        pol = pol or self.policy_for(st, pk)
+        if pol.get("balanced"):
+            uid = self.bal.get(pk) if pk else self.bal_new
+            if uid and Store.upstream(st, uid):
+                return "up:" + uid
+        return pol["default"]
 
     def _resolved(self, st: dict, pol: dict) -> dict:
         return {"rules": [(r["lists"], self.resolve(r["outbound"], st)) for r in pol["rules"]],
@@ -724,23 +777,26 @@ class Engine:
         после резолва; правила со списками доменов — отдельно (их выход резолвит sniproxy-конфиг)."""
         dl = self.domain_lists(st)
 
-        def conv(pol: dict) -> dict:
+        def conv(pol: dict, pk: str | None) -> dict:
             ip_rules, dom = [], []
             for r in pol["rules"]:
                 if any(lid in dl for lid in r["lists"]):
                     dom.append(([lid for lid in r["lists"] if lid in dl], r["outbound"]))
                 else:
                     ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
-            return {"rules": ip_rules, "default": self.resolve(pol["default"], st), "domain": dom}
+            default = self.resolve(self.default_out(st, pk, pol), st)
+            if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
+                default = nftgen.Sticky(default)     # открытые соединения не переезжают
+            return {"rules": ip_rules, "default": default, "domain": dom}
 
-        gp = conv(self.policy_for(st, None))
+        gp = conv(self.policy_for(st, None), None)
         cps = {}
         for c in self.clients:
             if not c.get("ip"):
                 continue
             pol = self.policy_for(st, c["public_key"])
-            if pol["custom"]:
-                cps[c["ip"]] = conv(pol)
+            if pol["custom"] or pol["balanced"]:
+                cps[c["ip"]] = conv(pol, c["public_key"])
         return gp, cps
 
     def _up_list(self, st: dict) -> list[dict]:
@@ -758,7 +814,7 @@ class Engine:
         gp, cps = self._policies(st)
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
-        return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port)
+        return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port, self.bal_nums)
 
     # ---------------------------------------------- правила по доменам (sniproxy.py)
     def tunnel_addr(self, t: system.Target) -> tuple[str, str] | None:
@@ -872,7 +928,7 @@ class Engine:
         → порт для nftables или None (правила по доменам сейчас не действуют)."""
         gp, cps = self._policies(st)
         up_nums = {u["num"] for u in self._up_list(st)}
-        policies, client_map = nftgen.layout(gp, cps, up_nums)
+        policies, client_map = nftgen.layout(gp, cps, up_nums, self.bal_nums)
         marks = nftgen.sniff_marks(policies)
         if not marks:
             self._stop_sni()
@@ -895,8 +951,12 @@ class Engine:
         cidrs = {lid: lists.path_for(lid) for lid in nets if os.path.exists(lists.path_for(lid))}
         acct = lambda p: {"rules": [[l, self._acct_label(st, o)] for l, o in p["rules"]],
                           "default": self._acct_label(st, p["default"])}
+        # ограничения скорости выходов SOCKS5 для соединений через прокси (байт/с; 0 — нет)
+        bps = lambda v: int((shaping.mbit(v) or 0) * 125_000)
+        rates = {u["id"]: [bps(u.get("rate_up")), bps(u.get("rate_down"))] for u in st["upstreams"]
+                 if shaping.mbit(u.get("rate_up")) or shaping.mbit(u.get("rate_down"))}
         cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS,
-               "lists": files, "cidrs": cidrs,
+               "lists": files, "cidrs": cidrs, "rates": rates,
                "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
                "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o)}
                                                      for l, o in policies[n]["domain"]],
@@ -1173,6 +1233,7 @@ class Engine:
                 self._stop_dns()
                 self.target = t
                 self.applied_hash = None
+                self._shape = {}
                 self._sysctl(t)
 
             if self._masking_checked != t.key:
@@ -1199,9 +1260,15 @@ class Engine:
                 self._exit_quotas(st)
             except Exception:  # noqa: BLE001
                 log.exception("exit traffic")
+            self.balancer.feed(self.traffic.take_recent(), time.time())
 
             self._sync_upstreams(t, st)
             self._update_health(t, st)
+            try:
+                self._balance(st)
+            except Exception:  # noqa: BLE001
+                log.exception("balance")
+                self.bal, self.bal_new, self.bal_nums = {}, None, set()
             try:
                 sniff = self._sync_sni(t, st)
             except Exception as e:  # noqa: BLE001
@@ -1229,6 +1296,11 @@ class Engine:
                 self.ruleset = text
                 self.last_apply = time.time()
             self._sync_rules(t)
+            try:
+                self._sync_shaping(t, st)
+            except Exception as e:  # noqa: BLE001
+                log.exception("shaping")
+                self.shape_state = {"state": "error", "error": msg_of(e)}
             self.last_error = None
             self.last_reconcile = time.time()
 
@@ -1240,6 +1312,7 @@ class Engine:
             self._stop_sni()
             self._stop_dns()
             if t:
+                self._clear_shaping(t)
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
                 t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
                 self._input_rule(t, "del")
@@ -1281,6 +1354,147 @@ class Engine:
                             t.ns(["nft", "-f", p], check=False, timeout=60)
                         except Exception:  # noqa: BLE001
                             log.exception("ruleset without sniproxy")
+
+    # ------------------------------------------------ ограничение скорости (tc)
+    def shaping_plan(self, t: system.Target, st: dict) -> dict:
+        lim = st.get("limits") or {}
+        clients = {}
+        for c in self.clients:
+            if c.get("ip"):
+                L = lim.get(c["public_key"]) or {}
+                clients[c["ip"]] = {"down": L.get("rate_down"), "up": L.get("rate_up")}
+        exits = [{"num": r.num, "iface": r.iface, "down": u.get("rate_down"), "up": u.get("rate_up")}
+                 for u in st["upstreams"] if (r := self.rt.get(u["id"])) and r.target_key == t.key]
+        return shaping.plan(t.iface, st["settings"].get("shaping") or {}, clients, exits)
+
+    def _ifb_source(self, t: system.Target, ifb: str) -> str | None:
+        """ifb → интерфейс, входящий трафик которого он ограничивает (awgq0 → awg0, awgqN → awgrN)."""
+        m = re.fullmatch(re.escape(shaping.IFB_PREFIX) + r"(\d+)", ifb)
+        if not m:
+            return None
+        return t.iface if m.group(1) == "0" else f"{config.IFACE_PREFIX}{int(m.group(1))}"
+
+    def _sync_shaping(self, t: system.Target, st: dict) -> None:
+        """Держит очереди tc такими, как в настройках ограничения скорости. Ничего не задано — tc
+        не вызывается вовсе (кроме одной уборки на цель: остатки прошлого запуска панели)."""
+        p = self.shaping_plan(t, st)
+        roots, ingress = p["roots"], p["ingress"]
+        if not roots and self._shape_key == t.key and not self._shape:
+            self.shape_state = None
+            return
+        if config.DRY_RUN:
+            self.shape_state = {"state": "on"} if roots else None
+            self._shape = {d: shaping.digest(c) for d, c in roots.items()}
+            self._shape_key = t.key
+            return
+        now = time.time()
+        sig = shaping.digest([sorted(roots.items()), sorted(ingress.items()), t.key])
+        st_ = self.shape_state or {}
+        if st_.get("state") == "error" and st_.get("sig") == sig and now < self._shape_retry:
+            return                                   # та же ошибка — не чаще раза в минуту
+        q = t.ns(["tc", "-j", "qdisc", "show"], check=False, timeout=20)
+        if q.returncode != 0:
+            if roots:
+                self._shape_failed(sig, Msg("sh.no_tc", detail=(q.stderr or q.stdout or "").strip()[-200:]))
+            else:
+                self.shape_state, self._shape_key = None, t.key
+            return
+        ours, ing = shaping.parse_qdiscs(q.stdout)
+        links = self._links(t) or set()
+        # лишнее: сначала перенаправление, потом сам ifb (пакеты в пропавший ifb отбрасывались бы)
+        for l in sorted(links):
+            src = self._ifb_source(t, l)
+            if not src or ingress.get(src) == l:
+                continue
+            if src in ing and src not in ingress:
+                t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
+            t.ns(["ip", "link", "del", l], check=False)
+            self._shape.pop("ing:" + src, None)
+            self._shape.pop(l, None)
+        for dev in ours - set(roots):
+            t.ns(["tc", "qdisc", "del", "dev", dev, "root"], check=False)
+            self._shape.pop(dev, None)
+        self._shape_key = t.key
+        errors = []
+        for src, ifb in ingress.items():
+            if ifb not in links:
+                r = t.ns(["ip", "link", "add", ifb, "type", "ifb"], check=False)
+                if r.returncode != 0:
+                    errors.append(Msg("sh.no_ifb", detail=(r.stderr or r.stdout or "").strip()[-200:]))
+                    continue
+                links.add(ifb)
+            t.ns(["ip", "link", "set", ifb, "up"], check=False)
+        for dev, cmds in roots.items():
+            h = shaping.digest(cmds)
+            if dev not in links and dev != t.iface:
+                continue                              # ifb не создался — ошибка уже есть
+            if dev in ours and self._shape.get(dev) == h:
+                continue
+            if dev in ours:
+                t.ns(["tc", "qdisc", "del", "dev", dev, "root"], check=False)
+            err = self._tc_batch(t, dev, cmds)
+            if err:
+                errors.append(Msg("sh.failed", dev=dev, detail=err))
+                self._shape.pop(dev, None)
+                t.ns(["tc", "qdisc", "del", "dev", dev, "root"], check=False)   # не оставлять половину
+            else:
+                self._shape[dev] = h
+        for src, ifb in ingress.items():
+            if ifb not in links:
+                continue
+            k = "ing:" + src
+            if src in ing and self._shape.get(k) == ifb:
+                continue
+            if src in ing:
+                t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
+            err = self._tc_batch(t, src + "-in", shaping.redirect(src, ifb))
+            if err:
+                errors.append(Msg("sh.failed", dev=src, detail=err))
+                t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
+                self._shape.pop(k, None)
+            else:
+                self._shape[k] = ifb
+        self._shape = {k: v for k, v in self._shape.items()
+                       if k in roots or (k.startswith("ing:") and k[4:] in ingress)}
+        if errors:
+            self._shape_failed(sig, errors[0])
+        else:
+            if st_.get("state") == "error":
+                self.event("info", Msg("ev.shaping_ok"))
+            self.shape_state = {"state": "on"} if roots else None
+
+    def _shape_failed(self, sig: str, err: Msg) -> None:
+        prev = self.shape_state or {}
+        if prev.get("state") != "error" or str(prev.get("error")) != str(err):
+            self.event("warn", Msg("ev.shaping_failed", error=err))
+        self.shape_state = {"state": "error", "error": err, "sig": sig}
+        self._shape_retry = time.time() + 60
+
+    def _tc_batch(self, t: system.Target, name: str, cmds: list[str]) -> str | None:
+        """Команды через tc -batch. → None или текст ошибки."""
+        path = os.path.join(RUN_DIR, f"tc-{name}.batch")
+        with open(path, "w") as f:
+            f.write("\n".join(cmds) + "\n")
+        r = t.ns(["tc", "-batch", path], check=False, timeout=30)
+        return None if r.returncode == 0 else (r.stderr or r.stdout or "").strip()[-300:] or "tc"
+
+    def _clear_shaping(self, t: system.Target) -> None:
+        """Убирает все наши очереди и ifb (удаление панели, «восстановить при остановке»)."""
+        if config.DRY_RUN:
+            return
+        q = t.ns(["tc", "-j", "qdisc", "show"], check=False, timeout=20)
+        if q.returncode != 0:
+            return
+        ours, ing = shaping.parse_qdiscs(q.stdout)
+        for l in sorted(self._links(t) or ()):
+            src = self._ifb_source(t, l)
+            if src:
+                if src in ing:
+                    t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
+                t.ns(["ip", "link", "del", l], check=False)
+        for dev in ours:
+            t.ns(["tc", "qdisc", "del", "dev", dev, "root"], check=False)
+        self._shape, self._shape_key, self.shape_state = {}, None, None
 
     # ---------------------------------------------------------------- tools
     def own_route(self, out: str) -> tuple[int, int] | None:
@@ -1368,7 +1582,12 @@ class Engine:
                     eff = self.resolve(r["outbound"], st)
                     return {"result": r["outbound"], "effective": eff, "steps": steps,
                             "rule": r.get("comment") or r["id"]}
-        steps.append(Msg("tr.default_client" if pk and st["clients"].get(pk, {}).get(
-            "outbound", "inherit") != "inherit" else "tr.default"))
-        return {"result": pol["default"], "effective": self.resolve(pol["default"], st),
-                "steps": steps}
+        out = self.default_out(st, pk, pol)
+        if out != pol["default"]:
+            steps.append(Msg("tr.balance" if pk else "tr.balance_new",
+                             exit=(Store.upstream(st, out[3:]) or {}).get("name", out)))
+        else:
+            steps.append(Msg("tr.default_client" if pk and st["clients"].get(pk, {}).get(
+                "outbound", "inherit") != "inherit" else "tr.balance_down" if pol.get("balanced")
+                else "tr.default"))
+        return {"result": out, "effective": self.resolve(out, st), "steps": steps}

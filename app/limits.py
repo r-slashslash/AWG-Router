@@ -125,4 +125,5 @@ def first_seen(engine, now: float | None = None) -> None:
 def view(L: dict | None) -> dict:
     L = L or {}
     return {"expires": L.get("expires"), "quota": L.get("quota"),
-            "period": L.get("period") or "month", "auto_off": L.get("auto_off")}
+            "period": L.get("period") or "month", "auto_off": L.get("auto_off"),
+            "rate_down": L.get("rate_down"), "rate_up": L.get("rate_up")}

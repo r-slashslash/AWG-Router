@@ -59,6 +59,9 @@ TEXTS = {
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ Напрямую",
         "b_update": "⬆️ Обновить до {version}", "b_update_go": "✅ Да, обновить", "b_cancel": "Отмена",
         "st_default": "⭐ Основной выход: {out}",
+        "st_balance": "⚖️ Балансировка между выходами",
+        "st_balance_hint": "«Сделать основным» выключит балансировку.",
+        "cd_exit_bal": "Выход: {out} (балансировка)",
         "ex_title": "<b>🌐 Выходы</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — выключен",
         "ex_down": "🔴 {name} — не работает, его трафик: {to}",
         "ex_quota": "📦 {name} — лимит исчерпан, его трафик: {to}",
@@ -157,6 +160,9 @@ TEXTS = {
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ Direct",
         "b_update": "⬆️ Update to {version}", "b_update_go": "✅ Yes, update", "b_cancel": "Cancel",
         "st_default": "⭐ Default exit: {out}",
+        "st_balance": "⚖️ Load balancing across exits",
+        "st_balance_hint": "“Make default” turns load balancing off.",
+        "cd_exit_bal": "Exit: {out} (load balancing)",
         "ex_title": "<b>🌐 Exits</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — turned off",
         "ex_down": "🔴 {name} — not working, its traffic: {to}",
         "ex_quota": "📦 {name} — limit used up, its traffic: {to}",
@@ -255,6 +261,9 @@ TEXTS = {
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ 直连",
         "b_update": "⬆️ 更新到 {version}", "b_update_go": "✅ 是的，更新", "b_cancel": "取消",
         "st_default": "⭐ 默认出口：{out}",
+        "st_balance": "⚖️ 出口负载均衡",
+        "st_balance_hint": "“设为默认”会关闭负载均衡。",
+        "cd_exit_bal": "出口：{out}（负载均衡）",
         "ex_title": "<b>🌐 出口</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — 已停用",
         "ex_down": "🔴 {name} — 无法工作，其流量：{to}",
         "ex_quota": "📦 {name} — 限额已用完，其流量：{to}",
@@ -350,6 +359,9 @@ TEXTS = {
         "b_probe": "🔍 {name}", "b_default": "⭐ {name}", "b_direct": "⭐ مستقیم",
         "b_update": "⬆️ به‌روزرسانی به {version}", "b_update_go": "✅ بله، به‌روزرسانی کن", "b_cancel": "لغو",
         "st_default": "⭐ خروجی اصلی: {out}",
+        "st_balance": "⚖️ توزیع بار بین خروجی‌ها",
+        "st_balance_hint": "«اصلی کردن» توزیع بار را خاموش می‌کند.",
+        "cd_exit_bal": "خروجی: {out} (توزیع بار)",
         "ex_title": "<b>🌐 خروجی‌ها</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — خاموش",
         "ex_down": "🔴 {name} — کار نمی‌کند، ترافیک آن: {to}",
         "ex_quota": "📦 {name} — سقف تمام شده، ترافیک آن: {to}",
@@ -1195,7 +1207,8 @@ class Bot:
             period = lim.get("period") or "month"
             lines.append(tr(L, "cd_quota_" + period, used=fmt_size(self.ops.used(pk, period), L),
                             quota=fmt_size(lim["quota"], L)))
-        lines.append(tr(L, "cd_exit", out=self.out_label(c, self.ops.client_out(pk), st)))
+        lines.append(tr(L, "cd_exit_bal" if self.ops.balanced(pk) else "cd_exit",
+                        out=self.out_label(c, self.ops.client_out(pk), st)))
         if not x.get("has_config"):
             lines.append("")
             lines.append(tr(L, "cd_app"))
@@ -1225,7 +1238,11 @@ class Bot:
         st = self.ops.snapshot()
         ups = st.get("upstreams") or []
         d = st["routing"]["default"]
-        lines = [tr(L, "ex_title"), tr(L, "st_default", out=self.out_label(c, d, st)), ""]
+        bal = bool((st["routing"].get("balance") or {}).get("on"))
+        lines = [tr(L, "ex_title"), tr(L, "st_balance") if bal else tr(L, "st_default", out=self.out_label(c, d, st)), ""]
+        if bal:
+            lines[-1:-1] = [tr(L, "st_balance_hint")]
+            d = None            # звезда «основной» не стоит ни на одном: выход выбирает балансировка
         lines.append(tr(L, "ex_pick") if ups else tr(L, "ex_none"))
         if note:
             lines += ["", note]
