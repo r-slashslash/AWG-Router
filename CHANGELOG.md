@@ -3,6 +3,14 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.17.2 — 2026-11-07
+
+- **The connection name in a vpn:// key is just the client's name.** AmneziaVPN showed the connection as
+  "name · server address", but the app shows the server address on its main screen anyway, so the address
+  is no longer repeated in the name. Keys issued earlier keep their old name until they are imported again.
+  The .conf file and the QR code carry no name at all: AmneziaWG takes it from the file name or asks for it.
+  Thanks @Neborya for the request (#7).
+
 ## 1.17.1 — 2026-11-07
 
 - **Ready images actually used.** In 1.17.0 the installer still built the image on the server: when the

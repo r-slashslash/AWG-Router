@@ -246,8 +246,11 @@ class ServerManager:
         conf = awgserver.client_conf(sc, prof, p, priv, override)
         name = self._name(rows, pk) or p.ip
         safe = re.sub(r"[^\w.-]+", "_", name, flags=re.UNICODE).strip("_")[:40] or "awg"
+        # Название подключения в AmneziaVPN — только имя клиента: адрес сервера приложение и так
+        # показывает на главном экране, а в названии он светился бы у каждого клиента (issue #7).
+        # В .conf и QR названия нет вовсе: приложения AmneziaWG берут его из имени файла или спрашивают.
         return {"name": name, "conf": conf, "filename": f"{safe}.conf",
-                "link": awgserver.vpn_link(sc, prof, p, priv, conf, f"{name} · {prof.host}", override),
+                "link": awgserver.vpn_link(sc, prof, p, priv, conf, name, override),
                 "warn_host": not self.client_host(st)}
 
     @staticmethod
