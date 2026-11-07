@@ -247,7 +247,7 @@ The panel effectively has root access to the server.
 - Domain rules see only HTTPS and HTTP (ports 443 and 80) and can't see the site when the browser hides the name (Encrypted Client Hello); such connections follow the address rules. In host mode with an nftables-only firewall (for example, firewalld), allow incoming TCP port 10443 on the clients' interface; with iptables or ufw the panel does it itself.
 - SOCKS5 exits need IPv6 support in the kernel (always there, except on servers booted with `ipv6.disable=1`).
 - Country lists are built from registry data. For a specific service, an ASN list is more accurate.
-- Upload limits for clients and download limits for exits need the kernel's `ifb` module (cloud kernels sometimes ship it only in `linux-modules-extra`); without it the panel says so and the other limits still work. For a SOCKS5 exit, sites from domain rules are limited separately from the rest of its traffic, so together they can exceed the exit's limit.
+- Upload limits for clients and download limits for exits need the kernel's `ifb` module (cloud kernels sometimes ship it only in `linux-modules-extra`); without it the panel says so and the other limits still work.
 
 ## Development
 

@@ -22,19 +22,21 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from pyroute2 import IPRoute, NetNS, netns
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from app import config, nftgen, socks  # noqa: E402
+from app import config, nftgen, shaping, socks  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRV = os.path.join(HERE, "e2e_servers.py")
 NS = ["cli", "amz", "inet", "prx"]
 USER, PW = "alice", "s3cret:pw"
 TMP = tempfile.mkdtemp(prefix="awgr-e2e-")
-NAMES = ["foreign.test=8.8.8.8", "www.foreign.test=8.8.8.8", "cdnfoo.test=8.8.4.4", "ru.test=77.88.55.242"]
+NAMES = ["foreign.test=8.8.8.8", "www.foreign.test=8.8.8.8", "cdnfoo.test=8.8.4.4", "ru.test=77.88.55.242",
+         "big.test=1.1.1.1"]
 SOCKS = {"ip": "172.21.0.2", "port": 1080, "user": USER, "password": PW}
 
 CLIENT_TCP = r"""
@@ -59,6 +61,22 @@ s=socket.socket(); s.settimeout(5)
 try:
     s.connect((ip,port)); s.sendall(data); print(s.recv(100).decode() or "EMPTY")
 except OSError as e: print("FAIL", type(e).__name__)
+"""
+# замер загрузки: ClientHello с именем (если не «-»), затем читаем поток; → Мбит/с
+CLIENT_STREAM = r"""
+import socket,ssl,sys,time
+ip,port,name,secs=sys.argv[1],int(sys.argv[2]),sys.argv[3],float(sys.argv[4])
+s=socket.create_connection((ip,port),timeout=5)
+if name!="-":
+    i,o=ssl.MemoryBIO(),ssl.MemoryBIO(); obj=ssl.create_default_context().wrap_bio(i,o,server_hostname=name)
+    try: obj.do_handshake()
+    except ssl.SSLWantReadError: pass
+    s.sendall(o.read())
+f=s.makefile("rb"); t=time.monotonic()+1.5          # разгон и время панели поделить предел
+while time.monotonic()<t: f.read1(262144)
+n,t0=0,time.monotonic()
+while time.monotonic()-t0<secs: n+=len(f.read1(262144))
+print(round(n*8/(time.monotonic()-t0)/1e6,2))
 """
 CLIENT_UDP = r"""
 import socket,sys
@@ -123,7 +141,7 @@ def setup():
     # адрес сервера — адрес сети, как в контейнере AmneziaVPN (Address = 10.8.1.0/24)
     conf("amz", [("awg0", "10.8.1.0", 24), ("eth0", "172.20.0.1", 24)], [dict(dst="0.0.0.0/0", gateway="172.20.0.2")])
     conf("inet", [("i0", "172.20.0.2", 24), ("i1", "172.21.0.1", 24)], lo=targets)
-    conf("prx", [("p0", "172.21.0.2", 24)], [dict(dst="0.0.0.0/0", gateway="172.21.0.1")], lo=targets)
+    conf("prx", [("p0", "172.21.0.2", 24)], [dict(dst="0.0.0.0/0", gateway="172.21.0.1")], lo=targets + ["1.1.1.1"])
     sysctl("amz", "net.ipv4.ip_forward", 1)
     sysctl("inet", "net.ipv4.ip_forward", 1)
     for k in ("all", "default"):
@@ -138,6 +156,8 @@ def setup():
         "prx-http": bg("prx", sys.executable, SRV, "http", "PROXY", *targets),
         "prx-echo": bg("prx", sys.executable, SRV, "echo", "PROXY-UDP", "8.8.8.8"),
         "socks": bg("prx", sys.executable, SRV, "socks", "172.21.0.2", "1080", USER, PW, *NAMES, log="socks"),
+        # потоки для замера скорости: big.test (правило по доменам → посредник) и 8.8.4.4 (правило по адресу → hev)
+        "prx-stream": bg("prx", sys.executable, SRV, "stream", "1.1.1.1:443", "8.8.4.4:5001", log="stream"),
     }
     time.sleep(0.7)
     return procs
@@ -170,18 +190,18 @@ def rules(policy, sniff=True):
     nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None))
 
 
-def sni_conf(policy, to):
+def sni_conf(policy, to, extra=None):
     """Конфиг sniproxy.py — как его собирает engine._sync_sni."""
     lists = {}
     with open(os.path.join(TMP, "dvid.domains"), "w") as f:
-        f.write("foreign.test\ncdnfoo.test\n")
+        f.write("foreign.test\ncdnfoo.test\nbig.test\n")
     lists["dvid"] = os.path.join(TMP, "dvid.domains")
     policies, cmap = nftgen.layout(policy, {}, {1})
     marks = nftgen.sniff_marks(policies)
     cfg = {"listen": "10.8.1.0", "port": config.SNI_PROXY_PORT, "clients": "10.8.1.0/24",
            "stats": os.path.join(TMP, "sni-stats.json"), "lists": lists, "client_policy": cmap,
            "policies": {n: {"mark": m, "rules": [{"lists": l, "to": to} for l, _ in policies[n]["domain"]]}
-                        for n, m in marks.items()}}
+                        for n, m in marks.items()}, **(extra or {})}
     p = os.path.join(TMP, "sni.json")
     with open(p, "w") as f:
         json.dump(cfg, f)
@@ -200,6 +220,56 @@ def tcp(ip, wait=3):
 
 def hello(ip, name, port=443):
     return sh("cli", sys.executable, "-c", CLIENT_HELLO, ip, str(port), name, timeout=15).stdout.strip()
+
+
+def speed(ip, port, name, secs=4.0):
+    out = sh("cli", sys.executable, "-c", CLIENT_STREAM, ip, str(port), name, str(secs), timeout=30).stdout.strip()
+    try:
+        return float(out)
+    except ValueError:
+        return 0.0
+
+
+def shared_limit(procs, pol):
+    """Предел выхода SOCKS5 20 Мбит/с на загрузку — общий для туннеля (hev) и посредника."""
+    cap = 20
+    tc = lambda *a: sh("amz", "tc", *a)
+    sh("amz", "ip", "link", "add", "awgq1", "type", "ifb")
+    sh("amz", "ip", "link", "set", "awgq1", "up")
+    for cmds in (shaping.cap_tree("awgq1", cap), shaping.redirect("awgr1", "awgq1")):
+        path = os.path.join(TMP, "tc.batch")
+        with open(path, "w") as f:
+            f.write("\n".join(cmds) + "\n")
+        p = sh("amz", "tc", "-batch", path)
+        assert p.returncode == 0, p.stderr
+    bps = cap * 125_000
+    extra = {"rates": {"u1": [0, bps]},
+             "shared": {"u1": {"1": {"iface": "awgr1", "dev": "awgq1", "cap": bps,
+                                     "tc": shaping.cap_change("awgq1", cap)}}}}
+    procs["sni"] = start_sni(sni_conf(pol, {"socks": SOCKS, "acct": "u1"}, extra))
+    try:
+        res = {}
+        alone_sni = speed("1.1.1.1", 443, "big.test")
+        alone_tun = speed("8.8.4.4", 5001, "-")
+        th = [threading.Thread(target=lambda k=k, a=a: res.__setitem__(k, speed(*a, secs=5.0)))
+              for k, a in (("sni", ("1.1.1.1", 443, "big.test")), ("tun", ("8.8.4.4", 5001, "-")))]
+        [t.start() for t in th]
+        [t.join() for t in th]
+        within = lambda lo, hi: (lambda g: lo <= float(g) <= hi)
+        check("предел 20: только сайт из правила по доменам (посредник)", f"{alone_sni}", within(13, 23))
+        check("предел 20: только трафик через туннель (hev)", f"{alone_tun}", within(13, 23))
+        both = res.get("sni", 0) + res.get("tun", 0)
+        check(f"обе дороги сразу: вместе не больше предела ({res})", f"{round(both, 2)}", within(13, 24))
+        check("обе дороги сразу: каждой достаётся заметная доля",
+              f"{min(res.get('sni', 0), res.get('tun', 0))}", within(4, 20))
+        procs["sni"].terminate()
+        procs["sni"].wait(5)
+        q = tc("class", "show", "dev", "awgq1").stdout
+        check("посредник остановлен: туннелю вернулся весь предел", q.strip().replace("\n", " ")[:90],
+              lambda g: "rate 20Mbit" in g)
+    finally:
+        tc("qdisc", "del", "dev", "awgr1", "ingress")
+        sh("amz", "ip", "link", "del", "awgq1")
 
 
 def udp(ip, port=7):
@@ -258,6 +328,11 @@ def main():
         check("клиент молчит (сервер говорит первым): соединение идёт через 3 с", tcp("77.88.55.242", 6), "DIRECT")
         stats = json.load(open(os.path.join(TMP, "sni-stats.json"))) if os.path.exists(os.path.join(TMP, "sni-stats.json")) else {}
         check("счётчики sniproxy.py пишутся", str(sorted(stats)), lambda g: "pid" in g)
+
+        # общий предел скорости выхода SOCKS5 для туннеля и посредника
+        procs["sni"].terminate()
+        procs["sni"].wait(5)
+        shared_limit(procs, pol)
 
         # резервный путь вместо прокси: соединение по совпавшему домену — с меткой (напрямую)
         procs["sni"].terminate()

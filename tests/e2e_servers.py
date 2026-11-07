@@ -222,6 +222,30 @@ def socks_client(c, user, pw):
         c.close()
 
 
+def stream(addrs):
+    """Поток данных без конца (замер скорости): адреса «ip:порт». Что прислал клиент, не читается."""
+    def client(c):
+        try:
+            buf = b"x" * 65536
+            while True:
+                c.sendall(buf)
+        except OSError:
+            pass
+
+    def serve(ip, port):
+        s = socket.socket()
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((ip, port))
+        s.listen(16)
+        while True:
+            c, _ = s.accept()
+            threading.Thread(target=client, args=(c,), daemon=True).start()
+    for a in addrs:
+        ip, port = a.rsplit(":", 1)
+        threading.Thread(target=serve, args=(ip, int(port)), daemon=True).start()
+    threading.Event().wait()
+
+
 def socks5(ip, port, user="", pw=""):
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -238,6 +262,8 @@ if __name__ == "__main__":
         http(args[0], args[1:])
     elif kind == "echo":
         echo(args[0], args[1:])
+    elif kind == "stream":
+        stream(args)
     elif kind == "dns":
         dns(args[0], args[1:])
     elif kind == "socks":

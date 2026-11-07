@@ -130,6 +130,7 @@ class Engine:
         self._shape: dict[str, str] = {}        # интерфейс → хеш применённой очереди; "ing:<if>" → ifb
         self._shape_key: str | None = None      # цель, на которой уже убрано всё лишнее
         self._shape_retry = 0.0
+        self._sni_shared_devs: set[str] = set()  # очереди tc, долю которых сейчас ставит sniproxy.py
         os.makedirs(RUN_DIR, exist_ok=True)
         os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -878,7 +879,35 @@ class Engine:
         pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
         self.traffic.update_sni(s["pid"], s["bytes"], valid, pk_of)
 
+    def _sni_shared(self, st: dict, rates: dict) -> dict:
+        """Общий предел туннеля выхода SOCKS5 и соединений sniproxy.py через прокси: {id выхода:
+        {"0" — отдача | "1" — загрузка: {"iface", "dev", "cap", "tc"}}}. dev — где стоит очередь tc
+        этой стороны (awgrN или его ifb), tc — команда смены её скорости (shaping.cap_change)."""
+        out = {}
+        for u in st["upstreams"]:
+            r = self.rt.get(u["id"])
+            if not r or u["id"] not in rates:
+                continue
+            try:
+                if self.parsed(u).kind != "socks5":
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            dirs = {}
+            for i, key, dev in ((0, "rate_up", r.iface), (1, "rate_down", shaping.ifb_for(r.num))):
+                m = shaping.mbit(u.get(key))
+                if m:
+                    dirs[str(i)] = {"iface": r.iface, "dev": dev, "cap": rates[u["id"]][i],
+                                    "tc": shaping.cap_change(dev, m)}
+            if dirs:
+                out[u["id"]] = dirs
+        return out
+
     def _stop_sni(self) -> None:
+        # доли туннелей, которые делил посредник, — заново из настроек (панель пересоздаст очереди)
+        for dev in self._sni_shared_devs:
+            self._shape.pop(dev, None)
+        self._sni_shared_devs = set()
         d, self.sni = self.sni, None
         if d and d.proc.poll() is None:
             d.proc.terminate()
@@ -955,8 +984,10 @@ class Engine:
         bps = lambda v: int((shaping.mbit(v) or 0) * 125_000)
         rates = {u["id"]: [bps(u.get("rate_up")), bps(u.get("rate_down"))] for u in st["upstreams"]
                  if shaping.mbit(u.get("rate_up")) or shaping.mbit(u.get("rate_down"))}
+        shared = self._sni_shared(st, rates)
+        self._sni_shared_devs = {d["dev"] for dirs in shared.values() for d in dirs.values()}
         cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS,
-               "lists": files, "cidrs": cidrs, "rates": rates,
+               "lists": files, "cidrs": cidrs, "rates": rates, "shared": shared,
                "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
                "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o)}
                                                      for l, o in policies[n]["domain"]],

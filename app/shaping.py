@@ -54,13 +54,24 @@ def _bytes(m: float) -> int:
     return int(m * 1_000_000 / 8)
 
 
-def _class(dev: str, parent: str, minor: int, rate: float, ceil: float) -> str:
+def _sizes(rate: float, ceil: float) -> tuple[int, int]:
     # burst — 10 мс на полной скорости, не меньше 64 КБ: пакеты GSO у туннелей бывают до 64 КБ,
     # и с маленьким burst класс не добирал бы до своей скорости
-    b = max(_bytes(ceil) // 100, 65536)
-    q = max(1514, min(_bytes(rate) // 10, 60000))
+    return max(_bytes(ceil) // 100, 65536), max(1514, min(_bytes(rate) // 10, 60000))
+
+
+def _class(dev: str, parent: str, minor: int, rate: float, ceil: float) -> str:
+    b, q = _sizes(rate, ceil)
     return (f"class add dev {dev} parent {parent} classid {HANDLE}:{minor:x} htb rate {_rate(rate)} "
             f"ceil {_rate(ceil)} burst {b} cburst {b} quantum {q}")
+
+
+def cap_change(dev: str, m: float) -> list[str]:
+    """Команда смены скорости класса cap_tree(dev, m) без пересоздания очереди: {kbit} — новая скорость
+    в кбит/с (её подставляет sniproxy.py, когда делит предел выхода SOCKS5 со своими соединениями)."""
+    b, q = _sizes(m, m)
+    return ["tc", "class", "change", "dev", dev, "parent", f"{HANDLE}:", "classid", f"{HANDLE}:1", "htb",
+            "rate", "{kbit}kbit", "ceil", "{kbit}kbit", "burst", str(b), "cburst", str(b), "quantum", str(q)]
 
 
 def _leaf(dev: str, minor: int) -> str:

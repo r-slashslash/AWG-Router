@@ -22,8 +22,9 @@ it grows, so every user-visible change gets a new version.
   exit (exit settings). Within the common limit the speed is split evenly between those downloading right
   now. The strictest limit applies. Limits are `tc` HTB queues with fq_codel, so latency stays low under
   load; incoming traffic goes through an `ifb` device. If the kernel can't create one, the panel says so
-  and the other limits still work. For SOCKS5 exits, sites from domain rules (which go to the proxy past
-  the exit's tunnel) are limited by the domain-rule handler itself.
+  and the other limits still work. A SOCKS5 exit's limit is shared by both of its paths: sites from domain
+  rules go to the proxy past the exit's tunnel, so the domain-rule handler measures itself and the tunnel
+  every second and splits the limit — each path gets what the other leaves, but at least half.
 - **Current speed of each exit** on the Exits tab and the overview, with its limit next to it.
 
 ## 1.18.0 — 2026-11-07

@@ -528,5 +528,111 @@ class BucketTest(unittest.TestCase):
         self.assertEqual(s.buckets, {})
 
 
+class SharedLimitTest(unittest.TestCase):
+    """Предел выхода SOCKS5 общий для туннеля (hev) и соединений посредника через прокси."""
+    CAP = 2_500_000.0            # 20 Мбит/с
+
+    def test_share(self):
+        self.assertEqual(sniproxy.share(self.CAP, 0), self.CAP)               # другая дорога молчит — всё
+        self.assertEqual(sniproxy.share(self.CAP, self.CAP), self.CAP / 2)    # обе качают — пополам
+        self.assertEqual(sniproxy.share(self.CAP, self.CAP * 0.3), self.CAP * 0.7)
+
+    def test_net_dev(self):
+        text = ("Inter-|   Receive                            |  Transmit\n"
+                " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets\n"
+                "    lo:     100       1    0    0    0     0          0         0      100       1 0 0 0 0 0 0\n"
+                " awgr1: 5000000    3000    0    0    0     0          0         0   200000    1500 0 0 0 0 0 0\n")
+        self.assertEqual(sniproxy.net_dev(text), {"lo": (100, 100), "awgr1": (5_000_000, 200_000)})
+
+    def sniffer(self, shared=True):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "sni.json")
+        cfg = {"listen": "127.0.0.1", "rates": {"u1": [0, self.CAP]}}
+        if shared:
+            cfg["shared"] = {"u1": {"1": {"iface": "awgr1", "dev": "awgq1", "cap": self.CAP,
+                                          "tc": shaping.cap_change("awgq1", 20)}}}
+        with open(p, "w") as f:
+            json.dump(cfg, f)
+        return sniproxy.Sniffer(p), p
+
+    def test_tick_splits(self):
+        s, _ = self.sniffer()
+        b = s.buckets[("u1", 1)]
+        todo = s.share_tick({"awgr1": (0, 0)}, 0.0)
+        self.assertEqual([x[1] for x in todo], [self.CAP])                  # сначала туннелю весь предел
+        # туннель качает 20 Мбит/с, посредник молчит: баку — половина, туннелю — всё
+        rx = 0
+        for t in range(1, 12):
+            rx += int(self.CAP)
+            todo = s.share_tick({"awgr1": (rx, 0)}, float(t))
+        self.assertAlmostEqual(b.rate, self.CAP / 2, delta=self.CAP * 0.02)
+        # посредник тоже качает 10 Мбит/с — туннелю остаётся половина
+        for t in range(12, 24):
+            rx += int(self.CAP / 2)
+            b.total += int(self.CAP / 2)
+            todo = s.share_tick({"awgr1": (rx, 0)}, float(t))
+        st = s.share_state[("u1", 1)]
+        self.assertAlmostEqual(st["tc"], self.CAP / 2, delta=self.CAP * 0.05)
+        argv = [x.replace("{kbit}", "10000") for x in shaping.cap_change("awgq1", 20)]
+        self.assertEqual(argv[:9], ["tc", "class", "change", "dev", "awgq1", "parent", f"{shaping.HANDLE}:",
+                                    "classid", f"{shaping.HANDLE}:1"])
+        self.assertIn("10000kbit", argv)
+
+    def test_restore_on_reload_and_stop(self):
+        s, p = self.sniffer()
+        calls = []
+        s.tc_set = lambda d, bps, wait=True: calls.append((d["dev"], bps))
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1", "rates": {"u1": [0, self.CAP]}}, f)
+        s.reload()                                              # выход больше не делится — весь предел туннелю
+        self.assertEqual(calls, [("awgq1", self.CAP)])
+        self.assertEqual(s.shared, {})
+        s2, _ = self.sniffer()
+        calls2 = []
+        s2.tc_set = lambda d, bps, wait=True: calls2.append((d["dev"], bps))
+        s2.restore()
+        self.assertEqual(calls2, [("awgq1", self.CAP)])
+
+    def test_no_bucket_no_sharing(self):
+        s, _ = self.sniffer()
+        self.assertIn(("u1", 1), s.shared)
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "sni.json")
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1", "shared": {"u1": {"1": {"iface": "awgr1", "cap": 1, "tc": ["true"]}}}}, f)
+        self.assertEqual(sniproxy.Sniffer(p).shared, {})        # без предела в rates делить нечего
+
+    def test_engine_passes_only_socks_with_limits(self):
+        from app import main
+        from types import SimpleNamespace
+        st = main.store.snapshot()
+        socks_id = main.add_upstream(Req({"name": "S", "config": "socks5://198.51.100.77:1080",
+                                          "rate_down": 20}))["id"]
+        awg_id = main.add_upstream(Req({"name": "A", "config": UP.format(n=41), "rate_down": 20}))["id"]
+        try:
+            st = main.store.snapshot()
+            e = main.engine
+            saved = dict(e.rt)
+            for uid in (socks_id, awg_id):
+                u = main.Store.upstream(st, uid)
+                e.rt[uid] = SimpleNamespace(num=u["num"], iface=f"awgr{u['num']}", target_key="k")
+            rates = {socks_id: [0, 2_500_000], awg_id: [0, 2_500_000]}
+            got = e._sni_shared(st, rates)
+            self.assertEqual(set(got), {socks_id})
+            n = main.Store.upstream(st, socks_id)["num"]
+            self.assertEqual(got[socks_id]["1"]["dev"], f"awgq{n}")
+            self.assertEqual(got[socks_id]["1"]["iface"], f"awgr{n}")
+            self.assertNotIn("0", got[socks_id])                 # отдача без предела — не делится
+            e._sni_shared_devs = {f"awgq{n}"}
+            e._shape[f"awgq{n}"] = "h"
+            e._stop_sni()                                        # посредник остановлен — очередь заново
+            self.assertNotIn(f"awgq{n}", e._shape)
+        finally:
+            e.rt.clear()
+            e.rt.update(saved)
+            for uid in (socks_id, awg_id):
+                main.del_upstream(Req({"replace": "direct"}), uid)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,11 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
 Если выход правила не работает, панель передаёт его резервный путь (метку, напрямую или блок).
 Ограничение скорости выхода SOCKS5 (rates в настройках): соединения через CONNECT идут к прокси
 мимо туннеля выхода, и очередь tc на нём их не видит — их ограничивает общий для выхода «бак
-токенов» в каждую сторону.
+токенов» в каждую сторону. Предел выхода у двух дорог общий (shared): раз в секунду посредник
+смотрит, сколько идёт через туннель (/proc/net/dev — счётчики своей сети) и через него самого, и
+делит предел (share): каждой дороге — то, что не занято другой, но не меньше половины. Свою долю
+он ставит баку, долю туннеля — классу tc на нём (tc class change, очередь не пересоздаётся). При
+остановке и когда выход пропадает из настроек туннель получает весь предел обратно.
 SIGHUP — перечитать настройки и списки. Счётчики и байты по «клиент|выход» — в файл stats
 раз в 15 секунд и при остановке (по ним панель считает трафик выходов).
 """
@@ -28,6 +32,7 @@ import os
 import signal
 import socket
 import struct
+import subprocess
 import sys
 import time
 
@@ -186,17 +191,42 @@ def keepalive(sock) -> None:
         pass
 
 
+SHARE_EVERY = 1.0          # как часто делить предел выхода между туннелем и посредником, с
+TC_REFRESH = 10.0          # долю туннеля повторяем не реже (панель могла пересоздать очередь)
+SHARE_SMOOTH = 0.5         # сглаживание скоростей при делении
+
+
+def share(cap: float, other: float) -> float:
+    """Доля одной дороги в общем пределе cap: то, что не занято другой, но не меньше половины —
+    когда качают обе, предел делится примерно поровну, когда одна — она получает весь."""
+    return max(cap - other, cap / 2)
+
+
+def net_dev(text: str) -> dict[str, tuple[int, int]]:
+    """/proc/net/dev → {интерфейс: (принято, отправлено)} в байтах."""
+    out = {}
+    for line in text.splitlines()[2:]:
+        name, _, rest = line.partition(":")
+        f = rest.split()
+        if len(f) >= 9:
+            out[name.strip()] = (int(f[0]), int(f[8]))
+    return out
+
+
 class Bucket:
     """Ограничение скорости, общее для всех соединений одного выхода в одну сторону: каждое
     соединение берёт байты из бака и, уйдя в минус, ждёт, пока бак не наполнится."""
 
     def __init__(self, rate: float):
         self.rate = float(rate)                       # байт/с
+        self.cap = self.rate                          # предел из настроек (rate — текущая доля)
         self.burst = max(self.rate * 0.05, 65536.0)
         self.tokens = self.burst
         self.t = time.monotonic()
+        self.total = 0                                # байт через бак — скорость посредника по выходу
 
     async def take(self, n: int) -> None:
+        self.total += n
         now = time.monotonic()
         self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
         self.t = now
@@ -302,8 +332,21 @@ class Sniffer:
                 v = pair[i] if isinstance(pair, list) and len(pair) == 2 else 0
                 if isinstance(v, (int, float)) and v > 0:
                     rates[(out, i)] = float(v)
-        self.buckets = {k: b if (b := self.buckets.get(k)) and b.rate == r else Bucket(r)
+        self.buckets = {k: b if (b := self.buckets.get(k)) and b.cap == r else Bucket(r)
                         for k, r in rates.items()}
+        # общий предел туннеля и посредника: {(выход, сторона): {"iface", "cap", "tc"}}
+        shared = {}
+        for out, dirs in (cfg.get("shared") or {}).items():
+            for i in (0, 1):
+                d = (dirs or {}).get(str(i)) if isinstance(dirs, dict) else None
+                if isinstance(d, dict) and (out, i) in self.buckets and isinstance(d.get("tc"), list):
+                    shared[(out, i)] = d
+        old = getattr(self, "shared", {})
+        self.shared = shared
+        for k, d in old.items():
+            if k not in shared or shared[k].get("tc") != d.get("tc"):
+                self.tc_set(d, d["cap"], wait=False)         # выход ушёл из деления — весь предел туннелю
+        self.share_state = {k: v for k, v in getattr(self, "share_state", {}).items() if k in shared}
         self.net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
 
     def policy(self, client: str) -> dict:
@@ -415,6 +458,79 @@ class Sniffer:
                     except OSError:
                         pass
 
+    # ------------------------------------------------ общий предел выхода SOCKS5
+    def tc_set(self, d: dict, bps: float, wait: bool = True):
+        """Скорость класса tc туннеля → bps (байт/с). wait=False — без ожидания (остановка, reload)."""
+        argv = [str(x).replace("{kbit}", str(max(1, int(bps * 8 / 1000)))) for x in d["tc"]]
+        try:
+            p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except OSError as e:
+            log(f"tc: {e}")
+            return None
+        if not wait:
+            try:
+                p.wait(5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            return None
+        return p
+
+    def share_tick(self, dev: dict[str, tuple[int, int]], now: float) -> list:
+        """Одно деление: новые доли бакам и туннелям. → [(настройка, байт/с)] — что поставить tc."""
+        todo = []
+        for k, d in self.shared.items():
+            out, i = k
+            b = self.buckets[k]
+            st = self.share_state.setdefault(k, {"t": now, "own": b.total, "tun": None,
+                                                  "r_own": 0.0, "r_tun": 0.0, "tc": None, "tc_at": 0.0})
+            dt = now - st["t"]
+            c = dev.get(d.get("iface") or "")
+            # отправлено в туннель — отдача клиентов (0), принято из туннеля — загрузка (1)
+            tun = c[1] if c and i == 0 else c[0] if c else None
+            if dt > 0:
+                inst_own = (b.total - st["own"]) / dt
+                inst_tun = (tun - st["tun"]) / dt if tun is not None and st["tun"] is not None and tun >= st["tun"] else 0.0
+                st["r_own"] += SHARE_SMOOTH * (inst_own - st["r_own"])
+                st["r_tun"] += SHARE_SMOOTH * (inst_tun - st["r_tun"])
+            st.update(t=now, own=b.total, tun=tun)
+            cap = float(d["cap"])
+            b.rate = share(cap, st["r_tun"])
+            want = share(cap, st["r_own"])
+            if st["tc"] is None or abs(want - st["tc"]) > cap * 0.03 or now - st["tc_at"] >= TC_REFRESH:
+                st["tc"], st["tc_at"] = want, now
+                todo.append((d, want))
+        return todo
+
+    async def share_loop(self) -> None:
+        while True:
+            await asyncio.sleep(SHARE_EVERY)
+            if not self.shared:
+                continue
+            try:
+                with open("/proc/net/dev") as f:
+                    dev = net_dev(f.read())
+            except OSError:
+                dev = {}
+            for d, bps in self.share_tick(dev, time.monotonic()):
+                p = self.tc_set(d, bps)
+                if p is not None:
+                    await asyncio.get_running_loop().run_in_executor(None, self._reap, p)
+
+    @staticmethod
+    def _reap(p) -> None:
+        try:
+            _, err = p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            return
+        if p.returncode and err:
+            log(f"tc: {err.decode(errors='replace').strip()[-200:]}")
+
+    def restore(self) -> None:
+        """Остановка: туннелям — весь предел."""
+        for d in self.shared.values():
+            self.tc_set(d, d["cap"], wait=False)
+
     def write_stats(self) -> None:
         p = self.cfg.get("stats")
         if not p:
@@ -433,6 +549,7 @@ class Sniffer:
         loop.add_signal_handler(signal.SIGHUP, self.on_hup)
         loop.add_signal_handler(signal.SIGTERM, loop.stop)
         log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
+        asyncio.ensure_future(self.share_loop())
         while True:
             self.write_stats()
             await asyncio.sleep(STATS_EVERY)
@@ -458,6 +575,7 @@ def main() -> None:
     finally:
         task.cancel()
         s.write_stats()
+        s.restore()
 
 
 if __name__ == "__main__":
