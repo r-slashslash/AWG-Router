@@ -1027,7 +1027,7 @@ function viewRouting() {
     <div class="default-row" style="margin-top:8px">
       <div class="rule-n" style="padding:0">∗</div>
       <div><b>${esc(t("rt.else"))}</b><div class="small muted">${esc(t("rt.else_sub"))}</div></div>
-      <select id="g-default"><option value="balance" ${rd.balance.on ? "selected" : ""}>⚖️ ${esc(t("bal.option"))}</option>${outOptions(rd.balance.on ? "" : rd.default)}</select>
+      <select id="g-default"><option value="balance" ${rd.balance.on ? "selected" : ""}>${esc(t("bal.option"))}</option>${outOptions(rd.balance.on ? "" : rd.default)}</select>
       <div></div>
     </div>
     <div class="panel panel-pad bal-box" id="g-bal" ${rd.balance.on ? "" : "hidden"}>
@@ -1626,7 +1626,7 @@ function shapingSection() {
   return `
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("sh.title"))}</h2><p class="muted small">${esc(t("sh.sub"))}</p></div></div>
-    <div class="panel panel-pad" style="max-width:560px">
+    <div class="panel panel-pad">
       ${shapingNotice()}
       <div class="row2">
         <label class="field"><span>${esc(t("sh.down"))}</span><input type="number" id="sh-down" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${sh.down || ""}"></label>

@@ -3,6 +3,13 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.19.1 — 2026-11-08
+
+- **Interface polish.** The common speed limit panel on the **Server** tab spans the full width like the
+  other panels; on the **Exits** tab the empty hint and the **Direct** card have a gap between them; the
+  QR code is centred when the buttons wrap below it (always the case in the dark theme); **Everything
+  else** on the Routing tab shows **Load balancing** without the scales emoji.
+
 ## 1.19.0 — 2026-11-08
 
 - **Load balancing across exits.** On the Routing tab, **Everything else** can now be **Load balancing**

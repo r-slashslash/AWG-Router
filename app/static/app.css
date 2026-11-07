@@ -355,6 +355,8 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 
 .empty { padding: 34px 18px; text-align: center; color: var(--muted); }
 .empty p { margin: 0 0 14px; }
+/* пустая подсказка на вкладке «Выходы» стоит над карточкой «Напрямую»: тот же отступ, что между карточками выходов */
+.panel.empty + .exit { margin-top: 12px; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
@@ -376,6 +378,10 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 .connect { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
 .connect > :last-child { flex: 1 1 220px; min-width: 0; }
 .qr-box { flex: none; max-width: 100%; background: #fff; border-radius: 12px; padding: 6px; border: 1px solid var(--rule); }
+/* Когда кнопки не помещаются справа и уходят вниз (в тёмной теме рамка QR широкая, так бывает и на
+ * широком экране), QR остаётся один в строке и встаёт по центру. Рядом с кнопками отступов нет:
+ * правая колонка растягивается и забирает всё свободное место. */
+.connect > .qr-box { margin-inline: auto; }
 .qr { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
 .connect-actions { display: grid; gap: 8px; align-content: start; }
 .connect-actions .btn { justify-content: flex-start; }
