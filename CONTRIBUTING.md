@@ -12,6 +12,8 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome, in Eng
 
 ## Rules for the code
 
+New to the code? Start with the [architecture overview](docs/ARCHITECTURE.md).
+
 - **Standard library only.** The panel has no Python dependencies; the HTTP layer is `app/web.py`.
 - **Every text a user sees exists in four languages: ru, en, zh, fa** (fa is right to left).
   Add the key to all four dictionaries in `app/static/i18n.js` with the same `{placeholders}`.
