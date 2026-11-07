@@ -140,17 +140,19 @@ def build(api: Api) -> dict:
         return re.sub(r"(?m)^Endpoint\s*=.*$", f"Endpoint = {endpoint}", c)
 
     nl = api("POST", "upstreams", {"name": "Netherlands", "config": awg("10.9.0.2/32", "203.0.113.10:47823"),
-                                   "fallback": "direct", "quota_gb": 1000, "quota_action": "direct"})["id"]
+                                   "fallback": "direct", "quota_gb": 1000, "quota_action": "direct",
+                                   "rate_down": 500, "rate_up": 100})["id"]
     de = api("POST", "upstreams", {"name": "Germany", "config": awg("10.7.0.5/32", "198.51.100.44:47823"),
                                    "fallback": "block", "quota_gb": 300, "quota_action": "notify"})["id"]
     us = api("POST", "upstreams", {"name": "USA proxy", "config": "socks5://alice:wonderland@192.0.2.80:1080",
-                                   "fallback": "up:" + nl,
+                                   "fallback": "up:" + nl, "rate_down": 100,
                                    "routing": {"domains": "chatgpt.com\nopenai.com\nclaude.ai\nnetflix.com",
                                                "default": False}})["id"]
     office = api("POST", "lists", {"kind": "manual", "name": "Office",
                                    "source": "10.20.0.0/16\n192.168.50.0/24"})["id"]
     own = next(l["id"] for l in api("GET", "state")["lists"] if l["kind"] == "domains")
-    api("PUT", "routing", {"default": "up:" + nl, "rules": [
+    # балансировка вместо одного выхода по умолчанию; «напрямую» — если все её выходы лежат
+    api("PUT", "routing", {"default": "direct", "balance": {"on": True, "skip": []}, "rules": [
         {"lists": [own], "outbound": "up:" + us, "comment": "USA proxy"},
         {"lists": ["ru", "cn", "ir"], "outbound": "direct", "comment": "Local sites"},
         {"lists": [office], "outbound": "direct", "comment": "Office"}]})
@@ -159,7 +161,8 @@ def build(api: Api) -> dict:
     api("PUT", f"clients/{q('Living room TV')}", {"outbound": "up:" + de, "rules_mode": "custom",
                                                   "rules": [{"lists": ["ru"], "outbound": "direct"}]})
     api("PUT", f"limits/{q('Guest')}", {"expires": int(time.time()) + 86400 + 3600, "quota_gb": 20,
-                                        "period": "month"})
+                                        "period": "month", "rate_down": 10, "rate_up": 5})
+    api("PUT", "settings", {"shaping": {"down": 900, "up": 200}})
     api("PUT", f"limits/{q('Anna MacBook')}", {"quota_gb": 150, "period": "month"})
     return {"pk": pk, "nl": nl, "de": de, "us": us}
 

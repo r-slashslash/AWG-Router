@@ -71,8 +71,8 @@ Details are in [How routing works](#how-routing-works).
 - **Route check** shows which way an IP or domain would go.
 
 <p align="center">
-  <img src="docs/screenshots/exits.png" alt="Exits: traffic per exit and direct, monthly limits" width="860">
-  <img src="docs/screenshots/routing.png" alt="Routing: rules, the default exit and lists" width="860">
+  <img src="docs/screenshots/exits.png" alt="Exits: traffic per exit and direct, monthly limits, speed now and speed limits" width="860">
+  <img src="docs/screenshots/routing.png" alt="Routing: rules, load balancing across exits and lists" width="860">
 </p>
 
 **Panel**

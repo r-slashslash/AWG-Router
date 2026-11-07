@@ -76,8 +76,8 @@
 - **بررسی مسیر** نشان می‌دهد ترافیک به یک IP یا دامنه از کدام راه می‌رود.
 
 <p align="center">
-  <img src="docs/screenshots/exits.png" alt="خروجی‌ها: ترافیک هر خروجی و مستقیم، سقف ماهانه" width="860">
-  <img src="docs/screenshots/routing.png" alt="مسیریابی: قانون‌ها، خروجی پیش‌فرض و فهرست‌ها" width="860">
+  <img src="docs/screenshots/exits.png" alt="خروجی‌ها: ترافیک هر خروجی و مستقیم، سقف ماهانه، سرعت فعلی و محدودیت سرعت" width="860">
+  <img src="docs/screenshots/routing.png" alt="مسیریابی: قانون‌ها، توزیع بار بین خروجی‌ها و فهرست‌ها" width="860">
 </p>
 
 **پنل**

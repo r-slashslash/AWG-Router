@@ -71,8 +71,8 @@ AWG Router 让你的 AmneziaWG 服务器成为级联的入口（中转服务器�
 - **路由检测** 可显示到某个 IP 或域名的流量会走哪条路。
 
 <p align="center">
-  <img src="docs/screenshots/exits.png" alt="出口：各出口和直连的流量、每月限额" width="860">
-  <img src="docs/screenshots/routing.png" alt="路由：规则、默认出口和列表" width="860">
+  <img src="docs/screenshots/exits.png" alt="出口：各出口和直连的流量、每月限额、当前速度和速度限制" width="860">
+  <img src="docs/screenshots/routing.png" alt="路由：规则、出口负载均衡和列表" width="860">
 </p>
 
 **面板**

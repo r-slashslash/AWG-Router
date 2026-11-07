@@ -71,8 +71,8 @@ AWG Router делает ваш сервер AmneziaWG входом каскад�
 - «Проверка маршрута» показывает, куда пойдёт трафик до нужного IP или домена.
 
 <p align="center">
-  <img src="docs/screenshots/exits.png" alt="Выходы: трафик по выходам и напрямую, месячные лимиты" width="860">
-  <img src="docs/screenshots/routing.png" alt="Маршрутизация: правила, выход по умолчанию и списки" width="860">
+  <img src="docs/screenshots/exits.png" alt="Выходы: трафик по выходам и напрямую, месячные лимиты, текущая скорость и её ограничение" width="860">
+  <img src="docs/screenshots/routing.png" alt="Маршрутизация: правила, балансировка между выходами и списки" width="860">
 </p>
 
 **Панель**
