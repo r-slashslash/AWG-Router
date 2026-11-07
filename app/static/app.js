@@ -1076,14 +1076,13 @@ function viewExits() {
       <button class="btn primary" id="add-up">${esc(t("ov.add_exit"))}</button>
     </div>
     ${off}
-    ${cards || `<div class="panel empty"><p>${esc(t("ex.empty"))}</p><p class="small">${esc(t("ex.empty_hint"))}</p><button class="btn primary" data-add-empty>${esc(t("ov.add_exit"))}</button></div>`}
+    ${cards || `<div class="panel empty"><p>${esc(t("ex.empty"))}</p><p class="small">${esc(t("ex.empty_hint"))}</p></div>`}
     ${direct}
   </section>`;
 }
 bind.exits = () => {
   const add = () => editUpstream(null);
   $("#add-up").onclick = add;
-  const e = $("[data-add-empty]"); if (e) e.onclick = add;
   $$("[data-edit]").forEach((b) => b.onclick = () => editUpstream(b.dataset.edit));
   $$("[data-probe]").forEach((b) => b.onclick = () => {
     const k = b.dataset.probe;
