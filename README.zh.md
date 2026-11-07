@@ -2,6 +2,13 @@
   <a href="README.md">English</a> · <a href="README.ru.md">Русский</a> · <b>中文</b> · <a href="README.fa.md">فارسی</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/r-slashslash/AWG-Router/releases/latest"><img src="https://img.shields.io/github/v/release/r-slashslash/AWG-Router" alt="Release"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml/badge.svg" alt="Network tests"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/blob/main/LICENSE"><img src="https://img.shields.io/github/license/r-slashslash/AWG-Router" alt="License: MIT"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/releases"><img src="https://img.shields.io/github/downloads/r-slashslash/AWG-Router/total" alt="Downloads"></a>
+</p>
+
 # AWG Router
 
 **AmneziaWG** 的 Web 管理面板：用户、隧道设置、级联路由以及为每个客户端单独设置的路由，集中在一个地方管理。

@@ -2,6 +2,13 @@
   <a href="README.md">English</a> · <b>Русский</b> · <a href="README.zh.md">中文</a> · <a href="README.fa.md">فارسی</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/r-slashslash/AWG-Router/releases/latest"><img src="https://img.shields.io/github/v/release/r-slashslash/AWG-Router" alt="Release"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml/badge.svg" alt="Network tests"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/blob/main/LICENSE"><img src="https://img.shields.io/github/license/r-slashslash/AWG-Router" alt="License: MIT"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/releases"><img src="https://img.shields.io/github/downloads/r-slashslash/AWG-Router/total" alt="Downloads"></a>
+</p>
+
 # AWG Router
 
 Веб-панель для **AmneziaWG**: клиенты, настройки туннеля, каскадная маршрутизация и индивидуальная маршрутизация для каждого клиента.

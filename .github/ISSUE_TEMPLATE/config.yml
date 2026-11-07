@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/r-slashslash/AWG-Router/security/advisories/new
+    about: Please do not open a public issue for vulnerabilities. Report them privately here.
