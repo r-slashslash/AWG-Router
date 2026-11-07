@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Ask a question or discuss an idea
+    url: https://github.com/r-slashslash/AWG-Router/discussions
+    about: Questions, setup help and early ideas go to Discussions; bugs go to issues.
   - name: Report a security vulnerability
     url: https://github.com/r-slashslash/AWG-Router/security/advisories/new
     about: Please do not open a public issue for vulnerabilities. Report them privately here.

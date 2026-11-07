@@ -5,7 +5,8 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome, in Eng
 
 ## Before you start
 
-- For a bug or an idea, open an issue first and use the template. For a larger change,
+- For a question or an early idea, start a thread in [Discussions](https://github.com/r-slashslash/AWG-Router/discussions).
+- For a bug or a concrete proposal, open an issue first and use the template. For a larger change,
   describe it in an issue before writing code, so nobody's time is wasted.
 - Vulnerabilities go through the private form, not a public issue: see [SECURITY.md](SECURITY.md).
 
