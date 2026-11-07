@@ -11,7 +11,11 @@
 #   переменной репозитория RU_RUNNER=on (Settings → Secrets and variables → Actions → Variables), чтобы
 #   выключенный сервер не держал задание в очереди. Машина не одноразовая: cleanup.sh до и после.
 #   Код берётся архивом codeload, а не git: git поверх HTTPS к GitHub в России рвётся (#8).
-#   На чужие pull request это не запускается: триггеров pull_request здесь нет.
+#   Безопасность: репозиторий публичный, а workflow для чужого pull request GitHub берёт из самого PR —
+#   автор может добавить свой файл с runs-on: [self-hosted, russia] и выполнить на сервере что угодно
+#   (у пользователя runner — sudo). Защита: Settings → Actions → General → «Require approval for all
+#   external contributors» (включено) и правило — не одобрять запуск для PR, который трогает
+#   .github/workflows/. Сервер тестовый, ничего ценного на нём не хранится.
 name: E2E
 
 on:
