@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write in English, Русский, 中文 or فارسی, whichever is easier.
+        For a security problem use the private form instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Panel version
+      description: Shown on the System tab, or run `awg-router info`.
+      placeholder: "1.19.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - AmneziaVPN container (amnezia-awg2)
+        - Own AmneziaWG server in Docker
+        - AmneziaWG on the host
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: access
+    attributes:
+      label: Panel access
+      options:
+        - HTTPS in the browser
+        - SSH tunnel only
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Server OS and CPU
+      placeholder: "Ubuntu 22.04, amd64"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: Output of `awg-router logs`. Remove passwords, private keys and the secret panel path before pasting.
+      render: shell
