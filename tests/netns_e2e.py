@@ -87,6 +87,11 @@ def setup():
     with NetNS("up1") as ip:
         u0 = ip.link_lookup(ifname="u0")[0]
         ip.route("add", dst="10.8.1.3/32", oif=u0)  # адрес «нашего клиента» на выходном сервере
+        # Обратный путь к адресу туннеля в amz. Настоящему туннелю AWG он не нужен (там нет ARP), а veth
+        # нужен: без него проверка источника (rp_filter) в up1 не отвечает на ARP от 169.254.200.1, и
+        # пакеты в выход падают с «host unreachable». Так и было на машинах GitHub (ядро 7.0): новые
+        # сетевые пространства там получают rp_filter включённым.
+        ip.route("add", dst="169.254.200.1/32", oif=u0)
         with NetNS("amz") as ip2:
             mac = ip2.get_links(ip2.link_lookup(ifname="awgr1")[0])[0].get_attr("IFLA_ADDRESS")
         ip.neigh("add", dst="10.8.1.3", lladdr=mac, ifindex=u0, state=0x80)
