@@ -55,6 +55,11 @@ jobs:
     if: github.event_name != 'release'
     needs: net
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write           # подпись аттестаций сборки (OIDC)
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -158,6 +163,72 @@ jobs:
             echo "$msg" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # Подписанное происхождение (кто, из какого коммита и каким workflow собрал) и состав образов (SBOM).
+      # Проверка: gh attestation verify oci://ghcr.io/<владелец>/awg-router:<версия> -R <владелец>/AWG-Router
+      # Аттестации лежат отдельными объектами рядом с образом и манифест образа не меняют (поэтому
+      # provenance: false выше остаётся). continue-on-error: сбой подписи не должен ронять выпуск.
+      - name: Attest the panel image (provenance)
+        if: steps.v.outputs.state != 'published'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ steps.img.outputs.repo }}
+          subject-digest: ${{ steps.panel.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the AmneziaWG server image (provenance)
+        if: steps.v.outputs.state != 'published'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ steps.img.outputs.repo }}
+          subject-digest: ${{ steps.server.outputs.digest }}
+          push-to-registry: true
+
+      - name: SBOM of the panel image
+        if: steps.v.outputs.state != 'published'
+        id: sbom_panel
+        continue-on-error: true
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.img.outputs.repo }}@${{ steps.panel.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-panel.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: SBOM of the AmneziaWG server image
+        if: steps.v.outputs.state != 'published'
+        id: sbom_server
+        continue-on-error: true
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.img.outputs.repo }}@${{ steps.server.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-server.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest the panel SBOM
+        if: steps.v.outputs.state != 'published' && steps.sbom_panel.outcome == 'success'
+        continue-on-error: true
+        uses: actions/attest-sbom@v3
+        with:
+          subject-name: ${{ steps.img.outputs.repo }}
+          subject-digest: ${{ steps.panel.outputs.digest }}
+          sbom-path: sbom-panel.spdx.json
+          push-to-registry: true
+
+      - name: Attest the server SBOM
+        if: steps.v.outputs.state != 'published' && steps.sbom_server.outcome == 'success'
+        continue-on-error: true
+        uses: actions/attest-sbom@v3
+        with:
+          subject-name: ${{ steps.img.outputs.repo }}
+          subject-digest: ${{ steps.server.outputs.digest }}
+          sbom-path: sbom-server.spdx.json
+          push-to-registry: true
+
       - name: Build the archive
         if: steps.v.outputs.state != 'published'
         env:
@@ -176,6 +247,13 @@ jobs:
           ls -l awg-router.tar.gz*
           cat "$RUNNER_TEMP/IMAGES"
 
+      - name: Attest the archive (provenance)
+        if: steps.v.outputs.state != 'published'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: awg-router.tar.gz
+
       - name: Create or refresh the draft
         if: steps.v.outputs.state != 'published'
         env:
@@ -184,9 +262,11 @@ jobs:
           if [ "${{ steps.v.outputs.state }}" = draft ]; then
             gh release edit "$TAG" --target "$GITHUB_SHA" --notes-file notes.md
             gh release upload "$TAG" awg-router.tar.gz awg-router.tar.gz.sha256 --clobber
+            for f in sbom-panel.spdx.json sbom-server.spdx.json; do [ -s "$f" ] && gh release upload "$TAG" "$f" --clobber; done || true
           else
             gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "AWG Router $TAG" \
               --notes-file notes.md awg-router.tar.gz awg-router.tar.gz.sha256
+            for f in sbom-panel.spdx.json sbom-server.spdx.json; do [ -s "$f" ] && gh release upload "$TAG" "$f" --clobber; done || true
           fi
           echo "Draft $TAG is ready: open Releases and press Publish." >> "$GITHUB_STEP_SUMMARY"
 

@@ -1,0 +1,32 @@
+# OpenSSF Scorecard: автоматическая оценка практик безопасности репозитория (0–10) и значок для README.
+# Результат публикуется на api.scorecard.dev (publish_results). Правила для задания с этим действием:
+# только разрешённые шаги, без env и defaults на уровне задания, id-token: write только у него.
+name: Scorecard
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 4 * * 2"
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@v2.4.2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
