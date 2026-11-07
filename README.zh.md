@@ -255,6 +255,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 - 出口以及在面板中创建的客户端的私钥保存在 `/opt/awg-router/data/state.json` 中，权限为 600。
 - Telegram 控制只认聊天而不认人：如果该聊天是群组，任何成员都能控制面板。请使用与机器人的私聊。
 - 备份中包含服务器和所有客户端的私钥。请为下载的备份和发送到 Telegram 的备份设置密码。
+- 从 1.19.1 起，镜像和归档由 GitHub Actions 构建，带有签名的构建证明，镜像另有 SBOM（组件清单）。下载内容可用 `gh attestation verify oci://ghcr.io/r-slashslash/awg-router:<version> -R r-slashslash/AWG-Router`（镜像）或 `gh attestation verify awg-router.tar.gz -R r-slashslash/AWG-Router`（归档）验证。
 
 ## 限制
 

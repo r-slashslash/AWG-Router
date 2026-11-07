@@ -255,6 +255,7 @@ The panel effectively has root access to the server.
 - Private keys of exits and of clients created in the panel are stored in `/opt/awg-router/data/state.json`, with permissions 600.
 - Telegram control obeys a chat, not a person: if that chat is a group, every member can control the panel. Use a private chat with the bot.
 - A backup holds the private keys of the server and of all clients. Set a password for downloaded backups and for backups sent to Telegram.
+- Starting with 1.19.1, the images and the archive are built by GitHub Actions and carry a signed build attestation, and the images also have an SBOM (list of components). You can check a download with `gh attestation verify oci://ghcr.io/r-slashslash/awg-router:<version> -R r-slashslash/AWG-Router` (images) or `gh attestation verify awg-router.tar.gz -R r-slashslash/AWG-Router` (the archive).
 
 ## Limitations
 
