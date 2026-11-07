@@ -3,6 +3,14 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.19.2 — 2026-11-08
+
+- **Session cookie.** The tag in the session cookie that ties it to the current password is now an HMAC
+  with the panel's secret key instead of a plain SHA-256 of the password, so a stolen cookie gives nothing
+  to test password guesses against. Everyone signs in again once after the update.
+- **Tab from the address.** An address such as `…/#toString` no longer breaks the page: an unknown tab
+  opens **Overview**.
+
 ## 1.19.1 — 2026-11-08
 
 - **Interface polish.** The common speed limit panel on the **Server** tab spans the full width like the

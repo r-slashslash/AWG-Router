@@ -57,7 +57,17 @@ if config.PANEL_PASSWORD:
 else:
     PASSWORD = _secret_file("panel_password", lambda: secrets.token_urlsafe(12))
     log.warning("PANEL_PASSWORD is not set. Panel password: %s (file data/panel_password)", PASSWORD)
-PW_TAG = hashlib.sha256(PASSWORD.encode()).hexdigest()[:8]  # смена пароля = выход везде
+
+
+def _tag(material: str) -> str:
+    """Метка сессии из пароля: HMAC с ключом панели, а не голый SHA-256.
+
+    Метка лежит в cookie открытым текстом; без ключа по ней нельзя перебирать пароли.
+    """
+    return hmac.new(SECRET, material.encode(), hashlib.sha256).hexdigest()[:8]
+
+
+PW_TAG = _tag(PASSWORD)  # смена пароля = выход везде
 
 # Пароль, заданный в панели, хранится хешем и важнее PANEL_PASSWORD из .env.
 # `awg-router password` удаляет этот файл и задаёт новый пароль в .env.
@@ -115,7 +125,7 @@ def sec_tag() -> str:
     if not c and not t:
         return PW_TAG
     material = ("h:" + c["hash"]) if c else PASSWORD
-    return hashlib.sha256(f"{material}|{t['secret'] if t else ''}".encode()).hexdigest()[:8]
+    return _tag(f"{material}|{t['secret'] if t else ''}")
 
 
 def make_session() -> str:

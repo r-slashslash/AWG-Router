@@ -313,9 +313,12 @@ function render(force = false) {
     bindLists();
     return;
   }
+  // вкладка приходит из адреса (#…): только свои ключи, иначе #toString или #__proto__ сломали бы страницу
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  if (!own(views, tab)) tab = "overview";
   const keepSearch = $("#client-search") ? $("#client-search").value : null;
-  $("#main").innerHTML = banners() + (views[tab] || viewOverview)();
-  bind[tab] && bind[tab]();
+  $("#main").innerHTML = banners() + views[tab]();
+  if (own(bind, tab)) bind[tab]();
   $$(".banner [data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
   if (keepSearch !== null && $("#client-search")) { $("#client-search").value = keepSearch; filterClients(); }
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
