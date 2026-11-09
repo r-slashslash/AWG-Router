@@ -25,13 +25,24 @@ INSTALL_DIR="${AWGR_DIR:-/opt/awg-router}"
 # (HTTP 404): a network error or a bad checksum stops here, so an update never installs
 # unreleased code instead of the version it announced. Another branch or AWGR_SRC_URL: just that.
 fetch_code() {
-  local tmp url ok=0 code sum urls=()
+  local tmp url sum_url ok=0 code sum urls=()
   tmp="$(mktemp -d)" || return 1
   if [ -z "${AWGR_SRC_URL:-}" ] && [ "$BRANCH" = main ]; then
     url="https://github.com/$REPO/releases/latest/download/awg-router.tar.gz"
+    sum_url="$url.sha256"
     code=$(curl -sSL --retry 3 --max-time 300 -w '%{http_code}' -o "$tmp/src.tgz" "$url" 2>/dev/null) || true
+    if [ "$code" != 200 ] && [ "$code" != 404 ]; then
+      local rel api_url api_sum_url
+      rel=$(curl -fsSL --retry 2 --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null) || true
+      api_url=$(printf '%s\n' "$rel" | awk '/"url": *".*\/releases\/assets\//{u=$0; sub(/.*"url": *"/,"",u); sub(/".*/,"",u)} /"name": *"awg-router\.tar\.gz"/{print u; exit}')
+      api_sum_url=$(printf '%s\n' "$rel" | awk '/"url": *".*\/releases\/assets\//{u=$0; sub(/.*"url": *"/,"",u); sub(/".*/,"",u)} /"name": *"awg-router\.tar\.gz\.sha256"/{print u; exit}')
+      if [ -n "$api_url" ] && [ -n "$api_sum_url" ]; then
+        code=$(curl -sSL --retry 3 --max-time 300 -H "Accept: application/octet-stream" -w '%{http_code}' -o "$tmp/src.tgz" "$api_url" 2>/dev/null) || true
+        sum_url="$api_sum_url"
+      fi
+    fi
     if [ "$code" = 200 ]; then
-      sum=$(curl -fsSL --retry 3 --max-time 60 "$url.sha256" 2>/dev/null | awk '{print $1; exit}')
+      sum=$(curl -fsSL --retry 3 --max-time 60 -H "Accept: application/octet-stream" "$sum_url" 2>/dev/null | awk '{print $1; exit}')
       if [ -z "$sum" ] || ! echo "$sum  $tmp/src.tgz" | sha256sum -c --status 2>/dev/null \
          || ! tar -tzf "$tmp/src.tgz" >/dev/null 2>&1; then
         rm -rf "$tmp"; echo "The release archive failed its checksum check. Try again later." >&2; return 1
