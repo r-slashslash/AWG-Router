@@ -3,7 +3,7 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.19.3 — 2026-11-09
+## 1.19.3 — 2026-11-10
 
 - **Release download fallback.** When github.com fails to serve the release archive (in Russia
   `/releases/download/` sometimes answers HTTP 504), the installer and the update take the same archive and
