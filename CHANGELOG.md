@@ -3,6 +3,14 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.19.3 — 2026-11-09
+
+- **Release download fallback.** When github.com fails to serve the release archive (in Russia
+  `/releases/download/` sometimes answers HTTP 504), the installer and the update take the same archive and
+  its `.sha256` through api.github.com, which sends them straight to GitHub's file storage. The checksum is
+  checked as before, and a failed download still never installs unreleased code from `main`. Thanks to
+  @LCF30 (#13).
+
 ## 1.19.2 — 2026-11-08
 
 - **Session cookie.** The tag in the session cookie that ties it to the current password is now an HMAC

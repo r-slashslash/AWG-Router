@@ -4,6 +4,7 @@
 python3 -m unittest discover tests
 """
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -113,14 +114,15 @@ class FetchCodeTest(unittest.TestCase):
         bindir = os.path.join(self.tmp, "bin")
         os.makedirs(bindir)
         # curl: пишет адрес в лог; CODES — «адрес=код ответа» (по умолчанию 200, 000 — нет сети);
-        # 200 отдаёт архив (или его .sha256 = SUM), -w печатает код, -f при ошибке — выход 22
+        # 200 отдаёт архив (или его .sha256 = SUM, или ответ API о релизе = API_JSON),
+        # -w печатает код, -f при ошибке — выход 22
         with open(os.path.join(bindir, "curl"), "w") as f:
             f.write(textwrap.dedent("""\
                 #!/usr/bin/env bash
                 out=""; url=""; w=""; fail=0
                 while [ $# -gt 0 ]; do
                   case "$1" in
-                    -o) out="$2"; shift 2 ;; -w) w="$2"; shift 2 ;; --retry|--max-time) shift 2 ;;
+                    -o) out="$2"; shift 2 ;; -w) w="$2"; shift 2 ;; -H|--retry|--max-time) shift 2 ;;
                     --*) shift ;; -*) [[ "$1" == *f* ]] && fail=1; shift ;; *) url="$1"; shift ;;
                   esac
                 done
@@ -130,15 +132,33 @@ class FetchCodeTest(unittest.TestCase):
                 [ -n "$w" ] && printf '%s' "$code"
                 [ "$code" = 000 ] && exit 7
                 if [ "$code" != 200 ]; then [ "$fail" = 1 ] && exit 22; [ -n "$out" ] && echo "Not Found" > "$out"; exit 0; fi
-                if [[ "$url" == *.sha256 ]]; then
+                if [ "$url" = "$API" ]; then
+                  if [ -n "$out" ]; then cp "$API_JSON" "$out"; else cat "$API_JSON"; fi
+                elif [[ "$url" == *.sha256 || "$url" == "$API_SUM" ]]; then
                   if [ -n "$out" ]; then echo "$SUM  awg-router.tar.gz" > "$out"; else echo "$SUM  awg-router.tar.gz"; fi
                 else cp "$GOOD_TGZ" "$out"; fi
                 """))
         os.chmod(os.path.join(bindir, "curl"), 0o755)
         with open(self.tgz, "rb") as f:
             self.sum = hashlib.sha256(f.read()).hexdigest()
+        self.api_json = os.path.join(self.tmp, "release.json")
+        self.write_api_json()
         self.env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "GOOD_TGZ": self.tgz,
-                    "CURL_LOG": os.path.join(self.tmp, "curl.log")}
+                    "CURL_LOG": os.path.join(self.tmp, "curl.log"), "API": self.API,
+                    "API_SUM": self.ASSET + "2", "API_JSON": self.api_json}
+
+    def write_api_json(self, indent=2, assets=("awg-router.tar.gz", "awg-router.tar.gz.sha256")):
+        """Ответ api.github.com о релизе: поля в том же порядке, что у настоящего (1.19.2)."""
+        user = {"login": "github-actions[bot]", "url": "https://api.github.com/users/github-actions%5Bbot%5D"}
+        rel = {"url": "https://api.github.com/repos/o/r/releases/9",
+               "assets_url": "https://api.github.com/repos/o/r/releases/9/assets",
+               "author": user, "tag_name": "v1.0.0", "name": "v1.0.0",
+               "assets": [{"url": f"{self.ASSET}{i}", "id": i, "name": n, "label": "", "uploader": user,
+                           "browser_download_url": f"https://github.com/o/r/releases/download/v1.0.0/{n}"}
+                          for i, n in enumerate(assets + ("sbom-panel.spdx.json",), 1)],
+               "body": 'notes with "url": "https://api.github.com/repos/o/r/releases/assets/7"'}
+        with open(self.api_json, "w") as f:
+            json.dump(rel, f, indent=indent, separators=None if indent else (",", ":"))
 
     def run_fetch(self, branch="main", src_url="", codes="", sum=None):
         dest = os.path.join(self.tmp, "dest")
@@ -156,6 +176,8 @@ class FetchCodeTest(unittest.TestCase):
 
     REL = "https://github.com/o/r/releases/latest/download/awg-router.tar.gz"
     MAIN = "https://codeload.github.com/o/r/tar.gz/refs/heads/main"
+    API = "https://api.github.com/repos/o/r/releases/latest"
+    ASSET = "https://api.github.com/repos/o/r/releases/assets/"
 
     def test_release_first(self):
         rc, urls, ok = self.run_fetch()
@@ -168,9 +190,32 @@ class FetchCodeTest(unittest.TestCase):
     def test_network_error_never_falls_back_to_branch(self):
         """1.12.2: сбой сети при скачивании релиза — ошибка, а не неопубликованный код из main."""
         for code in ("000", "503", "403"):
-            rc, urls, ok = self.run_fetch(codes=f"{self.REL}={code}")
-            self.assertEqual((urls, ok), ([self.REL], False), code)
+            rc, urls, ok = self.run_fetch(codes=f"{self.REL}={code} {self.API}={code}")
+            self.assertEqual((urls, ok), ([self.REL, self.API], False), code)
             self.assertNotEqual(rc, 0, code)
+
+    def test_api_fallback(self):
+        """1.19.3: github.com отвечает 504 на /releases/download/ — те же файлы через api.github.com."""
+        for indent in (2, None):                                # как сейчас и JSON одной строкой
+            self.write_api_json(indent)
+            rc, urls, ok = self.run_fetch(codes=f"{self.REL}=504")
+            self.assertEqual((rc, urls, ok), (0, [self.REL, self.API, self.ASSET + "1", self.ASSET + "2"], True),
+                             indent)
+
+    def test_api_fallback_checks_sum(self):
+        rc, urls, ok = self.run_fetch(codes=f"{self.REL}=504", sum="0" * 64)
+        self.assertEqual((urls, ok), ([self.REL, self.API, self.ASSET + "1", self.ASSET + "2"], False))
+        self.assertNotEqual(rc, 0)
+
+    def test_api_fallback_never_installs_branch(self):
+        """Ни 404 файла через API, ни релиз без файла суммы не превращаются в «релиза нет»."""
+        rc, urls, ok = self.run_fetch(codes=f"{self.REL}=504 {self.ASSET}1=404")
+        self.assertEqual((urls, ok), ([self.REL, self.API, self.ASSET + "1"], False))
+        self.assertNotEqual(rc, 0)
+        self.write_api_json(assets=("awg-router.tar.gz",))
+        rc, urls, ok = self.run_fetch(codes=f"{self.REL}=504")
+        self.assertEqual((urls, ok), ([self.REL, self.API], False))
+        self.assertNotEqual(rc, 0)
 
     def test_checksum_mismatch(self):
         rc, urls, ok = self.run_fetch(sum="0" * 64)
