@@ -7,6 +7,10 @@
   <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/net-tests.yml/badge.svg" alt="Network tests"></a>
   <a href="https://github.com/r-slashslash/AWG-Router/blob/main/LICENSE"><img src="https://img.shields.io/github/license/r-slashslash/AWG-Router" alt="License: MIT"></a>
   <a href="https://github.com/r-slashslash/AWG-Router/releases"><img src="https://img.shields.io/github/downloads/r-slashslash/AWG-Router/total" alt="Downloads"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/codeql.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/e2e.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/e2e.yml/badge.svg" alt="E2E"></a>
+  <a href="https://github.com/r-slashslash/AWG-Router/pkgs/container/awg-router"><img src="https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker image on ghcr.io"></a>
+  <img src="https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white" alt="Python 3.13">
 </p>
 
 <div dir="rtl">
