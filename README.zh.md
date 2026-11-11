@@ -17,7 +17,7 @@
 
 # AWG Router
 
-**AmneziaWG** 的 Web 管理面板：用户、隧道设置、级联路由以及为每个客户端单独设置的路由，集中在一个地方管理。
+**AmneziaWG** 与级联 VPN 服务器的 Web 管理面板：用户、隧道设置、级联路由、出口负载均衡以及为每个客户端单独设置的路由，集中在一个地方管理。
 
 它可以管理 AmneziaVPN 应用安装的服务器（Docker 容器 `amnezia-awg2`），也可以安装自己的 AmneziaWG 服务器——在 Docker 容器中或直接在主机上。协议最高支持 **AmneziaWG 3.1**。
 
