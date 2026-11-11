@@ -92,6 +92,15 @@ class PanelPortTest(unittest.TestCase):
         self.assertIn("in use", self.problem("4821"))
         self.assertIn("in use", self.problem("5353"))                  # и UDP тоже
 
+    def test_busy_with_long_socket_list(self):
+        """Занятый порт в начале длинного списка должен отклоняться при включённом pipefail."""
+        with open(os.path.join(self.tmp, "bin", "ss"), "w") as f:
+            f.write("#!/bin/sh\nawk 'BEGIN {\n"
+                    ' print "tcp LISTEN 0 4096 0.0.0.0:4821 0.0.0.0:*"\n'
+                    ' for (i = 0; i < 10000; i++) print "udp UNCONN 0 0 [::]:5353 [::]:*"\n'
+                    "}'\n")
+        self.assertIn("Port 4821 is in use", self.problem("4821"))
+
     def test_own_port_is_allowed(self):
         """При --reconfigure текущий порт занят самой панелью — его можно оставить."""
         self.assertEqual(self.problem("4821", current="4821"), "")
