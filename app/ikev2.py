@@ -20,6 +20,12 @@ XFRM_ID_BASE = 0x41570000
 # Внешние IKE/ESP-пакеты не должны снова попадать в таблицу своего туннеля.
 OUTER_MARK = 0x40000000
 log = logging.getLogger("awgr.ikev2")
+# Кросс-подписи новых корней публичных CA. Серверы присылают только промежуточный сертификат,
+# а strongSwan не находит недостающее звено цепочки. Файлы скачивает и проверяет сборка образа (Dockerfile).
+INTERMEDIATES_DIR = "/usr/share/awg-router/ikev2-intermediates"
+# charon не нашёл ключ сервера, которому можно доверять: цепочка не дошла до доверенного CA
+# или сертификат выдан не на удалённый ID. Без подробного журнала эти случаи не различить.
+_UNTRUSTED_SERVER = re.compile(r"\bno trusted \S+ public key found for\b")
 _HOSTNAME = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")
 
 
@@ -136,6 +142,8 @@ def daemon_config(socket_path: str) -> str:
     filelog {{
         stderr {{
             default = 0
+            # Уровень 1 нужен для причины отказа в доверии серверу; он добавляет в журнал логин, но не пароль.
+            ike = 1
             flush_line = yes
         }}
     }}
@@ -153,10 +161,12 @@ def _private_file(path: str, content: str) -> None:
 class Runtime:
     """Отдельный демон на выход изолирует пароли даже при одинаковом имени пользователя."""
 
-    def __init__(self, root: str, name: str):
+    def __init__(self, root: str, name: str, log_path: str, intermediates: str = INTERMEDIATES_DIR):
         """Каталог принадлежит одному выходу и не разделяется с другими демонами."""
         self.root = root
         self.name = name
+        self.log_path = log_path            # журнал charon текущего запуска, по нему ищется причина отказа
+        self.intermediates = intermediates  # сертификаты для построения цепочки, но не для доверия
         self.socket = os.path.join(root, "vici.sock")
         self.proc: subprocess.Popen | None = None
         self.target_pid: int | None = None
@@ -202,6 +212,9 @@ class Runtime:
             _private_file(ca_file, fields["ca"])
         else:
             os.symlink("/etc/ssl/certs", ca_dir)
+        # swanctl загружает x509 без флага CA: такие сертификаты только достраивают цепочку,
+        # а доверие по-прежнему даёт лишь корень из x509ca.
+        os.symlink(self.intermediates, os.path.join(self.root, "x509"))
         conf = os.path.join(self.root, "swanctl.conf")
         _private_file(conf, connection_config(fields, self.name, server_ip, ca_file))
         daemon = os.path.join(self.root, "strongswan.conf")
@@ -210,7 +223,7 @@ class Runtime:
         _private_file(pid_file, "0\n")
         return conf, daemon, pid_file
 
-    def start(self, target, fields: dict, server_ip: str, log_path: str) -> None:
+    def start(self, target, fields: dict, server_ip: str) -> None:
         """Приватный mount namespace разделяет фиксированный PID-файл charon между выходами."""
         self.target_pid = target.pid
         conf, daemon, pid_file = self._prepare(fields, server_ip)
@@ -220,7 +233,7 @@ class Runtime:
         os.close(fd)
         env = dict(os.environ, STRONGSWAN_CONF=daemon)
         launcher = 'mount --bind "$1" /run/charon.pid && exec /usr/lib/strongswan/charon'
-        with open(log_path, "w") as logf:
+        with open(self.log_path, "w") as logf:
             self.proc = subprocess.Popen(
                 ["nsenter", "-t", str(target.pid), "-n", "--", "unshare", "--mount", "--propagation", "private",
                  "--", "sh", "-c", launcher, "sh", pid_file],
@@ -244,6 +257,15 @@ class Runtime:
         result = self.command("--list-sas", "--ike", self.name, "--raw")
         if_id = XFRM_ID_BASE + int(re.search(r"\d+$", self.name).group())
         return parse_status(result.stdout if result.returncode == 0 else "", if_id)
+
+    def failure(self) -> Msg | None:
+        """Известная причина отказа подсказывает, что исправить; неизвестная не подменяется догадкой."""
+        try:
+            with open(self.log_path, errors="replace") as logf:
+                text = logf.read()
+        except FileNotFoundError:
+            return None
+        return Msg("ike.untrusted_server") if _UNTRUSTED_SERVER.search(text) else None
 
     def close(self) -> None:
         """SIGTERM удаляет только SA собственного демона; после остановки удаляются секреты."""

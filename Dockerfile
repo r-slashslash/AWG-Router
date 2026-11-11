@@ -34,6 +34,19 @@ RUN git clone --depth 1 --branch "${HEV_REF}" --recurse-submodules --shallow-sub
  && make -C /src -j"$(nproc)" ENABLE_STATIC=1 \
  && install -D -m 0755 /src/bin/hev-socks5-tunnel /out/hev-socks5-tunnel
 
+# Кросс-подписи корней Let's Encrypt поколения Y (Root YR от ISRG Root X1, Root YE от ISRG Root X2).
+# Серверы IKEv2 присылают только промежуточный YR*/YE*, а сами корни Y ещё не входят в хранилища CA.
+# Хеши закреплены: подменённый или изменённый файл останавливает сборку.
+FROM alpine:3.22 AS ikev2-certs
+ARG LE_ROOT_YR_BY_X1_SHA256=b3858d7a4d598b4ab6ed2892a1b8c0ee035154876dd40a082a3b05387eea11a4
+ARG LE_ROOT_YE_BY_X2_SHA256=2681e97e939cab7cde4fad1dc733fc7c99e39a203190e8f298e1c02ab431b1e9
+RUN apk add --no-cache curl \
+ && mkdir /out && cd /out \
+ && curl -fsSL --retry 3 -o root-yr-by-x1.pem https://letsencrypt.org/certs/gen-y/root-yr-by-x1.pem \
+ && curl -fsSL --retry 3 -o root-ye-by-x2.pem https://letsencrypt.org/certs/gen-y/root-ye-by-x2.pem \
+ && printf '%s  %s\n' "${LE_ROOT_YR_BY_X1_SHA256}" root-yr-by-x1.pem "${LE_ROOT_YE_BY_X2_SHA256}" root-ye-by-x2.pem \
+    | sha256sum -c -
+
 FROM python:3.13-alpine
 # по этой метке GHCR связывает готовый образ с репозиторием
 LABEL org.opencontainers.image.source="https://github.com/r-slashslash/AWG-Router"
@@ -43,6 +56,7 @@ COPY --from=awg-tools /out/awg /usr/bin/awg
 COPY --from=awg-tools /out/awg-quick /usr/bin/awg-quick
 COPY --from=lego /lego /usr/bin/lego
 COPY --from=hev /out/hev-socks5-tunnel /usr/bin/hev-socks5-tunnel
+COPY --from=ikev2-certs /out /usr/share/awg-router/ikev2-intermediates
 WORKDIR /opt/awg-router
 COPY app ./app
 ENV DATA_DIR=/data PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1

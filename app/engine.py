@@ -286,7 +286,7 @@ class Engine:
         r = UpRT(u["num"], conf_hash, t.key)
         ifn = r.iface
         if pc.kind == "ikev2" and not config.DRY_RUN:
-            r.ike = ikev2.Runtime(os.path.join(RUN_DIR, f"ike-{r.num}"), r.iface)
+            r.ike = ikev2.Runtime(os.path.join(RUN_DIR, f"ike-{r.num}"), r.iface, os.path.join(LOG_DIR, f"{r.iface}.log"))
             r.ike.check_owner()        # чужой активный выход нельзя затронуть даже до запуска charon
         t.ns(["ip", "link", "del", ifn], check=False)
         if pc.kind == "ikev2":
@@ -368,7 +368,7 @@ class Engine:
         if not config.DRY_RUN:
             ip = awgconf.resolve_host(pc.ikev2["host"])
             self._sync_rules(t)       # защищающий маршрут проверяется до выбора выхода в nftables
-            r.ike.start(t, pc.ikev2, ip, os.path.join(LOG_DIR, f"{r.iface}.log"))
+            r.ike.start(t, pc.ikev2, ip)
             r.proc = r.ike.proc
         self.event("info", Msg("ev.tunnel_up", iface=r.iface, name=u["name"], endpoint=pc.endpoint))
 
@@ -549,6 +549,9 @@ class Engine:
             status = {"healthy": False, "address": "", "rx": 0, "tx": 0}
             error = Msg("ike.check_failed")
         healthy = status["healthy"]
+        # Причина из журнала charon видна сразу, а не только после остановки попыток через 120 с.
+        reason = r.ike.failure() if not healthy and r.ike else None
+        error = error or reason
         prev = self.health.get(u["id"], {}).get("healthy")
         if prev is not None and prev != healthy:
             self.event("info" if healthy else "warn", Msg("ev.upstream_ok" if healthy else "ev.upstream_failed", name=u["name"], uid=u["id"]))
@@ -562,7 +565,7 @@ class Engine:
         # Отказ начальной аутентификации не создаёт SA для DPD: пробуем новый сеанс с общей паузой.
         if not healthy and now - r.ike_down_since >= 120:
             self._stop_up(u["id"])
-            self._failed_up(u["id"], f"{r.conf_hash}|{r.target_key}", Msg("ike.connect_failed"), u)
+            self._failed_up(u["id"], f"{r.conf_hash}|{r.target_key}", reason or Msg("ike.connect_failed"), u)
 
     def _reresolve(self, t: system.Target, u: dict, r: UpRT, peer: dict, now: float) -> None:
         """Туннель с именем в Endpoint не отвечает: разбираем имя заново и, если адрес сменился,

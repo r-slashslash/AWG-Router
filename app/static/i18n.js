@@ -2781,6 +2781,7 @@ Object.assign(I18N.ru, {
   "ike.load_failed": "Не удалось загрузить параметры IKEv2; проверьте реквизиты и сертификат CA",
   "ike.xfrm_failed": "Не удалось создать XFRM-интерфейс; требуется поддержка XFRM в ядре Linux",
   "ike.check_failed": "Не удалось проверить состояние IKEv2", "ike.connect_failed": "Не удалось установить IKEv2; проверьте доступность сервера, реквизиты и сертификат",
+  "ike.untrusted_server": "Сертификат сервера IKEv2 не прошёл проверку: он выдан не на удалённый ID или не сводится к доверенному CA. Проверьте удалённый ID; если сервер не присылает цепочку целиком, укажите в настройках выхода сертификат CA сервера",
 });
 Object.assign(I18N.en, {
   "ike.host": "IKEv2 server", "ike.remote_id": "Remote ID (empty: server name)",
@@ -2793,6 +2794,7 @@ Object.assign(I18N.en, {
   "ike.load_failed": "Failed to load IKEv2 settings; check credentials and CA certificate",
   "ike.xfrm_failed": "Failed to create an XFRM interface; Linux kernel XFRM support is required",
   "ike.check_failed": "Failed to check IKEv2 status", "ike.connect_failed": "Failed to establish IKEv2; check server availability, credentials and certificate",
+  "ike.untrusted_server": "The IKEv2 server certificate failed verification: it is not issued for the remote ID or does not chain to a trusted CA. Check the remote ID; if the server does not send its full chain, set the server's CA certificate in the exit settings",
 });
 Object.assign(I18N.zh, {
   "ike.host": "IKEv2 服务器", "ike.remote_id": "远程 ID（留空使用服务器名称）",
@@ -2805,6 +2807,7 @@ Object.assign(I18N.zh, {
   "ike.load_failed": "无法加载 IKEv2 设置，请检查凭据和 CA 证书",
   "ike.xfrm_failed": "无法创建 XFRM 接口，需要 Linux 内核支持 XFRM",
   "ike.check_failed": "无法检查 IKEv2 状态", "ike.connect_failed": "无法建立 IKEv2，请检查服务器、凭据和证书",
+  "ike.untrusted_server": "IKEv2 服务器证书验证失败：证书不是为远程 ID 签发的，或无法链接到受信任的 CA。请检查远程 ID；如果服务器未发送完整证书链，请在出口设置中填写服务器的 CA 证书",
 });
 Object.assign(I18N.fa, {
   "ike.host": "سرور IKEv2", "ike.remote_id": "شناسهٔ راه‌دور (خالی: نام سرور)",
@@ -2817,6 +2820,7 @@ Object.assign(I18N.fa, {
   "ike.load_failed": "بارگذاری تنظیمات IKEv2 ناموفق بود؛ اطلاعات ورود و گواهی CA را بررسی کنید",
   "ike.xfrm_failed": "ساخت رابط XFRM ناموفق بود؛ پشتیبانی XFRM در هستهٔ Linux لازم است",
   "ike.check_failed": "بررسی وضعیت IKEv2 ناموفق بود", "ike.connect_failed": "اتصال IKEv2 برقرار نشد؛ سرور، اطلاعات ورود و گواهی را بررسی کنید",
+  "ike.untrusted_server": "گواهی سرور IKEv2 تأیید نشد: برای شناسهٔ راه‌دور صادر نشده یا به یک CA معتبر نمی‌رسد. شناسهٔ راه‌دور را بررسی کنید؛ اگر سرور زنجیرهٔ کامل را نمی‌فرستد، گواهی CA سرور را در تنظیمات خروجی وارد کنید",
 });
 
 /* Разделители: перечисление, фразы, ссылки */

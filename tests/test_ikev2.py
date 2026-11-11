@@ -100,13 +100,55 @@ class Ikev2RuntimeTest(unittest.TestCase):
             work = Path(root) / "ike"
             work.mkdir()
             (work / "x509ca").symlink_to(outside, target_is_directory=True)
-            runtime = ikev2.Runtime(str(work), "awgr7")
+            runtime = ikev2.Runtime(str(work), "awgr7", root + "/awgr7.log")
             fields = json.loads(vpn_config(ca="new company certificate"))
             runtime._prepare(fields, "198.51.100.7")
             self.assertEqual(list(outside.iterdir()), [])
             self.assertFalse((work / "x509ca").is_symlink())
             self.assertEqual((work / "x509ca/company.pem").read_text(), "new company certificate")
             self.assertEqual((work / "swanctl.conf").stat().st_mode & 0o777, 0o600)
+
+    def test_intermediates_complete_chain_without_becoming_trusted(self):
+        """Кросс-подписи достраивают цепочку сервера, но доверие остаётся только у корней из x509ca.
+
+        Вход: каталог с одним промежуточным сертификатом, выход с CA компании и без него.
+        Ожидание: файл доступен в x509, в x509ca его нет; закрытие выхода не удаляет общий каталог.
+        """
+        from pathlib import Path
+        from app import ikev2
+        with tempfile.TemporaryDirectory() as root:
+            bundle = Path(root) / "bundle"
+            bundle.mkdir()
+            (bundle / "cross.pem").write_text("cross-signed root")
+            for ca in ("", "company certificate"):
+                with self.subTest(company_ca=bool(ca)):
+                    work = Path(root) / "ike"
+                    runtime = ikev2.Runtime(str(work), "awgr7", root + "/awgr7.log", intermediates=str(bundle))
+                    runtime._prepare(json.loads(vpn_config(ca=ca)), "198.51.100.7")
+                    self.assertEqual((work / "x509/cross.pem").read_text(), "cross-signed root")
+                    self.assertNotIn("cross.pem", os.listdir(work / "x509ca"))
+                    runtime.close()
+                    self.assertEqual((bundle / "cross.pem").read_text(), "cross-signed root")
+
+    def test_server_verification_failure_from_log(self):
+        """Отказ в доверии серверу распознаётся по журналу charon, иначе причина не угадывается.
+
+        Вход: журнала нет; строки отказа для RSA- и ECDSA-ключа; обычный ход подключения.
+        Ожидание: ike.untrusted_server только для строк отказа.
+        """
+        from pathlib import Path
+        from app import ikev2
+        with tempfile.TemporaryDirectory() as root:
+            log = Path(root) / "awgr7.log"
+            runtime = ikev2.Runtime(root + "/ike", "awgr7", str(log))
+            self.assertIsNone(runtime.failure())
+            for key in ("RSA", "ECDSA"):
+                with self.subTest(key=key):
+                    log.write_text("02[IKE] received end entity cert \"CN=vpn.example.com\"\n"
+                                   f"02[IKE] no trusted {key} public key found for 'vpn.example.com'\n")
+                    self.assertEqual(runtime.failure().key, "ike.untrusted_server")
+            log.write_text("10[IKE] initiating IKE_SA awgr7[1] to 198.51.100.7\n13[IKE] establishing CHILD_SA net{1}\n")
+            self.assertIsNone(runtime.failure())
 
     def test_unknown_runtime_owner_preserves_existing_files(self):
         """Ошибка чтения владельца не разрешает удалять его сертификаты или IPsec-состояние."""
@@ -118,10 +160,10 @@ class Ikev2RuntimeTest(unittest.TestCase):
             work.mkdir()
             existing = work / "company.pem"
             existing.write_text("existing certificate")
-            runtime = ikev2.Runtime(str(work), "awgr7")
+            runtime = ikev2.Runtime(str(work), "awgr7", root + "/log")
             with mock.patch("app.ikev2.open", side_effect=PermissionError, create=True), mock.patch("app.ikev2.subprocess.run") as command:
                 with self.assertRaises(ikev2.Ikev2Error):
-                    runtime.start(SimpleNamespace(pid=42), json.loads(vpn_config()), "198.51.100.7", root + "/log")
+                    runtime.start(SimpleNamespace(pid=42), json.loads(vpn_config()), "198.51.100.7")
                 runtime.close()
             self.assertEqual(existing.read_text(), "existing certificate")
             command.assert_not_called()
@@ -131,7 +173,7 @@ class Ikev2RuntimeTest(unittest.TestCase):
         import subprocess
         from app import ikev2
         with tempfile.TemporaryDirectory() as root:
-            runtime = ikev2.Runtime(root + "/ike", "awgr7")
+            runtime = ikev2.Runtime(root + "/ike", "awgr7", root + "/awgr7.log")
             runtime._prepare(json.loads(vpn_config()), "198.51.100.7")
             runtime.target_pid = 42
             runtime.proc = mock.Mock()
@@ -195,6 +237,28 @@ class Ikev2RoutingTest(unittest.TestCase):
         self.assertFalse(engine.health["u000001"]["healthy"])
         self.assertEqual(engine._up_list(self.st)[0]["snat"], "")
         target.ns.assert_not_called()
+
+    def test_server_verification_failure_is_shown(self):
+        """Причина из журнала видна и пока выход ждёт сессию, и после остановки попыток.
+
+        Вход: SA не установлена, журнал сообщает об отказе в доверии; затем прошло 120 с.
+        Ожидание: ошибка ike.untrusted_server в здоровье выхода в обоих состояниях.
+        """
+        from app.engine import Engine, UpRT
+        from app.i18n import Msg
+        engine = Engine(main.store)
+        runtime = UpRT(1, "hash", "target")
+        runtime.ike = mock.Mock()
+        runtime.ike.status.return_value = {"healthy": False, "address": "", "rx": 0, "tx": 0}
+        runtime.ike.failure.return_value = Msg("ike.untrusted_server")
+        engine.rt["u000001"] = runtime
+        engine._update_health(mock.Mock(), self.st)
+        self.assertEqual(engine.health["u000001"]["error"].key, "ike.untrusted_server")
+        runtime.ike_down_since -= 120
+        with mock.patch.object(engine, "_stop_up"):
+            engine._update_health(mock.Mock(), self.st)
+        self.assertEqual(engine.health["u000001"]["state"], "error")
+        self.assertEqual(engine.health["u000001"]["error"].key, "ike.untrusted_server")
 
     def test_routes_installed_before_daemon_start(self):
         """Пока IKEv2 подключается, метка выхода уже имеет проверенный запрещающий маршрут."""

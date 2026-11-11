@@ -66,6 +66,16 @@ test("IKEv2 сохраняет реквизиты и список корпора
   assert.equal(body.make_default, false);
 });
 
+/* Причина отказа видна, пока панель ещё повторяет попытки, а не только после их остановки. */
+test("Карточка IKEv2 показывает причину неустановленной сессии", () => {
+  const { context } = panel();
+  const html = vm.runInContext(`fmtNum = String;
+    S.upstreams = [{id: "ike", name: "Company", kind: "ikev2", enabled: true, refs: [], traffic: {},
+    health: {state: "stale", healthy: false, error: {$t: "ike.untrusted_server", p: {}}}}];
+    viewExits();`, context);
+  assert.match(html, /ike\.untrusted_server/);
+});
+
 test("Редактор доменных правил предлагает IKEv2 и SOCKS5", () => {
   const { context } = panel();
   const options = vm.runInContext(`S.upstreams = [

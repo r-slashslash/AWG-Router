@@ -1105,7 +1105,7 @@ function viewExits() {
     const h = u.health || {};
     let st = stateBadge(u);
     if (u.enabled && h.healthy && !quotaSwitched(u)) st = `<span class="state"><span class="dot ok"></span>${esc(u.kind === "ikev2" ? t("ike.connected") : u.kind === "socks5" ? t("ex.working_socks", { ms: h.latency_ms ?? "?" }) : t("ex.working", { ago: fmtAge(h.handshake_age) }))}</span>`;
-    else if (u.enabled && u.kind === "socks5" && h.error && h.state !== "error") st += ` <span class="small warn-text">${esc(tm(h.error))}</span>`;
+    else if (u.enabled && (u.kind === "socks5" || u.kind === "ikev2") && h.error && h.state !== "error") st +=` <span class="small warn-text">${esc(tm(h.error))}</span>`;
     else if (u.enabled && h.state === "error") st = `<span class="state"><span class="dot bad"></span>${esc(tm(h.error) || t("st.error"))}</span>`;
     else if (u.enabled && h.handshake_age) st += ` <span class="muted small">${esc(t("ex.last_handshake", { ago: fmtAge(h.handshake_age) }))}</span>`;
     const ver = u.kind === "ikev2" ? "IKEv2" : u.kind === "socks5" ? "SOCKS5" : u.version ? `AWG ${u.version}` : u.config_error ? "" : "WireGuard";
