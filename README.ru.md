@@ -34,6 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 
 Установщик настроит всё сам, включая Docker Compose, и в конце покажет ссылку на панель и пароль. Подробности: [Установка](#установка).
 
+<p align="center">
+  <img src="docs/screenshots/install.gif" alt="Установка одной командой, затем панель: вход, новый клиент с QR-кодом, выходы и маршрутизация" width="860">
+</p>
+
 ```
                                ┌── RU / CN / IR ─────────► интернет (IP этого сервера)
  клиенты ──AWG──► этот сервер ─┤

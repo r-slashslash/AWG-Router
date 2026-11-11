@@ -34,6 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 
 安装程序会完成全部配置（包括 Docker Compose），并在结束时显示面板链接和密码。详情见[安装](#安装)。
 
+<p align="center">
+  <img src="docs/screenshots/install.gif" alt="一条命令完成安装，然后是面板：登录、新客户端及其二维码、出口和路由" width="860">
+</p>
+
 ```
 客户端 ──AWG──► 本服务器
   ├── RU / CN / IR ─────────► 互联网（本服务器 IP）

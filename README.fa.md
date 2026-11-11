@@ -40,6 +40,14 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 
 نصب‌کننده همه‌چیز را تنظیم می‌کند، از جمله Docker Compose، و در پایان لینک پنل و رمز عبور را نشان می‌دهد. جزئیات: [نصب](#نصب).
 
+</div>
+
+<p align="center">
+  <img src="docs/screenshots/install.gif" alt="نصب با یک فرمان، سپس پنل: ورود، کلاینت تازه با کد QR، خروجی‌ها و مسیریابی" width="860">
+</p>
+
+<div dir="rtl">
+
 یک نمونه:
 - کلاینت‌ها با AWG به این سرور وصل می‌شوند.
 - ترافیک روسیه، چین و ایران مستقیم از IP همین سرور به اینترنت می‌رود.
