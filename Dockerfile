@@ -37,7 +37,7 @@ RUN git clone --depth 1 --branch "${HEV_REF}" --recurse-submodules --shallow-sub
 FROM python:3.13-alpine
 # по этой метке GHCR связывает готовый образ с репозиторием
 LABEL org.opencontainers.image.source="https://github.com/r-slashslash/AWG-Router"
-RUN apk add --no-cache iproute2 iproute2-tc nftables util-linux-misc procps-ng ca-certificates openssl bash
+RUN apk add --no-cache iproute2 iproute2-tc nftables util-linux-misc procps-ng ca-certificates openssl bash strongswan
 COPY --from=awg-go /out/amneziawg-go /usr/bin/amneziawg-go
 COPY --from=awg-tools /out/awg /usr/bin/awg
 COPY --from=awg-tools /out/awg-quick /usr/bin/awg-quick

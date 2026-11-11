@@ -209,10 +209,11 @@ def v_outbound(st: dict, v, allow_inherit: bool = False) -> str:
     bad(Msg("err.unknown_outbound", value=v))
 
 
-def is_socks_out(st: dict, out: str) -> bool:
+def is_domain_out(st: dict, out: str) -> bool:
+    """Именные правила доступны для прокси и корпоративных веб-выходов IKEv2."""
     u = Store.upstream(st, out[3:]) if isinstance(out, str) and out.startswith("up:") else None
     try:
-        return bool(u) and engine.parsed(u).kind == "socks5"
+        return bool(u) and engine.parsed(u).kind in ("socks5", "ikev2")
     except awgconf.ConfigError:
         return False
 
@@ -233,10 +234,10 @@ def v_rules(st: dict, rules) -> list[dict]:
         outbound = v_outbound(st, r.get("outbound"))
         kinds = {Store.lst(st, lid)["kind"] == "domains" for lid in ls}
         if True in kinds:
-            # списки доменов — только на выход SOCKS5: имя сайта передаётся прокси (sniproxy.py)
+            # Именные правила отделены от сетевых: посредник выбирает прокси или метку IKEv2.
             if len(kinds) > 1:
                 bad("err.rule_mixed_domains")
-            if not is_socks_out(st, outbound):
+            if not is_domain_out(st, outbound):
                 bad("err.domains_need_socks")
         rid = r.get("id") if isinstance(r.get("id"), str) and ID_RE.match(r.get("id", "")) else new_id("r_")
         out.append({"id": rid, "lists": list(dict.fromkeys(ls)),
@@ -1108,7 +1109,7 @@ def _upstream_view(st: dict, u: dict, bal_members: set | None = None, bal_counts
         bal_counts = engine.balancer.counts()
     try:
         pc = engine.parsed(u)
-        info = {"endpoint": pc.endpoint, "address": pc.address, "mtu": pc.mtu,
+        info = {"endpoint": pc.endpoint, "address": engine.health.get(u["id"], {}).get("address", "") if pc.kind == "ikev2" else pc.address, "mtu": pc.mtu,
                 "version": pc.version, "kind": pc.kind, "own_list": u.get("own_list"),
                 "socks_user": pc.socks.get("user") if pc.kind == "socks5" else None,
                 "config_error": None}
@@ -1421,9 +1422,9 @@ def del_upstream(req, uid):
         bal = st["routing"].get("balance")
         if bal and uid in (bal.get("skip") or []):
             bal["skip"] = [x for x in bal["skip"] if x != uid]
-        # правила со списками доменов могут вести только на SOCKS5: если замена не SOCKS5 — убираем их
+        # При замене сохраняем доменные правила только для поддерживающего их типа выхода.
         dom = {l["id"] for l in st["lists"] if l["kind"] == "domains"}
-        keep = lambda r: not (set(r.get("lists") or []) & dom) or is_socks_out(st, r.get("outbound"))
+        keep = lambda r: not (set(r.get("lists") or []) & dom) or is_domain_out(st, r.get("outbound"))
         st["routing"]["rules"] = [r for r in st["routing"]["rules"] if keep(r)]
         for c in st["clients"].values():
             if c.get("rules"):

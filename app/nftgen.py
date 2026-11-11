@@ -127,7 +127,9 @@ def mark_for(num: int) -> int:
 
 def _policy_key(policy: dict) -> tuple:
     return (tuple((tuple(l), o) for l, o in policy["rules"]), _okey(policy["default"]),
-            tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()))
+            tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()),
+            tuple((tuple(l), _okey(o)) for l, o in policy.get("private_rules") or ()),
+            bool(policy.get("private_domain")), _okey(policy.get("private_default", "direct")))
 
 
 def _set_block(name: str, cidrs: list[str], comment: str = "") -> str:
@@ -145,13 +147,25 @@ def _set_block(name: str, cidrs: list[str], comment: str = "") -> str:
 
 
 def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = False,
-                  outs=None) -> str:
+                  outs=None, local_guard: bool = False) -> str:
     """Цепочка политики. sniff — у политики есть правила по доменам: её TCP 80/443 идёт в
     sniproxy.py, а QUIC (UDP 443) блокируется — имени сайта в нём не прочитать, и браузер
     переходит на обычный HTTPS. outs — свои цепочки выходов (для q_* в hook output)."""
     oc = outs or out_chain
     lines = [f"\tchain {name} {{"]
-    if sniff:
+    # Частные корпоративные сайты тоже должны попасть к посреднику. Для остальных
+    # политик исключение локальных сетей остаётся перед перехватом соединений.
+    private_sniff = sniff and policy.get("private_domain")
+    if private_sniff:
+        lines.append(f"\t\tudp dport 443 goto {oc('block')}")
+        lines.append(f"\t\ttcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
+    if local_guard:
+        for list_ids, target in policy.get("private_rules", []):
+            for lid in list_ids:
+                if lid in available:
+                    lines.append(f"\t\tip daddr @local4 ip daddr @l_{lid} goto {oc(target)}")
+        lines.append(f"\t\tip daddr @local4 goto {oc(policy.get('private_default', 'direct'))}")
+    if sniff and not private_sniff:
         lines.append(f"\t\tudp dport 443 goto {oc('block')}")
         lines.append(f"\t\ttcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
     for list_ids, out in policy["rules"]:
@@ -178,7 +192,14 @@ def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[i
             default = int(default)
         while rules and rules[-1][1] == default:  # хвостовые правила ничего не меняют
             rules.pop()
-        return {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
+        result = {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
+        if policy.get("private_rules"):
+            result["private_rules"] = [(l, fix(o)) for l, o in policy["private_rules"]]
+        if policy.get("private_domain"):
+            result["private_domain"] = True
+        if "private_default" in policy:
+            result["private_default"] = fix(policy["private_default"])
+        return result
 
     gp = norm(global_policy)
     chains: dict[tuple, str] = {_policy_key(gp): "p_global"}
@@ -214,7 +235,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     policies, client_map = layout(global_policy, client_policies, up_nums, balance)
     marks = sniff_marks(policies) if sniff_port else {}
 
-    used_lists = sorted({lid for p in policies.values() for l, _ in p["rules"] for lid in l})
+    used_lists = sorted({lid for p in policies.values() for l, _ in [*p["rules"], *p.get("private_rules", [])] for lid in l})
+    private = any(p.get("private_domain") or p.get("private_rules") or "private_default" in p for p in policies.values())
     available = {lid for lid in used_lists if lists.get(lid)}
 
     out = [f"table ip {T}", f"delete table ip {T}", f"table ip {T} {{"]
@@ -231,16 +253,16 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         out.append("\t\t}")
     out.append("\t}")
 
+    local_bypass = "" if private else "\n\t\tip daddr @local4 return"
     out.append(f"""\tchain c_prerouting {{
 \t\ttype filter hook prerouting priority mangle; policy accept;
-\t\tiifname != "{wg_iface}" return
-\t\tip daddr @local4 return
+\t\tiifname != "{wg_iface}" return{local_bypass}
 \t\tip saddr vmap @clients
 \t\tgoto p_global
 \t}}""")
 
     for name in sorted(policies, key=lambda n: (n != "p_global", n)):
-        out.append(_policy_chain(name, policies[name], available, name in marks))
+        out.append(_policy_chain(name, policies[name], available, name in marks, local_guard=private))
 
     out.append("\tchain o_direct {\n\t\taccept\n\t}")
     out.append(f"\tchain o_block {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept\n\t}}")
@@ -280,8 +302,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 \t\tmeta mark vmap {{ {vm} }}
 \t}}""")
         for n in marks:
-            out.append(_policy_chain("q_" + n, policies[n], available, False, oq).replace(
-                f"\tchain q_{n} {{", f"\tchain q_{n} {{\n\t\tip daddr @local4 goto oq_direct", 1))
+            out.append(_policy_chain("q_" + n, policies[n], available, False, oq, local_guard=True))
         out.append("\tchain oq_direct {\n\t\tmeta mark set 0x0 accept\n\t}")
         out.append("\tchain oq_block {\n\t\treject with tcp reset\n\t}")
         for u in sorted(upstreams, key=lambda x: x["num"]):

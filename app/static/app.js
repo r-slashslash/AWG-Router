@@ -132,13 +132,13 @@ function effChip(eff, wanted) {
   }
   return outChip(val);
 }
-function outOptions(selected, { inherit = null, exclude = null, socksOnly = false } = {}) {
+function outOptions(selected, { inherit = null, exclude = null, domainOnly = false } = {}) {
   const opts = [];
   if (inherit !== null) opts.push(["inherit", inherit]);
-  if (!socksOnly) opts.push(["direct", t("out.direct")]);
-  for (const u of S.upstreams) if ("up:" + u.id !== exclude && (!socksOnly || u.kind === "socks5")) opts.push(["up:" + u.id, t("out.via", { name: u.name })]);
-  if (!socksOnly) opts.push(["block", t("out.block")]);
-  if (socksOnly && !opts.some(([v]) => v === selected)) opts.unshift([selected, t("re.need_socks")]);
+  if (!domainOnly) opts.push(["direct", t("out.direct")]);
+  for (const u of S.upstreams) if ("up:" + u.id !== exclude && (!domainOnly || ["socks5", "ikev2"].includes(u.kind))) opts.push(["up:" + u.id, t("out.via", { name: u.name })]);
+  if (!domainOnly) opts.push(["block", t("out.block")]);
+  if (domainOnly && !opts.some(([v]) => v === selected)) opts.unshift([selected, t("re.need_socks")]);
   return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(l)}</option>`).join("");
 }
 /* балансировка и ограничение скорости */
@@ -419,7 +419,7 @@ function viewOverview() {
     const na = assigned["up:" + u.id] || 0;
     const meta = [
       `<span><bdi>${esc(u.endpoint || "")}</bdi></span>`,
-      h.healthy ? `<span>${esc(u.kind === "socks5" ? t("ov.socks_ms", { ms: h.latency_ms ?? "?" }) : t("ov.handshake", { ago: fmtAge(h.handshake_age) }))}</span>` : "",
+      h.healthy ? `<span>${esc(u.kind === "ikev2" ? t("ike.connected") : u.kind === "socks5" ? t("ov.socks_ms", { ms: h.latency_ms ?? "?" }) : t("ov.handshake", { ago: fmtAge(h.handshake_age) }))}</span>` : "",
       acctOn() ? `<span>${esc(t("ex.month"))} ${arrows(u.traffic)}</span>`
         : h.rx != null && u.enabled ? `<span>↓ ${esc(fmtBytes(h.rx))} ↑ ${esc(fmtBytes(h.tx))}</span>` : "",
       acctOn() && !dead && (u.rate_down || u.rate_up || Math.max(...(u.speed || [0])) >= 12500) ? `<span>${speedHtml(u)}</span>` : "",
@@ -939,18 +939,18 @@ function editClient(pk, section = null) {
 
 /* ================================================================ редактор правил */
 const LIST_KINDS = ["country", "asn", "url", "manual", "domains"];
-/** список в правило; первый список доменов — выход первый SOCKS5, если выбран не он */
+/** Для доменного списка выбираем первый выход, поддерживающий именные правила. */
 function addListTo(r, id) {
   if (r.lists.includes(id)) return;
   r.lists.push(id);
-  if (isDomainList(id) && !socksExits().some((u) => "up:" + u.id === r.outbound) && socksExits().length) r.outbound = "up:" + socksExits()[0].id;
+  if (isDomainList(id) && !domainExits().some((u) => "up:" + u.id === r.outbound) && domainExits().length) r.outbound = "up:" + domainExits()[0].id;
 }
 const isDomainList = (id) => (listObj(id) || {}).kind === "domains";
-const socksExits = () => S.upstreams.filter((u) => u.kind === "socks5");
+const domainExits = () => S.upstreams.filter((u) => ["socks5", "ikev2"].includes(u.kind));
 function rulesEditor(box, rules, onChange, { create = null } = {}) {
   const draw = () => {
     const items = rules.map((r, i) => {
-      // списки доменов — отдельные правила и только на выход SOCKS5 (имя сайта передаётся прокси)
+      // Сайты выбирает посредник, поэтому их правила отделены от правил по сетям.
       const dom = r.lists.some(isDomainList);
       const addable = S.lists.filter((l) => !r.lists.includes(l.id) && (!r.lists.length || (l.kind === "domains") === dom));
       const kinds = LIST_KINDS.filter((k) => !r.lists.length || (k === "domains") === dom);
@@ -963,9 +963,9 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
             <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
           </div>
           <input type="text" class="rule-comment" data-comment value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}" maxlength="80">
-          ${dom ? `<div class="small muted" style="margin-top:4px">${esc(t(socksExits().length ? "re.domain_hint" : "re.domain_no_socks"))}</div>` : ""}
+          ${dom ? `<div class="small muted" style="margin-top:4px">${esc(t(domainExits().length ? "re.domain_hint" : "re.domain_no_socks"))}</div>` : ""}
         </div>
-        <div class="rule-then"><label>${esc(t(dom ? "re.then_sites" : "re.then"))}</label><select data-out>${outOptions(r.outbound, { socksOnly: dom })}</select></div>
+        <div class="rule-then"><label>${esc(t(dom ? "re.then_sites" : "re.then"))}</label><select data-out>${outOptions(r.outbound, { domainOnly: dom })}</select></div>
         <div class="rule-ctl">
           <label class="switch" title="${esc(t("re.enabled"))}"><input type="checkbox" data-en ${r.enabled ? "checked" : ""} aria-label="${esc(t("re.enabled"))}"><span></span></label>
           <button class="icon-btn" type="button" data-up ${i === 0 ? "disabled" : ""} aria-label="${esc(t("re.up"))}">↑</button>
@@ -1104,11 +1104,11 @@ function viewExits() {
   const cards = S.upstreams.map((u) => {
     const h = u.health || {};
     let st = stateBadge(u);
-    if (u.enabled && h.healthy && !quotaSwitched(u)) st = `<span class="state"><span class="dot ok"></span>${esc(u.kind === "socks5" ? t("ex.working_socks", { ms: h.latency_ms ?? "?" }) : t("ex.working", { ago: fmtAge(h.handshake_age) }))}</span>`;
+    if (u.enabled && h.healthy && !quotaSwitched(u)) st = `<span class="state"><span class="dot ok"></span>${esc(u.kind === "ikev2" ? t("ike.connected") : u.kind === "socks5" ? t("ex.working_socks", { ms: h.latency_ms ?? "?" }) : t("ex.working", { ago: fmtAge(h.handshake_age) }))}</span>`;
     else if (u.enabled && u.kind === "socks5" && h.error && h.state !== "error") st += ` <span class="small warn-text">${esc(tm(h.error))}</span>`;
     else if (u.enabled && h.state === "error") st = `<span class="state"><span class="dot bad"></span>${esc(tm(h.error) || t("st.error"))}</span>`;
     else if (u.enabled && h.handshake_age) st += ` <span class="muted small">${esc(t("ex.last_handshake", { ago: fmtAge(h.handshake_age) }))}</span>`;
-    const ver = u.kind === "socks5" ? "SOCKS5" : u.version ? `AWG ${u.version}` : u.config_error ? "" : "WireGuard";
+    const ver = u.kind === "ikev2" ? "IKEv2" : u.kind === "socks5" ? "SOCKS5" : u.version ? `AWG ${u.version}` : u.config_error ? "" : "WireGuard";
     return `
     <div class="panel exit ${u.enabled ? "" : "disabled-exit"}" style="--c:${lineVar(u)}">
       <div class="exit-bar"></div>
@@ -1244,8 +1244,9 @@ async function editUpstream(id) {
     try { conf = (await api("GET", `upstreams/${id}/config`)).config; } catch (e) { toast(e.message, true); return; }
     if (u.own_list && listObj(u.own_list)) { try { ownText = (await api("GET", "lists/" + u.own_list)).source || ""; } catch (e) { /* пусто */ } }
   }
-  let kind = u ? (u.kind === "socks5" ? "socks5" : "awg") : "awg";
-  const buf = { awg: kind === "awg" ? conf : "", socks5: kind === "socks5" ? conf : "" };
+  let kind = u ? (u.kind || "awg") : "awg";
+  const buf = { awg: kind === "awg" ? conf : "", socks5: kind === "socks5" ? conf : "", ikev2: kind === "ikev2" ? conf : "" };
+  const ike = kind === "ikev2" ? JSON.parse(conf) : {};
   // что сейчас ведёт на этот выход в общих правилах
   const routed = new Set(out ? S.routing.rules.filter((r) => r.outbound === out && r.enabled !== false).flatMap((r) => r.lists) : []);
   const dlists = S.lists.filter((l) => l.kind === "domains" && l.id !== (u && u.own_list));
@@ -1254,7 +1255,7 @@ async function editUpstream(id) {
   const group = (title, ls) => ls.length ? `<div class="field"><span>${esc(title)}</span><div class="check-cols">${ls.map(box).join("")}</div></div>` : "";
   openModal(u ? t("ex.modal_title", { name: u.name }) : t("ex.new"), `
     <div class="field"><span>${esc(t("ex.kind"))}</span>
-      <div class="seg" id="u-kind"><button type="button" data-v="awg">AmneziaWG</button><button type="button" data-v="socks5">SOCKS5</button></div>
+      <div class="seg" id="u-kind"><button type="button" data-v="awg">AmneziaWG</button><button type="button" data-v="socks5">SOCKS5</button><button type="button" data-v="ikev2">IKEv2</button></div>
       ${u ? `<span class="hint">${esc(t("ex.kind_locked"))}</span>` : ""}</div>
     <label class="field"><span>${esc(t("ex.name"))}</span><input type="text" id="u-name" maxlength="40" value="${esc(u ? u.name : "")}" placeholder="${esc(t("ex.name_ph"))}"></label>
     <div id="u-sf">
@@ -1267,7 +1268,21 @@ async function editUpstream(id) {
         <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input type="password" id="u-sw" dir="ltr" autocomplete="new-password" placeholder="${esc(t("ex.socks_opt"))}"></label>
       </div>
     </div>
-    <label class="field"><span id="u-conf-l"></span>
+    <div id="u-ike">
+      <label class="field"><span>${esc(t("ike.host"))}</span><input id="u-ih" type="text" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(ike.host || "")}" placeholder="vpn.example.com"></label>
+      <div class="row2">
+        <label class="field"><span>${esc(t("ike.remote_id"))}</span><input id="u-ir" type="text" dir="ltr" autocomplete="off" value="${esc(ike.remote_id || "")}" placeholder="vpn.example.com"></label>
+        <label class="field"><span>${esc(t("ike.local_id"))}</span><input id="u-il" type="text" dir="ltr" autocomplete="off" value="${esc(ike.local_id || "")}"></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>${esc(t("ex.socks_user"))}</span><input id="u-iu" type="text" dir="ltr" autocomplete="off" value="${esc(ike.user || "")}"></label>
+        <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input id="u-iw" type="password" dir="ltr" autocomplete="new-password" value="${esc(ike.password || "")}"></label>
+      </div>
+      <label class="field"><span>${esc(t("ike.ca"))}</span><textarea id="u-ic" dir="ltr" spellcheck="false">${esc(ike.ca || "")}</textarea><span class="hint">${esc(t("ike.cert_hint"))}</span></label>
+      <label class="field"><span>MTU</span><input id="u-im" type="number" min="1100" max="1500" value="${esc(ike.mtu || 1280)}"></label>
+      <p class="small muted">${esc(t("ike.sites_hint"))}</p>
+    </div>
+    <label class="field" id="u-configf"><span id="u-conf-l"></span>
       <textarea id="u-conf" dir="ltr" spellcheck="false"></textarea>
       <span class="hint" id="u-conf-h"></span>
     </label>
@@ -1310,14 +1325,17 @@ async function editUpstream(id) {
     if (f) for (const k in F) F[k].value = f[k];
   };
   const draw = () => {
-    const socks = kind === "socks5";
+    const socks = kind === "socks5", ike = kind === "ikev2";
     $$("#u-kind button").forEach((b) => {
       b.setAttribute("aria-pressed", b.dataset.v === kind);
       b.disabled = !!u && b.dataset.v !== kind;          // тип существующего выхода не меняется
     });
-    $("#u-sf").hidden = $("#u-route").hidden = !socks;
-    $("#u-filef").hidden = socks;
-    if ($("#u-defl")) $("#u-defl").hidden = socks;      // у SOCKS5 — в блоке маршрутизации
+    $("#u-sf").hidden = !socks;
+    $("#u-ike").hidden = !ike;
+    $("#u-route").hidden = !(socks || ike);
+    $("#u-configf").hidden = ike;
+    $("#u-filef").hidden = socks || ike;
+    if ($("#u-defl")) $("#u-defl").hidden = socks || ike;
     $("#u-conf-l").textContent = t(socks ? "ex.socks_line" : "ex.config");
     $("#u-conf-h").textContent = socks ? t("ex.socks_line_hint") : t("ex.config_hint");
     ta.placeholder = socks ? "socks5://login:password@203.0.113.20:1080" : t("ex.config_ph");
@@ -1327,7 +1345,9 @@ async function editUpstream(id) {
   };
   $$("#u-kind button").forEach((b) => b.onclick = () => {
     if (b.disabled || b.dataset.v === kind) return;
-    buf[kind] = ta.value; kind = b.dataset.v; draw();
+    buf[kind] = ta.value; kind = b.dataset.v;
+    if (!u) $("#u-fb").value = kind === "ikev2" ? "block" : "direct";
+    draw();
   });
   Object.values(F).forEach((el) => el.oninput = () => {
     if (el === F.port) el.value = el.value.replace(/\D/g, "");
@@ -1349,9 +1369,12 @@ async function editUpstream(id) {
     const body = { name: $("#u-name").value.trim(), fallback: $("#u-fb").value,
       quota_gb: $("#u-quota").value.trim(), quota_action: $("#u-qa").value,
       rate_down: $("#u-rd").value.trim() || null, rate_up: $("#u-ru").value.trim() || null };
-    const c = ta.value.trim();
+    const c = kind === "ikev2" ? JSON.stringify({ kind: "ikev2", host: $("#u-ih").value.trim(),
+      remote_id: $("#u-ir").value.trim(), local_id: $("#u-il").value.trim(),
+      user: $("#u-iu").value, password: $("#u-iw").value, ca: $("#u-ic").value.trim(),
+      mtu: +$("#u-im").value || 1280 }) : ta.value.trim();
     if (!u || c !== conf.trim()) body.config = c;
-    if (kind === "socks5" && (routeTouched || !u)) {
+    if (["socks5", "ikev2"].includes(kind) && (routeTouched || !u)) {
       const picked = $$("#u-route [data-rl]").filter((x) => x.checked).map((x) => x.dataset.rl);
       body.routing = { domains: $("#u-doms").value.trim(), default: $("#u-rdef").checked,
         domain_lists: picked.filter((x) => dlists.some((l) => l.id === x)),

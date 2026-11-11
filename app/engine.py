@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 
-from . import awgconf, balance, config, domains, limits, lists, nftgen, shaping, socks, system
+from . import awgconf, balance, config, domains, ikev2, limits, lists, nftgen, shaping, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
@@ -67,6 +67,9 @@ class UpRT:
         self.started = time.time()
         self.socks_ip: str | None = None        # адрес прокси SOCKS5 (имя разрешает панель)
         self.reresolved = 0.0                   # когда последний раз заново разбирали имя из Endpoint
+        self.ike: ikev2.Runtime | None = None    # свой демон IKEv2 и его управляющий сокет
+        self.ike_address = ""                  # виртуальный IPv4, выданный сервером IKEv2
+        self.ike_down_since = self.started     # начало ожидания установленного CHILD_SA
 
 
 class HelperRT:
@@ -257,6 +260,8 @@ class Engine:
         r = self.rt.pop(uid, None)
         if not r:
             return
+        if r.ike:
+            r.ike.close()
         if r.proc and r.proc.poll() is None:
             r.proc.terminate()
             try:
@@ -280,7 +285,14 @@ class Engine:
                   conf_hash: str) -> None:
         r = UpRT(u["num"], conf_hash, t.key)
         ifn = r.iface
+        if pc.kind == "ikev2" and not config.DRY_RUN:
+            r.ike = ikev2.Runtime(os.path.join(RUN_DIR, f"ike-{r.num}"), r.iface)
+            r.ike.check_owner()        # чужой активный выход нельзя затронуть даже до запуска charon
         t.ns(["ip", "link", "del", ifn], check=False)
+        if pc.kind == "ikev2":
+            self.rt[uid] = r
+            self._start_ike(t, r, u, pc)
+            return
         if pc.kind == "socks5":
             self._start_socks(t, r, u, pc)
             self.rt[uid] = r
@@ -342,6 +354,23 @@ class Engine:
         t.ns(["ip", "link", "set", ifn, "mtu", str(pc.mtu), "up"])
         t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
         self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
+
+    def _start_ike(self, t: system.Target, r: UpRT, u: dict, pc: awgconf.UpstreamConf) -> None:
+        """XFRM сохраняет модель интерфейсов выходов и отделяет политики IPsec от прочей сети."""
+        if not config.DRY_RUN:
+            try:
+                t.ns(["ip", "link", "add", r.iface, "type", "xfrm", "if_id", str(ikev2.XFRM_ID_BASE + r.num)])
+            except system.SysError:
+                raise system.SysError(Msg("ike.xfrm_failed")) from None
+        t.ns(["ip", "addr", "replace", f"169.254.200.{r.num}/32", "dev", r.iface])
+        t.ns(["ip", "link", "set", r.iface, "mtu", str(pc.mtu), "up"])
+        t.ns(["sysctl", "-qw", f"net.ipv4.conf.{r.iface}.rp_filter=2"], check=False)
+        if not config.DRY_RUN:
+            ip = awgconf.resolve_host(pc.ikev2["host"])
+            self._sync_rules(t)       # защищающий маршрут проверяется до выбора выхода в nftables
+            r.ike.start(t, pc.ikev2, ip, os.path.join(LOG_DIR, f"{r.iface}.log"))
+            r.proc = r.ike.proc
+        self.event("info", Msg("ev.tunnel_up", iface=r.iface, name=u["name"], endpoint=pc.endpoint))
 
     def _start_socks(self, t: system.Target, r: UpRT, u: dict, pc: awgconf.UpstreamConf) -> None:
         """hev-socks5-tunnel в сети сервера: создаёт TUN awgrN и отправляет всё из него в прокси."""
@@ -480,6 +509,9 @@ class Engine:
             if kind == "socks5":
                 self._socks_health(t, u, r, now)
                 continue
+            if kind == "ikev2":
+                self._ike_health(u, r, now)
+                continue
             if config.DRY_RUN and self._fake and r.iface not in self._fake.handshakes:
                 # в демо второй туннель «мёртвый», чтобы было видно резервирование
                 self._fake.handshakes[r.iface] = now - (900 if r.num == 2 else 20)
@@ -507,6 +539,30 @@ class Engine:
                 "endpoint": peer["endpoint"] if peer else None,
                 "since": r.started,
             }
+
+    def _ike_health(self, u: dict, r: UpRT, now: float) -> None:
+        """Готовность и SNAT меняются вместе с установленным CHILD_SA и его виртуальным адресом."""
+        error = None
+        try:
+            status = r.ike.status() if r.ike else {"healthy": bool(config.DRY_RUN), "address": "10.250.0.2" if config.DRY_RUN else "", "rx": 0, "tx": 0}
+        except (OSError, subprocess.TimeoutExpired):
+            status = {"healthy": False, "address": "", "rx": 0, "tx": 0}
+            error = Msg("ike.check_failed")
+        healthy = status["healthy"]
+        prev = self.health.get(u["id"], {}).get("healthy")
+        if prev is not None and prev != healthy:
+            self.event("info" if healthy else "warn", Msg("ev.upstream_ok" if healthy else "ev.upstream_failed", name=u["name"], uid=u["id"]))
+        r.ike_address = status["address"]
+        if healthy:
+            r.ike_down_since = now
+        self.health[u["id"]] = {"state": "up" if healthy else ("connecting" if now - r.started < 30 else "stale"),
+                                  "healthy": healthy, "iface": r.iface, "endpoint": self.parsed(u).endpoint,
+                                  "address": r.ike_address, "since": r.started,
+                                  "rx": status["rx"], "tx": status["tx"], "error": error}
+        # Отказ начальной аутентификации не создаёт SA для DPD: пробуем новый сеанс с общей паузой.
+        if not healthy and now - r.ike_down_since >= 120:
+            self._stop_up(u["id"])
+            self._failed_up(u["id"], f"{r.conf_hash}|{r.target_key}", Msg("ike.connect_failed"), u)
 
     def _reresolve(self, t: system.Target, u: dict, r: UpRT, peer: dict, now: float) -> None:
         """Туннель с именем в Endpoint не отвечает: разбираем имя заново и, если адрес сменился,
@@ -773,22 +829,49 @@ class Engine:
     def domain_lists(st: dict) -> set[str]:
         return {l["id"] for l in st["lists"] if l.get("kind") == "domains"}
 
+    def _ike_outs(self, st: dict) -> set[str]:
+        """Повреждённый выход остаётся в состоянии ошибки, не прерывая генерацию остальных правил."""
+        outs = set()
+        for u in st["upstreams"]:
+            try:
+                if self.parsed(u).kind == "ikev2":
+                    outs.add("up:" + u["id"])
+            except awgconf.ConfigError:
+                continue
+        return outs
+
     def _policies(self, st: dict) -> tuple[dict, dict]:
         """Общая и личные политики для nftables и sniproxy.py: правила по адресам — с выходом
         после резолва; правила со списками доменов — отдельно (их выход резолвит sniproxy-конфиг)."""
         dl = self.domain_lists(st)
+        ike_outs = self._ike_outs(st)
 
         def conv(pol: dict, pk: str | None) -> dict:
-            ip_rules, dom = [], []
+            ip_rules, dom, private_rules = [], [], []
+            has_ike_rule = False
             for r in pol["rules"]:
                 if any(lid in dl for lid in r["lists"]):
                     dom.append(([lid for lid in r["lists"] if lid in dl], r["outbound"]))
                 else:
-                    ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
-            default = self.resolve(self.default_out(st, pk, pol), st)
+                    resolved = self.resolve(r["outbound"], st)
+                    ip_rules.append((r["lists"], resolved))
+                    is_ike = r["outbound"] in ike_outs
+                    has_ike_rule = has_ike_rule or is_ike
+                    private_rules.append((r["lists"], resolved if is_ike or r["outbound"] == "block" else "direct"))
+            wanted_default = self.default_out(st, pk, pol)
+            default = self.resolve(wanted_default, st)
             if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
                 default = nftgen.Sticky(default)     # открытые соединения не переезжают
-            return {"rules": ip_rules, "default": default, "domain": dom}
+            result = {"rules": ip_rules, "default": default, "domain": dom}
+            # Сети компании часто частные. Разрешаем обход общего исключения local4
+            # только явно выбранным IKEv2-правилам, сохраняя поведение остальных выходов.
+            if has_ike_rule or wanted_default in ike_outs:
+                result["private_rules"] = private_rules
+            if any(o in ike_outs for _, o in dom):
+                result["private_domain"] = True
+            if wanted_default in ike_outs:
+                result["private_default"] = default
+            return result
 
         gp = conv(self.policy_for(st, None), None)
         cps = {}
@@ -808,11 +891,17 @@ class Engine:
                     pc = self.parsed(u)
                 except Exception:  # noqa: BLE001
                     continue
-                ups.append({"num": u["num"], "snat": pc.address, "mtu": pc.mtu})
+                address = self.rt[u["id"]].ike_address if pc.kind == "ikev2" else pc.address
+                ups.append({"num": u["num"], "snat": address, "mtu": pc.mtu})
         return ups
 
     def build_ruleset(self, t: system.Target, st: dict, sniff_port: int | None = None) -> str:
         gp, cps = self._policies(st)
+        # Если посредник IKEv2-сайтов не запустился, перенаправление в закрытый порт
+        # сохраняется: обычный маршрут не должен подменять выбранный корпоративный выход.
+        ike_outs = self._ike_outs(st)
+        if not sniff_port and any(o in ike_outs for p in [gp, *cps.values()] for _, o in p.get("domain", [])):
+            sniff_port = config.SNI_PROXY_PORT
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
         return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port, self.bal_nums)
@@ -1179,6 +1268,7 @@ class Engine:
     # -------------------------------------------------------- ip rule/route
     def _sync_rules(self, t: system.Target) -> None:
         want = {r.num for r in self.rt.values()}
+        protected = {r.num for r in self.rt.values() if r.ike is not None}
         lo, hi = config.RULE_PRIO_BASE + 1, config.RULE_PRIO_BASE + config.MAX_UPSTREAMS
         p = t.ns(["ip", "-j", "rule", "show"], check=False)
         try:
@@ -1206,9 +1296,9 @@ class Engine:
                       "priority", str(config.RULE_PRIO_BASE + num)])
             # Если туннель исчезнет, останется unreachable — трафик не утечёт мимо
             t.ns(["ip", "route", "replace", "unreachable", "default", "metric", "4096",
-                  "table", table], check=False)
+                  "table", table], check=num in protected)
             t.ns(["ip", "route", "replace", "default", "dev", f"{config.IFACE_PREFIX}{num}",
-                  "table", table], check=False)
+                  "table", table], check=num in protected)
 
     def _sysctl(self, t: system.Target) -> None:
         for kv in ("net.ipv4.ip_forward=1", "net.ipv4.conf.all.rp_filter=2",
@@ -1588,14 +1678,20 @@ class Engine:
         dl = self.domain_lists(st)
         sni_on = bool(self.sni_state and self.sni_state.get("state") == "on")
         steps = []
-        for net in nftgen.LOCAL_NETS:
-            if ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(net):
-                return {"result": "direct", "effective": "direct",
-                        "steps": [Msg("tr.local", ip=ip, net=net)]}
+        local_net = next((net for net in nftgen.LOCAL_NETS if ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(net)), None)
         pol = self.policy_for(st, pk)
+        ike_outs = self._ike_outs(st)
+        private_domains = any(r["outbound"] in ike_outs and any(lid in dl for lid in r["lists"]) for r in pol["rules"])
+        private_networks = self.default_out(st, pk, pol) in ike_outs or any(
+            r["outbound"] in ike_outs and not any(lid in dl for lid in r["lists"]) for r in pol["rules"])
+        if local_net and not private_domains and not private_networks:
+            return {"result": "direct", "effective": "direct", "steps": [Msg("tr.local", ip=ip, net=local_net)]}
         steps.append(Msg("tr.client_rules" if pk and st["clients"].get(pk, {}).get("rules_mode")
                          == "custom" else "tr.global_rules"))
-        for r in pol["rules"] if name and sni_on else []:
+        domain_route = bool(name) and (not local_net or private_domains)
+        if domain_route and private_domains and not sni_on:
+            return {"result": "block", "effective": "block", "steps": [*steps, Msg("ls.sni_error")]}
+        for r in pol["rules"] if domain_route and sni_on else []:
             for lid in r["lists"]:
                 dom = self.domain_matcher.match(lid, name) if lid in dl else None
                 if dom:
@@ -1603,17 +1699,19 @@ class Engine:
                     eff = self.resolve(r["outbound"], st)
                     return {"result": r["outbound"], "effective": eff, "steps": steps,
                             "rule": r.get("comment") or r["id"], "domain": dom}
-        for r in pol["rules"]:
+        for r in pol["rules"] if not local_net or private_networks else []:
             for lid in r["lists"]:
                 if lid in dl:
                     continue
                 hit = self.matcher.contains(lid, ip)
                 if hit:
                     steps.append(Msg("tr.match", list=lid, net=hit))
-                    eff = self.resolve(r["outbound"], st)
-                    return {"result": r["outbound"], "effective": eff, "steps": steps,
+                    out = r["outbound"] if not local_net or r["outbound"] in ike_outs or r["outbound"] == "block" else "direct"
+                    return {"result": out, "effective": self.resolve(out, st), "steps": steps,
                             "rule": r.get("comment") or r["id"]}
         out = self.default_out(st, pk, pol)
+        if local_net and out not in ike_outs:
+            return {"result": "direct", "effective": "direct", "steps": [*steps, Msg("tr.local", ip=ip, net=local_net)]}
         if out != pol["default"]:
             steps.append(Msg("tr.balance" if pk else "tr.balance_new",
                              exit=(Store.upstream(st, out[3:]) or {}).get("name", out)))

@@ -11,6 +11,7 @@ import urllib.parse
 import zlib
 from dataclasses import dataclass, field
 
+from . import ikev2
 from .i18n import Msg, MsgError
 
 # Ключи, которые понимает только awg-quick; в `awg setconf` их передавать нельзя
@@ -64,8 +65,9 @@ class UpstreamConf:
     rekey_after: int = 120
     params: dict = field(default_factory=dict)
     version: str = ""
-    kind: str = "awg"              # "awg" | "socks5"
+    kind: str = "awg"              # "awg" | "socks5" | "ikev2"
     socks: dict = field(default_factory=dict)   # host, port, user, password
+    ikev2: dict = field(default_factory=dict)   # проверенные параметры IKEv2
 
 
 SOCKS_MTU = 8500                   # как советует hev-socks5-tunnel: TCP он завершает сам
@@ -229,6 +231,22 @@ def _range_max(v: str, default: int) -> int:
 
 
 def parse_upstream(user_input: str) -> UpstreamConf:
+    """Тип выхода определяется из сохранённого конфига, в том числе при восстановлении копии."""
+    if user_input.lstrip().startswith("{"):
+        try:
+            fields = json.loads(user_input)
+        except ValueError:
+            fields = None
+        if isinstance(fields, dict) and fields.get("kind") == "ikev2":
+            try:
+                fields = ikev2.normalize(fields)
+            except ikev2.Ikev2Error as e:
+                raise ConfigError(e.msg) from None
+            host = fields["host"]
+            endpoint = f"[{host}]:500" if ":" in host else f"{host}:500"
+            return UpstreamConf(raw=json.dumps(fields, ensure_ascii=False, sort_keys=True), setconf="",
+                                address="", mtu=fields["mtu"], endpoint=endpoint,
+                                peer_public_key="", kind="ikev2", ikev2=fields)
     if is_socks(user_input):
         return parse_socks(user_input)
     text = extract_conf_text(user_input)
