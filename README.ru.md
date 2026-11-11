@@ -10,13 +10,8 @@
   <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/release.yml?query=branch%3Amain+event%3Apush"><img src="https://img.shields.io/github/actions/workflow/status/r-slashslash/AWG-Router/release.yml?branch=main&event=push&label=CI&logo=github" alt="CI: unit and network tests, image build"></a>
   <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/e2e.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/e2e.yml/badge.svg" alt="E2E"></a>
   <br>
-  <a href="https://github.com/r-slashslash/AWG-Router/actions/workflows/codeql.yml"><img src="https://github.com/r-slashslash/AWG-Router/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
   <a href="https://github.com/r-slashslash/AWG-Router/attestations"><img src="https://img.shields.io/badge/provenance-signed-brightgreen" alt="Signed build provenance"></a>
-  <a href="https://github.com/r-slashslash/AWG-Router/blob/main/.github/dependabot.yml"><img src="https://img.shields.io/badge/dependabot-enabled-brightgreen?logo=dependabot&logoColor=white" alt="Dependabot enabled"></a>
-  <a href="https://github.com/r-slashslash/AWG-Router/blob/main/SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue" alt="Security policy"></a>
-  <br>
   <a href="https://github.com/r-slashslash/AWG-Router/pkgs/container/awg-router"><img src="https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker image on ghcr.io"></a>
-  <img src="https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white" alt="Python 3.13">
   <img src="https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen" alt="Dependencies: Python standard library only">
 </p>
 
