@@ -287,9 +287,10 @@ class SocksConnectByNameTest(SocksCheckTest):
 
         with mock.patch.dict(e2e_servers.HOSTS, {"site.test": "127.0.0.1"}):
             async def go():
-                asyncio.get_running_loop().getaddrinfo = getaddrinfo
-                out = await sniproxy.socks_connect({"ip": "proxy.test", "port": self.port, "user": "alice",
-                                                    "password": "pw"}, "site.test", "192.0.2.1", tport)
+                """CONNECT через прокси, имя которого разрешает подменённый резолвер."""
+                with mock.patch.object(asyncio.get_running_loop(), "getaddrinfo", side_effect=getaddrinfo):
+                    out = await sniproxy.socks_connect({"ip": "proxy.test", "port": self.port, "user": "alice",
+                                                        "password": "pw"}, "site.test", "192.0.2.1", tport)
                 out.close()
             asyncio.run(go())
         self.assertEqual(resolved, [("proxy.test", self.port)])
@@ -306,6 +307,7 @@ class SocksConnectByNameTest(SocksCheckTest):
         """
         early = b"site speaks first"
         srv = socket.create_server(("127.0.0.1", 0))
+        srv.settimeout(10)                              # поток прокси не ждёт вечно, если тест упал раньше
         self.addCleanup(srv.close)
 
         def proxy():
@@ -322,6 +324,7 @@ class SocksConnectByNameTest(SocksCheckTest):
         threading.Thread(target=proxy, daemon=True).start()
 
         async def go():
+            """CONNECT через однократный прокси; сокет возвращается, чтобы прочитать байты сайта."""
             return await sniproxy.socks_connect({"ip": "127.0.0.1", "port": srv.getsockname()[1]},
                                                 "site.test", "192.0.2.1", 443)
         out = asyncio.run(go())

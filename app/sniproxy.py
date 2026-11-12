@@ -41,6 +41,7 @@ import struct
 import subprocess
 import sys
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass
 
 SO_MARK = 36
@@ -56,6 +57,7 @@ SPLICE_FLAGS = getattr(os, "SPLICE_F_MOVE", 1) | getattr(os, "SPLICE_F_NONBLOCK"
 IDLE_TIMEOUT = 900          # соединение без данных в обе стороны дольше — закрываем
 KEEPALIVE = (120, 30, 4)    # TCP keepalive: пропавший без FIN собеседник виден через ~4 мин
 STATS_EVERY = 15
+ACCEPT_LOG_EVERY = 10.0     # повторяющуюся ошибку приёма пишем в журнал не чаще, с
 
 
 # --------------------------------------------------------------- разбор имени
@@ -142,6 +144,28 @@ def match(name: str, doms: set[str]) -> bool:
     return any(".".join(labels[i:]) in doms for i in range(len(labels)))
 
 
+async def peek_name(sock: socket.socket, dport: int) -> tuple[bytes, str | None]:
+    """Начало соединения клиента, пока из него не прочитается имя сайта (или PEEK_TIMEOUT, или
+    PEEK_MAX байт). -> (прочитанное: его надо отправить сайту, имя или None)."""
+    loop = asyncio.get_running_loop()
+    data = b""
+    name = False
+    deadline = time.monotonic() + PEEK_TIMEOUT
+    while name is False and len(data) < PEEK_MAX:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        try:
+            chunk = await asyncio.wait_for(loop.sock_recv(sock, PEEK_MAX - len(data)), left)
+        except asyncio.TimeoutError:
+            break
+        if not chunk:
+            break
+        data += chunk
+        name = name_of(data, dport)
+    return data, name or None
+
+
 # --------------------------------------------------------------- SOCKS5
 async def _recv_exact(sock: socket.socket, n: int) -> bytes:
     """Ровно n байт ответа прокси. Лишнее не читается: данные сайта, пришедшие сразу за ответом,
@@ -163,34 +187,42 @@ async def _connect_any(host: str, port: int) -> socket.socket:
     loop = asyncio.get_running_loop()
     err = None
     for family, kind, proto, _, addr in await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM):
-        s = None
         try:
             s = socket.socket(family, kind, proto)
+        except OSError as e:
+            err = e
+            continue
+        try:
             s.setblocking(False)
             await loop.sock_connect(s, addr)
             return s
-        except BaseException as e:
-            if s is not None:
-                s.close()
-            if not isinstance(e, OSError):
-                raise
+        except OSError as e:
+            s.close()
             err = e
-    raise err or OSError(f"socks: no address for {host}")
+        except BaseException:
+            s.close()
+            raise
+    raise err                                           # getaddrinfo не отдаёт пустой список
+
+
+async def send_all(sock: socket.socket, data: bytes) -> None:
+    """Отправка с пределом времени: собеседник, который принял соединение, но не читает,
+    иначе держал бы задачу и её сокеты бесконечно (IDLE_TIMEOUT сюда не доходит)."""
+    await asyncio.wait_for(asyncio.get_running_loop().sock_sendall(sock, data), CONNECT_TIMEOUT)
 
 
 async def socks_connect(s: dict, host: str | None, ip: str, port: int) -> socket.socket:
     """Соединение через прокси: CONNECT по имени (или по адресу, если имени нет).
     Возвращает сырой сокет: дальше поток идёт через splice, как и на прямом пути."""
-    loop = asyncio.get_running_loop()
     sock = await asyncio.wait_for(_connect_any(s["ip"], int(s["port"])), CONNECT_TIMEOUT)
     try:
         user, pw = (s.get("user") or "").encode(), (s.get("password") or "").encode()
-        await loop.sock_sendall(sock, b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")
+        await send_all(sock, b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")
         ver, method = await _recv_exact(sock, 2)
         if ver != 5 or method == 0xFF:
             raise OSError("socks: no acceptable auth method")
         if method == 2:
-            await loop.sock_sendall(sock, b"\x01" + bytes([len(user)]) + user + bytes([len(pw)]) + pw)
+            await send_all(sock, b"\x01" + bytes([len(user)]) + user + bytes([len(pw)]) + pw)
             if (await _recv_exact(sock, 2))[1] != 0:
                 raise OSError("socks: login rejected")
         if host:
@@ -198,7 +230,7 @@ async def socks_connect(s: dict, host: str | None, ip: str, port: int) -> socket
             addr = b"\x03" + bytes([len(hb)]) + hb
         else:
             addr = b"\x01" + socket.inet_aton(ip)
-        await loop.sock_sendall(sock, b"\x05\x01\x00" + addr + struct.pack("!H", port))
+        await send_all(sock, b"\x05\x01\x00" + addr + struct.pack("!H", port))
         head = await _recv_exact(sock, 4)
         if head[1] != 0:
             raise OSError(f"socks: connect failed ({head[1]})")
@@ -294,8 +326,8 @@ async def _ready(fd: int, writable: bool) -> None:
         remove(fd)
 
 
-async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None = None,
-                      i: int = 0, act: list | None = None, bucket: Bucket | None = None) -> None:
+async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None, i: int, act: list,
+                      bucket: Bucket | None) -> None:
     """Копирует поток src -> dst внутри ядра: сокет -> канал -> сокет через splice.
 
     Данные не попадают в Python: копирование в пространство пользователя и обратно стоило
@@ -319,8 +351,7 @@ async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None =
                 break                                   # собеседник закрыл запись
             if cnt is not None:
                 cnt[i] += n
-            if act is not None:
-                act[0] = time.monotonic()
+            act[0] = time.monotonic()
             if bucket is not None:
                 await bucket.take(n)
             # Канал опустошается до следующего чтения: так EAGAIN при чтении означает только пустой сокет.
@@ -340,24 +371,32 @@ async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None =
             pass
 
 
-async def relay_both(up, down, act: list) -> None:
+async def relay_both(up: Awaitable[None], down: Awaitable[None], act: list) -> None:
     """Обе стороны соединения: до конца или пока соединение молчит дольше IDLE_TIMEOUT (act[0] -
     время последних данных). Сокеты потом закрывает вызывающий, поэтому возврат только когда обе
     стороны остановлены: иначе уцелевшая ждала бы на закрытом дескрипторе, который ядро уже выдало
-    другому соединению. Ошибка одной стороны останавливает другую и поднимается дальше."""
+    другому соединению. Сторона, закончившая нормально (собеседник закрыл запись), другую не
+    останавливает. Ошибка одной стороны останавливает другую и поднимается дальше."""
     tasks = [asyncio.ensure_future(up), asyncio.ensure_future(down)]
     try:
         while True:
             done, pending = await asyncio.wait(tasks, timeout=min(60, IDLE_TIMEOUT),
                                                return_when=asyncio.FIRST_EXCEPTION)
-            if not pending or any(t.exception() for t in done):
-                break
-            if time.monotonic() - act[0] > IDLE_TIMEOUT:
+            if not pending or any(t.exception() for t in done) or time.monotonic() - act[0] > IDLE_TIMEOUT:
                 break
     finally:
         for t in tasks:
             t.cancel()
-        await asyncio.wait(tasks)
+        # Повторная отмена (остановка посредника) не прерывает это ожидание: стороны ещё снимают
+        # свои дескрипторы с цикла событий, а сразу за возвратом сокеты закрываются.
+        cancelled = False
+        while not all(t.done() for t in tasks):
+            try:
+                await asyncio.wait(tasks)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
     for t in tasks:
         if not t.cancelled() and t.exception():
             raise t.exception()
@@ -365,19 +404,19 @@ async def relay_both(up, down, act: list) -> None:
 
 def _ipv4_range(text: str) -> int | None:
     """'a.b.c.d/nn' или адрес -> первый адрес << 32 | последний; None: IPv6, мусор, пустая строка.
-    Без модуля ipaddress: он разбирает 100 000 строк за 0,7 с, а inet_pton в разы быстрее. Длина
-    префикса строгая, как у ipaddress и nftables: учёт не должен расходиться с маршрутами."""
+    Без модуля ipaddress: на больших списках он медленный, а inet_pton работает в C. Длина
+    префикса проверяется как у ipaddress (только цифры, 0-32): учёт не должен расходиться с маршрутами."""
     addr, slash, bits = text.partition("/")
     if slash and not (bits.isascii() and bits.isdigit()):
         return None
     try:
         a = int.from_bytes(socket.inet_pton(socket.AF_INET, addr), "big")
-    except OSError:
+    except (OSError, ValueError):                   # ValueError: нулевой байт в испорченной строке
         return None
     n = int(bits) if slash else 32
     if n > 32:
         return None
-    host = (1 << (32 - n)) - 1                      # биты узла: подсеть без strict, как у панели
+    host = (1 << (32 - n)) - 1                      # биты узла обнуляются, как ip_network(strict=False)
     return (a & ~host) << 32 | a | host
 
 
@@ -387,7 +426,7 @@ class Nets:
 
     def __init__(self, path: str):
         # Полоса хранится одним числом "начало << 32 | конец": сортировка держит GIL и на это время
-        # останавливает цикл событий, а числа сортируются втрое быстрее пар.
+        # останавливает цикл событий, а числа сортируются быстрее пар.
         ranges = []
         with open(path) as f:
             for line in f:
@@ -423,9 +462,14 @@ class Conf:
     net: ipaddress.IPv4Network | ipaddress.IPv6Network   # адреса клиентов, которых посредник обслуживает
 
 
+def _positive(v) -> bool:
+    """Число больше нуля из JSON. bool — подкласс int в Python, но true пределом не считается."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+
+
 def load(path: str) -> Conf:
     """Читает и разбирает настройки, ничего не меняя в посреднике: так это можно делать в потоке,
-    пока цикл событий обслуживает соединения (100 000 адресов разбираются около секунды)."""
+    пока цикл событий обслуживает соединения (большие списки адресов разбираются заметное время)."""
     with open(path) as f:
         cfg = json.load(f)
     lists = {}
@@ -445,15 +489,13 @@ def load(path: str) -> Conf:
     for out, pair in (cfg.get("rates") or {}).items():
         for i in (0, 1):
             v = pair[i] if isinstance(pair, list) and len(pair) == 2 else 0
-            if isinstance(v, (int, float)) and v > 0:
+            if _positive(v):
                 rates[(out, i)] = float(v)
     shared = {}
     for out, dirs in (cfg.get("shared") or {}).items():
         for i in (0, 1):
             d = (dirs or {}).get(str(i)) if isinstance(dirs, dict) else None
-            # cap нужен числом: по нему туннелю возвращают весь предел, когда деление кончается
-            if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list) \
-                    and isinstance(d.get("cap"), (int, float)) and d["cap"] > 0:
+            if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list) and _positive(d.get("cap")):
                 shared[(out, i)] = d
     net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
     return Conf(cfg, lists, nets, rates, shared, net)
@@ -471,13 +513,18 @@ class Sniffer:
         self.buckets: dict[tuple[str, int], Bucket] = {}   # (выход, 0 — отдача | 1 — загрузка)
         self.shared: dict[tuple[str, int], dict] = {}
         self.share_state: dict[tuple[str, int], dict] = {}  # скорости и последняя доля tc для деления
-        self.hup = False                    # пришёл SIGHUP, который ещё не перечитан
-        self.reloading: asyncio.Task | None = None
+        self.hup_pending = False            # пришёл SIGHUP, который ещё не перечитан
+        self.reload_task: asyncio.Task | None = None
         self.reload()
 
     def reload(self) -> None:
         """Перечитать настройки сразу, в вызывающем потоке (запуск посредника)."""
-        for d in self.apply(load(self.path)):
+        self.give_back(self.apply(load(self.path)))
+
+    def give_back(self, ds) -> None:
+        """Туннелям этих выходов — весь предел, с ожиданием tc (запуск и остановка: цикл событий
+        ещё или уже не обслуживает соединения)."""
+        for d in ds:
             self.tc_set(d, d["cap"], wait=False)
 
     def apply(self, c: Conf) -> list[dict]:
@@ -485,10 +532,14 @@ class Sniffer:
         ссылку на него, и с новым баком предел выхода делился бы надвое.
         -> настройки tc выходов, которые больше не делятся: их туннелям нужно вернуть весь предел."""
         self.cfg, self.lists, self.nets, self.net = c.cfg, c.lists, c.nets, c.net
-        self.buckets = {k: b if (b := self.buckets.get(k)) and b.cap == r else Bucket(r)
+        old_buckets = self.buckets
+        self.buckets = {k: b if (b := old_buckets.get(k)) and b.cap == r else Bucket(r)
                         for k, r in c.rates.items()}
         old, self.shared = self.shared, c.shared
-        self.share_state = {k: v for k, v in self.share_state.items() if k in c.shared}
+        # Скорости для деления считаются от счётчика бака: при новом баке или новом пределе старое
+        # состояние дало бы ложную (даже отрицательную) скорость посредника.
+        self.share_state = {k: v for k, v in self.share_state.items()
+                            if c.shared.get(k) == old.get(k) and self.buckets.get(k) is old_buckets.get(k)}
         return [d for k, d in old.items() if k not in c.shared or c.shared[k].get("tc") != d.get("tc")]
 
     def policy(self, client: str) -> dict:
@@ -522,9 +573,24 @@ class Sniffer:
             return None
         return self.bytes.setdefault(f"{client}|{out}", [0, 0])
 
+    async def open_upstream(self, to: dict, name: str | None, dip: str, dport: int, data: bytes) -> socket.socket:
+        """Соединение с сайтом по решению decide (через SOCKS5 или с меткой выхода) и отправка
+        первых байт клиента, прочитанных ради имени сайта."""
+        if to.get("socks"):
+            out = await socks_connect(to["socks"], name, dip, dport)
+        else:
+            out = await direct_socket(dip, dport, int(to.get("mark") or 0))
+        try:
+            keepalive(out)
+            if data:
+                await send_all(out, data)
+        except BaseException:
+            out.close()
+            raise
+        return out
+
     async def client(self, sock: socket.socket) -> None:
         """Одно перенаправленное соединение: имя сайта, выбор пути, пересылка через splice."""
-        loop = asyncio.get_running_loop()
         sock.setblocking(False)
         out = None
         counted = False
@@ -539,22 +605,7 @@ class Sniffer:
             self.stats["conns"] += 1
             self.stats["active"] += 1
             counted = True
-            data = b""
-            name = False
-            deadline = time.monotonic() + PEEK_TIMEOUT
-            while name is False and len(data) < PEEK_MAX:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    break
-                try:
-                    chunk = await asyncio.wait_for(loop.sock_recv(sock, PEEK_MAX - len(data)), left)
-                except asyncio.TimeoutError:
-                    break
-                if not chunk:
-                    break
-                data += chunk
-                name = name_of(data, dport)
-            name = name or None
+            data, name = await peek_name(sock, dport)
             if name is None:
                 self.stats["no_name"] += 1
             to, lid = self.decide(peer, name)
@@ -566,18 +617,12 @@ class Sniffer:
             keepalive(sock)
             cnt = self.counter(peer, to.get("acct") if lid else self.miss_out(peer, dip))
             act = [time.monotonic()]
-            if to.get("socks"):
-                out = await socks_connect(to["socks"], name, dip, dport)
-                # через прокси — мимо туннеля выхода: его ограничение скорости — здесь
-                bk = [self.buckets.get((to.get("acct"), i)) for i in (0, 1)]
-            else:
-                out = await direct_socket(dip, dport, int(to.get("mark") or 0))
-                bk = [None, None]           # с меткой идёт через туннель выхода: его ограничивает tc там
-            keepalive(out)
-            if data:
-                await loop.sock_sendall(out, data)
-                if cnt is not None:
-                    cnt[0] += len(data)
+            out = await self.open_upstream(to, name, dip, dport, data)
+            if cnt is not None:
+                cnt[0] += len(data)
+            # через прокси — мимо туннеля выхода: его ограничение скорости — здесь; с меткой
+            # соединение идёт через туннель выхода, и его ограничивает tc там
+            bk = [self.buckets.get((to.get("acct"), i)) if to.get("socks") else None for i in (0, 1)]
             await relay_both(splice_pipe(sock, out, cnt, 0, act, bk[0]),
                              splice_pipe(out, sock, cnt, 1, act, bk[1]), act)
         except (OSError, asyncio.TimeoutError, ValueError) as e:
@@ -596,7 +641,8 @@ class Sniffer:
 
     # ------------------------------------------------ общий предел выхода SOCKS5
     def tc_set(self, d: dict, bps: float, wait: bool = True):
-        """Скорость класса tc туннеля → bps (байт/с). wait=False — без ожидания (остановка, reload)."""
+        """Скорость класса tc туннеля → bps (байт/с). wait=False — дождаться tc здесь же, до 5 с
+        (запуск и остановка); иначе процесс tc отдаётся вызывающему, чтобы ждать его вне цикла."""
         argv = [str(x).replace("{kbit}", str(max(1, int(bps * 8 / 1000)))) for x in d["tc"]]
         try:
             p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -647,10 +693,17 @@ class Sniffer:
                     dev = net_dev(f.read())
             except OSError:
                 dev = {}
-            for d, bps in self.share_tick(dev, time.monotonic()):
-                p = self.tc_set(d, bps)
-                if p is not None:
-                    await asyncio.get_running_loop().run_in_executor(None, self._reap, p)
+            await self.share_once(dev, time.monotonic())
+
+    async def share_once(self, dev: dict[str, tuple[int, int]], now: float) -> None:
+        """Одно деление с установкой долей туннелям. Пока ждём tc одного выхода, SIGHUP мог убрать
+        другой из деления и уже вернуть его туннелю весь предел: запоздалая доля его бы урезала."""
+        for d, bps in self.share_tick(dev, now):
+            if not any(x is d for x in self.shared.values()):
+                continue
+            p = self.tc_set(d, bps)
+            if p is not None:
+                await asyncio.get_running_loop().run_in_executor(None, self._reap, p)
 
     @staticmethod
     def _reap(p) -> None:
@@ -664,8 +717,7 @@ class Sniffer:
 
     def restore(self) -> None:
         """Остановка: туннелям — весь предел."""
-        for d in self.shared.values():
-            self.tc_set(d, d["cap"], wait=False)
+        self.give_back(self.shared.values())
 
     def write_stats(self) -> None:
         p = self.cfg.get("stats")
@@ -686,7 +738,8 @@ class Sniffer:
         listener.bind((host, port))
         listener.listen(1024)
         listener.setblocking(False)
-        asyncio.ensure_future(self.accept_loop(listener))
+        accepting = asyncio.ensure_future(self.accept_loop(listener))
+        accepting.add_done_callback(self.accept_stopped)
         loop.add_signal_handler(signal.SIGHUP, self.on_hup)
         loop.add_signal_handler(signal.SIGTERM, loop.stop)
         log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
@@ -695,15 +748,29 @@ class Sniffer:
             self.write_stats()
             await asyncio.sleep(STATS_EVERY)
 
+    @staticmethod
+    def accept_stopped(task: asyncio.Task) -> None:
+        """Цикл приёма упал: без него посредник только писал бы счётчики, а соединения клиентов
+        ждали бы в очереди. Остановка процесса видна панели, и она запускает посредника заново."""
+        if task.cancelled():
+            return
+        log(f"accept loop stopped: {task.exception()!r}")
+        asyncio.get_running_loop().stop()
+
     async def accept_loop(self, listener: socket.socket) -> None:
         """Свой приём вместо start_server: клиенту нужен сырой сокет, а не потоки asyncio."""
         loop = asyncio.get_running_loop()
         tasks: set[asyncio.Task] = set()      # цикл событий держит только слабые ссылки на задачи
+        logged = None                         # когда последний раз писали об ошибке приёма
         while True:
             try:
                 conn, _ = await loop.sock_accept(listener)
             except OSError as e:
-                log(f"accept: {e}")         # например, исчерпаны дескрипторы: не крутим цикл впустую
+                # например, исчерпаны дескрипторы: сокет остаётся готовым, и ошибка повторяется
+                # на каждой попытке; не крутим цикл впустую и не заливаем журнал
+                if logged is None or time.monotonic() - logged >= ACCEPT_LOG_EVERY:
+                    logged = time.monotonic()
+                    log(f"accept: {e}")
                 await asyncio.sleep(0.1)
                 continue
             task = asyncio.ensure_future(self.client(conn))
@@ -713,15 +780,15 @@ class Sniffer:
     def on_hup(self) -> None:
         """SIGHUP: перечитать настройки. Панель шлёт его при каждом изменении, и сигнал во время
         перечитывания не теряется: после текущего идёт ещё одно, уже с последним файлом."""
-        self.hup = True
-        if self.reloading is None or self.reloading.done():
-            self.reloading = asyncio.ensure_future(self.reload_async())
+        self.hup_pending = True
+        if self.reload_task is None or self.reload_task.done():
+            self.reload_task = asyncio.ensure_future(self.reload_async())
 
     async def reload_async(self) -> None:
         """Чтение и разбор идут в потоке, подмена в цикле событий: соединения не ждут разбора."""
         loop = asyncio.get_running_loop()
-        while self.hup:
-            self.hup = False
+        while self.hup_pending:
+            self.hup_pending = False
             try:
                 conf = await loop.run_in_executor(None, load, self.path)
             except Exception as e:  # noqa: BLE001

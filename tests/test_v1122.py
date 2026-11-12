@@ -262,9 +262,11 @@ class SniTrafficTest(unittest.TestCase):
             json.dump({"listen": "127.0.0.1", "debug": True}, f)
         s = sniproxy.Sniffer(p)
         sock = socket.socket()
-        with mock.patch.object(sniproxy, "log"):
+        with mock.patch.object(sniproxy, "log") as log:     # журнал проверяется: в нём и была ошибка
             asyncio.run(s.client(sock))
         self.assertEqual(sock.fileno(), -1)
+        self.assertTrue(log.call_args.args[0].startswith("?: "), log.call_args)
+        self.assertEqual((s.stats["active"], s.stats["errors"]), (0, 1))
 
     @unittest.skipUnless(hasattr(os, "splice"), "нужен os.splice (Linux)")
     def test_splice_pipe_relays_counts_and_half_closes(self):
@@ -304,8 +306,8 @@ class SniTrafficTest(unittest.TestCase):
 
         Вход: splice_pipe отменяется через 0,1 с, пока ждёт данных от молчащего отправителя или
         ждёт бак (1 КБ/с, отправлено 100 КБ).
-        Ожидание: число дескрипторов процесса вернулось к прежнему, получатель дочитывает до EOF
-        (а не ждёт до таймаута сокета).
+        Ожидание: оба дескриптора канала закрыты, получатель дочитывает до EOF (а не ждёт до
+        таймаута сокета).
         """
         for case, rate, data in (("ждёт данных", None, b""), ("ждёт бак", 1000, b"x" * 100_000)):
             with self.subTest(case):
@@ -313,19 +315,26 @@ class SniTrafficTest(unittest.TestCase):
                 proxy_out, receiver = _tcp_pair()
                 try:
                     sender.sendall(data)
-                    before = len(os.listdir("/proc/self/fd"))
 
                     async def run():
+                        """Запускает пересылку, отменяет её и отдаёт дескрипторы созданного канала."""
                         proxy_in.setblocking(False)
                         proxy_out.setblocking(False)
                         bucket = sniproxy.Bucket(rate) if rate else None
-                        task = asyncio.ensure_future(sniproxy.splice_pipe(proxy_in, proxy_out, bucket=bucket))
-                        await asyncio.sleep(0.1)
+                        fds = []
+                        real_pipe2 = os.pipe2
+                        with mock.patch.object(sniproxy.os, "pipe2",
+                                               side_effect=lambda flags: fds.extend(real_pipe2(flags)) or fds):
+                            task = asyncio.ensure_future(
+                                sniproxy.splice_pipe(proxy_in, proxy_out, [0, 0], 0, [0.0], bucket))
+                            await asyncio.sleep(0.1)
                         task.cancel()
                         with self.assertRaises(asyncio.CancelledError):
                             await task
-                    asyncio.run(run())
-                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                        return fds
+                    for fd in asyncio.run(run()):
+                        with self.assertRaises(OSError):
+                            os.fstat(fd)
                     receiver.settimeout(5)
                     got = b""
                     while chunk := receiver.recv(65536):    # запас бака мог пройти до отмены
@@ -345,19 +354,94 @@ class SniTrafficTest(unittest.TestCase):
         stopped = []
 
         async def fails():
+            """Сторона, упавшая сразу."""
             raise OSError(24, "Too many open files")
 
-        async def waits():
-            try:
-                await asyncio.sleep(3600)
-            finally:
-                stopped.append(True)
+        async def run():
+            """-> какие стороны успели остановиться к возврату relay_both."""
+            with self.assertRaises(OSError):
+                await sniproxy.relay_both(fails(), _side(3600, stopped), [time.monotonic()])
+            return list(stopped)            # до того, как asyncio.run отменит оставшиеся задачи
+        self.assertEqual(asyncio.run(run()), ["cancelled"])
+
+    def test_relay_both_half_close_keeps_other_side(self):
+        """Клиент закрыл запись (запрос отправлен), а ответ сайта ещё идёт.
+
+        Вход: одна сторона заканчивается нормально сразу, другая через 0,2 с.
+        Ожидание: вторая сторона доработала до конца, а не отменена вместе с первой.
+        """
+        stopped = []
 
         async def run():
-            with self.assertRaises(OSError):
-                await sniproxy.relay_both(fails(), waits(), [time.monotonic()])
-            return list(stopped)            # до того, как asyncio.run отменит оставшиеся задачи
-        self.assertEqual(asyncio.run(run()), [True])
+            """Обе стороны заканчиваются сами, в разное время."""
+            await sniproxy.relay_both(_side(0, stopped), _side(0.2, stopped), [time.monotonic()])
+            return list(stopped)
+        self.assertEqual(asyncio.run(run()), ["done", "done"])
+
+    def test_relay_both_stops_idle_connection(self):
+        """Соединение молчит дольше IDLE_TIMEOUT: обе стороны останавливаются.
+
+        Вход: IDLE_TIMEOUT 0,05 с, время последних данных давно в прошлом, обе стороны ждут.
+        Ожидание: relay_both возвращается быстро и без ошибки, обе стороны отменены.
+        """
+        stopped = []
+
+        async def run():
+            """Обе стороны ждут бесконечно; выйти можно только по простою."""
+            await asyncio.wait_for(sniproxy.relay_both(_side(3600, stopped), _side(3600, stopped), [0.0]), 5)
+            return list(stopped)
+        with mock.patch.object(sniproxy, "IDLE_TIMEOUT", 0.05):
+            self.assertEqual(asyncio.run(run()), ["cancelled", "cancelled"])
+
+    def test_relay_both_waits_sides_even_if_cancelled_again(self):
+        """Соединение отменяют дважды (остановка посредника), пока стороны ещё снимают регистрацию.
+
+        Вход: стороны после отмены освобождаются 0,1 с; задача relay_both отменяется второй раз
+        во время этого ожидания.
+        Ожидание: к выходу из relay_both обе стороны остановлены (иначе вызывающий закрыл бы сокеты
+        под ними), а отмена доходит до вызывающего.
+        """
+        stopped = []
+
+        async def run():
+            """Отменяет relay_both дважды и смотрит, кто остановился к её выходу."""
+            task = asyncio.ensure_future(sniproxy.relay_both(_side(3600, stopped, linger=0.1),
+                                                             _side(3600, stopped, linger=0.1), [time.monotonic()]))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await asyncio.sleep(0.02)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            return list(stopped)
+        self.assertEqual(asyncio.run(run()), ["cancelled", "cancelled"])
+
+    def test_send_to_peer_that_does_not_read_times_out(self):
+        """Собеседник принял соединение, но не читает: отправка (первые байты клиента сайту,
+        запросы SOCKS5) не висит вечно, а кончается по CONNECT_TIMEOUT.
+
+        Вход: буферы сокетов меньше данных (4 МБ), получатель не читает, CONNECT_TIMEOUT 0,5 с.
+        Ожидание: send_all заканчивается TimeoutError не позже чем через 3 с.
+        """
+        sender, peer = _tcp_pair()
+        self.addCleanup(sender.close)
+        self.addCleanup(peer.close)
+        sender.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        sender.setblocking(False)
+
+        async def run():
+            """Отправка в сокет, который никто не читает. -> сколько она длилась."""
+            t0 = time.monotonic()
+            # внешний предел: без тайм-аута в send_all тест упал бы, а не завис
+            send = asyncio.ensure_future(sniproxy.send_all(sender, b"x" * (4 * 1024 * 1024)))
+            done, _ = await asyncio.wait([send], timeout=3)
+            if not done:
+                send.cancel()
+                self.fail("send_all ждёт дольше 3 с")
+            self.assertIsInstance(send.exception(), asyncio.TimeoutError)
+            return time.monotonic() - t0
+        with mock.patch.object(sniproxy, "CONNECT_TIMEOUT", 0.5):
+            self.assertLess(asyncio.run(run()), 3)
 
     @staticmethod
     def _splice_relay(payload: bytes, bucket=None, side=0) -> tuple[bytes, bool, list, list, float]:
@@ -379,19 +463,20 @@ class SniTrafficTest(unittest.TestCase):
                 received.extend(chunk)
 
         async def run():
+            """Пересылка одной стороны; время меряется только по ней, без запуска потоков и цикла."""
             proxy_in.setblocking(False)
             proxy_out.setblocking(False)
             cnt, act = [0, 0], [0.0]
+            t0 = time.monotonic()
             await asyncio.wait_for(sniproxy.splice_pipe(proxy_in, proxy_out, cnt, side, act, bucket), 20)
-            return cnt, act
+            return cnt, act, time.monotonic() - t0
 
-        sending, receiving = threading.Thread(target=send), threading.Thread(target=receive)
-        t0 = time.monotonic()
+        sending = threading.Thread(target=send, daemon=True)
+        receiving = threading.Thread(target=receive, daemon=True)
         sending.start()
         receiving.start()
         try:
-            cnt, act = asyncio.run(run())
-            dt = time.monotonic() - t0
+            cnt, act, dt = asyncio.run(run())
             receiving.join(5)               # сокеты ещё открыты: EOF мог прийти только от shutdown
             eof = not receiving.is_alive()
         finally:
@@ -400,6 +485,80 @@ class SniTrafficTest(unittest.TestCase):
             sending.join(20)
             receiving.join(20)
         return bytes(received), eof, cnt, act, dt
+
+
+class SniproxyServeTest(unittest.TestCase):
+    """Приём соединений посредником: нехватка дескрипторов и падение цикла приёма."""
+
+    def sniffer(self, **cfg) -> sniproxy.Sniffer:
+        """Посредник с минимальным sni.json во временном каталоге."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "sni.json")
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1", **cfg}, f)
+        return sniproxy.Sniffer(p)
+
+    def test_accept_errors_do_not_flood_log(self):
+        """Приём падает раз за разом (как при исчерпании дескрипторов): журнал не заливается.
+
+        Вход: слушающий сокет, на котором accept всегда даёт ошибку; цикл приёма работает 0,5 с.
+        Ожидание: одна запись в журнале, а не по записи на каждую попытку.
+        """
+        s = self.sniffer()
+        broken = socket.socket()                        # не слушает: accept даёт EINVAL
+        broken.setblocking(False)
+        self.addCleanup(broken.close)
+
+        async def run():
+            """Даёт циклу приёма поработать 0,5 с."""
+            task = asyncio.ensure_future(s.accept_loop(broken))
+            await asyncio.sleep(0.5)
+            task.cancel()
+        with mock.patch.object(sniproxy, "log") as log:
+            asyncio.run(run())
+        self.assertEqual(log.call_count, 1, log.call_args_list)
+
+    def test_accept_loop_death_stops_process(self):
+        """Цикл приёма упал неожиданной ошибкой: процесс останавливается, а не живёт без приёма.
+
+        Вход: serve() с циклом приёма, который сразу бросает RuntimeError.
+        Ожидание: цикл событий остановлен меньше чем за 3 с, причина в журнале
+        (панель увидит остановку и перезапустит посредника).
+        """
+        with socket.socket() as probe:                  # свободный порт
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        s = self.sniffer(port=port)
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        with mock.patch.object(s, "accept_loop", side_effect=RuntimeError("boom")), \
+                mock.patch.object(sniproxy, "log") as log:
+            loop.create_task(s.serve())
+            guard = loop.call_later(3, loop.stop)       # не дать тесту зависнуть, если остановки нет
+            t0 = time.monotonic()
+            loop.run_forever()
+            elapsed = time.monotonic() - t0
+            guard.cancel()
+            rest = asyncio.all_tasks(loop)              # serve и деление предела работают бесконечно
+            for t in rest:
+                t.cancel()
+            loop.run_until_complete(asyncio.gather(*rest, return_exceptions=True))
+        self.assertLess(elapsed, 2.5)
+        self.assertTrue(any("accept" in c.args[0] and "boom" in c.args[0] for c in log.call_args_list),
+                        log.call_args_list)
+
+
+async def _side(seconds: float, stopped: list, linger: float = 0.0) -> None:
+    """Сторона соединения для relay_both: работает seconds и пишет в stopped, как закончила.
+    linger — сколько она освобождается после отмены (снимает регистрацию дескрипторов)."""
+    try:
+        await asyncio.sleep(seconds)
+    except asyncio.CancelledError:
+        await asyncio.sleep(linger)
+        stopped.append("cancelled")
+        raise
+    stopped.append("done")
 
 
 def _tcp_pair() -> tuple[socket.socket, socket.socket]:
