@@ -16,13 +16,15 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
 идёт весь TCP 80/443 таких клиентов, а не только сайты из списков.
 Ограничение скорости выхода SOCKS5 (rates в настройках): соединения через CONNECT идут к прокси
 мимо туннеля выхода, и очередь tc на нём их не видит — их ограничивает общий для выхода «бак
-токенов» в каждую сторону; splice берёт из бака каждую порцию до отправки дальше. Предел выхода у двух дорог общий (shared): раз в секунду посредник
-смотрит, сколько идёт через туннель (/proc/net/dev — счётчики своей сети) и через него самого, и
-делит предел (share): каждой дороге — то, что не занято другой, но не меньше половины. Свою долю
-он ставит баку, долю туннеля — классу tc на нём (tc class change, очередь не пересоздаётся). При
-остановке и когда выход пропадает из настроек туннель получает весь предел обратно.
-SIGHUP — перечитать настройки и списки (разбор идёт в потоке, соединения его не ждут). Счётчики и байты по «клиент|выход» — в файл stats
-раз в 15 секунд и при остановке (по ним панель считает трафик выходов).
+токенов» в каждую сторону; splice берёт из бака каждую порцию до отправки дальше.
+Предел выхода у двух дорог общий (shared): раз в секунду посредник смотрит, сколько идёт через
+туннель (/proc/net/dev — счётчики своей сети) и через него самого, и делит предел (share):
+каждой дороге — то, что не занято другой, но не меньше половины. Свою долю он ставит баку, долю
+туннеля — классу tc на нём (tc class change, очередь не пересоздаётся). При остановке и когда
+выход пропадает из настроек туннель получает весь предел обратно.
+SIGHUP — перечитать настройки и списки (разбор идёт в потоке, соединения его не ждут).
+Счётчики и байты по «клиент|выход» — в файл stats раз в 15 секунд и при остановке (по ним панель
+считает трафик выходов).
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import resource
 import signal
 import socket
 import struct
@@ -46,7 +49,9 @@ PEEK_TIMEOUT = 3.0          # сколько ждём первых данных 
 PEEK_MAX = 64 * 1024
 CONNECT_TIMEOUT = 10.0
 BUF = 256 * 1024
-# splice без блокировки: ожидание готовности сокета остаётся за циклом событий
+# splice без блокировки (ожидание готовности сокета остаётся за циклом событий); MOVE просит ядро
+# переносить страницы, а не копировать. Запасные числа: модуль импортируется и там, где splice нет
+# (тесты на macOS), сами вызовы splice там не выполняются.
 SPLICE_FLAGS = getattr(os, "SPLICE_F_MOVE", 1) | getattr(os, "SPLICE_F_NONBLOCK", 2)
 IDLE_TIMEOUT = 900          # соединение без данных в обе стороны дольше — закрываем
 KEEPALIVE = (120, 30, 4)    # TCP keepalive: пропавший без FIN собеседник виден через ~4 мин
@@ -152,23 +157,25 @@ async def _recv_exact(sock: socket.socket, n: int) -> bytes:
 
 
 async def _connect_any(host: str, port: int) -> socket.socket:
-    """Подключение к прокси. Панель передаёт адрес, а если не смогла его разрешить — имя; у имени
-    может быть несколько адресов (IPv4 и IPv6), поэтому они пробуются по очереди."""
+    """Подключение к прокси. Панель передаёт адрес, а если не смогла его разрешить, то имя; у имени
+    может быть несколько адресов (IPv4 и IPv6), поэтому они пробуются по очереди. Адрес, который
+    не подходит сети сервера (IPv6 без IPv6), тоже просто пропускается."""
     loop = asyncio.get_running_loop()
     err = None
     for family, kind, proto, _, addr in await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM):
-        s = socket.socket(family, kind, proto)
+        s = None
         try:
+            s = socket.socket(family, kind, proto)
             s.setblocking(False)
             await loop.sock_connect(s, addr)
             return s
-        except OSError as e:
-            s.close()
+        except BaseException as e:
+            if s is not None:
+                s.close()
+            if not isinstance(e, OSError):
+                raise
             err = e
-        except BaseException:
-            s.close()
-            raise
-    raise err
+    raise err or OSError(f"socks: no address for {host}")
 
 
 async def socks_connect(s: dict, host: str | None, ip: str, port: int) -> socket.socket:
@@ -292,8 +299,8 @@ async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None =
     """Копирует поток src -> dst внутри ядра: сокет -> канал -> сокет через splice.
 
     Данные не попадают в Python: копирование в пространство пользователя и обратно стоило
-    большей части CPU посредника. cnt[i] — счётчик байт (учёт трафика выходов), act[0] — время
-    последних данных, bucket — ограничение скорости выхода SOCKS5. Пока бак ждёт, прочитанное
+    большей части CPU посредника. cnt[i]: счётчик байт (учёт трафика выходов), act[0]: время
+    последних данных, bucket: ограничение скорости выхода SOCKS5. Пока бак ждёт, прочитанное
     лежит в канале, а сокет src не читается: TCP притормаживает отправителя.
     """
     rp, wp = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
@@ -333,16 +340,42 @@ async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None =
             pass
 
 
+async def relay_both(up, down, act: list) -> None:
+    """Обе стороны соединения: до конца или пока соединение молчит дольше IDLE_TIMEOUT (act[0] -
+    время последних данных). Сокеты потом закрывает вызывающий, поэтому возврат только когда обе
+    стороны остановлены: иначе уцелевшая ждала бы на закрытом дескрипторе, который ядро уже выдало
+    другому соединению. Ошибка одной стороны останавливает другую и поднимается дальше."""
+    tasks = [asyncio.ensure_future(up), asyncio.ensure_future(down)]
+    try:
+        while True:
+            done, pending = await asyncio.wait(tasks, timeout=min(60, IDLE_TIMEOUT),
+                                               return_when=asyncio.FIRST_EXCEPTION)
+            if not pending or any(t.exception() for t in done):
+                break
+            if time.monotonic() - act[0] > IDLE_TIMEOUT:
+                break
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.wait(tasks)
+    for t in tasks:
+        if not t.cancelled() and t.exception():
+            raise t.exception()
+
+
 def _ipv4_range(text: str) -> int | None:
-    """'a.b.c.d/nn' или адрес -> первый адрес << 32 | последний; None — IPv6, мусор, пустая строка.
-    Без модуля ipaddress: он разбирает 100 000 строк за 0,7 с, а inet_pton — в разы быстрее."""
-    addr, _, bits = text.partition("/")
+    """'a.b.c.d/nn' или адрес -> первый адрес << 32 | последний; None: IPv6, мусор, пустая строка.
+    Без модуля ipaddress: он разбирает 100 000 строк за 0,7 с, а inet_pton в разы быстрее. Длина
+    префикса строгая, как у ipaddress и nftables: учёт не должен расходиться с маршрутами."""
+    addr, slash, bits = text.partition("/")
+    if slash and not (bits.isascii() and bits.isdigit()):
+        return None
     try:
         a = int.from_bytes(socket.inet_pton(socket.AF_INET, addr), "big")
-        n = int(bits) if bits else 32
-    except (OSError, ValueError):
+    except OSError:
         return None
-    if not 0 <= n <= 32:
+    n = int(bits) if slash else 32
+    if n > 32:
         return None
     host = (1 << (32 - n)) - 1                      # биты узла: подсеть без strict, как у панели
     return (a & ~host) << 32 | a | host
@@ -353,8 +386,8 @@ class Nets:
     так же, как цепочка q_* в nftables, только для учёта трафика."""
 
     def __init__(self, path: str):
-        # Полоса «начало << 32 | конец» — одно число: сортировка не прерывается ради других потоков
-        # (держит GIL), и числа сортируются втрое быстрее пар, а разбор идёт рядом с соединениями.
+        # Полоса хранится одним числом "начало << 32 | конец": сортировка держит GIL и на это время
+        # останавливает цикл событий, а числа сортируются втрое быстрее пар.
         ranges = []
         with open(path) as f:
             for line in f:
@@ -384,7 +417,7 @@ class Conf:
     настройки, либо новые, но не смесь."""
     cfg: dict
     lists: dict[str, set[str]]                      # домены списков из правил
-    nets: dict[str, Nets]                           # адреса списков — для учёта трафика без совпадения
+    nets: dict[str, Nets]                           # адреса списков: учёт трафика без совпадения
     rates: dict[tuple[str, int], float]             # (выход, сторона) -> байт/с для бака
     shared: dict[tuple[str, int], dict]             # общий предел туннеля и посредника: {"iface", "cap", "tc"}
     net: ipaddress.IPv4Network | ipaddress.IPv6Network   # адреса клиентов, которых посредник обслуживает
@@ -418,7 +451,9 @@ def load(path: str) -> Conf:
     for out, dirs in (cfg.get("shared") or {}).items():
         for i in (0, 1):
             d = (dirs or {}).get(str(i)) if isinstance(dirs, dict) else None
-            if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list):
+            # cap нужен числом: по нему туннелю возвращают весь предел, когда деление кончается
+            if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list) \
+                    and isinstance(d.get("cap"), (int, float)) and d["cap"] > 0:
                 shared[(out, i)] = d
     net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
     return Conf(cfg, lists, nets, rates, shared, net)
@@ -543,17 +578,8 @@ class Sniffer:
                 await loop.sock_sendall(out, data)
                 if cnt is not None:
                     cnt[0] += len(data)
-            both = asyncio.gather(splice_pipe(sock, out, cnt, 0, act, bk[0]),
-                                  splice_pipe(out, sock, cnt, 1, act, bk[1]))
-            while not both.done():
-                await asyncio.wait([both], timeout=min(60, IDLE_TIMEOUT))
-                if not both.done() and time.monotonic() - act[0] > IDLE_TIMEOUT:
-                    both.cancel()           # молчит в обе стороны дольше IDLE_TIMEOUT — закрываем
-                    try:
-                        await both
-                    except (asyncio.CancelledError, OSError):
-                        pass
-                    break
+            await relay_both(splice_pipe(sock, out, cnt, 0, act, bk[0]),
+                             splice_pipe(out, sock, cnt, 1, act, bk[1]), act)
         except (OSError, asyncio.TimeoutError, ValueError) as e:
             self.stats["errors"] += 1
             if self.cfg.get("debug"):
@@ -692,7 +718,7 @@ class Sniffer:
             self.reloading = asyncio.ensure_future(self.reload_async())
 
     async def reload_async(self) -> None:
-        """Чтение и разбор — в потоке, подмена — в цикле событий: соединения не ждут разбора."""
+        """Чтение и разбор идут в потоке, подмена в цикле событий: соединения не ждут разбора."""
         loop = asyncio.get_running_loop()
         while self.hup:
             self.hup = False
@@ -711,7 +737,19 @@ def log(text: str) -> None:
     print(time.strftime("%Y-%m-%d %H:%M:%S"), text, file=sys.stderr, flush=True)
 
 
+def raise_open_files_limit() -> None:
+    """Соединение держит 6 дескрипторов (2 сокета и 2 канала splice), а мягкий предел, унаследованный
+    от панели, бывает 1024: это около 170 соединений. Жёсткий предел процесс может взять себе сам."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < hard:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        except (OSError, ValueError) as e:
+            log(f"open files limit stays {soft}: {e}")
+
+
 def main() -> None:
+    raise_open_files_limit()
     s = Sniffer(sys.argv[1])
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

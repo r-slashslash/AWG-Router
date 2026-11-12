@@ -269,14 +269,30 @@ class SocksConnectByNameTest(SocksCheckTest):
 
     def test_connect_by_name(self):
         """Адрес прокси может быть именем: панель передаёт имя, если не смогла его разрешить.
-        У localhost бывает и ::1, где прокси не слушает, — подключение пробует все адреса."""
+
+        Вход: имя прокси разрешается в два адреса; по первому соединение отклоняется (порт закрыт).
+        Ожидание: подключение пробует следующий адрес и проходит CONNECT с логином.
+        """
         tport = self.target.getsockname()[1]
+        closed = socket.socket()                        # занятый, но не слушающий порт: отказ в соединении
+        closed.bind(("127.0.0.1", 0))
+        self.addCleanup(closed.close)
+        resolved = []
+
+        async def getaddrinfo(host, port, **kw):
+            """Ответ резолвера: сначала мёртвый адрес, потом настоящий прокси."""
+            resolved.append((host, port))
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", addr)
+                    for addr in (closed.getsockname(), ("127.0.0.1", port))]
+
         with mock.patch.dict(e2e_servers.HOSTS, {"site.test": "127.0.0.1"}):
             async def go():
-                out = await sniproxy.socks_connect({"ip": "localhost", "port": self.port, "user": "alice",
+                asyncio.get_running_loop().getaddrinfo = getaddrinfo
+                out = await sniproxy.socks_connect({"ip": "proxy.test", "port": self.port, "user": "alice",
                                                     "password": "pw"}, "site.test", "192.0.2.1", tport)
                 out.close()
             asyncio.run(go())
+        self.assertEqual(resolved, [("proxy.test", self.port)])
         with self.assertRaises(OSError):
             asyncio.run(sniproxy.socks_connect({"ip": "127.0.0.1", "port": self.port, "user": "alice",
                                                 "password": "bad"}, "site.test", "192.0.2.1", tport))
@@ -296,7 +312,7 @@ class SocksConnectByNameTest(SocksCheckTest):
             """Однократный SOCKS5: приветствие, CONNECT, ответ вместе с данными сайта."""
             c, _ = srv.accept()
             with c:
-                e2e_servers._recv(c, 3)                     # версия, число методов, «без логина»
+                e2e_servers._recv(c, 3)                     # версия, число методов, метод "без логина"
                 c.sendall(b"\x05\x00")
                 e2e_servers._recv(c, 3)                     # версия, CONNECT, резерв
                 e2e_servers._addr(c)

@@ -7,6 +7,7 @@ import json
 import os
 import random
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -532,25 +533,30 @@ class BucketTest(unittest.TestCase):
 
 
 class NetsTest(unittest.TestCase):
+    """Nets: поиск адреса соединения в списке CIDR панели (учёт трафика без совпадения по домену)."""
+
     def test_ranges_like_nftables_set(self):
         """Адреса списка ищутся так же, как в наборе nftables: подсеть целиком, границы включены.
 
         Вход: подсеть с битами узла (10.1.2.3/8), адрес без длины, /32, соседние и вложенные подсети
-        не по порядку, IPv6, мусор и пустые строки.
-        Ожидание: IPv6 и мусор пропущены; соседние подсети слиты; первый и последний адрес — внутри,
-        соседние с ними — снаружи.
+        не по порядку, IPv6, мусор, пустые строки и длины префикса, которые отвергает ipaddress
+        ("/33", "/" без числа, "/+24", "/ 24").
+        Ожидание: IPv6 и мусор пропущены; соседние подсети слиты; первый и последний адрес внутри,
+        соседние с ними снаружи.
         """
-        p = os.path.join(tempfile.mkdtemp(), "c.txt")
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "c.txt")
         with open(p, "w") as f:
             f.write("192.0.2.128/25\n10.1.2.3/8\n\n2001:db8::/32\nnot an address\n198.51.100.7\n"
-                    "203.0.113.9/32\n192.0.2.0/25\n192.0.2.10/30\n1.2.3.4/33\n")
+                    "203.0.113.9/32\n192.0.2.0/25\n192.0.2.10/30\n1.2.3.4/33\n1.2.3.5/\n1.2.3.6/+24\n1.2.3.7/ 24\n")
         n = sniproxy.Nets(p)
         inside = ["10.0.0.0", "10.255.255.255", "192.0.2.0", "192.0.2.255", "198.51.100.7", "203.0.113.9"]
         outside = ["9.255.255.255", "11.0.0.0", "192.0.1.255", "192.0.3.0", "198.51.100.6", "203.0.113.10",
-                   "1.2.3.4"]
+                   "1.2.3.4", "1.2.3.5", "1.2.3.6", "1.2.3.7"]
         self.assertEqual([ip for ip in inside if ip not in n], [])
         self.assertEqual([ip for ip in outside if ip in n], [])
-        self.assertEqual(len(n.starts), 4)               # 192.0.2.0/25 и /25 рядом — одна полоса
+        self.assertEqual(len(n.starts), 4)               # 192.0.2.0/25 и вторая /25 рядом: одна полоса
 
 
 class ReloadTest(unittest.TestCase):
@@ -579,9 +585,9 @@ class ReloadTest(unittest.TestCase):
     def test_loop_runs_during_reload(self):
         """Разбор 100 000 CIDR не держит цикл событий.
 
-        Вход: sni.json со списком cidrs на 100 000 строк (разбор в цикле занимал 0,7-0,9 с); задача-«пульс»
-        с шагом 10 мс.
-        Ожидание: список применён; самый большой разрыв пульса меньше 200 мс (запас против дрожания CI).
+        Вход: sni.json со списком cidrs на 100 000 строк; задача-пульс с шагом 10 мс.
+        Ожидание: список применён; разбор шёл не в потоке цикла событий; самый большой разрыв пульса
+        меньше 200 мс (запас против дрожания CI).
         """
         cidrs = os.path.join(self.dir, "cidrs.txt")
         rnd = random.Random(1)
@@ -589,6 +595,13 @@ class ReloadTest(unittest.TestCase):
             for _ in range(100_000):
                 f.write(f"{rnd.randrange(1, 224)}.{rnd.randrange(256)}.{rnd.randrange(256)}.0/24\n")
         s = self.sniffer
+        threads = []
+        real_load = sniproxy.load
+
+        def traced_load(path):
+            """Запоминает поток, в котором идёт разбор."""
+            threads.append(threading.current_thread())
+            return real_load(path)
 
         async def go():
             gaps = []
@@ -603,53 +616,71 @@ class ReloadTest(unittest.TestCase):
             beat = asyncio.ensure_future(pulse())
             await asyncio.sleep(0.05)
             self.write({"listen": "127.0.0.1", "cidrs": {"big": cidrs}})
-            s.on_hup()
-            applied = await self.until(lambda: "big" in s.nets)
+            with mock.patch.object(sniproxy, "load", side_effect=traced_load):
+                s.on_hup()
+                applied = await self.until(lambda: "big" in s.nets)
             beat.cancel()
             return applied, max(gaps)
         applied, gap = asyncio.run(go())
         self.assertTrue(applied)
+        self.assertEqual(len(threads), 1)
+        self.assertIsNot(threads[0], threading.main_thread())
         self.assertLess(gap, 0.2)
 
     def test_hup_during_reload_is_not_lost(self):
         """SIGHUP, пришедший во время перечитывания, даёт ещё одно перечитывание с последним файлом.
 
         Вход: первый разбор задержан, пока тест не пришлёт второй SIGHUP с другим sni.json.
-        Ожидание: файл разобран дважды, действуют настройки второго SIGHUP.
+        Ожидание: файл разобран дважды и не одновременно (иначе старый разбор мог бы закончиться
+        позже нового); в итоге действуют настройки второго SIGHUP.
         """
         s = self.sniffer
         first, second = {"listen": "127.0.0.1", "clients": "10.8.0.0/24"}, {"listen": "127.0.0.1", "clients": "10.8.1.0/24"}
         started, release = threading.Event(), threading.Event()
+        lock = threading.Lock()
+        running = [0, 0]                                # [идёт сейчас, наибольшее число одновременно]
         real_load = sniproxy.load
 
         def slow_first_load(path):
-            """Первый разбор прочитал файл и ещё идёт, когда приходит второй SIGHUP; остальные — сразу."""
-            conf = real_load(path)
-            if not started.is_set():
-                started.set()
-                release.wait(10)
-            return conf
+            """Первый разбор прочитал файл и ещё идёт, когда приходит второй SIGHUP; остальные сразу."""
+            with lock:
+                running[0] += 1
+                running[1] = max(running)
+            try:
+                conf = real_load(path)
+                if not started.is_set():
+                    started.set()
+                    release.wait(10)
+                return conf
+            finally:
+                with lock:
+                    running[0] -= 1
 
         async def go():
             with mock.patch.object(sniproxy, "load", side_effect=slow_first_load) as load:
-                self.write(first)
-                s.on_hup()
-                in_progress = await self.until(started.is_set)
-                self.write(second)
-                s.on_hup()
-                release.set()
-                applied = await self.until(lambda: s.cfg == second)
-                return in_progress, applied, load.call_count
-        in_progress, applied, calls = asyncio.run(go())
+                try:
+                    self.write(first)
+                    s.on_hup()
+                    in_progress = await self.until(started.is_set)
+                    self.write(second)
+                    s.on_hup()
+                finally:
+                    release.set()
+                applied = await self.until(lambda: s.cfg == second and load.call_count == 2 and not running[0])
+                await asyncio.sleep(0.05)               # опоздавший старый разбор успел бы всё испортить
+                return in_progress, applied, s.cfg == second, load.call_count
+        in_progress, applied, still, calls = asyncio.run(go())
         self.assertTrue(in_progress)
         self.assertTrue(applied)
+        self.assertTrue(still)
         self.assertEqual(calls, 2)
+        self.assertEqual(running[1], 1)
 
     def test_bad_config_keeps_old_and_next_hup_works(self):
         """Неверный sni.json: старые настройки остаются, ошибка в журнале, следующий SIGHUP применяется.
 
         Вход: SIGHUP с битым JSON, затем SIGHUP с верным файлом.
-        Ожидание: после первого — прежние настройки и запись «reload: ...»; после второго — новые.
+        Ожидание: после первого прежние настройки и запись "reload: ..."; после второго новые.
         """
         s = self.sniffer
         good = {"listen": "127.0.0.1", "clients": "10.8.1.0/24"}
@@ -668,6 +699,41 @@ class ReloadTest(unittest.TestCase):
         self.assertTrue(kept)
         self.assertTrue(applied)
         self.assertTrue(msg.startswith("reload:"), msg)
+
+
+@unittest.skipUnless(os.path.isfile("/proc/self/limits"), "нужен /proc (Linux)")
+class SniproxyProcessTest(unittest.TestCase):
+    """sniproxy.py как отдельный процесс, как его запускает панель."""
+
+    def test_raises_open_files_limit(self):
+        """Соединение держит 6 дескрипторов (2 сокета и 2 канала splice): мягкий предел 1024 у панели
+        дал бы около 170 соединений. Посредник поднимает мягкий предел до жёсткого.
+
+        Вход: процесс запущен с мягким пределом 256.
+        Ожидание: после запуска ("listening" в журнале) мягкий предел процесса равен жёсткому.
+        """
+        import resource
+        _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if hard <= 256:
+            self.skipTest("жёсткий предел дескрипторов не выше 256")
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with socket.socket() as probe:                  # свободный порт для посредника
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        p = os.path.join(d, "sni.json")
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1", "port": port}, f)
+        proc = subprocess.Popen([sys.executable, sniproxy.__file__, p], stderr=subprocess.PIPE,
+                                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (256, hard)))
+        self.addCleanup(proc.wait, 10)
+        self.addCleanup(proc.stderr.close)
+        self.addCleanup(proc.terminate)
+        line = proc.stderr.readline()
+        self.assertIn(b"listening", line)
+        with open(f"/proc/{proc.pid}/limits") as f:
+            soft_now = next(x.split()[3] for x in f if x.startswith("Max open files"))
+        self.assertEqual(soft_now, str(hard))
 
 
 class SharedLimitTest(unittest.TestCase):
@@ -743,6 +809,44 @@ class SharedLimitTest(unittest.TestCase):
         with open(p, "w") as f:
             json.dump({"listen": "127.0.0.1", "shared": {"u1": {"1": {"iface": "awgr1", "cap": 1, "tc": ["true"]}}}}, f)
         self.assertEqual(sniproxy.Sniffer(p).shared, {})        # без предела в rates делить нечего
+
+    def test_shared_without_numeric_cap_ignored(self):
+        """Выход без числового предела не делится: иначе возврат предела туннелю упал бы на нём.
+
+        Вход: shared без cap, со строковым cap и с нулевым cap.
+        Ожидание: ни один выход не попал в деление.
+        """
+        for cap in (None, "20", 0):
+            with self.subTest(cap=cap):
+                d = tempfile.mkdtemp()
+                self.addCleanup(shutil.rmtree, d)
+                p = os.path.join(d, "sni.json")
+                entry = {"iface": "awgr1", "tc": ["true"], **({} if cap is None else {"cap": cap})}
+                with open(p, "w") as f:
+                    json.dump({"listen": "127.0.0.1", "rates": {"u1": [0, self.CAP]}, "shared": {"u1": {"1": entry}}}, f)
+                self.assertEqual(sniproxy.Sniffer(p).shared, {})
+
+    def test_restore_on_hup(self):
+        """SIGHUP убрал выход из деления: туннель получает весь предел, tc ждётся вне цикла событий.
+
+        Вход: посредник делит предел u1; новый sni.json без shared; on_hup.
+        Ожидание: tc поставлен на весь предел, процесс tc дождались, деления больше нет.
+        """
+        s, p = self.sniffer()
+        calls, reaped = [], []
+        proc = object()
+        s.tc_set = lambda d, bps, wait=True: calls.append((d["dev"], bps, wait)) or proc
+        s._reap = reaped.append
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1", "rates": {"u1": [0, self.CAP]}}, f)
+
+        async def go():
+            s.on_hup()
+            await s.reloading
+        asyncio.run(go())
+        self.assertEqual(calls, [("awgq1", self.CAP, True)])
+        self.assertEqual(reaped, [proc])
+        self.assertEqual(s.shared, {})
 
     def test_engine_passes_only_socks_with_limits(self):
         from app import main

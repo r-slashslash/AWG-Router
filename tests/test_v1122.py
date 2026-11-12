@@ -2,8 +2,11 @@
 import asyncio
 import json
 import os
+import shutil
+import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -252,8 +255,9 @@ class SniTrafficTest(unittest.TestCase):
         Вход: неподключённый сокет (getpeername даёт ENOTCONN), в настройках debug.
         Ожидание: client() завершается без исключения, сокет закрыт.
         """
-        import socket
-        p = os.path.join(tempfile.mkdtemp(), "sni.json")
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "sni.json")
         with open(p, "w") as f:
             json.dump({"listen": "127.0.0.1", "debug": True}, f)
         s = sniproxy.Sniffer(p)
@@ -270,8 +274,9 @@ class SniTrafficTest(unittest.TestCase):
         Ожидание: получатель видит те же байты и EOF, счётчик равен объёму, время активности обновлено.
         """
         payload = os.urandom(3 * 1024 * 1024)
-        received, cnt, act, _ = self._splice_relay(payload)
+        received, eof, cnt, act, _ = self._splice_relay(payload)
         self.assertEqual(received, payload)
+        self.assertTrue(eof)
         self.assertEqual(cnt, [len(payload), 0])
         self.assertGreater(act[0], 0)
 
@@ -279,35 +284,88 @@ class SniTrafficTest(unittest.TestCase):
     def test_splice_pipe_bucket_limits_rate(self):
         """Ограничение скорости выхода SOCKS5 действует на пересылку внутри ядра.
 
-        Вход: 1,2 МБ через бак 4 МБ/с (запас 200 КБ).
+        Вход: 1,2 МБ через бак 4 МБ/с (запас 200 КБ), сторона загрузки (счётчик cnt[1]).
         Ожидание: передача не быстрее (1,2 МБ - запас) / 4 МБ/с = 0,25 с, но и без лишних пауз;
-        бак, счётчик и получатель видят весь объём.
+        бак, счётчик своей стороны и получатель видят весь объём.
         """
         payload = os.urandom(1_200_000)
         bucket = sniproxy.Bucket(4_000_000)
-        received, cnt, _, dt = self._splice_relay(payload, bucket)
+        received, eof, cnt, _, dt = self._splice_relay(payload, bucket, side=1)
         self.assertGreater(dt, 0.2)
         self.assertLess(dt, 1.0)
         self.assertEqual(received, payload)
-        self.assertEqual(cnt, [len(payload), 0])
+        self.assertTrue(eof)
+        self.assertEqual(cnt, [0, len(payload)])
         self.assertEqual(bucket.total, len(payload))
 
+    @unittest.skipUnless(hasattr(os, "splice"), "нужен os.splice (Linux)")
+    def test_splice_pipe_cancel_closes_pipe_and_sends_eof(self):
+        """Отмена (соединение молчит дольше IDLE_TIMEOUT) не оставляет открытых каналов.
+
+        Вход: splice_pipe отменяется через 0,1 с, пока ждёт данных от молчащего отправителя или
+        ждёт бак (1 КБ/с, отправлено 100 КБ).
+        Ожидание: число дескрипторов процесса вернулось к прежнему, получатель дочитывает до EOF
+        (а не ждёт до таймаута сокета).
+        """
+        for case, rate, data in (("ждёт данных", None, b""), ("ждёт бак", 1000, b"x" * 100_000)):
+            with self.subTest(case):
+                sender, proxy_in = _tcp_pair()
+                proxy_out, receiver = _tcp_pair()
+                try:
+                    sender.sendall(data)
+                    before = len(os.listdir("/proc/self/fd"))
+
+                    async def run():
+                        proxy_in.setblocking(False)
+                        proxy_out.setblocking(False)
+                        bucket = sniproxy.Bucket(rate) if rate else None
+                        task = asyncio.ensure_future(sniproxy.splice_pipe(proxy_in, proxy_out, bucket=bucket))
+                        await asyncio.sleep(0.1)
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await task
+                    asyncio.run(run())
+                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                    receiver.settimeout(5)
+                    got = b""
+                    while chunk := receiver.recv(65536):    # запас бака мог пройти до отмены
+                        got += chunk
+                    self.assertLessEqual(len(got), len(data))
+                finally:
+                    for s in (sender, proxy_in, proxy_out, receiver):
+                        s.close()
+
+    def test_relay_both_stops_other_side_on_error(self):
+        """Одна сторона соединения упала (например, не хватило дескрипторов на канал splice).
+
+        Вход: первая сторона сразу бросает OSError, вторая ждёт данных.
+        Ожидание: вторая остановлена до возврата (вызывающий сразу закрывает сокеты: живая сторона
+        ждала бы на закрытом и снова выданном ядром дескрипторе), ошибка идёт дальше.
+        """
+        stopped = []
+
+        async def fails():
+            raise OSError(24, "Too many open files")
+
+        async def waits():
+            try:
+                await asyncio.sleep(3600)
+            finally:
+                stopped.append(True)
+
+        async def run():
+            with self.assertRaises(OSError):
+                await sniproxy.relay_both(fails(), waits(), [time.monotonic()])
+            return list(stopped)            # до того, как asyncio.run отменит оставшиеся задачи
+        self.assertEqual(asyncio.run(run()), [True])
+
     @staticmethod
-    def _splice_relay(payload: bytes, bucket=None) -> tuple[bytes, list, list, float]:
+    def _splice_relay(payload: bytes, bucket=None, side=0) -> tuple[bytes, bool, list, list, float]:
         """Пропускает payload через splice_pipe между двумя парами loopback-сокетов.
-        → (что получил получатель, счётчик, время активности, длительность пересылки)."""
-        import socket
-        import threading
-
-        def pair():
-            """Пара соединённых TCP-сокетов на loopback, как у посредника с клиентом или целью."""
-            with socket.create_server(("127.0.0.1", 0)) as listener:
-                outer = socket.create_connection(listener.getsockname())
-                inner, _ = listener.accept()
-            return outer, inner
-
-        sender, proxy_in = pair()
-        proxy_out, receiver = pair()
+        -> (что получил получатель, увидел ли он EOF до закрытия сокетов, счётчик, время активности,
+        длительность пересылки)."""
+        sender, proxy_in = _tcp_pair()
+        proxy_out, receiver = _tcp_pair()
         received = bytearray()
 
         def send():
@@ -324,22 +382,32 @@ class SniTrafficTest(unittest.TestCase):
             proxy_in.setblocking(False)
             proxy_out.setblocking(False)
             cnt, act = [0, 0], [0.0]
-            await asyncio.wait_for(sniproxy.splice_pipe(proxy_in, proxy_out, cnt, 0, act, bucket), 20)
+            await asyncio.wait_for(sniproxy.splice_pipe(proxy_in, proxy_out, cnt, side, act, bucket), 20)
             return cnt, act
 
-        threads = [threading.Thread(target=send), threading.Thread(target=receive)]
+        sending, receiving = threading.Thread(target=send), threading.Thread(target=receive)
         t0 = time.monotonic()
-        for thread in threads:
-            thread.start()
+        sending.start()
+        receiving.start()
         try:
             cnt, act = asyncio.run(run())
             dt = time.monotonic() - t0
+            receiving.join(5)               # сокеты ещё открыты: EOF мог прийти только от shutdown
+            eof = not receiving.is_alive()
         finally:
-            for thread in threads:
-                thread.join(20)
             for s in (sender, proxy_in, proxy_out, receiver):
                 s.close()
-        return bytes(received), cnt, act, dt
+            sending.join(20)
+            receiving.join(20)
+        return bytes(received), eof, cnt, act, dt
+
+
+def _tcp_pair() -> tuple[socket.socket, socket.socket]:
+    """Пара соединённых TCP-сокетов на loopback, как у посредника с клиентом или целью."""
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        outer = socket.create_connection(listener.getsockname())
+        inner, _ = listener.accept()
+    return outer, inner
 
 
 def _sni_stats():
