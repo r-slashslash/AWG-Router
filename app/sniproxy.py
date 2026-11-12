@@ -12,6 +12,8 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
     type route (hook output) проверяет обычные правила по адресам и ставит метку нужного выхода
     (AWG, SOCKS5 через hev-socks5-tunnel, напрямую или блок).
 Если выход правила не работает, панель передаёт его резервный путь (метку, напрямую или блок).
+Соединения с меткой пересылаются внутри ядра (splice), без копирования данных в Python: через
+посредника идёт весь TCP 80/443 таких клиентов, а не только сайты из списков.
 Ограничение скорости выхода SOCKS5 (rates в настройках): соединения через CONNECT идут к прокси
 мимо туннеля выхода, и очередь tc на нём их не видит — их ограничивает общий для выхода «бак
 токенов» в каждую сторону. Предел выхода у двух дорог общий (shared): раз в секунду посредник
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import fcntl
 import ipaddress
 import json
 import os
@@ -42,6 +45,8 @@ PEEK_TIMEOUT = 3.0          # сколько ждём первых данных 
 PEEK_MAX = 64 * 1024
 CONNECT_TIMEOUT = 10.0
 BUF = 256 * 1024
+# splice без блокировки: ожидание готовности сокета остаётся за циклом событий
+SPLICE_FLAGS = getattr(os, "SPLICE_F_MOVE", 1) | getattr(os, "SPLICE_F_NONBLOCK", 2)
 IDLE_TIMEOUT = 900          # соединение без данных в обе стороны дольше — закрываем
 KEEPALIVE = (120, 30, 4)    # TCP keepalive: пропавший без FIN собеседник виден через ~4 мин
 STATS_EVERY = 15
@@ -164,7 +169,8 @@ async def socks_connect(s: dict, host: str | None, ip: str, port: int):
         raise
 
 
-async def direct_connect(ip: str, port: int, mark: int):
+async def direct_socket(ip: str, port: int, mark: int) -> socket.socket:
+    """Соединение к исходному адресу; метка политики выбирает выход в цепочке type route."""
     loop = asyncio.get_running_loop()
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -175,7 +181,7 @@ async def direct_connect(ip: str, port: int, mark: int):
     except BaseException:
         s.close()
         raise
-    return await asyncio.open_connection(sock=s)
+    return s
 
 
 def keepalive(sock) -> None:
@@ -258,6 +264,61 @@ async def pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter, cnt: list | Non
         try:
             if w.can_write_eof():
                 w.write_eof()
+        except OSError:
+            pass
+
+
+async def _ready(fd: int, writable: bool) -> None:
+    """Ждёт готовности сокета через цикл событий, не читая данные в Python."""
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    add, remove = (loop.add_writer, loop.remove_writer) if writable else (loop.add_reader, loop.remove_reader)
+    add(fd, lambda: fut.done() or fut.set_result(None))
+    try:
+        await fut
+    finally:
+        remove(fd)
+
+
+async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None = None,
+                      i: int = 0, act: list | None = None) -> None:
+    """Копирует поток src → dst внутри ядра: сокет → канал → сокет через splice.
+
+    Данные не попадают в Python, поэтому на пересылку уходит заметно меньше CPU, чем у pipe().
+    Ограничения скорости здесь нет: он нужен только соединениям через SOCKS5, они идут через pipe().
+    cnt[i] и act[0] — как у pipe(): учёт трафика выхода и время последних данных.
+    """
+    rp, wp = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        try:
+            fcntl.fcntl(wp, fcntl.F_SETPIPE_SZ, BUF)    # меньше переключений на каждый мегабайт
+        except OSError:
+            pass                                        # лимит pipe-user-pages: остаётся размер по умолчанию
+        while True:
+            try:
+                n = os.splice(src.fileno(), wp, BUF, flags=SPLICE_FLAGS)
+            except BlockingIOError:
+                await _ready(src.fileno(), False)
+                continue
+            if n == 0:
+                break                                   # собеседник закрыл запись
+            if cnt is not None:
+                cnt[i] += n
+            if act is not None:
+                act[0] = time.monotonic()
+            # Канал опустошается до следующего чтения: так EAGAIN при чтении означает только пустой сокет.
+            while n:
+                try:
+                    n -= os.splice(rp, dst.fileno(), n, flags=SPLICE_FLAGS)
+                except BlockingIOError:
+                    await _ready(dst.fileno(), True)
+    except OSError:
+        pass
+    finally:
+        os.close(rp)
+        os.close(wp)
+        try:
+            dst.shutdown(socket.SHUT_WR)
         except OSError:
             pass
 
@@ -380,12 +441,15 @@ class Sniffer:
             return None
         return self.bytes.setdefault(f"{client}|{out}", [0, 0])
 
-    async def client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        sock = writer.get_extra_info("socket")
-        peer = (writer.get_extra_info("peername") or ("0.0.0.0", 0))[0]
-        out_w = None
+    async def client(self, sock: socket.socket) -> None:
+        """Сырой сокет нужен splice; потоки asyncio создаются только для пути через SOCKS5."""
+        loop = asyncio.get_running_loop()
+        sock.setblocking(False)
+        writer = out_w = out = None
         counted = False
+        peer = "?"                  # для журнала, если клиент пропал раньше, чем узнали его адрес
         try:
+            peer = sock.getpeername()[0]
             if ipaddress.ip_address(peer) not in self.net:
                 return
             raw = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
@@ -402,7 +466,7 @@ class Sniffer:
                 if left <= 0:
                     break
                 try:
-                    chunk = await asyncio.wait_for(reader.read(PEEK_MAX - len(data)), left)
+                    chunk = await asyncio.wait_for(loop.sock_recv(sock, PEEK_MAX - len(data)), left)
                 except asyncio.TimeoutError:
                     break
                 if not chunk:
@@ -418,23 +482,29 @@ class Sniffer:
                 self.stats["by_list"][lid] = self.stats["by_list"].get(lid, 0) + 1
             if to.get("block"):
                 return
+            keepalive(sock)
+            cnt = self.counter(peer, to.get("acct") if lid else self.miss_out(peer, dip))
+            act = [time.monotonic()]
             if to.get("socks"):
                 out_r, out_w = await socks_connect(to["socks"], name, dip, dport)
+                keepalive(out_w.get_extra_info("socket"))
+                reader, writer = await asyncio.open_connection(sock=sock)
+                if data:
+                    out_w.write(data)
+                    await out_w.drain()
+                # через прокси — мимо туннеля выхода: его ограничение скорости — здесь
+                bk = [self.buckets.get((to.get("acct"), i)) for i in (0, 1)]
+                both = asyncio.gather(pipe(reader, out_w, cnt, 0, act, bk[0]),
+                                      pipe(out_r, writer, cnt, 1, act, bk[1]))
             else:
-                out_r, out_w = await direct_connect(dip, dport, int(to.get("mark") or 0))
-            keepalive(sock)
-            keepalive(out_w.get_extra_info("socket"))
-            cnt = self.counter(peer, to.get("acct") if lid else self.miss_out(peer, dip))
-            if data:
-                out_w.write(data)
-                await out_w.drain()
-                if cnt is not None:
-                    cnt[0] += len(data)
-            act = [time.monotonic()]
-            # через прокси — мимо туннеля выхода: его ограничение скорости — здесь
-            bk = [self.buckets.get((to.get("acct"), i)) if to.get("socks") else None for i in (0, 1)]
-            both = asyncio.gather(pipe(reader, out_w, cnt, 0, act, bk[0]),
-                                  pipe(out_r, writer, cnt, 1, act, bk[1]))
+                out = await direct_socket(dip, dport, int(to.get("mark") or 0))
+                keepalive(out)
+                if data:
+                    await loop.sock_sendall(out, data)
+                # Ограничения скорости на этом пути нет, поэтому поток не нужно читать в Python.
+                both = asyncio.gather(splice_pipe(sock, out, cnt, 0, act), splice_pipe(out, sock, cnt, 1, act))
+            if data and cnt is not None:
+                cnt[0] += len(data)
             while not both.done():
                 await asyncio.wait([both], timeout=min(60, IDLE_TIMEOUT))
                 if not both.done() and time.monotonic() - act[0] > IDLE_TIMEOUT:
@@ -451,10 +521,11 @@ class Sniffer:
         finally:
             if counted:
                 self.stats["active"] -= 1
-            for w in (writer, out_w):
-                if w is not None:
+            # writer владеет сокетом клиента, если его создали; иначе сокет закрывается напрямую
+            for c in (writer or sock, out_w, out):
+                if c is not None:
                     try:
-                        w.close()
+                        c.close()
                     except OSError:
                         pass
 
@@ -545,7 +616,12 @@ class Sniffer:
     async def serve(self) -> None:
         loop = asyncio.get_running_loop()
         host, port = self.cfg["listen"], int(self.cfg.get("port") or 10443)
-        await asyncio.start_server(self.client, host, port, reuse_address=True, backlog=1024)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
+        listener.listen(1024)
+        listener.setblocking(False)
+        asyncio.ensure_future(self.accept_loop(listener))
         loop.add_signal_handler(signal.SIGHUP, self.on_hup)
         loop.add_signal_handler(signal.SIGTERM, loop.stop)
         log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
@@ -553,6 +629,21 @@ class Sniffer:
         while True:
             self.write_stats()
             await asyncio.sleep(STATS_EVERY)
+
+    async def accept_loop(self, listener: socket.socket) -> None:
+        """Свой приём вместо start_server: клиенту нужен сырой сокет, а не потоки asyncio."""
+        loop = asyncio.get_running_loop()
+        tasks: set[asyncio.Task] = set()      # цикл событий держит только слабые ссылки на задачи
+        while True:
+            try:
+                conn, _ = await loop.sock_accept(listener)
+            except OSError as e:
+                log(f"accept: {e}")         # например, исчерпаны дескрипторы: не крутим цикл впустую
+                await asyncio.sleep(0.1)
+                continue
+            task = asyncio.ensure_future(self.client(conn))
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
 
     def on_hup(self) -> None:
         try:

@@ -270,6 +270,75 @@ class SniTrafficTest(unittest.TestCase):
         self.assertEqual((cnt, len(data)), ([0, 1000], 1000))
         self.assertGreater(act[0], 0)
 
+    def test_client_gone_before_peername(self):
+        """Клиент пропал до разбора соединения: посредник закрывает сокет и не падает при записи в журнал.
+
+        Вход: неподключённый сокет (getpeername даёт ENOTCONN), в настройках debug.
+        Ожидание: client() завершается без исключения, сокет закрыт.
+        """
+        import socket
+        p = os.path.join(tempfile.mkdtemp(), "sni.json")
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1", "debug": True}, f)
+        s = sniproxy.Sniffer(p)
+        sock = socket.socket()
+        with mock.patch.object(sniproxy, "log"):
+            asyncio.run(s.client(sock))
+        self.assertEqual(sock.fileno(), -1)
+
+    @unittest.skipUnless(hasattr(os, "splice"), "нужен os.splice (Linux)")
+    def test_splice_pipe_relays_counts_and_half_closes(self):
+        """Пересылка внутри ядра доставляет поток целиком, считает байты и передаёт конец потока.
+
+        Вход: 3 МБ по TCP через пару сокетов посредника, затем SHUT_WR у отправителя.
+        Ожидание: получатель видит те же байты и EOF, счётчик равен объёму, время активности обновлено.
+        """
+        import socket
+        import threading
+
+        def pair():
+            """Пара соединённых TCP-сокетов на loopback, как у посредника с клиентом или целью."""
+            with socket.create_server(("127.0.0.1", 0)) as listener:
+                outer = socket.create_connection(listener.getsockname())
+                inner, _ = listener.accept()
+            return outer, inner
+
+        sender, proxy_in = pair()
+        proxy_out, receiver = pair()
+        payload = os.urandom(3 * 1024 * 1024)
+        received = bytearray()
+
+        def send():
+            """Отправитель закрывает свою сторону записи, как браузер после запроса."""
+            sender.sendall(payload)
+            sender.shutdown(socket.SHUT_WR)
+
+        def receive():
+            """Чтение до EOF доказывает, что посредник передал конец потока."""
+            while chunk := receiver.recv(65536):
+                received.extend(chunk)
+
+        async def run():
+            proxy_in.setblocking(False)
+            proxy_out.setblocking(False)
+            cnt, act = [0, 0], [0.0]
+            await asyncio.wait_for(sniproxy.splice_pipe(proxy_in, proxy_out, cnt, 0, act), 20)
+            return cnt, act
+
+        threads = [threading.Thread(target=send), threading.Thread(target=receive)]
+        for thread in threads:
+            thread.start()
+        try:
+            cnt, act = asyncio.run(run())
+        finally:
+            for thread in threads:
+                thread.join(20)
+            for s in (sender, proxy_in, proxy_out, receiver):
+                s.close()
+        self.assertEqual(bytes(received), payload)
+        self.assertEqual(cnt, [len(payload), 0])
+        self.assertGreater(act[0], 0)
+
 
 def _sni_stats():
     from app import engine as eng
