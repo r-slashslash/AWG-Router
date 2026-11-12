@@ -143,7 +143,8 @@ choose() { # $1 question, then options; answer number in CHOICE
   done
 }
 
-# grep дочитывает поток, чтобы SIGPIPE у awk не скрывал занятый порт при pipefail.
+# grep reads the whole stream: with pipefail an early exit (grep -q) would make awk die of SIGPIPE
+# and hide a busy port behind a failed pipeline.
 port_busy() { ss -Hltnu 2>/dev/null | awk '{print $5}' | grep -E "[:.]$1\$" >/dev/null; }
 
 # Ports that Chrome, Firefox and Safari refuse to open (ERR_UNSAFE_PORT)

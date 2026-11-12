@@ -238,7 +238,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 
 面板运行在独立容器中（`network_mode: host`、`pid: host`、`privileged`），通过 `nsenter` 进入 AWG 服务器的网络命名空间。
 - 每个出口都有一条隧道 `awgrN` 和独立的路由表。SOCKS5 出口使用 [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) 接口：进入它的流量都会经过代理。
-- 域名规则：有这类规则的客户端的 TCP 80/443 会被重定向到服务器网络中的处理程序（`sniproxy.py`）。它读取网站名称（SNI 或 Host）；匹配时通过 SOCKS5 代理按名称连接，否则带着客户端策略的标记连到原地址，由通常的地址规则选择路径（output 钩子中的 nftables `type route` 链）。这类客户端的 QUIC（UDP 443）会被阻断，浏览器会自动改用 HTTPS。处理程序不工作时，面板会移除重定向，只按地址规则走。
+- 域名规则：有这类规则的客户端的 TCP 80/443 会被重定向到服务器网络中的处理程序（`sniproxy.py`）。它读取网站名称（SNI 或 Host）；匹配时通过 SOCKS5 代理按名称连接，否则带着客户端策略的标记连到原地址，由通常的地址规则选择路径（output 钩子中的 nftables `type route` 链）。数据在内核中转发（`splice`），不经过 Python 复制。这类客户端的 QUIC（UDP 443）会被阻断，浏览器会自动改用 HTTPS。处理程序不工作时，面板会移除重定向，只按地址规则走。
 - 客户端数据包由 `ip awgr` 表中的 nftables 规则打标记。
 - 出口服务器上的隧道地址通过 SNAT 替换，不会与你的客户端冲突。
 - 如果隧道消失，其路由表中会保留 `unreachable` 路由，流量不会绕过出口泄漏。
@@ -290,6 +290,9 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 <td align="center" valign="top" width="33%"><a href="https://github.com/Neborya"><img src="https://github.com/Neborya.png?size=128" width="72" alt=""><br><b>Neborya</b></a><br>🐛 💡<br><sub>Debian 13 上的 Compose 软件包 <a href="https://github.com/r-slashslash/AWG-Router/issues/1">#1</a>、按出口统计流量 <a href="https://github.com/r-slashslash/AWG-Router/issues/2">#2</a>、经由出口发送 Telegram <a href="https://github.com/r-slashslash/AWG-Router/issues/3">#3</a>、与 Web 服务器共用 80 端口 <a href="https://github.com/r-slashslash/AWG-Router/issues/4">#4</a>、配置中的客户端名称 <a href="https://github.com/r-slashslash/AWG-Router/issues/7">#7</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/koo-pub"><img src="https://github.com/koo-pub.png?size=128" width="72" alt=""><br><b>koo-pub</b></a><br>💻<br><sub>在 Android 版 AmneziaWG 中可稳定扫描的二维码 <a href="https://github.com/r-slashslash/AWG-Router/issues/5">#5</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/LCF30"><img src="https://github.com/LCF30.png?size=128" width="72" alt=""><br><b>LCF30</b></a><br>🐛 💻 🔍<br><sub>Endpoint 使用域名的出口 <a href="https://github.com/r-slashslash/AWG-Router/issues/6">#6</a>、面向俄罗斯、中国和伊朗的现成镜像 <a href="https://github.com/r-slashslash/AWG-Router/issues/8">#8</a>、SOCKS5 出口健康检查 <a href="https://github.com/r-slashslash/AWG-Router/issues/9">#9</a>、不依赖故障出口的 Telegram 通知 <a href="https://github.com/r-slashslash/AWG-Router/issues/10">#10</a>、github.com 无法下载时通过 GitHub API 下载版本 <a href="https://github.com/r-slashslash/AWG-Router/pull/13">#13</a></sub></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>域名规则在内核中转发 <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>、安装程序检查端口是否被占用 <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
 </tr>
 </table>
 
