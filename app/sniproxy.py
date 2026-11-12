@@ -41,8 +41,8 @@ import struct
 import subprocess
 import sys
 import time
-from collections.abc import Awaitable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
 
 SO_MARK = 36
 SO_ORIGINAL_DST = 80
@@ -259,6 +259,15 @@ async def direct_socket(ip: str, port: int, mark: int) -> socket.socket:
     return s
 
 
+def no_delay(sock: socket.socket) -> None:
+    """Без алгоритма Нейгла: мелкие порции (рукопожатие TLS, кадры HTTP/2) уходят сразу, а не ждут
+    подтверждения предыдущих. Потоки asyncio включали это сами; splice работает с сырыми сокетами."""
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except OSError:
+        pass
+
+
 def keepalive(sock: socket.socket) -> None:
     """Пропавший клиент (телефон ушёл из сети без FIN) не держит соединение вечно."""
     try:
@@ -424,15 +433,22 @@ class Nets:
     """Адреса списка (файл CIDR панели) для поиска «в какой выход уйдёт соединение» —
     так же, как цепочка q_* в nftables, только для учёта трафика."""
 
-    def __init__(self, path: str):
+    def __init__(self, src: str | Iterable[str]):
+        """src: путь к файлу или его строки (уже открытый файл)."""
+        if isinstance(src, str):
+            with open(src) as f:
+                self._build(f)
+        else:
+            self._build(src)
+
+    def _build(self, lines: Iterable[str]) -> None:
         # Полоса хранится одним числом "начало << 32 | конец": сортировка держит GIL и на это время
         # останавливает цикл событий, а числа сортируются быстрее пар.
         ranges = []
-        with open(path) as f:
-            for line in f:
-                r = _ipv4_range(line.strip())
-                if r is not None:
-                    ranges.append(r)
+        for line in lines:
+            r = _ipv4_range(line.strip())
+            if r is not None:
+                ranges.append(r)
         ranges.sort()
         self.starts, self.ends = [], []
         for r in ranges:
@@ -460,6 +476,7 @@ class Conf:
     rates: dict[tuple[str, int], float]             # (выход, сторона) -> байт/с для бака
     shared: dict[tuple[str, int], dict]             # общий предел туннеля и посредника: {"iface", "cap", "tc"}
     net: ipaddress.IPv4Network | ipaddress.IPv6Network   # адреса клиентов, которых посредник обслуживает
+    files: dict = field(default_factory=dict)       # разобранные списки для следующего load (_cached)
 
 
 def _positive(v) -> bool:
@@ -467,22 +484,44 @@ def _positive(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
 
 
-def load(path: str) -> Conf:
+def _domains(f: Iterable[str]) -> set[str]:
+    """Строки файла списка доменов -> множество имён."""
+    return {x.strip() for x in f if x.strip()}
+
+
+def _cached(kind: str, path: str, prev: dict, files: dict, parse: Callable[[Iterable[str]], object]):
+    """Разобранный файл списка. Тот же файл (inode, размер, время изменения в нс) берётся из прошлого
+    разбора: панель шлёт SIGHUP при каждом изменении настроек, а большие списки при этом обычно не
+    меняются, и их повторный разбор держал бы GIL (а с ним цикл событий) впустую. Признаки берутся
+    у уже открытого файла: подмена между проверкой и чтением не даст старый разбор под новым именем.
+    prev — прошлый кэш (только читается: им ещё пользуется посредник), files — новый."""
+    with open(path) as f:
+        st = os.fstat(f.fileno())
+        sig = (st.st_ino, st.st_size, st.st_mtime_ns)
+        hit = prev.get((kind, path))
+        value = hit[1] if hit is not None and hit[0] == sig else parse(f)
+    files[(kind, path)] = (sig, value)
+    return value
+
+
+def load(path: str, prev: dict | None = None) -> Conf:
     """Читает и разбирает настройки, ничего не меняя в посреднике: так это можно делать в потоке,
-    пока цикл событий обслуживает соединения (большие списки адресов разбираются заметное время)."""
+    пока цикл событий обслуживает соединения (большие списки адресов разбираются заметное время).
+    prev — Conf.files прошлого разбора: неизменённые списки берутся оттуда, не разбираются заново."""
+    prev = prev or {}
+    files: dict = {}
     with open(path) as f:
         cfg = json.load(f)
     lists = {}
     for lid, p in (cfg.get("lists") or {}).items():
         try:
-            with open(p) as f:
-                lists[lid] = {x.strip() for x in f if x.strip()}
+            lists[lid] = _cached("lists", p, prev, files, _domains)
         except OSError as e:
             log(f"list {lid}: {e}")
     nets = {}
     for lid, p in (cfg.get("cidrs") or {}).items():
         try:
-            nets[lid] = Nets(p)
+            nets[lid] = _cached("cidrs", p, prev, files, Nets)
         except OSError as e:
             log(f"cidrs {lid}: {e}")
     rates = {}
@@ -498,7 +537,7 @@ def load(path: str) -> Conf:
             if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list) and _positive(d.get("cap")):
                 shared[(out, i)] = d
     net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
-    return Conf(cfg, lists, nets, rates, shared, net)
+    return Conf(cfg, lists, nets, rates, shared, net, files)
 
 
 # --------------------------------------------------------------- посредник
@@ -515,11 +554,12 @@ class Sniffer:
         self.share_state: dict[tuple[str, int], dict] = {}  # скорости и последняя доля tc для деления
         self.hup_pending = False            # пришёл SIGHUP, который ещё не перечитан
         self.reload_task: asyncio.Task | None = None
+        self.files: dict = {}               # разобранные списки прошлого перечитывания (Conf.files)
         self.reload()
 
     def reload(self) -> None:
         """Перечитать настройки сразу, в вызывающем потоке (запуск посредника)."""
-        self.give_back(self.apply(load(self.path)))
+        self.give_back(self.apply(load(self.path, self.files)))
 
     def give_back(self, ds) -> None:
         """Туннелям этих выходов — весь предел, с ожиданием tc (запуск и остановка: цикл событий
@@ -531,7 +571,7 @@ class Sniffer:
         """Подменяет настройки. Бак с прежней скоростью остаётся тем же: открытые соединения держат
         ссылку на него, и с новым баком предел выхода делился бы надвое.
         -> настройки tc выходов, которые больше не делятся: их туннелям нужно вернуть весь предел."""
-        self.cfg, self.lists, self.nets, self.net = c.cfg, c.lists, c.nets, c.net
+        self.cfg, self.lists, self.nets, self.net, self.files = c.cfg, c.lists, c.nets, c.net, c.files
         old_buckets = self.buckets
         self.buckets = {k: b if (b := old_buckets.get(k)) and b.cap == r else Bucket(r)
                         for k, r in c.rates.items()}
@@ -581,6 +621,7 @@ class Sniffer:
         else:
             out = await direct_socket(dip, dport, int(to.get("mark") or 0))
         try:
+            no_delay(out)
             keepalive(out)
             if data:
                 await send_all(out, data)
@@ -614,6 +655,7 @@ class Sniffer:
                 self.stats["by_list"][lid] = self.stats["by_list"].get(lid, 0) + 1
             if to.get("block"):
                 return
+            no_delay(sock)
             keepalive(sock)
             cnt = self.counter(peer, to.get("acct") if lid else self.miss_out(peer, dip))
             act = [time.monotonic()]
@@ -790,7 +832,7 @@ class Sniffer:
         while self.hup_pending:
             self.hup_pending = False
             try:
-                conf = await loop.run_in_executor(None, load, self.path)
+                conf = await loop.run_in_executor(None, load, self.path, self.files)
             except Exception as e:  # noqa: BLE001
                 log(f"reload: {e}")             # прежние настройки остаются
                 continue

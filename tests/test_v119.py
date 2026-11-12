@@ -600,10 +600,10 @@ class ReloadTest(unittest.TestCase):
         threads = []
         real_load = sniproxy.load
 
-        def traced_load(path):
+        def traced_load(path, prev=None):
             """Запоминает поток, в котором идёт разбор."""
             threads.append(threading.current_thread())
-            return real_load(path)
+            return real_load(path, prev)
 
         async def go():
             """SIGHUP на фоне пульса. -> (список применён, самый большой разрыв пульса)."""
@@ -645,13 +645,13 @@ class ReloadTest(unittest.TestCase):
         running = [0, 0]                                # [идёт сейчас, наибольшее число одновременно]
         real_load = sniproxy.load
 
-        def slow_first_load(path):
+        def slow_first_load(path, prev=None):
             """Первый разбор прочитал файл и ещё идёт, когда приходит второй SIGHUP; остальные сразу."""
             with lock:
                 running[0] += 1
                 running[1] = max(running)
             try:
-                conf = real_load(path)
+                conf = real_load(path, prev)
                 if not started.is_set():
                     started.set()
                     release.wait(10)
@@ -680,6 +680,42 @@ class ReloadTest(unittest.TestCase):
         self.assertTrue(still)
         self.assertEqual(calls, 2)
         self.assertEqual(running[1], 1)
+
+    def test_unchanged_lists_are_not_parsed_again(self):
+        """Перечитывание не разбирает заново списки, файлы которых не менялись.
+
+        Панель шлёт SIGHUP при каждом изменении настроек, а большие списки при этом обычно прежние.
+        Вход: sni.json со списком доменов и списком CIDR; перечитывание без изменений; затем панель
+        заменяет файл CIDR (os.replace, как lists.save_cidrs) файлом того же размера; затем список доменов
+        уходит из настроек.
+        Ожидание: без изменений — те же объекты; новый файл CIDR разобран заново (новые адреса), домены
+        прежние; ушедший список не остаётся в кэше.
+        """
+        dom, nets = os.path.join(self.dir, "d.txt"), os.path.join(self.dir, "n.txt")
+        with open(dom, "w") as f:
+            f.write("example.com\n")
+        with open(nets, "w") as f:
+            f.write("203.0.113.0/24\n")
+        cfg = {"listen": "127.0.0.1", "lists": {"d": dom}, "cidrs": {"n": nets}}
+        s = self.sniffer
+        self.write(cfg)
+        s.reload()
+        d1, n1 = s.lists["d"], s.nets["n"]
+        s.reload()
+        self.assertIs(s.lists["d"], d1)
+        self.assertIs(s.nets["n"], n1)
+        with open(nets + ".tmp", "w") as f:
+            f.write("203.0.113.0/25\n")                # тот же размер: замену выдают inode и время
+        os.replace(nets + ".tmp", nets)
+        s.reload()
+        self.assertIs(s.lists["d"], d1)
+        self.assertIsNot(s.nets["n"], n1)
+        self.assertIn("203.0.113.7", s.nets["n"])
+        self.assertNotIn("203.0.113.200", s.nets["n"])
+        self.write({"listen": "127.0.0.1", "cidrs": {"n": nets}})
+        s.reload()
+        self.assertEqual(s.lists, {})
+        self.assertEqual(set(s.files), {("cidrs", nets)})
 
     def test_bad_config_keeps_old_and_next_hup_works(self):
         """Неверный sni.json: старые настройки остаются, ошибка в журнале, следующий SIGHUP применяется.

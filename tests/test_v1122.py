@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import sys
 import tempfile
 import threading
@@ -442,6 +443,47 @@ class SniTrafficTest(unittest.TestCase):
             return time.monotonic() - t0
         with mock.patch.object(sniproxy, "CONNECT_TIMEOUT", 0.5):
             self.assertLess(asyncio.run(run()), 3)
+
+    def test_client_and_site_sockets_without_nagle(self):
+        """Сокеты клиента и сайта идут без алгоритма Нейгла, как раньше у потоков asyncio: иначе мелкие
+        порции (рукопожатие TLS, кадры HTTP/2) ждали бы подтверждения предыдущих.
+
+        Вход: соединение клиента с запросом HTTP; SO_ORIGINAL_DST указывает на тестовый сервер;
+        пересылка подменена записью сокетов.
+        Ожидание: к началу пересылки у обоих сокетов включён TCP_NODELAY, ошибок нет.
+        """
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "sni.json")
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1"}, f)
+        s = sniproxy.Sniffer(p)
+        site = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(site.close)
+        dst = b"\x02\x00" + struct.pack("!H", site.getsockname()[1]) + socket.inet_aton("127.0.0.1") + bytes(8)
+
+        class Redirected(socket.socket):
+            """Соединение, которое перенаправил nftables: исходный адрес — тестовый сервер."""
+
+            def getsockopt(self, level, opt, *args):
+                if opt == sniproxy.SO_ORIGINAL_DST:
+                    return dst
+                return super().getsockopt(level, opt, *args)
+
+        browser, conn = _tcp_pair()
+        self.addCleanup(browser.close)
+        sock = Redirected(fileno=conn.detach())
+        browser.sendall(b"GET / HTTP/1.1\r\nHost: site.test\r\n\r\n")
+        seen = []
+
+        async def fake_splice(src, dst, *args):
+            """Вместо пересылки: TCP_NODELAY стороны, из которой читали бы."""
+            seen.append(src.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY))
+        with mock.patch.object(sniproxy, "splice_pipe", fake_splice):
+            asyncio.run(s.client(sock))
+        self.assertEqual(len(seen), 2)
+        self.assertTrue(all(seen), seen)
+        self.assertEqual((s.stats["conns"], s.stats["errors"]), (1, 0))
 
     @staticmethod
     def _splice_relay(payload: bytes, bucket=None, side=0) -> tuple[bytes, bool, list, list, float]:
