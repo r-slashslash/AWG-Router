@@ -12,11 +12,11 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
     type route (hook output) проверяет обычные правила по адресам и ставит метку нужного выхода
     (AWG, SOCKS5 через hev-socks5-tunnel, напрямую или блок).
 Если выход правила не работает, панель передаёт его резервный путь (метку, напрямую или блок).
-Соединения с меткой пересылаются внутри ядра (splice), без копирования данных в Python: через
-посредника идёт весь TCP 80/443 таких клиентов, а не только сайты из списков.
+Данные соединений пересылаются внутри ядра (splice), без копирования в Python: через посредника
+идёт весь TCP 80/443 таких клиентов, а не только сайты из списков.
 Ограничение скорости выхода SOCKS5 (rates в настройках): соединения через CONNECT идут к прокси
 мимо туннеля выхода, и очередь tc на нём их не видит — их ограничивает общий для выхода «бак
-токенов» в каждую сторону. Предел выхода у двух дорог общий (shared): раз в секунду посредник
+токенов» в каждую сторону; splice берёт из бака каждую порцию до отправки дальше. Предел выхода у двух дорог общий (shared): раз в секунду посредник
 смотрит, сколько идёт через туннель (/proc/net/dev — счётчики своей сети) и через него самого, и
 делит предел (share): каждой дороге — то, что не занято другой, но не меньше половины. Свою долю
 он ставит баку, долю туннеля — классу tc на нём (tc class change, очередь не пересоздаётся). При
@@ -137,35 +137,70 @@ def match(name: str, doms: set[str]) -> bool:
 
 
 # --------------------------------------------------------------- SOCKS5
-async def socks_connect(s: dict, host: str | None, ip: str, port: int):
-    """Соединение через прокси: CONNECT по имени (или по адресу, если имени нет)."""
-    r, w = await asyncio.wait_for(asyncio.open_connection(s["ip"], int(s["port"])), CONNECT_TIMEOUT)
+async def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Ровно n байт ответа прокси. Лишнее не читается: данные сайта, пришедшие сразу за ответом,
+    остаются в сокете, и их пересылает splice."""
+    loop = asyncio.get_running_loop()
+    buf = b""
+    while len(buf) < n:
+        chunk = await asyncio.wait_for(loop.sock_recv(sock, n - len(buf)), CONNECT_TIMEOUT)
+        if not chunk:
+            raise OSError("socks: connection closed")
+        buf += chunk
+    return buf
+
+
+async def _connect_any(host: str, port: int) -> socket.socket:
+    """Подключение к прокси. Панель передаёт адрес, а если не смогла его разрешить — имя; у имени
+    может быть несколько адресов (IPv4 и IPv6), поэтому они пробуются по очереди."""
+    loop = asyncio.get_running_loop()
+    err = None
+    for family, kind, proto, _, addr in await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        s = socket.socket(family, kind, proto)
+        try:
+            s.setblocking(False)
+            await loop.sock_connect(s, addr)
+            return s
+        except OSError as e:
+            s.close()
+            err = e
+        except BaseException:
+            s.close()
+            raise
+    raise err
+
+
+async def socks_connect(s: dict, host: str | None, ip: str, port: int) -> socket.socket:
+    """Соединение через прокси: CONNECT по имени (или по адресу, если имени нет).
+    Возвращает сырой сокет: дальше поток идёт через splice, как и на прямом пути."""
+    loop = asyncio.get_running_loop()
+    sock = await asyncio.wait_for(_connect_any(s["ip"], int(s["port"])), CONNECT_TIMEOUT)
     try:
         user, pw = (s.get("user") or "").encode(), (s.get("password") or "").encode()
-        w.write(b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")
-        ver, method = await asyncio.wait_for(r.readexactly(2), CONNECT_TIMEOUT)
+        await loop.sock_sendall(sock, b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")
+        ver, method = await _recv_exact(sock, 2)
         if ver != 5 or method == 0xFF:
             raise OSError("socks: no acceptable auth method")
         if method == 2:
-            w.write(b"\x01" + bytes([len(user)]) + user + bytes([len(pw)]) + pw)
-            if (await asyncio.wait_for(r.readexactly(2), CONNECT_TIMEOUT))[1] != 0:
+            await loop.sock_sendall(sock, b"\x01" + bytes([len(user)]) + user + bytes([len(pw)]) + pw)
+            if (await _recv_exact(sock, 2))[1] != 0:
                 raise OSError("socks: login rejected")
         if host:
             hb = host.encode("idna") if any(ord(c) > 127 for c in host) else host.encode()
             addr = b"\x03" + bytes([len(hb)]) + hb
         else:
             addr = b"\x01" + socket.inet_aton(ip)
-        w.write(b"\x05\x01\x00" + addr + struct.pack("!H", port))
-        head = await asyncio.wait_for(r.readexactly(4), CONNECT_TIMEOUT)
+        await loop.sock_sendall(sock, b"\x05\x01\x00" + addr + struct.pack("!H", port))
+        head = await _recv_exact(sock, 4)
         if head[1] != 0:
             raise OSError(f"socks: connect failed ({head[1]})")
         n = {1: 4, 4: 16}.get(head[3])
         if n is None:
-            n = (await r.readexactly(1))[0]
-        await r.readexactly(n + 2)
-        return r, w
+            n = (await _recv_exact(sock, 1))[0]          # адрес-имя: длина в первом байте
+        await _recv_exact(sock, n + 2)
+        return sock
     except BaseException:
-        w.close()
+        sock.close()
         raise
 
 
@@ -184,10 +219,8 @@ async def direct_socket(ip: str, port: int, mark: int) -> socket.socket:
     return s
 
 
-def keepalive(sock) -> None:
+def keepalive(sock: socket.socket) -> None:
     """Пропавший клиент (телефон ушёл из сети без FIN) не держит соединение вечно."""
-    if sock is None:
-        return
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         for opt, v in zip(("TCP_KEEPIDLE", "TCP_KEEPINTVL", "TCP_KEEPCNT"), KEEPALIVE):
@@ -241,33 +274,6 @@ class Bucket:
             await asyncio.sleep(-self.tokens / self.rate)
 
 
-async def pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter, cnt: list | None = None,
-               i: int = 0, act: list | None = None, bucket: Bucket | None = None) -> None:
-    """Копирует поток. cnt[i] — счётчик байт (учёт трафика выходов), act[0] — время последних данных,
-    bucket — ограничение скорости выхода."""
-    try:
-        while True:
-            data = await r.read(BUF)
-            if not data:
-                break
-            if cnt is not None:
-                cnt[i] += len(data)
-            if act is not None:
-                act[0] = time.monotonic()
-            if bucket is not None:
-                await bucket.take(len(data))
-            w.write(data)
-            await w.drain()
-    except (OSError, asyncio.IncompleteReadError):
-        pass
-    finally:
-        try:
-            if w.can_write_eof():
-                w.write_eof()
-        except OSError:
-            pass
-
-
 async def _ready(fd: int, writable: bool) -> None:
     """Ждёт готовности сокета через цикл событий, не читая данные в Python."""
     loop = asyncio.get_running_loop()
@@ -281,12 +287,13 @@ async def _ready(fd: int, writable: bool) -> None:
 
 
 async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None = None,
-                      i: int = 0, act: list | None = None) -> None:
-    """Копирует поток src → dst внутри ядра: сокет → канал → сокет через splice.
+                      i: int = 0, act: list | None = None, bucket: Bucket | None = None) -> None:
+    """Копирует поток src -> dst внутри ядра: сокет -> канал -> сокет через splice.
 
-    Данные не попадают в Python, поэтому на пересылку уходит заметно меньше CPU, чем у pipe().
-    Ограничения скорости здесь нет: он нужен только соединениям через SOCKS5, они идут через pipe().
-    cnt[i] и act[0] — как у pipe(): учёт трафика выхода и время последних данных.
+    Данные не попадают в Python: копирование в пространство пользователя и обратно стоило
+    большей части CPU посредника. cnt[i] — счётчик байт (учёт трафика выходов), act[0] — время
+    последних данных, bucket — ограничение скорости выхода SOCKS5. Пока бак ждёт, прочитанное
+    лежит в канале, а сокет src не читается: TCP притормаживает отправителя.
     """
     rp, wp = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
     try:
@@ -306,6 +313,8 @@ async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None =
                 cnt[i] += n
             if act is not None:
                 act[0] = time.monotonic()
+            if bucket is not None:
+                await bucket.take(n)
             # Канал опустошается до следующего чтения: так EAGAIN при чтении означает только пустой сокет.
             while n:
                 try:
@@ -442,10 +451,10 @@ class Sniffer:
         return self.bytes.setdefault(f"{client}|{out}", [0, 0])
 
     async def client(self, sock: socket.socket) -> None:
-        """Сырой сокет нужен splice; потоки asyncio создаются только для пути через SOCKS5."""
+        """Одно перенаправленное соединение: имя сайта, выбор пути, пересылка через splice."""
         loop = asyncio.get_running_loop()
         sock.setblocking(False)
-        writer = out_w = out = None
+        out = None
         counted = False
         peer = "?"                  # для журнала, если клиент пропал раньше, чем узнали его адрес
         try:
@@ -486,25 +495,19 @@ class Sniffer:
             cnt = self.counter(peer, to.get("acct") if lid else self.miss_out(peer, dip))
             act = [time.monotonic()]
             if to.get("socks"):
-                out_r, out_w = await socks_connect(to["socks"], name, dip, dport)
-                keepalive(out_w.get_extra_info("socket"))
-                reader, writer = await asyncio.open_connection(sock=sock)
-                if data:
-                    out_w.write(data)
-                    await out_w.drain()
+                out = await socks_connect(to["socks"], name, dip, dport)
                 # через прокси — мимо туннеля выхода: его ограничение скорости — здесь
                 bk = [self.buckets.get((to.get("acct"), i)) for i in (0, 1)]
-                both = asyncio.gather(pipe(reader, out_w, cnt, 0, act, bk[0]),
-                                      pipe(out_r, writer, cnt, 1, act, bk[1]))
             else:
                 out = await direct_socket(dip, dport, int(to.get("mark") or 0))
-                keepalive(out)
-                if data:
-                    await loop.sock_sendall(out, data)
-                # Ограничения скорости на этом пути нет, поэтому поток не нужно читать в Python.
-                both = asyncio.gather(splice_pipe(sock, out, cnt, 0, act), splice_pipe(out, sock, cnt, 1, act))
-            if data and cnt is not None:
-                cnt[0] += len(data)
+                bk = [None, None]           # с меткой идёт через туннель выхода: его ограничивает tc там
+            keepalive(out)
+            if data:
+                await loop.sock_sendall(out, data)
+                if cnt is not None:
+                    cnt[0] += len(data)
+            both = asyncio.gather(splice_pipe(sock, out, cnt, 0, act, bk[0]),
+                                  splice_pipe(out, sock, cnt, 1, act, bk[1]))
             while not both.done():
                 await asyncio.wait([both], timeout=min(60, IDLE_TIMEOUT))
                 if not both.done() and time.monotonic() - act[0] > IDLE_TIMEOUT:
@@ -514,15 +517,14 @@ class Sniffer:
                     except (asyncio.CancelledError, OSError):
                         pass
                     break
-        except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError) as e:
+        except (OSError, asyncio.TimeoutError, ValueError) as e:
             self.stats["errors"] += 1
             if self.cfg.get("debug"):
                 log(f"{peer}: {e!r}")
         finally:
             if counted:
                 self.stats["active"] -= 1
-            # writer владеет сокетом клиента, если его создали; иначе сокет закрывается напрямую
-            for c in (writer or sock, out_w, out):
+            for c in (sock, out):
                 if c is not None:
                     try:
                         c.close()

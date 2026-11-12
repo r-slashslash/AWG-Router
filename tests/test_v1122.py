@@ -246,30 +246,6 @@ class SniTrafficTest(unittest.TestCase):
         s.counter("10.8.1.9", "u2")[0] += 5
         self.assertEqual(s.bytes, {"10.8.1.9|u2": [5, 0]})
 
-    def test_pipe_counts_bytes(self):
-        async def run():
-            r = asyncio.StreamReader()
-            r.feed_data(b"x" * 1000)
-            r.feed_eof()
-
-            class W:
-                data = b""
-
-                def write(self, b):
-                    W.data += b
-
-                async def drain(self):
-                    pass
-
-                def can_write_eof(self):
-                    return False
-            cnt, act = [0, 0], [0.0]
-            await sniproxy.pipe(r, W(), cnt, 1, act)
-            return cnt, act, W.data
-        cnt, act, data = asyncio.run(run())
-        self.assertEqual((cnt, len(data)), ([0, 1000], 1000))
-        self.assertGreater(act[0], 0)
-
     def test_client_gone_before_peername(self):
         """Клиент пропал до разбора соединения: посредник закрывает сокет и не падает при записи в журнал.
 
@@ -293,6 +269,33 @@ class SniTrafficTest(unittest.TestCase):
         Вход: 3 МБ по TCP через пару сокетов посредника, затем SHUT_WR у отправителя.
         Ожидание: получатель видит те же байты и EOF, счётчик равен объёму, время активности обновлено.
         """
+        payload = os.urandom(3 * 1024 * 1024)
+        received, cnt, act, _ = self._splice_relay(payload)
+        self.assertEqual(received, payload)
+        self.assertEqual(cnt, [len(payload), 0])
+        self.assertGreater(act[0], 0)
+
+    @unittest.skipUnless(hasattr(os, "splice"), "нужен os.splice (Linux)")
+    def test_splice_pipe_bucket_limits_rate(self):
+        """Ограничение скорости выхода SOCKS5 действует на пересылку внутри ядра.
+
+        Вход: 1,2 МБ через бак 4 МБ/с (запас 200 КБ).
+        Ожидание: передача не быстрее (1,2 МБ - запас) / 4 МБ/с = 0,25 с, но и без лишних пауз;
+        бак, счётчик и получатель видят весь объём.
+        """
+        payload = os.urandom(1_200_000)
+        bucket = sniproxy.Bucket(4_000_000)
+        received, cnt, _, dt = self._splice_relay(payload, bucket)
+        self.assertGreater(dt, 0.2)
+        self.assertLess(dt, 1.0)
+        self.assertEqual(received, payload)
+        self.assertEqual(cnt, [len(payload), 0])
+        self.assertEqual(bucket.total, len(payload))
+
+    @staticmethod
+    def _splice_relay(payload: bytes, bucket=None) -> tuple[bytes, list, list, float]:
+        """Пропускает payload через splice_pipe между двумя парами loopback-сокетов.
+        → (что получил получатель, счётчик, время активности, длительность пересылки)."""
         import socket
         import threading
 
@@ -305,7 +308,6 @@ class SniTrafficTest(unittest.TestCase):
 
         sender, proxy_in = pair()
         proxy_out, receiver = pair()
-        payload = os.urandom(3 * 1024 * 1024)
         received = bytearray()
 
         def send():
@@ -322,22 +324,22 @@ class SniTrafficTest(unittest.TestCase):
             proxy_in.setblocking(False)
             proxy_out.setblocking(False)
             cnt, act = [0, 0], [0.0]
-            await asyncio.wait_for(sniproxy.splice_pipe(proxy_in, proxy_out, cnt, 0, act), 20)
+            await asyncio.wait_for(sniproxy.splice_pipe(proxy_in, proxy_out, cnt, 0, act, bucket), 20)
             return cnt, act
 
         threads = [threading.Thread(target=send), threading.Thread(target=receive)]
+        t0 = time.monotonic()
         for thread in threads:
             thread.start()
         try:
             cnt, act = asyncio.run(run())
+            dt = time.monotonic() - t0
         finally:
             for thread in threads:
                 thread.join(20)
             for s in (sender, proxy_in, proxy_out, receiver):
                 s.close()
-        self.assertEqual(bytes(received), payload)
-        self.assertEqual(cnt, [len(payload), 0])
-        self.assertGreater(act[0], 0)
+        return bytes(received), cnt, act, dt
 
 
 def _sni_stats():

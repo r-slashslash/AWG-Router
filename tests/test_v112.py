@@ -268,16 +268,55 @@ class SocksConnectByNameTest(SocksCheckTest):
     """sniproxy.socks_connect: CONNECT с именем сайта к тестовому SOCKS5."""
 
     def test_connect_by_name(self):
+        """Адрес прокси может быть именем: панель передаёт имя, если не смогла его разрешить.
+        У localhost бывает и ::1, где прокси не слушает, — подключение пробует все адреса."""
         tport = self.target.getsockname()[1]
         with mock.patch.dict(e2e_servers.HOSTS, {"site.test": "127.0.0.1"}):
             async def go():
-                r, w = await sniproxy.socks_connect({"ip": "127.0.0.1", "port": self.port, "user": "alice",
-                                                     "password": "pw"}, "site.test", "192.0.2.1", tport)
-                w.close()
+                out = await sniproxy.socks_connect({"ip": "localhost", "port": self.port, "user": "alice",
+                                                    "password": "pw"}, "site.test", "192.0.2.1", tport)
+                out.close()
             asyncio.run(go())
         with self.assertRaises(OSError):
             asyncio.run(sniproxy.socks_connect({"ip": "127.0.0.1", "port": self.port, "user": "alice",
                                                 "password": "bad"}, "site.test", "192.0.2.1", tport))
+
+    def test_bytes_after_reply_stay_in_socket(self):
+        """Прокси прислал ответ на CONNECT и первые байты сайта одной записью: байты сайта не теряются.
+
+        Вход: прокси без логина отвечает адресом-именем (длина ответа видна только из него) и в том же
+        sendall присылает первые байты сайта.
+        Ожидание: socks_connect возвращает сокет, из которого читаются ровно эти байты.
+        """
+        early = b"site speaks first"
+        srv = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(srv.close)
+
+        def proxy():
+            """Однократный SOCKS5: приветствие, CONNECT, ответ вместе с данными сайта."""
+            c, _ = srv.accept()
+            with c:
+                e2e_servers._recv(c, 3)                     # версия, число методов, «без логина»
+                c.sendall(b"\x05\x00")
+                e2e_servers._recv(c, 3)                     # версия, CONNECT, резерв
+                e2e_servers._addr(c)
+                bnd = b"proxy.test"
+                c.sendall(b"\x05\x00\x00\x03" + bytes([len(bnd)]) + bnd + b"\x01\xbb" + early)
+                c.recv(1)                                   # ждём, пока посредник закроет соединение
+        threading.Thread(target=proxy, daemon=True).start()
+
+        async def go():
+            return await sniproxy.socks_connect({"ip": "127.0.0.1", "port": srv.getsockname()[1]},
+                                                "site.test", "192.0.2.1", 443)
+        out = asyncio.run(go())
+        try:
+            out.settimeout(5)
+            got = b""
+            while len(got) < len(early) and (chunk := out.recv(len(early) - len(got))):
+                got += chunk
+        finally:
+            out.close()
+        self.assertEqual(got, early)
 
 
 # ------------------------------------------------------------------ панель (демо-режим)
