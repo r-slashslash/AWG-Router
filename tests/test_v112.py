@@ -268,16 +268,74 @@ class SocksConnectByNameTest(SocksCheckTest):
     """sniproxy.socks_connect: CONNECT с именем сайта к тестовому SOCKS5."""
 
     def test_connect_by_name(self):
+        """Адрес прокси может быть именем: панель передаёт имя, если не смогла его разрешить.
+
+        Вход: имя прокси разрешается в два адреса; по первому соединение отклоняется (порт закрыт).
+        Ожидание: подключение пробует следующий адрес и проходит CONNECT с логином.
+        """
         tport = self.target.getsockname()[1]
+        closed = socket.socket()                        # занятый, но не слушающий порт: отказ в соединении
+        closed.bind(("127.0.0.1", 0))
+        self.addCleanup(closed.close)
+        resolved = []
+
+        async def getaddrinfo(host, port, **kw):
+            """Ответ резолвера: сначала мёртвый адрес, потом настоящий прокси."""
+            resolved.append((host, port))
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", addr)
+                    for addr in (closed.getsockname(), ("127.0.0.1", port))]
+
         with mock.patch.dict(e2e_servers.HOSTS, {"site.test": "127.0.0.1"}):
             async def go():
-                r, w = await sniproxy.socks_connect({"ip": "127.0.0.1", "port": self.port, "user": "alice",
-                                                     "password": "pw"}, "site.test", "192.0.2.1", tport)
-                w.close()
+                """CONNECT через прокси, имя которого разрешает подменённый резолвер."""
+                with mock.patch.object(asyncio.get_running_loop(), "getaddrinfo", side_effect=getaddrinfo):
+                    out = await sniproxy.socks_connect({"ip": "proxy.test", "port": self.port, "user": "alice",
+                                                        "password": "pw"}, "site.test", "192.0.2.1", tport)
+                out.close()
             asyncio.run(go())
+        self.assertEqual(resolved, [("proxy.test", self.port)])
         with self.assertRaises(OSError):
             asyncio.run(sniproxy.socks_connect({"ip": "127.0.0.1", "port": self.port, "user": "alice",
                                                 "password": "bad"}, "site.test", "192.0.2.1", tport))
+
+    def test_bytes_after_reply_stay_in_socket(self):
+        """Прокси прислал ответ на CONNECT и первые байты сайта одной записью: байты сайта не теряются.
+
+        Вход: прокси без логина отвечает адресом-именем (длина ответа видна только из него) и в том же
+        sendall присылает первые байты сайта.
+        Ожидание: socks_connect возвращает сокет, из которого читаются ровно эти байты.
+        """
+        early = b"site speaks first"
+        srv = socket.create_server(("127.0.0.1", 0))
+        srv.settimeout(10)                              # поток прокси не ждёт вечно, если тест упал раньше
+        self.addCleanup(srv.close)
+
+        def proxy():
+            """Однократный SOCKS5: приветствие, CONNECT, ответ вместе с данными сайта."""
+            c, _ = srv.accept()
+            with c:
+                e2e_servers._recv(c, 3)                     # версия, число методов, метод "без логина"
+                c.sendall(b"\x05\x00")
+                e2e_servers._recv(c, 3)                     # версия, CONNECT, резерв
+                e2e_servers._addr(c)
+                bnd = b"proxy.test"
+                c.sendall(b"\x05\x00\x00\x03" + bytes([len(bnd)]) + bnd + b"\x01\xbb" + early)
+                c.recv(1)                                   # ждём, пока посредник закроет соединение
+        threading.Thread(target=proxy, daemon=True).start()
+
+        async def go():
+            """CONNECT через однократный прокси; сокет возвращается, чтобы прочитать байты сайта."""
+            return await sniproxy.socks_connect({"ip": "127.0.0.1", "port": srv.getsockname()[1]},
+                                                "site.test", "192.0.2.1", 443)
+        out = asyncio.run(go())
+        try:
+            out.settimeout(5)
+            got = b""
+            while len(got) < len(early) and (chunk := out.recv(len(early) - len(got))):
+                got += chunk
+        finally:
+            out.close()
+        self.assertEqual(got, early)
 
 
 # ------------------------------------------------------------------ панель (демо-режим)

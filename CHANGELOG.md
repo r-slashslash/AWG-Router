@@ -3,6 +3,18 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.19.4 — 2026-11-13
+
+- **Faster domain rules.** `sniproxy.py`, which carries all TCP 80/443 of clients with domain rules,
+  now relays data inside the kernel (`splice`) instead of copying it through Python, on the direct path
+  and through SOCKS5 alike: about half the CPU at 1 Gbit/s and a higher ceiling through SOCKS5. Rereading
+  the settings no longer stalls open connections: files are parsed in a thread, and lists whose files have
+  not changed are not parsed again. Both sides of a connection stop together, sends to a site or a proxy
+  have a timeout, the open files limit is raised, and a failed accept loop restarts the handler. Thanks to
+  @alexeyvolodin (#19).
+- **Busy port check in the installer.** With a long list of open sockets the installer could miss that
+  the chosen panel port was already taken. Thanks to @alexeyvolodin.
+
 ## 1.19.3 — 2026-11-10
 
 - **Release download fallback.** When github.com fails to serve the release archive (in Russia

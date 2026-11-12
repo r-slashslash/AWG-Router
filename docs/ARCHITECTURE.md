@@ -57,7 +57,8 @@ fallback; an exit over its monthly quota follows `quota_action`. With load balan
 Domain rules apply to SOCKS5 exits only. nftables redirects TCP 80/443 of such clients to
 `sniproxy.py`, which reads the site name (SNI or Host header): a match goes through the proxy by name,
 anything else goes to its original address. QUIC is blocked for these clients because the name
-cannot be read from it.
+cannot be read from it. Once the path is chosen, data is relayed inside the kernel (`splice`), so Python
+only reads the name and counts bytes.
 
 ## Speed limits
 
