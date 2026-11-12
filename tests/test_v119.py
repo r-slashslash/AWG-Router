@@ -5,12 +5,15 @@ python3 -m unittest discover tests
 import asyncio
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("DRY_RUN", "1")
@@ -526,6 +529,145 @@ class BucketTest(unittest.TestCase):
             json.dump({"listen": "127.0.0.1", "rates": {}}, f)
         s.reload()
         self.assertEqual(s.buckets, {})
+
+
+class NetsTest(unittest.TestCase):
+    def test_ranges_like_nftables_set(self):
+        """Адреса списка ищутся так же, как в наборе nftables: подсеть целиком, границы включены.
+
+        Вход: подсеть с битами узла (10.1.2.3/8), адрес без длины, /32, соседние и вложенные подсети
+        не по порядку, IPv6, мусор и пустые строки.
+        Ожидание: IPv6 и мусор пропущены; соседние подсети слиты; первый и последний адрес — внутри,
+        соседние с ними — снаружи.
+        """
+        p = os.path.join(tempfile.mkdtemp(), "c.txt")
+        with open(p, "w") as f:
+            f.write("192.0.2.128/25\n10.1.2.3/8\n\n2001:db8::/32\nnot an address\n198.51.100.7\n"
+                    "203.0.113.9/32\n192.0.2.0/25\n192.0.2.10/30\n1.2.3.4/33\n")
+        n = sniproxy.Nets(p)
+        inside = ["10.0.0.0", "10.255.255.255", "192.0.2.0", "192.0.2.255", "198.51.100.7", "203.0.113.9"]
+        outside = ["9.255.255.255", "11.0.0.0", "192.0.1.255", "192.0.3.0", "198.51.100.6", "203.0.113.10",
+                   "1.2.3.4"]
+        self.assertEqual([ip for ip in inside if ip not in n], [])
+        self.assertEqual([ip for ip in outside if ip in n], [])
+        self.assertEqual(len(n.starts), 4)               # 192.0.2.0/25 и /25 рядом — одна полоса
+
+
+class ReloadTest(unittest.TestCase):
+    """Перечитывание настроек по SIGHUP (Sniffer.on_hup) не останавливает соединения."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.path = os.path.join(self.dir, "sni.json")
+        self.write({"listen": "127.0.0.1"})
+        self.sniffer = sniproxy.Sniffer(self.path)
+
+    def write(self, cfg) -> None:
+        """Новый sni.json, как его пишет панель перед SIGHUP."""
+        with open(self.path, "w") as f:
+            f.write(cfg if isinstance(cfg, str) else json.dumps(cfg))
+
+    @staticmethod
+    async def until(cond, timeout=20.0) -> bool:
+        """Ждёт, пока перечитывание в фоне не даст нужное состояние."""
+        deadline = time.monotonic() + timeout
+        while not cond() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        return cond()
+
+    def test_loop_runs_during_reload(self):
+        """Разбор 100 000 CIDR не держит цикл событий.
+
+        Вход: sni.json со списком cidrs на 100 000 строк (разбор в цикле занимал 0,7-0,9 с); задача-«пульс»
+        с шагом 10 мс.
+        Ожидание: список применён; самый большой разрыв пульса меньше 200 мс (запас против дрожания CI).
+        """
+        cidrs = os.path.join(self.dir, "cidrs.txt")
+        rnd = random.Random(1)
+        with open(cidrs, "w") as f:
+            for _ in range(100_000):
+                f.write(f"{rnd.randrange(1, 224)}.{rnd.randrange(256)}.{rnd.randrange(256)}.0/24\n")
+        s = self.sniffer
+
+        async def go():
+            gaps = []
+
+            async def pulse():
+                t = time.monotonic()
+                while True:
+                    await asyncio.sleep(0.01)
+                    now = time.monotonic()
+                    gaps.append(now - t)
+                    t = now
+            beat = asyncio.ensure_future(pulse())
+            await asyncio.sleep(0.05)
+            self.write({"listen": "127.0.0.1", "cidrs": {"big": cidrs}})
+            s.on_hup()
+            applied = await self.until(lambda: "big" in s.nets)
+            beat.cancel()
+            return applied, max(gaps)
+        applied, gap = asyncio.run(go())
+        self.assertTrue(applied)
+        self.assertLess(gap, 0.2)
+
+    def test_hup_during_reload_is_not_lost(self):
+        """SIGHUP, пришедший во время перечитывания, даёт ещё одно перечитывание с последним файлом.
+
+        Вход: первый разбор задержан, пока тест не пришлёт второй SIGHUP с другим sni.json.
+        Ожидание: файл разобран дважды, действуют настройки второго SIGHUP.
+        """
+        s = self.sniffer
+        first, second = {"listen": "127.0.0.1", "clients": "10.8.0.0/24"}, {"listen": "127.0.0.1", "clients": "10.8.1.0/24"}
+        started, release = threading.Event(), threading.Event()
+        real_load = sniproxy.load
+
+        def slow_first_load(path):
+            """Первый разбор прочитал файл и ещё идёт, когда приходит второй SIGHUP; остальные — сразу."""
+            conf = real_load(path)
+            if not started.is_set():
+                started.set()
+                release.wait(10)
+            return conf
+
+        async def go():
+            with mock.patch.object(sniproxy, "load", side_effect=slow_first_load) as load:
+                self.write(first)
+                s.on_hup()
+                in_progress = await self.until(started.is_set)
+                self.write(second)
+                s.on_hup()
+                release.set()
+                applied = await self.until(lambda: s.cfg == second)
+                return in_progress, applied, load.call_count
+        in_progress, applied, calls = asyncio.run(go())
+        self.assertTrue(in_progress)
+        self.assertTrue(applied)
+        self.assertEqual(calls, 2)
+
+    def test_bad_config_keeps_old_and_next_hup_works(self):
+        """Неверный sni.json: старые настройки остаются, ошибка в журнале, следующий SIGHUP применяется.
+
+        Вход: SIGHUP с битым JSON, затем SIGHUP с верным файлом.
+        Ожидание: после первого — прежние настройки и запись «reload: ...»; после второго — новые.
+        """
+        s = self.sniffer
+        good = {"listen": "127.0.0.1", "clients": "10.8.1.0/24"}
+
+        async def go():
+            with mock.patch.object(sniproxy, "log") as log:
+                self.write("{not json")
+                s.on_hup()
+                logged = await self.until(lambda: log.called)
+                kept = s.cfg == {"listen": "127.0.0.1"}
+                self.write(good)
+                s.on_hup()
+                return logged, kept, await self.until(lambda: s.cfg == good), log.call_args_list[0].args[0]
+        logged, kept, applied, msg = asyncio.run(go())
+        self.assertTrue(logged)
+        self.assertTrue(kept)
+        self.assertTrue(applied)
+        self.assertTrue(msg.startswith("reload:"), msg)
 
 
 class SharedLimitTest(unittest.TestCase):

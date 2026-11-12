@@ -21,7 +21,7 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
 делит предел (share): каждой дороге — то, что не занято другой, но не меньше половины. Свою долю
 он ставит баку, долю туннеля — классу tc на нём (tc class change, очередь не пересоздаётся). При
 остановке и когда выход пропадает из настроек туннель получает весь предел обратно.
-SIGHUP — перечитать настройки и списки. Счётчики и байты по «клиент|выход» — в файл stats
+SIGHUP — перечитать настройки и списки (разбор идёт в потоке, соединения его не ждут). Счётчики и байты по «клиент|выход» — в файл stats
 раз в 15 секунд и при остановке (по ним панель считает трафик выходов).
 """
 from __future__ import annotations
@@ -38,6 +38,7 @@ import struct
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 
 SO_MARK = 36
 SO_ORIGINAL_DST = 80
@@ -332,26 +333,38 @@ async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None =
             pass
 
 
+def _ipv4_range(text: str) -> int | None:
+    """'a.b.c.d/nn' или адрес -> первый адрес << 32 | последний; None — IPv6, мусор, пустая строка.
+    Без модуля ipaddress: он разбирает 100 000 строк за 0,7 с, а inet_pton — в разы быстрее."""
+    addr, _, bits = text.partition("/")
+    try:
+        a = int.from_bytes(socket.inet_pton(socket.AF_INET, addr), "big")
+        n = int(bits) if bits else 32
+    except (OSError, ValueError):
+        return None
+    if not 0 <= n <= 32:
+        return None
+    host = (1 << (32 - n)) - 1                      # биты узла: подсеть без strict, как у панели
+    return (a & ~host) << 32 | a | host
+
+
 class Nets:
     """Адреса списка (файл CIDR панели) для поиска «в какой выход уйдёт соединение» —
     так же, как цепочка q_* в nftables, только для учёта трафика."""
 
     def __init__(self, path: str):
+        # Полоса «начало << 32 | конец» — одно число: сортировка не прерывается ради других потоков
+        # (держит GIL), и числа сортируются втрое быстрее пар, а разбор идёт рядом с соединениями.
         ranges = []
         with open(path) as f:
             for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    n = ipaddress.ip_network(line, strict=False)
-                except ValueError:
-                    continue
-                if n.version == 4:
-                    ranges.append((int(n.network_address), int(n.broadcast_address)))
+                r = _ipv4_range(line.strip())
+                if r is not None:
+                    ranges.append(r)
         ranges.sort()
         self.starts, self.ends = [], []
-        for a, b in ranges:
+        for r in ranges:
+            a, b = r >> 32, r & 0xFFFFFFFF
             if self.ends and a <= self.ends[-1] + 1:
                 self.ends[-1] = max(self.ends[-1], b)
             else:
@@ -364,60 +377,84 @@ class Nets:
         return i >= 0 and self.ends[i] >= x
 
 
+# --------------------------------------------------------------- настройки
+@dataclass(frozen=True)
+class Conf:
+    """Разобранный sni.json со списками. Строится целиком до подмены: посредник видит либо старые
+    настройки, либо новые, но не смесь."""
+    cfg: dict
+    lists: dict[str, set[str]]                      # домены списков из правил
+    nets: dict[str, Nets]                           # адреса списков — для учёта трафика без совпадения
+    rates: dict[tuple[str, int], float]             # (выход, сторона) -> байт/с для бака
+    shared: dict[tuple[str, int], dict]             # общий предел туннеля и посредника: {"iface", "cap", "tc"}
+    net: ipaddress.IPv4Network | ipaddress.IPv6Network   # адреса клиентов, которых посредник обслуживает
+
+
+def load(path: str) -> Conf:
+    """Читает и разбирает настройки, ничего не меняя в посреднике: так это можно делать в потоке,
+    пока цикл событий обслуживает соединения (100 000 адресов разбираются около секунды)."""
+    with open(path) as f:
+        cfg = json.load(f)
+    lists = {}
+    for lid, p in (cfg.get("lists") or {}).items():
+        try:
+            with open(p) as f:
+                lists[lid] = {x.strip() for x in f if x.strip()}
+        except OSError as e:
+            log(f"list {lid}: {e}")
+    nets = {}
+    for lid, p in (cfg.get("cidrs") or {}).items():
+        try:
+            nets[lid] = Nets(p)
+        except OSError as e:
+            log(f"cidrs {lid}: {e}")
+    rates = {}
+    for out, pair in (cfg.get("rates") or {}).items():
+        for i in (0, 1):
+            v = pair[i] if isinstance(pair, list) and len(pair) == 2 else 0
+            if isinstance(v, (int, float)) and v > 0:
+                rates[(out, i)] = float(v)
+    shared = {}
+    for out, dirs in (cfg.get("shared") or {}).items():
+        for i in (0, 1):
+            d = (dirs or {}).get(str(i)) if isinstance(dirs, dict) else None
+            if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list):
+                shared[(out, i)] = d
+    net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
+    return Conf(cfg, lists, nets, rates, shared, net)
+
+
 # --------------------------------------------------------------- посредник
 class Sniffer:
     def __init__(self, path: str):
         self.path = path
-        self.cfg: dict = {}
-        self.lists: dict[str, set[str]] = {}
-        self.nets: dict[str, Nets] = {}
         self.stats = {"conns": 0, "active": 0, "matched": 0, "errors": 0, "no_name": 0,
                       "started": time.time(), "by_list": {}}
         # байты по «клиент|выход» с запуска процесса: панель добавляет их к трафику выходов
         # (соединения через посредника — не транзитные, таблица учёта nftables их не видит)
         self.bytes: dict[str, list[int]] = {}
         self.buckets: dict[tuple[str, int], Bucket] = {}   # (выход, 0 — отдача | 1 — загрузка)
+        self.shared: dict[tuple[str, int], dict] = {}
+        self.share_state: dict[tuple[str, int], dict] = {}  # скорости и последняя доля tc для деления
+        self.hup = False                    # пришёл SIGHUP, который ещё не перечитан
+        self.reloading: asyncio.Task | None = None
         self.reload()
 
     def reload(self) -> None:
-        with open(self.path) as f:
-            cfg = json.load(f)
-        lists = {}
-        for lid, p in (cfg.get("lists") or {}).items():
-            try:
-                with open(p) as f:
-                    lists[lid] = {x.strip() for x in f if x.strip()}
-            except OSError as e:
-                log(f"list {lid}: {e}")
-        nets = {}
-        for lid, p in (cfg.get("cidrs") or {}).items():
-            try:
-                nets[lid] = Nets(p)
-            except OSError as e:
-                log(f"cidrs {lid}: {e}")
-        self.cfg, self.lists, self.nets = cfg, lists, nets
-        rates = {}
-        for out, pair in (cfg.get("rates") or {}).items():
-            for i in (0, 1):
-                v = pair[i] if isinstance(pair, list) and len(pair) == 2 else 0
-                if isinstance(v, (int, float)) and v > 0:
-                    rates[(out, i)] = float(v)
+        """Перечитать настройки сразу, в вызывающем потоке (запуск посредника)."""
+        for d in self.apply(load(self.path)):
+            self.tc_set(d, d["cap"], wait=False)
+
+    def apply(self, c: Conf) -> list[dict]:
+        """Подменяет настройки. Бак с прежней скоростью остаётся тем же: открытые соединения держат
+        ссылку на него, и с новым баком предел выхода делился бы надвое.
+        -> настройки tc выходов, которые больше не делятся: их туннелям нужно вернуть весь предел."""
+        self.cfg, self.lists, self.nets, self.net = c.cfg, c.lists, c.nets, c.net
         self.buckets = {k: b if (b := self.buckets.get(k)) and b.cap == r else Bucket(r)
-                        for k, r in rates.items()}
-        # общий предел туннеля и посредника: {(выход, сторона): {"iface", "cap", "tc"}}
-        shared = {}
-        for out, dirs in (cfg.get("shared") or {}).items():
-            for i in (0, 1):
-                d = (dirs or {}).get(str(i)) if isinstance(dirs, dict) else None
-                if isinstance(d, dict) and (out, i) in self.buckets and isinstance(d.get("tc"), list):
-                    shared[(out, i)] = d
-        old = getattr(self, "shared", {})
-        self.shared = shared
-        for k, d in old.items():
-            if k not in shared or shared[k].get("tc") != d.get("tc"):
-                self.tc_set(d, d["cap"], wait=False)         # выход ушёл из деления — весь предел туннелю
-        self.share_state = {k: v for k, v in getattr(self, "share_state", {}).items() if k in shared}
-        self.net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
+                        for k, r in c.rates.items()}
+        old, self.shared = self.shared, c.shared
+        self.share_state = {k: v for k, v in self.share_state.items() if k in c.shared}
+        return [d for k, d in old.items() if k not in c.shared or c.shared[k].get("tc") != d.get("tc")]
 
     def policy(self, client: str) -> dict:
         pname = (self.cfg.get("client_policy") or {}).get(client, "p_global")
@@ -648,10 +685,26 @@ class Sniffer:
             task.add_done_callback(tasks.discard)
 
     def on_hup(self) -> None:
-        try:
-            self.reload()
-        except Exception as e:  # noqa: BLE001
-            log(f"reload: {e}")
+        """SIGHUP: перечитать настройки. Панель шлёт его при каждом изменении, и сигнал во время
+        перечитывания не теряется: после текущего идёт ещё одно, уже с последним файлом."""
+        self.hup = True
+        if self.reloading is None or self.reloading.done():
+            self.reloading = asyncio.ensure_future(self.reload_async())
+
+    async def reload_async(self) -> None:
+        """Чтение и разбор — в потоке, подмена — в цикле событий: соединения не ждут разбора."""
+        loop = asyncio.get_running_loop()
+        while self.hup:
+            self.hup = False
+            try:
+                conf = await loop.run_in_executor(None, load, self.path)
+            except Exception as e:  # noqa: BLE001
+                log(f"reload: {e}")             # прежние настройки остаются
+                continue
+            for d in self.apply(conf):
+                p = self.tc_set(d, d["cap"])    # выход ушёл из деления — весь предел туннелю
+                if p is not None:
+                    await loop.run_in_executor(None, self._reap, p)
 
 
 def log(text: str) -> None:
