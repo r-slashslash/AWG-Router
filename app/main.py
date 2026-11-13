@@ -824,8 +824,6 @@ def clean_backup_state(new: dict) -> dict:
         out["list_update_hours"] = max(1, min(int(s["list_update_hours"]), 24 * 30))
     if s.get("on_stop") in ("keep", "restore"):
         out["on_stop"] = s["on_stop"]
-    if s.get("exit_engine") in ("go", "kernel"):
-        out["exit_engine"] = s["exit_engine"]     # без модуля 3.x на новом сервере всё равно будет amneziawg-go
     sh = s.get("shaping")
     if sh is not None:
         if not isinstance(sh, dict):
@@ -1225,9 +1223,8 @@ def get_state(req):
         "system": {"cpu": 7.0, "cores": 2, "load": [0.14, 0.11, 0.09], "mem": [770 * 2**20, 2 * 2**30]}
         if config.DRY_RUN else hostnet.system_view(),
         "awg_engine": {"module": engine.module_info(), "server": engine.server_engine,
-                       "exits": st["settings"].get("exit_engine") or ("kernel" if config.UPSTREAM_BACKEND == "kernel"
-                                                                       else "go"),
                        "exits_now": engine.exit_engine(st), "fallback": engine.kernel_fallback,
+                       "forced": None if config.EXIT_ENGINE == "auto" else config.EXIT_ENGINE,
                        "old": engine.module_warn, "min": engine_mod.KERNEL_MIN},
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
@@ -1897,16 +1894,6 @@ def put_server(req):
     if tls.names() != names:
         tls.reconfigure()              # адрес панели или второй адрес сертификата сменился
     return res
-
-
-@app.post("/api/engine")
-def set_engine(req):
-    """Чем работают туннели к выходам: amneziawg-go или модуль ядра (только если загружен модуль 3.x)."""
-    try:
-        engine.set_exit_engine(str(req.json().get("exits") or ""))
-    except system.SysError as e:
-        bad(e.msg, 409)
-    return {"ok": True}
 
 
 @app.post("/api/server/restart")

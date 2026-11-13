@@ -556,30 +556,76 @@ class KernelInstallTest(unittest.TestCase):
 
 
 class ExitEngineTest(unittest.TestCase):
-    """Туннели к выходам: модуль ядра — только по выбору и с модулем 3.x; отказ ядра — сразу amneziawg-go."""
+    """Туннели к выходам идут за сервером (выбора нет): сервер на модуле 3.x — выходы тоже; отказ модуля —
+    amneziawg-go до перезапуска сервера; EXIT_ENGINE в .env закрепляет движок для разбора проблем."""
 
     def setUp(self):
         self.e = main.engine
         self.e.kernel_fallback = None
+        self.saved = self.e.server_engine
 
     def tearDown(self):
         self.e.kernel_fallback = None
-        main.store.mutate(lambda st: st["settings"].pop("exit_engine", None))
+        self.e.server_engine = self.saved
 
-    def test_choice_needs_module(self):
-        self.assertEqual(self.e.exit_engine(), "go")                    # по умолчанию
-        with mock.patch.object(self.e, "module_info", return_value={"loaded": True, "version": "1.0.2025", "ok": False}):
-            with self.assertRaises(system.SysError) as cm:
-                self.e.set_exit_engine("kernel")
-            self.assertEqual(cm.exception.msg.key, "eng.no_module")
-        self.e.set_exit_engine("kernel")                                 # демо: модуль 3.1 «загружен»
-        self.assertEqual(self.e.exit_engine(), "kernel")
-        with mock.patch.object(self.e, "module_info", return_value={"loaded": False, "version": None, "ok": False}):
-            self.assertEqual(self.e.exit_engine(), "go")                # модуль пропал — amneziawg-go
-        self.e.kernel_fallback = {"error": "x", "at": 0}
-        self.assertEqual(self.e.exit_engine(), "go")                    # отказ ядра — до нового выбора
-        self.e.set_exit_engine("kernel")
-        self.assertIsNone(self.e.kernel_fallback)
+    def test_exits_follow_server(self):
+        ok = {"loaded": True, "version": "3.1.20260812", "ok": True}
+        with mock.patch.object(self.e, "module_info", return_value=ok):
+            self.e.server_engine = "kernel"
+            self.assertEqual(self.e.exit_engine(), "kernel")
+            self.e.server_engine = "go"
+            self.assertEqual(self.e.exit_engine(), "go")                # сервер на amneziawg-go — выходы тоже
+            self.e.server_engine = None
+            self.assertEqual(self.e.exit_engine(), "go")                # сервер ещё не прочитан
+            self.e.server_engine = "kernel"
+            self.e.kernel_fallback = {"error": "x", "at": 0}
+            self.assertEqual(self.e.exit_engine(), "go")                # модуль отказал — до перезапуска сервера
+            self.e.kernel_fallback = None
+            with mock.patch.object(config, "EXIT_ENGINE", "go"):
+                self.assertEqual(self.e.exit_engine(), "go")
+            self.e.server_engine = "go"
+            with mock.patch.object(config, "EXIT_ENGINE", "kernel"):
+                self.assertEqual(self.e.exit_engine(), "kernel")        # закреплено в .env
+        old = {"loaded": True, "version": "1.0.2025", "ok": False}
+        with mock.patch.object(self.e, "module_info", return_value=old), \
+                mock.patch.object(config, "EXIT_ENGINE", "kernel"):
+            self.e.server_engine = "kernel"
+            self.assertEqual(self.e.exit_engine(), "go")                # модуль старше 3.x — никогда
+
+    def test_fallback_cleared_when_server_restarts(self):
+        e = engine.Engine.__new__(engine.Engine)
+        e.server_engine, e._srv_engine_at, e.module_warn, e._module_warned = None, ("", 0.0), None, None
+        e.kernel_fallback = None
+        e.event = lambda lvl, m: None
+        link = "5: awg0: <POINTOPOINT> mtu 1376\n    link/none\n    amneziawg \n"
+        info = {"loaded": True, "version": "3.1.1", "ok": True}
+        for key, expect in (("k1", None), ("k1", "keep"), ("k2", None)):
+            t = mock.Mock(key=key, iface="awg0", conf_path="/c")
+            t.ns = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, link, "")
+            t.read_file = lambda p: ""
+            if expect == "keep":
+                e.kernel_fallback = {"error": "x", "at": 0}
+                e._srv_engine_at = (key, 0.0)                            # пора перечитать, цель та же
+            with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(e, "module_info", return_value=info,
+                                                                                create=True):
+                e._watch_engine(t)
+            if expect == "keep":
+                self.assertIsNotNone(e.kernel_fallback)                  # та же цель — отказ помнится
+        self.assertIsNone(e.kernel_fallback)                             # новая цель (перезапуск) — пробуем снова
+        self.assertEqual(e.server_engine, "kernel")
+
+    def test_unreadable_interface_keeps_engine(self):
+        e = engine.Engine.__new__(engine.Engine)
+        e.server_engine, e._srv_engine_at, e.module_warn, e._module_warned = "kernel", ("k", 0.0), None, None
+        e.kernel_fallback = None
+        t = mock.Mock(key="k", iface="awg0", conf_path="/c")
+        t.ns = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "Cannot find device")
+        t.read_file = lambda p: ""
+        with mock.patch.object(config, "DRY_RUN", False), \
+                mock.patch.object(e, "module_info", return_value={"loaded": True, "version": "3.1", "ok": True},
+                                  create=True):
+            e._watch_engine(t)
+        self.assertEqual(e.server_engine, "kernel")                      # иначе выходы перезапускались бы зря
 
     def test_kernel_failure_falls_back_to_go(self):
         from app import awgconf
@@ -630,18 +676,17 @@ class ExitEngineTest(unittest.TestCase):
         self.assertEqual(len(events), 2)                                 # по одному на каждый Target.key
         self.assertEqual(events[0], ("ev.kernel_old", {"version": "1.0.20251009", "min": engine.KERNEL_MIN}))
 
-    def test_state_and_api(self):
+    def test_state_and_no_choice(self):
         main.engine.reconcile()
         st = main.get_state(None)
-        self.assertEqual(sorted(st["awg_engine"]), ["exits", "exits_now", "fallback", "min", "module", "old", "server"])
-        self.assertEqual(main.set_engine(type("R", (), {"json": lambda self: {"exits": "kernel"}})()), {"ok": True})
-        self.assertEqual(main.store.snapshot()["settings"]["exit_engine"], "kernel")
-        with self.assertRaises(web.HTTPError):
-            main.set_engine(type("R", (), {"json": lambda self: {"exits": "nope"}})())
+        self.assertEqual(sorted(st["awg_engine"]), ["exits_now", "fallback", "forced", "min", "module", "old", "server"])
+        self.assertIsNone(st["awg_engine"]["forced"])
+        self.assertFalse(hasattr(main, "set_engine"))                    # переключателя больше нет
         from test_api import good_state
         g = good_state()
-        g.setdefault("settings", {})["exit_engine"] = "kernel"
-        self.assertEqual(main.clean_backup_state(g)["settings"]["exit_engine"], "kernel")
+        g.setdefault("settings", {})["exit_engine"] = "kernel"           # из черновика 1.20.0 — отбрасывается
+        self.assertNotIn("exit_engine", main.clean_backup_state(g)["settings"])
+
 
 
 class ReviewFixesTest(unittest.TestCase):

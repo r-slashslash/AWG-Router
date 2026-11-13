@@ -6,10 +6,11 @@ it grows, so every user-visible change gets a new version.
 ## 1.20.0 — 2026-11-14
 
 - **AmneziaWG engine: amneziawg-go or the kernel module.** A new block on the Server tab shows what the server
-  runs on (the link type of `awg0`) and which kernel module is loaded, and lets tunnels to exits run on the
-  kernel module (only with a 3.x module; if the module can't create a tunnel or rejects a config that
-  amneziawg-go accepts, they move back to amneziawg-go at once; a config that neither accepts is the exit's
-  error and leaves the module in use). The server picks
+  runs on (the link type of `awg0`) and which kernel module is loaded. Tunnels to exits follow the server
+  with nothing to pick: on the kernel module when the server runs on it and the module is 3.x (if the module
+  can't create a tunnel or rejects a config that amneziawg-go accepts, they move back to amneziawg-go until
+  the server restarts; a config that neither accepts is the exit's error and leaves the module in use);
+  `EXIT_ENGINE=go|kernel` in `.env` pins them for debugging. The server picks
   the module by itself, as `awg-quick` does. A loaded module older than 3.x with an AWG 3.1 config — the
   server then doesn't come up — is reported in the panel and in Telegram. `awg-router install-kernel` builds
   the module from the Amnezia PPA (Ubuntu 22.04+, Debian 12+ with the PPA key checked by Launchpad's full

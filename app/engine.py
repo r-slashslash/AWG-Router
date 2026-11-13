@@ -57,7 +57,6 @@ SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытк
 MEM_ALERT, MEM_OK = 90, 85   # % занятой памяти: выше — тревога, ниже — снова норма
 CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
-ENGINES = ("go", "kernel")   # чем работают туннели к выходам: amneziawg-go или модуль ядра
 KERNEL_MIN = 3           # старший номер версии модуля ядра, с которой он понимает AWG 3.1
 # параметры AWG 3.1: модуль ядра старше KERNEL_MIN их не принимает, и сервер не поднимается
 AWG31_KEYS = re.compile(r"^\s*(HeaderProtectionKey|ContentPaddingAddition|RandomTrailers|DisableCookies)\s*=",
@@ -324,8 +323,8 @@ class Engine:
         r.engine = self.exit_engine()
         kernel_err = None       # awg setconf на модуле не прошёл: ошибка модуля или самого конфига
         if r.engine == "kernel":
-            # Модуль не создал интерфейс — это отказ модуля: amneziawg-go, а выбор «ядро» ждёт, пока его не
-            # сохранят снова (kernel_fallback). Не принял конфиг — ещё не ясно чей отказ: опечатка в конфиге
+            # Модуль не создал интерфейс — это отказ модуля: amneziawg-go до перезапуска сервера
+            # (kernel_fallback). Не принял конфиг — ещё не ясно чей отказ: опечатка в конфиге
             # выхода не должна снимать с модуля все выходы, поэтому тот же конфиг сперва пробуем на amneziawg-go.
             try:
                 if not config.DRY_RUN:
@@ -399,22 +398,16 @@ class Engine:
         return {**m, "ok": m["loaded"] and hostnet.module_major(m["version"]) >= KERNEL_MIN}
 
     def exit_engine(self, st: dict | None = None) -> str:
-        """Чем запускать туннели к выходам. Модуль ядра — только если его выбрали, загружен модуль 3.x и
-        он не отказал при запуске (kernel_fallback: тогда amneziawg-go, пока выбор не сохранят снова)."""
-        st = st or self.store.snapshot()
-        want = st["settings"].get("exit_engine") or ("kernel" if config.UPSTREAM_BACKEND == "kernel" else "go")
-        if want == "kernel" and not self.kernel_fallback and self.module_info()["ok"]:
+        """Чем запускать туннели к выходам: тем же, чем работает сервер (выбора нет, решение владельца
+        2026-11-14). Сервер на модуле ядра (его выбрал awg-quick: модуль загружен) — выходы тоже, если модуль
+        3.x и не отказал (kernel_fallback держится до перезапуска сервера). EXIT_ENGINE=go|kernel в .env —
+        для разбора проблем: всегда amneziawg-go или модуль без оглядки на сервер."""
+        forced = config.EXIT_ENGINE
+        if forced == "go" or self.kernel_fallback or not self.module_info()["ok"]:
+            return "go"
+        if forced == "kernel":
             return "kernel"
-        return "go"
-
-    def set_exit_engine(self, value: str) -> None:
-        if value not in ENGINES:
-            raise system.SysError(Msg("eng.bad"))
-        if value == "kernel" and not self.module_info()["ok"]:
-            raise system.SysError(Msg("eng.no_module", min=KERNEL_MIN))
-        self.store.mutate(lambda st: st["settings"].update(exit_engine=value))
-        self.kernel_fallback = None             # выбрали снова — снова пробуем модуль
-        self.reconcile_soon()
+        return "kernel" if self.server_engine == "kernel" else "go"
 
     def _watch_engine(self, t: system.Target) -> None:
         """Чем работает интерфейс сервера (тип ссылки: amneziawg/wireguard — ядро, tun — amneziawg-go) и не
@@ -428,8 +421,12 @@ class Engine:
                 or self.server_engine is None:
             p = t.ns(["ip", "-d", "link", "show", t.iface], check=False, timeout=10)
             out = p.stdout if p.returncode == 0 else ""
-            self.server_engine = ("kernel" if re.search(r"^\s+(amneziawg|wireguard)\b", out, re.M) else
-                                  "go" if re.search(r"^\s+tun\b", out, re.M) else None)
+            seen = ("kernel" if re.search(r"^\s+(amneziawg|wireguard)\b", out, re.M) else
+                    "go" if re.search(r"^\s+tun\b", out, re.M) else None)
+            if seen is not None or self._srv_engine_at[0] != t.key:
+                self.server_engine = seen     # не прочиталось у той же цели — прежнее, выходы не дёргаем
+            if self._srv_engine_at[0] != t.key and self._srv_engine_at[0]:
+                self.kernel_fallback = None   # сервер перезапущен (новая цель): модуль пробуем снова
             self._srv_engine_at = (t.key, now)
         m = self.module_info()
         old = bool(m["loaded"] and m["version"]) and not m["ok"]     # версию не узнать — не пугаем
@@ -1390,6 +1387,7 @@ class Engine:
                 t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
             t.restart()
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
+            self.kernel_fallback = None     # на хосте Target.key не меняется: модуль пробуем снова здесь
         self.reconcile_soon()
 
     def _watch_resources(self) -> None:

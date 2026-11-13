@@ -1660,13 +1660,9 @@ function engineSection() {
       <div class="kv" style="margin-bottom:14px">
         <div><span>${esc(t("eng.server"))}</span><b><bdi>${esc(srv)}</bdi></b></div>
         <div><span>${esc(t("eng.module"))}</span><b><bdi>${esc(mod)}</bdi></b></div>
+        <div><span>${esc(t("eng.exits"))}</span><b><bdi>${esc(E.exits_now === "kernel" ? t("eng.kernel") : "amneziawg-go")}</bdi></b></div>
       </div>
-      <label class="field"><span>${esc(t("eng.exits"))}</span>
-        <select id="eng-exits">
-          <option value="go" ${E.exits !== "kernel" ? "selected" : ""}>${esc(t("eng.opt_go"))}</option>
-          <option value="kernel" ${E.exits === "kernel" ? "selected" : ""} ${m.ok ? "" : "disabled"}>${esc(t("eng.opt_kernel"))}</option>
-        </select>
-        <span class="hint">${esc(t(m.ok ? "eng.exits_hint" : "eng.need_module", { min: E.min }))}</span></label>
+      ${E.forced ? `<p class="small muted">${esc(t("eng.forced", { value: E.forced }))}</p>` : ""}
       <p class="small muted">${esc(t("eng.server_auto"))}</p>
       <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel", "eng.what_cost"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
       <div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
@@ -1748,13 +1744,6 @@ bind.server = () => {
   if (!SRV || !SRV.exists) return;
   const ec = $("#eng-copy");
   if (ec) ec.onclick = () => copyText(KERNEL_CMD);
-  const ee = $("#eng-exits");
-  if (ee) ee.onchange = async () => {
-    ee.disabled = true;
-    try { await api("POST", "engine", { exits: ee.value }); toast(t("eng.saved")); }
-    catch (e) { toast(e.message, true); }
-    finally { ee.disabled = false; refresh(); }
-  };
   $("#sh-save").onclick = async () => {
     const b = $("#sh-save"); b.disabled = true;
     try {

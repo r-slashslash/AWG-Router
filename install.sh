@@ -345,7 +345,7 @@ install_kernel() {
 
 kernel_next() {
   echo "  Next: the AWG server moves to the module after a restart — in the panel, Server → Restart the AWG server"
-  echo "  (clients drop for a few seconds). Tunnels to exits: Server → AmneziaWG engine → Kernel module."
+  echo "  (clients drop for a few seconds); tunnels to exits follow it."
   echo "  To go back to amneziawg-go: apt remove amneziawg-dkms, then reboot the server."
 }
 

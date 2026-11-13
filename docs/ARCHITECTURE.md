@@ -36,8 +36,8 @@ interface restart. A disabled client is kept in the config as a commented block 
 
 The server's interface comes from `awg-quick`, which takes the AmneziaWG kernel module when it is loaded
 and `amneziawg-go` otherwise; the panel shows which one runs and warns when a module older than 3.x meets
-an AWG 3.1 config. Tunnels to exits run on `amneziawg-go` unless the kernel module is picked on the Server
-tab; any failure on the module moves them back. If the server's interface disappears while its target is
+an AWG 3.1 config. Tunnels to exits follow the server's engine (`EXIT_ENGINE` in `.env` can
+pin them); any failure on the module moves them back to `amneziawg-go` until the server restarts. If the server's interface disappears while its target is
 still there (for example, the kernel killed `amneziawg-go` when memory ran out), the engine restarts the
 server with growing pauses.
 
