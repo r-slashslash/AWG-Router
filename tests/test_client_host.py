@@ -123,6 +123,25 @@ class InstallerTest(unittest.TestCase):
         v, _ = self.run_part("198.51.100.99", domain="", reconf=1)
         self.assertEqual(v["PUBLIC_HOST"], "203.0.113.5")
 
+    def test_env_no_returns_configs_to_ip(self):
+        # в конфигах уже домен: AWGR_CLIENT_DOMAIN=no возвращает их на IP (раньше молча оставался домен)
+        os.environ["AWGR_CLIENT_DOMAIN"] = "no"
+        try:
+            v, _ = self.run_part("vpn.example.com", domain="vpn.example.com", tls_domain="vpn.example.com")
+        finally:
+            del os.environ["AWGR_CLIENT_DOMAIN"]
+        self.assertEqual(v["PUBLIC_HOST"], "203.0.113.5")
+        self.assertEqual(v["TLS_HOST"], "vpn.example.com")
+
+    def test_reconfigure_asks_when_configs_use_domain(self):
+        v, out = self.run_part("vpn.example.com", domain=None, tls_domain="vpn.example.com", reconf=1)
+        self.assertIn("1) vpn.example.com — configs keep working if the IP changes (current)", out)
+        self.assertEqual(v["PUBLIC_HOST"], "vpn.example.com")            # Enter — как было
+        # ANSWER отвечает на все вопросы сразу: домен передаём через AWGR_DOMAIN, «2» — только про конфиги
+        v, _ = self.run_part("vpn.example.com", domain="vpn.example.com", tls_domain="vpn.example.com", reconf=1,
+                             answer="2")
+        self.assertEqual(v["PUBLIC_HOST"], "203.0.113.5")
+
     def test_panel_domain_removed_returns_to_ip(self):
         v, _ = self.run_part("vpn.example.com", domain="", tls_domain="vpn.example.com")
         self.assertEqual(v["PUBLIC_HOST"], "203.0.113.5")

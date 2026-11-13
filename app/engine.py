@@ -322,17 +322,24 @@ class Engine:
             self._v6_route(t, ip)
             setconf = awgconf.setconf_for(pc, ip)
         r.engine = self.exit_engine()
+        kernel_err = None       # awg setconf на модуле не прошёл: ошибка модуля или самого конфига
         if r.engine == "kernel":
-            # модуль ядра: при любом отказе (ip link add, awg setconf) — сразу amneziawg-go, а выбор
-            # «ядро» ждёт, пока его не сохранят снова (kernel_fallback)
+            # Модуль не создал интерфейс — это отказ модуля: amneziawg-go, а выбор «ядро» ждёт, пока его не
+            # сохранят снова (kernel_fallback). Не принял конфиг — ещё не ясно чей отказ: опечатка в конфиге
+            # выхода не должна снимать с модуля все выходы, поэтому тот же конфиг сперва пробуем на amneziawg-go.
             try:
                 if not config.DRY_RUN:
                     t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
-                self._setconf(t, ifn, setconf)
             except Exception as e:  # noqa: BLE001
                 t.ns(["ip", "link", "del", ifn], check=False)
                 self._kernel_failed(ifn, msg_of(e))
                 r.engine = "go"
+            else:
+                try:
+                    self._setconf(t, ifn, setconf)
+                except Exception as e:  # noqa: BLE001
+                    t.ns(["ip", "link", "del", ifn], check=False)
+                    kernel_err, r.engine = msg_of(e), "go"
         if r.engine == "go":
             if not config.DRY_RUN:
                 sock = f"{SOCK_DIR}/{ifn}.sock"
@@ -360,7 +367,9 @@ class Engine:
                         pass
                     raise system.SysError(Msg("sys.awg_start_failed", iface=ifn))
             self.rt[uid] = r
-            self._setconf(t, ifn, setconf)
+            self._setconf(t, ifn, setconf)       # не прошёл и здесь — конфиг плох, модуль ни при чём
+            if kernel_err is not None:
+                self._kernel_failed(ifn, kernel_err)    # amneziawg-go принял то, что не принял модуль
         else:
             self.rt[uid] = r
         # Служебный link-local адрес: без IPv4-адреса ядро при включённом rp_filter
@@ -1343,22 +1352,22 @@ class Engine:
             t.ns(["sysctl", "-qw", kv], check=False)
 
     # ------------------------------------------------------------ reconcile
-    def _watch_server(self, t: system.Target) -> None:
+    def _watch_server(self, t: system.Target) -> bool:
         """Интерфейса сервера нет, а цель на месте — например, ядро завершило amneziawg-go при нехватке памяти:
         контейнер работает дальше без awg0, служба на хосте числится запущенной, клиенты отваливаются.
         Поднимаем перезапуском (контейнер — docker restart, хост — служба awg-quick). Контейнер — не сразу
         (SERVER_GRACE: при смене порта и S1–S4 интерфейс пропадает ненадолго), дальше с растущими паузами."""
         if config.DRY_RUN:
-            return
+            return False
         now = time.time()
         if t.is_up():
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
-            return
+            return False
         if self._srv_down is None:
             self._srv_down = now
         grace = SERVER_GRACE if t.kind == "container" else 0
         if now - self._srv_down < grace or now < self._srv_next:
-            return
+            return False
         self._srv_tries += 1
         self._srv_next = now + SERVER_PAUSES[min(self._srv_tries, len(SERVER_PAUSES)) - 1]
         self.event("warn", Msg("ev.server_iface_gone", iface=t.iface))
@@ -1368,6 +1377,8 @@ class Engine:
             t.restart()
         except Exception as e:  # noqa: BLE001
             self.event("error", Msg("ev.server_start_failed", error=msg_of(e)))
+        # True: цель перезапущена — у контейнера новый PID, и этот проход работал бы со старым
+        return True
 
     def restart_server(self) -> None:
         """Кнопка «Перезапустить сервер AWG». Дальше всё применит reconcile: у контейнера сменится Target.key."""
@@ -1439,7 +1450,11 @@ class Engine:
                 self.target_error = Msg("sys.host_no_server")
                 self.clients = []
                 return
-            self._watch_server(t)
+            if self._watch_server(t):
+                # сервер только что перезапущен: у контейнера новый PID, а интерфейс поднимается не сразу —
+                # этот проход не применяет ничего к старой цели, следующий (RECONCILE_INTERVAL) найдёт новую
+                self.applied_hash = None
+                return
             try:
                 self._watch_engine(t)
             except Exception:  # noqa: BLE001

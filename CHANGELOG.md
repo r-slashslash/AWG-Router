@@ -7,7 +7,9 @@ it grows, so every user-visible change gets a new version.
 
 - **AmneziaWG engine: amneziawg-go or the kernel module.** A new block on the Server tab shows what the server
   runs on (the link type of `awg0`) and which kernel module is loaded, and lets tunnels to exits run on the
-  kernel module (only with a 3.x module; any failure moves them back to amneziawg-go at once). The server picks
+  kernel module (only with a 3.x module; if the module can't create a tunnel or rejects a config that
+  amneziawg-go accepts, they move back to amneziawg-go at once; a config that neither accepts is the exit's
+  error and leaves the module in use). The server picks
   the module by itself, as `awg-quick` does. A loaded module older than 3.x with an AWG 3.1 config — the
   server then doesn't come up — is reported in the panel and in Telegram. `awg-router install-kernel` builds
   the module from the Amnezia PPA (Ubuntu 22.04+, Debian 12+ with the PPA key checked by Launchpad's full
@@ -21,7 +23,8 @@ it grows, so every user-visible change gets a new version.
 - **The AWG server comes back by itself.** When the server's interface is gone while its container keeps running
   (for example, the kernel's OOM killer ended `amneziawg-go`, and clients dropped until someone restarted it by
   hand), the panel restarts the container after `engine.SERVER_GRACE` and then with growing pauses
-  (`SERVER_PAUSES`) if that doesn't help. In host mode the `awg-quick` service is restarted the same way: before,
+  (`SERVER_PAUSES`) if that doesn't help; the pass that restarts it applies nothing more, since the container
+  has a new PID. In host mode the `awg-quick` service is restarted the same way: before,
   `systemctl enable --now` left a service that was "active" without its interface as it was. **Server → Restart
   the AWG server** does it by hand.
 - **Telegram: server resources.** A new notification kind with its own checkbox: memory above 90% or CPU above
@@ -37,7 +40,8 @@ it grows, so every user-visible change gets a new version.
   limits and the sign-in lockout count IPv6 clients by their /64. Thanks to @paris19891 (#20).
 - **A domain in client configs.** `PUBLIC_HOST` may be a domain: with a panel domain the installer asks
   whether client configs use it (`AWGR_CLIENT_DOMAIN=yes|no` answers without a prompt), checks the domain's DNS
-  against the server's IP instead of `PUBLIC_HOST`, and `--reconfigure` keeps the domain. Saving the Server tab
+  against the server's IP instead of `PUBLIC_HOST`, and `--reconfigure` asks again (Enter keeps the current
+  choice); `AWGR_CLIENT_DOMAIN=no` also returns configs that already use the domain to the IP. Saving the Server tab
   no longer turns the `.env` address into a panel setting that silently overrode `.env`, and the installer warns
   when the panel's own address does. Thanks to @koo-pub (#22, #23).
 - **Let's Encrypt through a web server on port 80.** Since 1.14.0 the self-check put its test file next to
@@ -48,6 +52,14 @@ it grows, so every user-visible change gets a new version.
   the AmneziaVPN container mode Docker gives the container no IPv6 by default), the exit now says so and what
   to do instead of hanging on "no connection"; README → Limitations shows how to turn on IPv6 in Docker. The
   check looks at the route, so servers with IPv6 in Docker keep working. Thanks to @paris19891 (#20).
+
+- **Smaller fixes.** Restoring a backup from another server no longer takes the old server's public address
+  and "Address in configs" when this server has none of its own (`PUBLIC_HOST` from `.env` stays in force);
+  before, configs, the panel link and the certificate got the old IP. An exit whose fallback chain leads back
+  to itself (A → B → A) is refused with a clear message: with all of them down clients would be blocked. The
+  certificate thread survives an unexpected error instead of stopping renewals until a restart; a self-signed
+  certificate is reissued when only the second address changes. `Infinity`, `NaN` and very deeply nested JSON
+  in a request get HTTP 400 instead of 500.
 
 ## 1.19.4 — 2026-11-13
 

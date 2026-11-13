@@ -4,6 +4,7 @@
 python3 -m unittest discover tests
 """
 import http.client
+import io
 import json
 import os
 import socket
@@ -642,6 +643,152 @@ class ExitEngineTest(unittest.TestCase):
         g.setdefault("settings", {})["exit_engine"] = "kernel"
         self.assertEqual(main.clean_backup_state(g)["settings"]["exit_engine"], "kernel")
 
+
+class ReviewFixesTest(unittest.TestCase):
+    """Замечания проверки 1.20.0: отказ модуля и отказ конфига различаются; после перезапуска сервера проход
+    не трогает старую цель; восстановление не берёт адрес старого сервера; Infinity и глубокий JSON — 400."""
+
+    def start_up(self, setconf_fails):
+        """_start_up на модуле ядра: setconf_fails — сколько первых вызовов awg setconf падает."""
+        from app import awgconf
+        from test_v115 import conf
+        e = engine.Engine.__new__(engine.Engine)
+        e.rt, e.kernel_fallback, events = {}, None, []
+        e.event = lambda lvl, m: events.append(m.key)
+        e.exit_engine = lambda st=None: "kernel" if not e.kernel_fallback else "go"
+        n = [0]
+
+        def setconf(*a):
+            n[0] += 1
+            if n[0] <= setconf_fails:
+                raise system.SysError("Invalid argument")
+        t = mock.Mock(pid=1, key="k")
+        t.ns.return_value = subprocess.CompletedProcess([], 0, "", "")
+        pc = awgconf.parse_upstream(conf("203.0.113.7:51820"))
+        err = None
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine.subprocess, "Popen") as po, \
+                mock.patch.object(engine.os.path, "exists", return_value=True), \
+                mock.patch.object(engine.os, "makedirs"), mock.patch.object(engine.os, "remove"), \
+                mock.patch("builtins.open", mock.mock_open()), \
+                mock.patch.object(engine.Engine, "_setconf", side_effect=setconf):
+            po.return_value.poll.return_value = None
+            try:
+                e._start_up(t, "u1", {"num": 3, "name": "X"}, pc, "h")
+            except system.SysError as ex:
+                err = ex
+        return e, events, err
+
+    def test_bad_config_does_not_blame_module(self):
+        e, events, err = self.start_up(setconf_fails=2)        # не принял ни модуль, ни amneziawg-go
+        self.assertIsNotNone(err)
+        self.assertNotIn("ev.kernel_fallback", events)
+        self.assertIsNone(e.kernel_fallback)                    # остальные выходы остаются на модуле
+
+    def test_module_rejects_what_go_accepts(self):
+        e, events, err = self.start_up(setconf_fails=1)
+        self.assertIsNone(err)
+        self.assertEqual(e.rt["u1"].engine, "go")
+        self.assertIn("ev.kernel_fallback", events)
+
+    def test_pass_stops_after_server_restart(self):
+        e = main.engine
+        t = mock.Mock(kind="host", iface="awg0", exists=True)
+        t.is_up = lambda: False
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(e, "event"), \
+                mock.patch.object(engine.system, "discover", return_value=t), \
+                mock.patch.object(e, "_watch_resources"), mock.patch.object(e, "_watch_engine") as we:
+            e._srv_down, e._srv_tries, e._srv_next = None, 0, 0.0
+            try:
+                self.assertTrue(e._watch_server(t))              # перезапуск — True
+                self.assertFalse(e._watch_server(t))             # пауза — False
+                e._srv_down, e._srv_tries, e._srv_next = None, 0, 0.0
+                e.applied_hash = "old"
+                e.reconcile()
+            finally:
+                e._srv_down, e._srv_tries, e._srv_next = None, 0, 0.0
+        we.assert_not_called()                                   # дальше проход не пошёл
+        self.assertIsNone(e.applied_hash)
+        self.assertEqual(t.restart.call_count, 2)
+
+    def restore(self, local):
+        from test_api import good_state
+        g = good_state()
+        g["settings"].update(public_host="198.51.100.1", client_host="198.51.100.2")
+        main.store.mutate(lambda st: st["settings"].update(local) or
+                          [st["settings"].pop(k, None) for k in ("public_host", "client_host") if k not in local])
+        b = {"format": main.BACKUP_FORMAT, "state": g}
+        main.restore_backup(type("R", (), {"json": lambda self: {"backup": b}})())
+        return main.store.snapshot()["settings"]
+
+    def test_restore_ignores_old_server_address(self):
+        st0 = main.store.snapshot()
+        try:
+            s = self.restore({})                                 # свой адрес — PUBLIC_HOST из .env
+            self.assertNotIn("public_host", s)
+            self.assertNotIn("client_host", s)
+            s = self.restore({"public_host": "203.0.113.9"})
+            self.assertEqual(s.get("public_host"), "203.0.113.9")
+            self.assertNotIn("client_host", s)
+        finally:
+            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+
+    def test_non_finite_and_deep_json_are_400(self):
+        def req(raw):
+            h = mock.Mock(rfile=io.BytesIO(raw))
+            r = web.Request.__new__(web.Request)
+            r.h, r.headers, r._body = h, {"Content-Length": str(len(raw))}, None
+            return r
+        for raw in (b'{"list_update_hours": Infinity}', b'{"x": NaN}', b'{"a":' * 100000 + b'1' + b'}' * 100000):
+            with self.assertRaises(web.HTTPError) as cm:
+                req(raw).json()
+            self.assertEqual(cm.exception.code, 400)
+        self.assertFalse(main._num(float("inf")))
+        self.assertTrue(main._num(2.5))
+
+    def test_tls_loop_survives_error(self):
+        from app import tlsmgr
+        m = tlsmgr.TLSManager.__new__(tlsmgr.TLSManager)
+        m.stop_ev, m._wake, m.error, m.busy = threading.Event(), mock.Mock(), None, True
+        m._wake.wait.side_effect = [True, True]
+        calls = []
+
+        def step(woke):
+            calls.append(woke)
+            if len(calls) == 1:
+                raise OSError("disk full")
+            m.stop_ev.set()
+        m._step = step
+        m._wait = lambda: 1
+        m._loop()
+        self.assertEqual(len(calls), 2)                          # поток жив после ошибки
+        self.assertIn("disk full", m.error)
+
+    def test_selfsigned_reissued_when_second_address_changes(self):
+        """Режим без Let's Encrypt: поменялся только второй адрес — самоподписанный выпускается заново."""
+        alt = ["203.0.113.7"]
+        m = tlsmgr.TLSManager(lambda: "2001:db8::7", lambda: alt)
+        m.mode = "selfsigned"
+        cert = os.path.join(tlsmgr.TLS_DIR, "self.crt")
+        with mock.patch.object(config, "DRY_RUN", False):
+            m._apply()
+            self.assertTrue(tlsmgr._san_matches(cert, "203.0.113.7"))
+            alt[0] = "203.0.113.8"
+            m._apply()
+        self.assertTrue(tlsmgr._san_matches(cert, "203.0.113.8"))
+    def test_fallback_loop_rejected(self):
+        R = lambda b: type("R", (), {"json": lambda self: b})()
+        st0 = main.store.snapshot()
+        try:
+            a = main.add_upstream(R({"name": "A", "config": "socks5://198.51.100.21:1080"}))["id"]
+            b = main.add_upstream(R({"name": "B", "config": "socks5://198.51.100.22:1080", "fallback": "up:" + a}))["id"]
+            c = main.add_upstream(R({"name": "C", "config": "socks5://198.51.100.23:1080", "fallback": "up:" + b}))["id"]
+            with self.assertRaises(web.HTTPError) as cm:
+                main.edit_upstream(R({"fallback": "up:" + c}), a)          # A → C → B → A
+            self.assertEqual(cm.exception.detail.key, "err.fallback_loop")
+            main.edit_upstream(R({"fallback": "direct"}), b)
+            main.edit_upstream(R({"fallback": "up:" + c}), a)              # цепочка без круга — можно
+        finally:
+            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
 
 if __name__ == "__main__":
     unittest.main()

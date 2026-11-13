@@ -638,22 +638,28 @@ OLD_DOMAIN="$(cur_domain)"
 if [ -n "$OLD_DOMAIN" ] && [ "$PUBLIC_HOST" = "$OLD_DOMAIN" ] && [ "$PANEL_DOMAIN" != "$OLD_DOMAIN" ]; then
   PUBLIC_HOST="$SERVER_IP"    # configs used the old panel domain — ask again below
 fi
-if [ "$ACCESS" = public ] && [ -n "$PANEL_DOMAIN" ] && [ "$PUBLIC_HOST" != "$PANEL_DOMAIN" ] \
+# Asked whenever the domain is (re)entered, also when configs already use it: AWGR_CLIENT_DOMAIN=no
+# and the second answer must be able to return them to the IP.
+if [ "$ACCESS" = public ] && [ -n "$PANEL_DOMAIN" ] \
    && { [ "$SET_DOMAIN" = 1 ] || [ -n "${AWGR_CLIENT_DOMAIN:-}" ]; }; then
+  ip_host="$PUBLIC_HOST"; [ "$PUBLIC_HOST" = "$PANEL_DOMAIN" ] && ip_host="$SERVER_IP"
   ans="${AWGR_CLIENT_DOMAIN:-}"
   if [ -z "$ans" ]; then
     q="Which address should client configs use?"
     use_domain="$PANEL_DOMAIN — configs keep working if the IP changes"
-    if [ "$DNS_OK" = 1 ]; then
-      choose "$q" "$use_domain (recommended)" "$PUBLIC_HOST"
-      [ "$CHOICE" = 1 ] && ans=yes
+    if [ "$PUBLIC_HOST" = "$PANEL_DOMAIN" ]; then
+      choose "$q" "$use_domain (current)" "$ip_host"
+      [ "$CHOICE" = 1 ] && ans=yes || ans=no
+    elif [ "$DNS_OK" = 1 ]; then
+      choose "$q" "$use_domain (recommended)" "$ip_host"
+      [ "$CHOICE" = 1 ] && ans=yes || ans=no
     else
-      choose "$q" "$PUBLIC_HOST (recommended)" \
+      choose "$q" "$ip_host (recommended)" \
              "$use_domain; it must lead straight to this server, without a proxy such as Cloudflare"
-      [ "$CHOICE" = 2 ] && ans=yes
+      [ "$CHOICE" = 2 ] && ans=yes || ans=no
     fi
   fi
-  [[ "$ans" =~ ^[Yy] ]] && PUBLIC_HOST="$PANEL_DOMAIN"
+  if [[ "$ans" =~ ^[Yy] ]]; then PUBLIC_HOST="$PANEL_DOMAIN"; else PUBLIC_HOST="$ip_host"; fi
 fi
 ok "Address in client configs: $PUBLIC_HOST"
 # Server → Server public address in the panel is kept in data/state.json and overrides PUBLIC_HOST

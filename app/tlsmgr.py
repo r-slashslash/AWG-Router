@@ -65,6 +65,7 @@ class TLSManager:
         self.active: str | None = None     # letsencrypt | custom | selfsigned
         self.expires: float | None = None
         self.loaded_for: str | None = None  # адрес, на который загружен сертификат
+        self.loaded_names: list[str] = []   # все адреса загруженного (второй — у IPv4 и IPv6, names())
         self.error = None                  # Msg или строка lego
         self.last_try: float | None = None
         self.busy = False
@@ -130,6 +131,7 @@ class TLSManager:
             changed = self.expires != exp or self.active != kind
             self._ctx, self.active, self.expires = ctx, kind, exp
             self.loaded_for = self.host()
+            self.loaded_names = self.names()
         if changed:
             log.info("TLS: %s certificate valid until %s", kind,
                      datetime.fromtimestamp(exp, timezone.utc).isoformat())
@@ -291,7 +293,8 @@ class TLSManager:
                         ok = self._lego()
                 if src != "letsencrypt":
                     self.port80 = None
-                if not ok and (not self._ctx or self.active != src or self.loaded_for != host):
+                if not ok and (not self._ctx or self.active != src or self.loaded_for != host
+                               or (self.active == "selfsigned" and self.loaded_names != self.names())):
                     self._selfsigned()
             finally:
                 self.busy = False
@@ -327,27 +330,35 @@ class TLSManager:
             woke = self._wake.wait(self._wait())
             if self.stop_ev.is_set():
                 return
-            if woke:
-                self._wake.clear()
+            try:
+                self._step(woke)
+            except Exception as e:  # noqa: BLE001 — иначе поток умрёт и сертификат больше не продлится
+                log.exception("tls")
+                self.error = str(e)[:300]
+                self.busy = False
+
+    def _step(self, woke: bool) -> None:
+        if woke:
+            self._wake.clear()
+            self._apply()
+            return
+        src = self.source()
+        if src == "custom":
+            cert, key = self._custom_files()
+            if self._sig(cert, key) != self._custom_sig or self.active != "custom":
                 self._apply()
-                continue
-            src = self.source()
-            if src == "custom":
-                cert, key = self._custom_files()
-                if self._sig(cert, key) != self._custom_sig or self.active != "custom":
-                    self._apply()
-                if self.on_fail and self.active == "custom" and (self.expires or 0) < time.time() + 2 * 86400:
-                    self.on_fail(self.expires)   # certbot не продлил: до конца срока меньше двух суток
-                continue
-            if src != "letsencrypt":
-                continue
-            with self._run:
-                ok = self._lego()
-            if not ok and self.active == "letsencrypt" and self.on_fail and \
-                    (self.expires or 0) < time.time() + 2 * 86400:
-                self.on_fail(self.expires)   # до конца срока меньше двух суток — сообщаем
-            if not ok and self.active == "letsencrypt" and (self.expires or 0) < time.time() + 600:
-                self._selfsigned()   # сертификат вот-вот истечёт, а продлить не удалось
+            if self.on_fail and self.active == "custom" and (self.expires or 0) < time.time() + 2 * 86400:
+                self.on_fail(self.expires)   # certbot не продлил: до конца срока меньше двух суток
+            return
+        if src != "letsencrypt":
+            return
+        with self._run:
+            ok = self._lego()
+        if not ok and self.active == "letsencrypt" and self.on_fail and \
+                (self.expires or 0) < time.time() + 2 * 86400:
+            self.on_fail(self.expires)   # до конца срока меньше двух суток — сообщаем
+        if not ok and self.active == "letsencrypt" and (self.expires or 0) < time.time() + 600:
+            self._selfsigned()   # сертификат вот-вот истечёт, а продлить не удалось
 
     def renew_now(self) -> bool:
         with self._run:

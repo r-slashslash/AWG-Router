@@ -28,6 +28,10 @@ MAX_PER_IP = 24            # с одного адреса: один источн
 IDLE_TIMEOUT = 60          # секунд на заголовки, тело и ожидание следующего запроса
 
 
+def _no_constant(name: str):
+    raise ValueError(f"{name} is not allowed")
+
+
 def client_key(addr: str) -> str:
     """Адрес клиента для пределов и блокировки подбора пароля. IPv4 из сокета IPv6 (`::ffff:a.b.c.d`) — как
     IPv4; IPv6 — его сеть /64: у одного абонента обычно целая /64, и по отдельным адресам блокировку
@@ -94,8 +98,10 @@ class Request:
             raw = self.h.rfile.read(n) if n else b"{}"
             self.h.body_read = True
             try:
-                self._body = json.loads(raw or b"{}")
-            except ValueError:
+                # Infinity и NaN — не JSON по стандарту, а int() на них падает; слишком глубокая
+                # вложенность — RecursionError: всё это неверный запрос (400), а не ошибка панели (500)
+                self._body = json.loads(raw or b"{}", parse_constant=_no_constant)
+            except (ValueError, RecursionError):
                 raise HTTPError(400, "err.bad_json")
             if not isinstance(self._body, dict):
                 raise HTTPError(400, "err.bad_json")

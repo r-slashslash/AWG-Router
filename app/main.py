@@ -8,6 +8,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -640,7 +641,7 @@ def decrypt_backup(req):
     plain = notify.decrypt(data, str(body.get("password") or ""))
     try:
         b = json.loads(plain) if plain is not None else None
-    except ValueError:
+    except (ValueError, RecursionError):
         b = None
     if not isinstance(b, dict):
         bad("err.backup_password")
@@ -648,7 +649,8 @@ def decrypt_backup(req):
 
 
 def _num(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """Конечное число (Infinity и NaN из JSON — нет: int() на них падает)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _int_or_none(v):
@@ -915,6 +917,19 @@ def clean_server_files(srv: dict, kind: str) -> tuple[awgserver.ServerConf, dict
     return sc, out
 
 
+def _fallback_loops(st: dict, uid: str, fb: str) -> bool:
+    """Резерв выхода uid по цепочке резервов возвращается к нему же (A → B → A): когда все в цепочке лежат,
+    клиенты получили бы «блок» (resolve обрывает цепочку), а человек ждал бы «напрямую»."""
+    seen = set()
+    while fb.startswith("up:") and fb not in seen:
+        if fb == "up:" + uid:
+            return True
+        seen.add(fb)
+        u = Store.upstream(st, fb[3:])
+        fb = (u or {}).get("fallback") or "direct"
+    return False
+
+
 @app.post("/api/restore")
 def restore_backup(req):
     body = req.json()
@@ -942,7 +957,11 @@ def restore_backup(req):
         keep_client_host = st["settings"].get("client_host")
         st.clear()
         st.update(new)
-        if keep_host:      # адрес этого сервера важнее адреса из копии (переезд)
+        # адреса этого сервера важнее адресов из копии (переезд): и свои из панели, и отсутствие своих —
+        # тогда остаётся PUBLIC_HOST из .env, а не IP старого сервера в конфигах, ссылке и сертификате
+        st["settings"].pop("public_host", None)
+        st["settings"].pop("client_host", None)
+        if keep_host:
             st["settings"]["public_host"] = keep_host
         if keep_client_host:
             st["settings"]["client_host"] = keep_client_host
@@ -1393,6 +1412,8 @@ def edit_upstream(req, uid):
             fb = v_outbound(st, body["fallback"])
             if fb == "up:" + uid:
                 bad("err.fallback_self")
+            if _fallback_loops(st, uid, fb):
+                bad("err.fallback_loop")
             u["fallback"] = fb
         if body.get("config"):
             try:
@@ -1738,7 +1759,7 @@ def put_settings(req):
         if "list_update_hours" in body:
             try:
                 s["list_update_hours"] = max(1, min(int(body["list_update_hours"]), 24 * 30))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 bad("err.hours")
         if "on_stop" in body:
             if body["on_stop"] not in ("keep", "restore"):
