@@ -178,7 +178,8 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 
 - 面板通过 [lego](https://go-acme.github.io/lego/) 为服务器 IP 或面板域名获取 Let's Encrypt 证书，经 80 端口验证，并在不重启的情况下续期。Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配置），因此面板大约每 3 天续期一次。
 - **系统 → 域名和证书**：设置面板域名（留空则通过 IP）并选择 Let's Encrypt 或自有证书。使用自有证书时，填写服务器上证书（完整链）和私钥的路径，例如 certbot 的 `/etc/letsencrypt/live/example.com/fullchain.pem` 和 `privkey.pem`。面板会检查证书是否签发给面板地址、私钥是否匹配；certbot 续期后，面板会在几分钟内加载新证书。
-- 域名只是面板的地址：客户端配置仍使用 **服务器** 选项卡中的服务器地址。
+- 使用 IPv6 时（**服务器公网地址** 为 IPv6，或在 **配置中的地址** 中选择了 IPv6），证书同时签发给服务器的 IPv4 和 IPv6 地址，通过任一地址打开面板都不会出现警告。如果 Let's Encrypt 无法验证第二个地址（例如该地址的 80 端口被关闭），证书只签发给主地址，面板会在一天后再尝试第二个地址。通过 80 端口上的 Web 服务器验证时，证书只签发给主地址。
+- 域名是面板的地址。客户端配置使用 **服务器** 选项卡中的服务器地址；安装程序也会询问是否改用面板域名。
 - 如果签发失败，面板会使用临时自签名证书运行，浏览器会显示警告。每 30 分钟重试一次。
 - 状态和 **立即获取证书** 按钮位于 **系统** 选项卡。
 
@@ -299,7 +300,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 <table>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/Neborya"><img src="https://github.com/Neborya.png?size=128" width="72" alt=""><br><b>Neborya</b></a><br>🐛 💡<br><sub>Debian 13 上的 Compose 软件包 <a href="https://github.com/r-slashslash/AWG-Router/issues/1">#1</a>、按出口统计流量 <a href="https://github.com/r-slashslash/AWG-Router/issues/2">#2</a>、经由出口发送 Telegram <a href="https://github.com/r-slashslash/AWG-Router/issues/3">#3</a>、与 Web 服务器共用 80 端口 <a href="https://github.com/r-slashslash/AWG-Router/issues/4">#4</a>、配置中的客户端名称 <a href="https://github.com/r-slashslash/AWG-Router/issues/7">#7</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/koo-pub"><img src="https://github.com/koo-pub.png?size=128" width="72" alt=""><br><b>koo-pub</b></a><br>💻<br><sub>在 Android 版 AmneziaWG 中可稳定扫描的二维码 <a href="https://github.com/r-slashslash/AWG-Router/issues/5">#5</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/koo-pub"><img src="https://github.com/koo-pub.png?size=128" width="72" alt=""><br><b>koo-pub</b></a><br>🐛 💻 🔍<br><sub>在 Android 版 AmneziaWG 中可稳定扫描的二维码 <a href="https://github.com/r-slashslash/AWG-Router/issues/5">#5</a>、客户端配置中的面板域名 <a href="https://github.com/r-slashslash/AWG-Router/issues/22">#22</a> <a href="https://github.com/r-slashslash/AWG-Router/pull/23">#23</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/LCF30"><img src="https://github.com/LCF30.png?size=128" width="72" alt=""><br><b>LCF30</b></a><br>🐛 💻 🔍<br><sub>Endpoint 使用域名的出口 <a href="https://github.com/r-slashslash/AWG-Router/issues/6">#6</a>、面向俄罗斯、中国和伊朗的现成镜像 <a href="https://github.com/r-slashslash/AWG-Router/issues/8">#8</a>、SOCKS5 出口健康检查 <a href="https://github.com/r-slashslash/AWG-Router/issues/9">#9</a>、不依赖故障出口的 Telegram 通知 <a href="https://github.com/r-slashslash/AWG-Router/issues/10">#10</a>、github.com 无法下载时通过 GitHub API 下载版本 <a href="https://github.com/r-slashslash/AWG-Router/pull/13">#13</a></sub></td>
 </tr>
 <tr>

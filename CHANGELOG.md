@@ -8,9 +8,17 @@ it grows, so every user-visible change gets a new version.
 - **The panel over IPv6.** The panel now listens on IPv6 as well as IPv4 (one socket for all addresses; IPv4
   only if the kernel has no IPv6), so an IPv6 server public address works as one field was meant to: the panel
   opens at it, gets its certificate for it and clients connect to it unless "Address in configs" picks another
-  one; the field's hint now says all three. A Let's Encrypt certificate for an IPv6 address is found under the
+  one; the field's hint now says all three. With IPv6 in use (an IPv6 public address, or IPv6 in "Address in
+  configs") the certificate covers both the IPv4 and the IPv6 address, so the panel opens without a warning at
+  either; if Let's Encrypt can't validate the second one, the certificate covers the main address and the second
+  is tried again after `tlsmgr.ALT_RETRY`. A Let's Encrypt certificate for an IPv6 address is found under the
   file name lego gives it (`:` becomes `-`), so it is no longer requested again every 30 minutes. Connection
   limits and the sign-in lockout count IPv6 clients by their /64. Thanks to @paris19891 (#20).
+- **A domain in client configs.** `PUBLIC_HOST` may be a domain: with a panel domain the installer asks
+  whether client configs use it (`AWGR_CLIENT_DOMAIN=yes|no` answers without a prompt), checks the domain's DNS
+  against the server's IP instead of `PUBLIC_HOST`, and `--reconfigure` keeps the domain. Saving the Server tab
+  no longer turns the `.env` address into a panel setting that silently overrode `.env`, and the installer warns
+  when the panel's own address does. Thanks to @koo-pub (#22, #23).
 - **Let's Encrypt through a web server on port 80.** Since 1.14.0 the self-check put its test file next to
   `.well-known/acme-challenge/` instead of inside it (`host_path` drops the trailing slash), so validation
   through nginx, Apache or Caddy always got HTTP 404 and was rolled back, in the panel and in the installer

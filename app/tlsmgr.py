@@ -1,6 +1,8 @@
 """HTTPS панели: Let's Encrypt (на 6 дней, профиль shortlived) для IP или домена, либо свой сертификат.
 
-* Адрес сертификата: домен из настроек (tlsconf: «Система» или установщик), иначе адрес сервера.
+* Адрес сертификата: домен из настроек (tlsconf: «Система» или установщик), иначе адрес сервера. Адрес
+  сервера — IP: в сертификат идёт и второй адрес сервера (IPv4 и IPv6, `alt`), чтобы панель открывалась
+  без предупреждения по обоим. Не выдали на оба — сертификат на один основной, вторую попытку — через ALT_RETRY.
 * Let's Encrypt: при запуске, если действующего сертификата нет, выпускаем (lego, проверка HTTP-01).
   Порт 80 свободен — lego слушает его сам; занят веб-сервером — токены кладутся в папку, которую
   этот веб-сервер отдаёт (webfront.py). Не получилось — временный самоподписанный, попытки идут.
@@ -31,6 +33,7 @@ TLS_DIR = os.path.join(config.DATA_DIR, "tls")
 ACME_DIR = os.path.join(config.DATA_DIR, "acme")
 ACME_PROFILE = os.environ.get("ACME_PROFILE", "shortlived")
 CUSTOM_CHECK = 300            # с, как часто смотреть, не сменил ли certbot файлы своего сертификата
+ALT_RETRY = 24 * 3600         # с: Let's Encrypt не проверил второй адрес — столько не просим его снова
 
 
 def cert_not_after(path: str) -> float | None:
@@ -50,9 +53,11 @@ def cert_not_after(path: str) -> float | None:
 
 
 class TLSManager:
-    def __init__(self, get_host):
+    def __init__(self, get_host, get_alt=None):
         self.mode = config.TLS_MODE          # letsencrypt | selfsigned | off — из .env
         self._get_host = get_host
+        self._get_alt = get_alt or (lambda: [])   # второй адрес сервера (IP другого семейства) или []
+        self._alt_failed: dict[tuple, float] = {}  # набор адресов → когда Let's Encrypt его не выдал
         self._ctx: ssl.SSLContext | None = None
         self._lock = threading.Lock()
         self._run = threading.Lock()        # один выпуск за раз (цикл, кнопка, смена настроек)
@@ -79,6 +84,26 @@ class TLSManager:
 
     def host(self) -> str:
         return tlsconf.domain() or self._get_host() or ""
+
+    def names(self) -> list[str]:
+        """Адреса сертификата: основной первым (по нему lego называет файлы), второй — только у IP."""
+        host = self.host()
+        if not host or not _is_ip(host) or tlsconf.domain():
+            return [host] if host else []
+        out = [host]
+        for a in self._get_alt() or []:
+            if a and _is_ip(a) and ipaddress.ip_address(a).version != ipaddress.ip_address(host).version \
+                    and str(ipaddress.ip_address(a)) not in out:
+                out.append(str(ipaddress.ip_address(a)))
+                break
+        return out
+
+    def _want(self) -> list[str]:
+        """Адреса для выпуска Let's Encrypt: второй — если недавно на нём не было отказа."""
+        names = self.names()
+        if len(names) > 1 and time.time() - self._alt_failed.get(tuple(names), 0) < ALT_RETRY:
+            return names[:1]
+        return names
 
     def context(self) -> ssl.SSLContext | None:
         return self._ctx
@@ -135,8 +160,9 @@ class TLSManager:
     def _selfsigned(self) -> None:
         cert, key = os.path.join(TLS_DIR, "self.crt"), os.path.join(TLS_DIR, "self.key")
         host = self.host() or "localhost"
-        if not self._load(cert, key, "selfsigned") or not _san_matches(cert, host):
-            san = f"IP:{host}" if _is_ip(host) else f"DNS:{host}"
+        names = self.names() or [host]
+        if not self._load(cert, key, "selfsigned") or not all(_san_matches(cert, n) for n in names):
+            san = ",".join(f"IP:{n}" if _is_ip(n) else f"DNS:{n}" for n in names)
             subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt",
                             "ec_paramgen_curve:prime256v1", "-nodes", "-days", "825",
                             "-subj", f"/CN={host}", "-addext", f"subjectAltName={san}",
@@ -169,14 +195,21 @@ class TLSManager:
         return False
 
     # -------------------------------------------------------- Let's Encrypt
-    def _lego(self) -> bool:
+    def _lego(self, keep: bool = False) -> bool:
+        """Выпуск или продление на адреса `_want()`. Не выдали на оба — на один основной. keep: действующий
+        сертификат есть, нужен только второй адрес — при отказе остаёмся на прежнем, лишний не выпускаем."""
         host = self.host()
         if not host:
             self.error = "no public address"
             return False
-        cmd = ["lego", "run", "--accept-tos", "--path", ACME_DIR, "--server", config.ACME_SERVER,
-               "--key-type", "ec256", "--http", "-d", host, "--no-random-sleep"]
+        names = self._want()
         web = tlsconf.load().get("web")
+        if web and web.get("host") == host:
+            names = [host]          # блок веб-сервера отвечает только на основной адрес (server_name)
+        if keep and len(names) < 2:
+            return False
+        cmd = ["lego", "run", "--accept-tos", "--path", ACME_DIR, "--server", config.ACME_SERVER,
+               "--key-type", "ec256", "--http", "--no-random-sleep"]
         if web and web.get("host") == host:
             cmd += ["--http.webroot", webfront.host_path(web["webroot"])]
             self.port80 = None
@@ -198,6 +231,23 @@ class TLSManager:
             cmd += ["--profile", ACME_PROFILE]
         if config.ACME_EMAIL:
             cmd += ["--email", config.ACME_EMAIL]
+        if len(names) > 1:
+            if self._issue(cmd, names):
+                return True
+            self._alt_failed[tuple(names)] = time.time()
+            log.warning("Let's Encrypt for %s failed, using %s only", ", ".join(names), host)
+            if keep:
+                return False
+        return self._issue(cmd, [host])
+
+    def _issue(self, cmd: list[str], names: list[str]) -> bool:
+        """Один запуск lego на эти адреса. Файлы сертификата не покрывают их (добавили второй адрес) —
+        `--renew-force`: иначе lego решил бы, что продлевать ещё рано."""
+        cur = self._le_paths()[0]
+        if os.path.exists(cur) and not all(_san_matches(cur, n) for n in names):
+            cmd = cmd + ["--renew-force"]
+        for n in names:
+            cmd = cmd + ["-d", n]
         self.last_try = time.time()
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
@@ -230,7 +280,15 @@ class TLSManager:
                 elif src == "letsencrypt" and host:
                     self.error = None
                     cert, key = self._le_paths()
-                    ok = (self._load(cert, key, "letsencrypt") and _san_matches(cert, host)) or self._lego()
+                    if self._load(cert, key, "letsencrypt") and _san_matches(cert, host):
+                        ok = True
+                        if not all(_san_matches(cert, n) for n in self._want()):
+                            # действующий сертификат без второго адреса: дополнить, при отказе остаться на нём
+                            err, p80 = self.error, self.port80
+                            if not self._lego(keep=True):
+                                self.error, self.port80 = err, p80
+                    else:
+                        ok = self._lego()
                 if src != "letsencrypt":
                     self.port80 = None
                 if not ok and (not self._ctx or self.active != src or self.loaded_for != host):

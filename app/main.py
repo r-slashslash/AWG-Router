@@ -152,7 +152,23 @@ _fails: dict[str, list[float]] = {}
 # -------------------------------------------------------------------- приложение
 store = Store()
 engine = Engine(store)
-tls = TLSManager(lambda: engine.srv.public_host(store.snapshot()))
+def _tls_alt() -> list[str]:
+    """Второй адрес сервера для сертификата панели, если IPv6 в ходу: у IPv6 во «Внешнем адресе» — внешний
+    IPv4, у IPv4 — IPv6, выбранный в «Адрес в конфигах». Иначе [] — сертификат на один адрес, как раньше:
+    лишняя проверка Let's Encrypt по IPv6, до которого порт 80 закрыт, только тратила бы попытки."""
+    st = store.snapshot()
+    try:
+        a = ipaddress.ip_address(engine.srv.public_host(st))
+    except ValueError:
+        return []                      # домен — сертификат на него
+    if a.version == 6:
+        v4 = config.PUBLIC_HOST if re.fullmatch(r"[0-9.]+", config.PUBLIC_HOST or "") else engine.public_v4
+        return [v4] if v4 else []
+    ch = st["settings"].get("client_host") or ""
+    return [ch] if ":" in ch else []
+
+
+tls = TLSManager(lambda: engine.srv.public_host(store.snapshot()), _tls_alt)
 notifier = notify.Notifier(store, lambda st: tls.host() if tls.enabled else engine.srv.public_host(st))
 notifier.buttons_fn = tgbot.notify_buttons
 engine.notifier = notifier
@@ -1843,8 +1859,11 @@ def get_server(req):
 @app.put("/api/server")
 def put_server(req):
     body = req.json()
+    names = tls.names()
     res = _user_errors(lambda: engine.srv.update_server(body))
     engine.reconcile_soon()
+    if tls.names() != names:
+        tls.reconfigure()              # адрес панели или второй адрес сертификата сменился
     return res
 
 
