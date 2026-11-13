@@ -488,7 +488,9 @@ class KernelInstallTest(unittest.TestCase):
                 f.write(loaded + "\n")
         script = ("set -uo pipefail\nstep() { echo \"STEP $1\"; }; ok() { echo \"OK $1\"; }; warn() { echo \"WARN $1\"; }\n"
                   "die() { echo \"DIE $1\"; exit 1; }\nask() { REPLY=\"$2\"; }\n" + self.part + "\ninstall_kernel\n")
+        self.modload = os.path.join(self.tmp, "modules-load.d", "amneziawg.conf")
         e = {"PATH": self.bin + ":/usr/bin:/bin", "AWGR_SYS": self.sys, "AWGR_OS_RELEASE": osr, "LOG": self.log,
+             "AWGR_MODLOAD": self.modload,
              "NEWVER": newver, "VIRT": virt, "AWGR_YES": yes, **env}
         p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, timeout=30)
         calls = open(self.log).read() if os.path.exists(self.log) else ""
@@ -499,6 +501,7 @@ class KernelInstallTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("OK Already loaded: version 3.1.20260812", out)
         self.assertEqual(calls, "")
+        self.assertTrue(os.path.exists(self.modload))                       # поставленный раньше — тоже
 
     def test_ubuntu_installs_module_only(self):
         rc, out, calls = self.run_sh()
@@ -506,12 +509,15 @@ class KernelInstallTest(unittest.TestCase):
         self.assertIn("add-apt-repository -y ppa:amnezia/ppa", calls)
         self.assertIn("apt-get install -y -qq amneziawg-dkms", calls)      # без amneziawg-tools
         self.assertIn("OK Kernel module loaded: version 3.1.20260812", out)
+        with open(self.modload) as f:                                       # и при загрузке системы, до Docker
+            self.assertEqual(f.read(), "amneziawg\n")
 
     def test_old_module_from_ppa_is_removed(self):
         rc, out, calls = self.run_sh(newver="1.0.20251009")
         self.assertEqual(rc, 1)
         self.assertIn("apt-get remove -y -qq amneziawg-dkms", calls)
         self.assertIn("doesn't speak AWG 3.1", out)
+        self.assertFalse(os.path.exists(self.modload))
 
     def test_old_loaded_new_installed_asks_reboot(self):
         # старый модуль занят сервером и не выгружается: установлен новый — нужна перезагрузка
@@ -533,6 +539,7 @@ class KernelInstallTest(unittest.TestCase):
         self.assertIn("did not build for kernel 6.8.0-45-generic", out)
         self.assertIn("apt-get remove -y -qq amneziawg-dkms", calls)
         self.assertNotIn("modprobe", calls)
+        self.assertFalse(os.path.exists(self.modload))
 
     def test_refusals(self):
         for kw, text in (({"virt": "lxc"}, "is a container (lxc)"),

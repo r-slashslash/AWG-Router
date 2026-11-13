@@ -249,6 +249,10 @@ PY
 # by itself (awg-quick prefers the kernel), and exits can be moved in the panel (Server → AmneziaWG engine).
 # Only a 3.x module speaks AWG 3.1 — an older one leaves the server without awg0, so it is removed again.
 AWG_SYS="${AWGR_SYS:-/sys}"; OS_RELEASE="${AWGR_OS_RELEASE:-/etc/os-release}"
+MODLOAD="${AWGR_MODLOAD:-/etc/modules-load.d/amneziawg.conf}"
+# Loaded at boot, before Docker starts the AWG container: otherwise the module comes only when awg-quick asks
+# for it, and a server whose container starts first could quietly come up on amneziawg-go.
+module_autoload() { mkdir -p "$(dirname "$MODLOAD")" && echo amneziawg > "$MODLOAD"; }
 KERNEL_MIN=3
 module_version() { # loaded module: /sys, or modinfo for builds without a version file
   [ -d "$AWG_SYS/module/amneziawg" ] || return 0
@@ -281,6 +285,7 @@ install_kernel() {
   v=$(module_version)
   if [ -n "$v" ] && module_new_enough "$v"; then
     ok "Already loaded: version $v"
+    module_autoload
     kernel_next; return 0
   fi
   virt=$(systemd-detect-virt -c 2>/dev/null || true)
@@ -340,13 +345,14 @@ install_kernel() {
     fi
   fi
   ok "Kernel module loaded: version ${v:-?}"
+  module_autoload && ok "Loaded at boot too ($MODLOAD)"
   kernel_next
 }
 
 kernel_next() {
   echo "  Next: the AWG server moves to the module after a restart — in the panel, Server → Restart the AWG server"
   echo "  (clients drop for a few seconds); tunnels to exits follow it."
-  echo "  To go back to amneziawg-go: apt remove amneziawg-dkms, then reboot the server."
+  echo "  To go back to amneziawg-go: apt remove amneziawg-dkms && rm -f $MODLOAD, then reboot the server."
 }
 
 if [ "$INFO_ONLY" = 1 ]; then print_info; exit 0; fi

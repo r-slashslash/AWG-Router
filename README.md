@@ -231,7 +231,7 @@ To switch:
 2. In the panel: **Server → Restart the AWG server**. The server picks the module by itself (awg-quick prefers the kernel).
 3. Tunnels to exits follow the server: on the module too, with nothing to pick. If the module can't start a tunnel, the panel moves the exits back to amneziawg-go by itself and tries the module again after the next server restart. To keep exits on one engine regardless of the server (for example, to read the amneziawg-go logs while looking into a problem), set `EXIT_ENGINE=go` or `EXIT_ENGINE=kernel` in `/opt/awg-router/.env` and run `awg-router restart`.
 
-**Server → AmneziaWG engine** shows what the server runs on and which module is loaded. The AmneziaVPN app may install a kernel module by itself; if it is older than 3.x while the server uses AWG 3.1 parameters, the panel warns (in Telegram too): such a server may not come up. To go back to amneziawg-go: `apt remove amneziawg-dkms`, then reboot the server.
+**Server → AmneziaWG engine** shows what the server runs on and which module is loaded. The AmneziaVPN app may install a kernel module by itself; if it is older than 3.x while the server uses AWG 3.1 parameters, the panel warns (in Telegram too): such a server may not come up. To go back to amneziawg-go: `apt remove amneziawg-dkms && rm -f /etc/modules-load.d/amneziawg.conf`, then reboot the server. `install-kernel` also loads the module at boot (`/etc/modules-load.d/amneziawg.conf`), so a server in a container comes up on it after a reboot too.
 
 ## DNS on the server
 
