@@ -67,6 +67,12 @@ it grows, so every user-visible change gets a new version.
   remove it as well, says when the folder must stay, and leaves containers of the AmneziaVPN app alone. The
   installer recognises an Amnezia container without a config, says so and sets it aside (stopped and renamed)
   instead of offering to manage it, so the port is free for a new server. Thanks to @paris19891 (#25).
+  A server on the host is no longer taken silently either: a new install or `awg-router reconfigure` that finds
+  `/etc/amnezia/amneziawg/awg0.conf` asks whether to keep it or put a new one in its place, in a container or
+  on the host (the old one is stopped and its config folder set aside; `AWGR_REPLACE=yes` unattended).
+  Removing a host server with `awg-router uninstall` also removes the service file and the `awg`,
+  `awg-quick`, `amneziawg-go` the panel had put into `/usr/local/bin` — only when the service file is the
+  panel's own. Thanks to @paris19891 (#27).
 - **Smaller fixes.** Restoring a backup from another server no longer takes the old server's public address
   and "Address in configs" when this server has none of its own (`PUBLIC_HOST` from `.env` stays in force);
   before, configs, the panel link and the certificate got the old IP. An exit whose fallback chain leads back

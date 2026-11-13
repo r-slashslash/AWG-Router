@@ -173,7 +173,7 @@ class InstallerMoveTest(unittest.TestCase):
         self.log = os.path.join(self.tmp, "docker.log")
         self.env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "DOCKER_LOG": self.log,
                     "STATE": self.state}
-        for k in ("AWGR_MODE", "AWGR_MOVE", "AWGR_INSTALL", "AWGR_AWG_PORT"):
+        for k in ("AWGR_MODE", "AWGR_MOVE", "AWGR_INSTALL", "AWGR_AWG_PORT", "AWGR_REPLACE"):
             self.env.pop(k, None)
         with open(os.path.join(ROOT, "install.sh")) as f:
             self.sh = f.read()
@@ -198,11 +198,13 @@ class InstallerMoveTest(unittest.TestCase):
                 textwrap.dedent(f"""\
                     DIR="{self.tmp}"; ENV_FILE="$DIR/.env"; SRV_DATA="$DIR/awg-server/data"; IMAGE=awg-router:latest
                     HOSTCONF="$DIR/etc/amnezia/amneziawg/awg0.conf"; HAVE_DOCKER=1; RECONF=${{RECONF:-0}}
+                    HOST_UNIT="$DIR/etc/systemd/system/awg-quick@.service"; HOST_BIN="$DIR/usr/local/bin"
                     B=; N=; step() {{ echo "STEP $1"; }}; ok() {{ echo "OK $1"; }}; warn() {{ echo "WARN $1"; }}
                     die() {{ echo "DIE $1"; exit 1; }}
                     envget() {{ [ -f "$ENV_FILE" ] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true; }}
                     random_port() {{ echo 41000; }}; port_busy() {{ return 1; }}
-                    """))
+                    """) + self.part("# ------------------------------------------------------------------ the AWG server on the host",
+                                     "# ------------------------------------------------------------------ uninstall"))
 
     def run_sh(self, body, answers="", **env):
         open(self.log, "w").close()
@@ -308,15 +310,82 @@ class InstallerMoveTest(unittest.TestCase):
         self.assertNotIn("what should happen to it", out)
         self.assertNotIn("docker rm", log)
 
-    def test_uninstall_host_server(self):
-        os.makedirs(os.path.join(self.tmp, "etc/amnezia/amneziawg"))
+    def host_server(self, unit="Description=AmneziaWG via awg-quick for %I (AWG Router)\n"):
+        """Сервер на хосте, как его ставит панель: конфиг, служба systemd и программы в /usr/local/bin."""
+        for d in ("etc/amnezia/amneziawg", "etc/systemd/system", "usr/local/bin"):
+            os.makedirs(os.path.join(self.tmp, d), exist_ok=True)
         open(os.path.join(self.tmp, "etc/amnezia/amneziawg/awg0.conf"), "w").close()
+        with open(os.path.join(self.tmp, "etc/systemd/system/awg-quick@.service"), "w") as f:
+            f.write(unit)
+        for b in ("awg", "awg-quick", "amneziawg-go"):
+            open(os.path.join(self.tmp, "usr/local/bin", b), "w").close()
         with open(os.path.join(self.tmp, ".env"), "w") as f:
             f.write("AWG_MODE=host\n")
+
+    def removed(self):
+        return [n for n in os.listdir(os.path.join(self.tmp, "etc/amnezia")) if n.startswith("amneziawg.removed-")]
+
+    def test_uninstall_host_server(self):
+        self.host_server()
         out, log = self.run_sh(self.uninstall_block(), answers="yes,2")
         self.assertIn("systemctl disable --now awg-quick@awg0", log)
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "etc/amnezia/amneziawg")))
-        self.assertTrue(any(n.startswith("amneziawg.removed-") for n in os.listdir(os.path.join(self.tmp, "etc/amnezia"))))
+        self.assertEqual(len(self.removed()), 1)
+        # #27: и служба, и программы панели убраны — новая установка начнёт с чистого места
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "etc/systemd/system/awg-quick@.service")))
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "usr/local/bin")), [])
+        self.assertIn("systemctl daemon-reload", log)
+
+    def test_uninstall_leaves_foreign_awg_programs(self):
+        self.host_server(unit="Description=WireGuard via wg-quick(8) for %I\n")
+        self.run_sh(self.uninstall_block(), answers="yes,2")
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "etc/systemd/system/awg-quick@.service")))
+        self.assertEqual(len(os.listdir(os.path.join(self.tmp, "usr/local/bin"))), 3)
+
+    def test_uninstall_keeps_host_server_and_says_so(self):
+        self.host_server()
+        out, log = self.run_sh(self.uninstall_block(), answers="yes,1")
+        self.assertIn("keeps running on the host", out)
+        self.assertNotIn("systemctl disable", log)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "etc/amnezia/amneziawg/awg0.conf")))
+
+    def test_host_server_found_keep(self):
+        # #27: сервер на хосте остался после удаления — установщик спрашивает, а не берёт молча
+        self.host_server()
+        out, log = self.run_sh(self.mode_block(), answers="1", RECONF="1")
+        self.assertIn("Found an AmneziaWG server on the host", out)
+        self.assertIn("MODE=host MOVE= INSTALL=", out)
+        self.assertEqual(self.removed(), [])
+
+    def test_host_server_found_replace(self):
+        self.host_server()
+        out, log = self.run_sh(self.mode_block(), answers="2,1", RECONF="1")
+        self.assertIn("Where should the new AmneziaWG server go?", out)
+        self.assertIn("MODE=container MOVE= INSTALL=container", out)
+        self.assertIn("systemctl disable --now awg-quick@awg0", log)
+        self.assertEqual(len(self.removed()), 1)
+        self.assertLess(out.index("is stopped; its config is kept"), out.index("UDP port for AmneziaWG"))   # порт свободен
+
+    def test_update_does_not_ask(self):
+        self.host_server()                                       # .env уже говорит AWG_MODE=host
+        out, log = self.run_sh(self.mode_block())
+        self.assertNotIn("Found an AmneziaWG server", out)
+        self.assertIn("MODE=host", out)
+
+    def test_host_server_replace_cancel_changes_nothing(self):
+        self.host_server()
+        out, log = self.run_sh(self.mode_block(), answers="2,3", RECONF="1")
+        self.assertNotIn("systemctl", log)
+        self.assertEqual(self.removed(), [])
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "etc/amnezia/amneziawg/awg0.conf")))
+
+    def test_host_server_replace_from_env(self):
+        self.host_server()
+        out, log = self.run_sh(self.mode_block(), AWGR_REPLACE="yes", AWGR_INSTALL="host", AWGR_AWG_PORT="42000",
+                               RECONF="1")
+        self.assertNotIn("What should the panel manage", out)
+        self.assertIn("MODE=host MOVE= INSTALL=host", out)
+        self.assertEqual(len(self.removed()), 1)
 
     def test_uninstall_needs_yes(self):
         self.container("amnezia-awg2", ours=True)

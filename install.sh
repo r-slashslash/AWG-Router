@@ -11,6 +11,7 @@
 #   AWGR_MODE=container|host  AWGR_ACCESS=public|ssh  bash install.sh
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
 #   move the Amnezia container's server to the host (same keys, port, clients): AWGR_MODE=host AWGR_MOVE=yes
+#   replace the AmneziaWG server found on the host with a new one (new keys): AWGR_REPLACE=yes
 #   panel port:                AWGR_PORT=4821 (empty — a random free 4-digit one)
 #   panel domain:              AWGR_DOMAIN=panel.example.com (empty — by IP)
 #   panel domain in client configs instead of the IP: AWGR_CLIENT_DOMAIN=yes|no
@@ -112,6 +113,8 @@ IMAGE=awg-router:latest
 SRV_NAME=amnezia-awg2                 # same name as AmneziaVPN uses — the app recognises it
 SRV_DATA="$DIR/awg-server/data"
 HOSTCONF="/etc/amnezia/amneziawg/awg0.conf"
+HOST_UNIT="/etc/systemd/system/awg-quick@.service"   # written by the panel (system.UNIT_TEXT)
+HOST_BIN="/usr/local/bin"                            # the panel's awg, awg-quick, amneziawg-go
 RECONF=0; INFO_ONLY=0; KERNEL_ONLY=0; UNINSTALL=0
 for a in "$@"; do
   case "$a" in
@@ -350,6 +353,24 @@ if [ "$INFO_ONLY" = 1 ]; then print_info; exit 0; fi
 [ "$(id -u)" = 0 ] || die "Run as root: sudo bash install.sh"
 if [ "$KERNEL_ONLY" = 1 ]; then install_kernel; exit $?; fi
 
+# ------------------------------------------------------------------ the AWG server on the host
+# Set aside, not deleted: the service is stopped and the config folder renamed, so the server can be put
+# back by hand, while the installer and the panel see no server on the host any more.
+retire_host_server() {
+  local d bak; d="$(dirname "$HOSTCONF")"; bak="$d.removed-$(date +%Y%m%d-%H%M%S)"
+  systemctl disable --now awg-quick@awg0 >/dev/null 2>&1
+  mv "$d" "$bak" || die "Could not move $d aside"
+  ok "The old AmneziaWG server is stopped; its config is kept in $bak"
+}
+# The service file and programs the panel put on the host — only if the service file is the panel's own,
+# so an AmneziaWG installed some other way is left alone.
+remove_host_runtime() {
+  grep -q "(AWG Router)" "$HOST_UNIT" 2>/dev/null || return 0
+  rm -f "$HOST_UNIT" "$HOST_BIN/awg" "$HOST_BIN/awg-quick" "$HOST_BIN/amneziawg-go"
+  systemctl daemon-reload >/dev/null 2>&1
+  ok "Removed the AmneziaWG programs and service file the panel had installed"
+}
+
 # ------------------------------------------------------------------ uninstall
 # The AWG server is asked about separately: the one this script put into a container keeps its keys and
 # clients in $SRV_DATA, inside $DIR, so "delete the folder" would silently delete the server as well.
@@ -382,9 +403,8 @@ uninstall() {
     docker rm -f "$amn" >/dev/null 2>&1 && ok "Container $amn removed"
     [ -n "$img" ] && docker image rm "$img" >/dev/null 2>&1
   elif [ "$drop" = 1 ]; then
-    local bak; bak="$(dirname "$HOSTCONF").removed-$(date +%Y%m%d-%H%M%S)"
-    systemctl disable --now awg-quick@awg0 >/dev/null 2>&1
-    mv "$(dirname "$HOSTCONF")" "$bak" && ok "The AmneziaWG service is stopped; its config moved to $bak"
+    retire_host_server
+    remove_host_runtime
   fi
   local i; i="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)"
   [ -n "$i" ] && docker image rm -f "$i" >/dev/null 2>&1
@@ -392,6 +412,9 @@ uninstall() {
   if [ "$srv" = container ] && [ "$drop" = 0 ]; then
     echo "Done. The AmneziaWG server keeps running, and its keys and clients live in $SRV_DATA:"
     echo "do not delete $DIR while the server is in use. Panel settings are in $DIR/data."
+  elif [ "$srv" = host ] && [ "$drop" = 0 ]; then
+    echo "Done. The AmneziaWG server keeps running on the host ($(dirname "$HOSTCONF")): a new install picks it"
+    echo "up again and asks whether to keep it. Panel settings are kept in $DIR — delete the folder to remove them too."
   else
     echo "Done. Settings are kept in $DIR — delete the folder to remove them too."
   fi
@@ -562,13 +585,21 @@ ask_port() { # UDP port for the AmneziaWG server → AWG_PORT
 ask_install() { # AmneziaWG not found: offer to install it
   local how="${AWGR_INSTALL:-}"
   if [ -z "$how" ]; then
-    choose "AmneziaWG was not found on this server. Install it?" \
-           "Yes, in a Docker container — like AmneziaVPN, the app will see it too (recommended)" \
-           "Yes, directly on the host — a systemd service" \
-           "No, exit"
+    if [ "${REPLACE_HOST:-0}" = 1 ]; then    # nothing is changed until the answer
+      choose "Where should the new AmneziaWG server go?" \
+             "In a Docker container — like AmneziaVPN, the app will see it too (recommended)" \
+             "Directly on the host — a systemd service" \
+             "Cancel: keep the old server and exit"
+    else
+      choose "AmneziaWG was not found on this server. Install it?" \
+             "Yes, in a Docker container — like AmneziaVPN, the app will see it too (recommended)" \
+             "Yes, directly on the host — a systemd service" \
+             "No, exit"
+    fi
     case "$CHOICE" in 1) how=container ;; 2) how=host ;; *) exit 0 ;; esac
   fi
   retire_broken
+  if [ "${REPLACE_HOST:-0}" = 1 ]; then retire_host_server; REPLACE_HOST=0; fi   # frees its UDP port
   ask_port
   INSTALL_AWG="$how"; AWG_MODE="$how"
   [ "$how" = host ] && AWG_INIT_PORT="$AWG_PORT"
@@ -593,7 +624,14 @@ if { [ "$RECONF" = 1 ] && [ -z "${AWGR_MODE:-}" ]; } || [ -z "$AWG_MODE" ]; then
       *) AWG_MODE=host; AWGR_INSTALL=host ask_install ;;
     esac
   elif [ -f "$HOSTCONF" ]; then
-    AWG_MODE=host
+    if [[ "${AWGR_REPLACE:-}" =~ ^[Yy] ]]; then
+      CHOICE=2
+    else
+      choose "Found an AmneziaWG server on the host ($HOSTCONF). What should the panel manage?" \
+             "This server (recommended)" \
+             "A new AmneziaWG server instead: new keys, so clients need new configs; the old one is stopped and its config kept"
+    fi
+    if [ "$CHOICE" = 1 ]; then AWG_MODE=host; else REPLACE_HOST=1; ask_install; fi
   else
     ask_install
   fi
