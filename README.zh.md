@@ -163,9 +163,9 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router 2fa-off` | 关闭验证器代码登录（手机丢失时） |
 | `awg-router restart` | 重启面板 |
 | `awg-router logs` | 查看面板日志 |
-| `awg-router reconfigure` | 重新选择模式和访问方式 |
+| `awg-router reconfigure` | 重新选择模式和访问方式；也可以把 AmneziaWG 服务器从容器迁移到主机，密钥、端口和客户端保持不变 |
 | `awg-router install-kernel` | 编译并加载 AmneziaWG 内核模块（见 [AmneziaWG 引擎](#amneziawg-引擎)） |
-| `awg-router uninstall` | 删除面板及其路由规则；AmneziaWG 服务器和客户端保持不变 |
+| `awg-router uninstall` | 删除面板及其路由规则；会询问是否保留面板安装的 AmneziaWG 服务器（默认保留；其密钥位于 `/opt/awg-router/awg-server`，服务器运行期间不要删除该目录） |
 
 ### 通过 SSH 隧道访问
 
@@ -322,7 +322,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>域名规则在内核中转发 <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>、安装程序检查端口是否被占用 <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>、内核模块引擎 <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>、内核模块引擎 <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>、服务器迁移和卸载 <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>通过 80 端口上的 Web 服务器进行 Let's Encrypt 验证 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>

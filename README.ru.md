@@ -163,9 +163,9 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router 2fa-off` | выключить вход по коду из приложения (если потеряли телефон) |
 | `awg-router restart` | перезапустить панель |
 | `awg-router logs` | журнал панели |
-| `awg-router reconfigure` | заново выбрать режим и способ входа |
+| `awg-router reconfigure` | заново выбрать режим и способ входа; можно и перенести сервер AmneziaWG из контейнера на хост с теми же ключами, портом и клиентами |
 | `awg-router install-kernel` | собрать и загрузить модуль ядра AmneziaWG (см. [Движок AmneziaWG](#движок-amneziawg)) |
-| `awg-router uninstall` | удалить панель и её правила маршрутизации; сервер AmneziaWG и клиенты остаются |
+| `awg-router uninstall` | удалить панель и её правила маршрутизации; спрашивает, оставить ли установленный ею сервер AmneziaWG (по умолчанию остаётся; его ключи лежат в `/opt/awg-router/awg-server`, поэтому, пока он работает, папку не удаляйте) |
 
 ### Вход через SSH-туннель
 
@@ -322,7 +322,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # дем
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>правила по доменам с пересылкой внутри ядра <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>, проверка занятого порта в установщике <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, движок на модуле ядра <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, движок на модуле ядра <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>, перенос сервера и удаление <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>проверка Let's Encrypt через веб-сервер на порту 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>

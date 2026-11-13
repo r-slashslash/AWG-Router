@@ -6,9 +6,11 @@
 #   bash install.sh --reconfigure  — choose the server mode and access method again
 #   bash install.sh --info         — show the panel link and password
 #   bash install.sh --install-kernel — build and load the AmneziaWG kernel module (awg-router install-kernel)
+#   bash install.sh --uninstall    — remove the panel; asks whether to remove the AWG server too (awg-router uninstall)
 # Non-interactive:
 #   AWGR_MODE=container|host  AWGR_ACCESS=public|ssh  bash install.sh
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
+#   move the Amnezia container's server to the host (same keys, port, clients): AWGR_MODE=host AWGR_MOVE=yes
 #   panel port:                AWGR_PORT=4821 (empty — a random free 4-digit one)
 #   panel domain:              AWGR_DOMAIN=panel.example.com (empty — by IP)
 #   panel domain in client configs instead of the IP: AWGR_CLIENT_DOMAIN=yes|no
@@ -110,12 +112,13 @@ IMAGE=awg-router:latest
 SRV_NAME=amnezia-awg2                 # same name as AmneziaVPN uses — the app recognises it
 SRV_DATA="$DIR/awg-server/data"
 HOSTCONF="/etc/amnezia/amneziawg/awg0.conf"
-RECONF=0; INFO_ONLY=0; KERNEL_ONLY=0
+RECONF=0; INFO_ONLY=0; KERNEL_ONLY=0; UNINSTALL=0
 for a in "$@"; do
   case "$a" in
     --reconfigure) RECONF=1 ;;
     --info) INFO_ONLY=1 ;;
     --install-kernel) KERNEL_ONLY=1 ;;
+    --uninstall) UNINSTALL=1 ;;
   esac
 done
 
@@ -347,6 +350,54 @@ if [ "$INFO_ONLY" = 1 ]; then print_info; exit 0; fi
 [ "$(id -u)" = 0 ] || die "Run as root: sudo bash install.sh"
 if [ "$KERNEL_ONLY" = 1 ]; then install_kernel; exit $?; fi
 
+# ------------------------------------------------------------------ uninstall
+# The AWG server is asked about separately: the one this script put into a container keeps its keys and
+# clients in $SRV_DATA, inside $DIR, so "delete the folder" would silently delete the server as well.
+our_container() { # $1 container: was it made by this script (its config folder is $SRV_DATA)?
+  docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' "$1" 2>/dev/null | grep -qx "$SRV_DATA"
+}
+uninstall() {
+  local amn srv="" A
+  amn="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^amnezia-awg2?$' | sort -r | head -1)"
+  if [ -n "$amn" ] && our_container "$amn"; then srv=container
+  elif [ "$(envget AWG_MODE)" = host ] && [ -f "$HOSTCONF" ]; then srv=host
+  fi
+  ask "Remove AWG Router? Type yes: " ""
+  [ "$REPLY" = yes ] || die "Cancelled: nothing was changed."
+  local drop=0
+  if [ -n "$srv" ]; then
+    if [ "$srv" = container ]; then where="container $amn"; else where="the host ($HOSTCONF)"; fi
+    choose "The AmneziaWG server in $where — what should happen to it?" \
+           "Keep it: clients stay connected (recommended)" \
+           "Remove it too: all its clients lose the connection"
+    [ "$CHOICE" = 2 ] && drop=1
+  elif [ -n "$amn" ]; then
+    ok "Container $amn belongs to the AmneziaVPN app and stays (remove it there if needed)"
+  fi
+  cd "$DIR" || exit 1
+  docker compose down >/dev/null 2>&1
+  docker compose run --rm --no-deps awg-router python3 -m app.uninstall
+  if [ "$drop" = 1 ] && [ "$srv" = container ]; then
+    local img; img="$(docker inspect -f '{{.Image}}' "$amn" 2>/dev/null)"
+    docker rm -f "$amn" >/dev/null 2>&1 && ok "Container $amn removed"
+    [ -n "$img" ] && docker image rm "$img" >/dev/null 2>&1
+  elif [ "$drop" = 1 ]; then
+    local bak; bak="$(dirname "$HOSTCONF").removed-$(date +%Y%m%d-%H%M%S)"
+    systemctl disable --now awg-quick@awg0 >/dev/null 2>&1
+    mv "$(dirname "$HOSTCONF")" "$bak" && ok "The AmneziaWG service is stopped; its config moved to $bak"
+  fi
+  local i; i="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)"
+  [ -n "$i" ] && docker image rm -f "$i" >/dev/null 2>&1
+  rm -f /usr/local/bin/awg-router
+  if [ "$srv" = container ] && [ "$drop" = 0 ]; then
+    echo "Done. The AmneziaWG server keeps running, and its keys and clients live in $SRV_DATA:"
+    echo "do not delete $DIR while the server is in use. Panel settings are in $DIR/data."
+  else
+    echo "Done. Settings are kept in $DIR — delete the folder to remove them too."
+  fi
+}
+if [ "$UNINSTALL" = 1 ]; then uninstall; exit $?; fi
+
 # ------------------------------------------------------------------ system
 step "Checking the system"
 mkdir -p "$DIR/data"; chmod 700 "$DIR/data"
@@ -473,6 +524,24 @@ if [ -z "$AMN" ] && [ "$HAVE_DOCKER" = 1 ]; then   # the container exists but is
     [ -n "$AMN" ] && ok "Container $AMN was stopped — started it"
   fi
 fi
+# A container without a config is no server: its folder was deleted (the server installed by this script
+# keeps its config in $SRV_DATA, so removing $DIR removes it). It still holds the UDP port and the name, so
+# it is stopped and kept under another name, and a new server is offered below.
+BROKEN=""
+if [ -n "$AMN" ] && ! docker exec "$AMN" sh -c 'ls /opt/amnezia/awg/*.conf' >/dev/null 2>&1; then
+  BROKEN="$AMN"; AMN=""
+  warn "Container $BROKEN has no AmneziaWG config in /opt/amnezia/awg (its folder was deleted?): there is no server to manage"
+fi
+retire_broken() { # stop the empty container and keep it under another name: frees the port and the name
+  [ -n "$BROKEN" ] || return 0
+  local old; old="$BROKEN-empty-$(date +%Y%m%d-%H%M%S)"
+  docker update --restart no "$BROKEN" >/dev/null 2>&1
+  docker stop "$BROKEN" >/dev/null 2>&1
+  docker rename "$BROKEN" "$old" >/dev/null 2>&1 || die "Could not rename the empty container $BROKEN"
+  ok "The empty container is stopped and kept as $old (docker rm $old removes it)"
+  BROKEN=""
+}
+MOVE_FROM=""
 
 ask_port() { # UDP port for the AmneziaWG server → AWG_PORT
   local def p
@@ -499,6 +568,7 @@ ask_install() { # AmneziaWG not found: offer to install it
            "No, exit"
     case "$CHOICE" in 1) how=container ;; 2) how=host ;; *) exit 0 ;; esac
   fi
+  retire_broken
   ask_port
   INSTALL_AWG="$how"; AWG_MODE="$how"
   [ "$how" = host ] && AWG_INIT_PORT="$AWG_PORT"
@@ -507,29 +577,42 @@ ask_install() { # AmneziaWG not found: offer to install it
 [ -n "${AWGR_MODE:-}" ] && AWG_MODE="$AWGR_MODE"
 [ -n "${AWGR_ACCESS:-}" ] && ACCESS="$AWGR_ACCESS"
 if { [ "$RECONF" = 1 ] && [ -z "${AWGR_MODE:-}" ]; } || [ -z "$AWG_MODE" ]; then
-  if [ -n "$AMN" ]; then
+  if [ -n "$AMN" ] && [ -f "$HOSTCONF" ]; then
     choose "Found an AmneziaVPN server ($AMN). What should the panel manage?" \
            "This Amnezia container (recommended)" \
-           "A separate AmneziaWG server on the host"
+           "The AmneziaWG server on the host ($HOSTCONF)"
     [ "$CHOICE" = 1 ] && AWG_MODE=container || AWG_MODE=host
-    if [ "$AWG_MODE" = host ] && [ ! -f "$HOSTCONF" ]; then AWGR_INSTALL=host ask_install; fi
+  elif [ -n "$AMN" ]; then
+    choose "Found an AmneziaVPN server ($AMN). What should the panel manage?" \
+           "This Amnezia container (recommended)" \
+           "Move this server to the host: same keys, port and clients, client configs keep working; the container is stopped and kept" \
+           "A new AmneziaWG server on the host: new keys, clients need new configs"
+    case "$CHOICE" in
+      1) AWG_MODE=container ;;
+      2) AWG_MODE=host; MOVE_FROM="$AMN" ;;
+      *) AWG_MODE=host; AWGR_INSTALL=host ask_install ;;
+    esac
   elif [ -f "$HOSTCONF" ]; then
     AWG_MODE=host
   else
     ask_install
   fi
 elif [ "$AWG_MODE" = container ] && [ -z "$AMN" ]; then
-  warn "The AmneziaWG container was not found"
+  [ -n "$BROKEN" ] || warn "The AmneziaWG container was not found"
   ask_install
+elif [ "$AWG_MODE" = host ] && [ ! -f "$HOSTCONF" ] && [ -n "$AMN" ] && [[ "${AWGR_MOVE:-}" =~ ^[Yy] ]]; then
+  MOVE_FROM="$AMN"
 elif [ "$AWG_MODE" = host ] && [ ! -f "$HOSTCONF" ]; then
   warn "The AmneziaWG server on the host was not found"
   ask_install
 fi
+retire_broken     # an empty container is no use in any mode, but would keep its port and the name
 
 case "$INSTALL_AWG" in
   container) ok "AmneziaWG will be installed into container $SRV_NAME, UDP port $AWG_PORT" ;;
   host)      ok "AmneziaWG will be installed on the host, UDP port $AWG_PORT" ;;
-  *) if [ "$AWG_MODE" = host ]; then ok "AmneziaWG server on the host: $HOSTCONF"
+  *) if [ -n "$MOVE_FROM" ]; then ok "The AmneziaWG server will move from container $MOVE_FROM to the host"
+     elif [ "$AWG_MODE" = host ]; then ok "AmneziaWG server on the host: $HOSTCONF"
      else ok "Amnezia container: $AMN"; fi ;;
 esac
 
@@ -857,6 +940,49 @@ if [ "$INSTALL_AWG" = container ]; then
   ok "AmneziaWG is running: container $SRV_NAME, UDP port $AWG_PORT"
 fi
 
+# Moves the container's server to the host with the same files: keys, port, obfuscation and clients stay,
+# so client configs keep working. The container is only stopped and renamed; any failure puts it back.
+move_server() { # $1 container → 0 moved, 1 nothing changed
+  local c="$1" tmp pol old out
+  tmp="$(mktemp -d)"; chmod 700 "$tmp"
+  mover() { docker compose run --rm --no-deps -T -v "$tmp:/move:ro" awg-router python3 -m app.movehost "$@" 2>&1; }
+  if ! docker cp "$c:/opt/amnezia/awg/." "$tmp/" >/dev/null 2>&1; then
+    rm -rf "$tmp"; warn "Could not copy the server files out of $c"; return 1
+  fi
+  if ! out="$(mover check /move)"; then rm -rf "$tmp"; warn "$out"; return 1; fi
+  ok "Server in $c: $out"
+  docker compose stop awg-router >/dev/null 2>&1    # the running panel manages the container
+  pol="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null)"; pol="${pol:-always}"
+  old="$c-moved-$(date +%Y%m%d-%H%M%S)"
+  docker update --restart no "$c" >/dev/null 2>&1
+  docker stop "$c" >/dev/null 2>&1                  # frees the UDP port
+  if ! docker rename "$c" "$old" >/dev/null 2>&1; then
+    docker update --restart "$pol" "$c" >/dev/null 2>&1; docker start "$c" >/dev/null 2>&1
+    rm -rf "$tmp"; warn "Could not rename container $c"; return 1
+  fi
+  if out="$(mover install /move)"; then
+    rm -rf "$tmp"
+    ok "AmneziaWG runs on the host: $out; client configs stay the same"
+    ok "The old container is kept stopped as $old — when everything works: docker rm $old"
+    warn "If this server has its own firewall, allow the AmneziaWG UDP port there (Docker opened it before)"
+    return 0
+  fi
+  warn "$out"
+  mover undo >/dev/null 2>&1
+  docker rename "$old" "$c" >/dev/null 2>&1
+  docker update --restart "$pol" "$c" >/dev/null 2>&1
+  docker start "$c" >/dev/null 2>&1
+  rm -rf "$tmp"; return 1
+}
+if [ -n "$MOVE_FROM" ]; then
+  step "Moving AmneziaWG from container $MOVE_FROM to the host"
+  if ! move_server "$MOVE_FROM"; then
+    warn "The server stays in container $MOVE_FROM, and the panel keeps managing it"
+    AWG_MODE=container
+    sed -i 's/^AWG_MODE=.*/AWG_MODE=container/' "$ENV_FILE"
+  fi
+fi
+
 # ------------------------------------------------------------------ port 80
 # Let's Encrypt validates the panel address on port 80. If a web server already holds it, the
 # panel can add its own small file there that serves only the validation for the panel address.
@@ -920,14 +1046,7 @@ case "\${1:-info}" in
                cd "\$DIR" && docker compose up -d >/dev/null 2>&1; sleep 3; bash "\$DIR/install.sh" --info ;;
   2fa-off)     rm -f "\$DIR/data/totp.json"
                echo "Two-factor sign-in is off: the panel password alone is enough now." ;;
-  uninstall)   printf 'Remove AWG Router? The AmneziaWG server and its clients stay. Type yes: '
-               read -r A </dev/tty; [ "\$A" = yes ] || exit 1
-               cd "\$DIR" && docker compose down
-               docker compose run --rm --no-deps awg-router python3 -m app.uninstall
-               I=\$(docker image inspect -f '{{.Id}}' awg-router:latest 2>/dev/null)
-               [ -n "\$I" ] && docker image rm -f "\$I" >/dev/null 2>&1
-               rm -f /usr/local/bin/awg-router
-               echo "Done. Settings are kept in \$DIR — delete the folder to remove them too." ;;
+  uninstall)   bash "\$DIR/install.sh" --uninstall ;;
   *) echo "awg-router info | restart | logs | password | 2fa-off | update | reconfigure | install-kernel | uninstall" ;;
 esac
 EOF

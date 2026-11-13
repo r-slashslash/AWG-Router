@@ -74,6 +74,11 @@ jobs:
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/shaping_e2e.py
 
+      - name: Moving the AWG server to the host (movehost_e2e.py)
+        # последним: ставит awg-quick@awg0 на саму машину (одноразовую)
+        if: always()
+        run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/movehost_e2e.py
+
   kernel:
     # Не держит выпуск: сборка DKMS зависит от PPA Amnezia и ядра машины GitHub. Падение видно в прогоне
     # (и в нём же — почему), а черновик всё равно создаётся: по умолчанию панель на amneziawg-go.

@@ -163,9 +163,9 @@ It asks for the panel port (Enter — a random free 4-digit one); the rest is au
 | `awg-router 2fa-off` | turn off the authenticator code (if you lost your phone) |
 | `awg-router restart` | restart the panel |
 | `awg-router logs` | show the panel log |
-| `awg-router reconfigure` | choose the mode and access method again |
+| `awg-router reconfigure` | choose the mode and access method again; can also move the AmneziaWG server from its container to the host with the same keys, port and clients |
 | `awg-router install-kernel` | build and load the AmneziaWG kernel module (see [AmneziaWG engine](#amneziawg-engine)) |
-| `awg-router uninstall` | remove the panel and its routing rules; the AmneziaWG server and its clients stay |
+| `awg-router uninstall` | remove the panel and its routing rules; asks whether to keep the AmneziaWG server it installed (kept by default; its keys live in `/opt/awg-router/awg-server`, so don't delete the folder while it runs) |
 
 ### Access through an SSH tunnel
 
@@ -322,7 +322,7 @@ They found problems, traced them down to the line of code and suggested solution
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>domain rules relayed inside the kernel <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>, busy port check in the installer <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>IPv6 exits and the panel address in the container mode <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, the kernel module engine <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>IPv6 exits and the panel address in the container mode <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, the kernel module engine <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>, moving the server and uninstall <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>Let's Encrypt validation through a web server on port 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>

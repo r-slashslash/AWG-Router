@@ -188,9 +188,9 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router 2fa-off` | غیرفعال کردن ورود با کد برنامه (اگر گوشی را گم کردید) |
 | `awg-router restart` | راه‌اندازی دوبارهٔ پنل |
 | `awg-router logs` | نمایش گزارش پنل |
-| `awg-router reconfigure` | انتخاب دوبارهٔ حالت و روش دسترسی |
+| `awg-router reconfigure` | انتخاب دوبارهٔ حالت و روش دسترسی؛ همچنین می‌تواند سرور AmneziaWG را با همان کلیدها، درگاه و کلاینت‌ها از کانتینر به میزبان منتقل کند |
 | `awg-router install-kernel` | ساخت و بارگذاری ماژول هستهٔ AmneziaWG (بخش «موتور AmneziaWG» را ببینید) |
-| `awg-router uninstall` | حذف پنل و قانون‌های مسیریابی آن؛ سرور AmneziaWG و کلاینت‌هایش باقی می‌مانند |
+| `awg-router uninstall` | حذف پنل و قانون‌های مسیریابی آن؛ می‌پرسد سرور AmneziaWG نصب‌شده توسط پنل بماند یا نه (پیش‌فرض: می‌ماند؛ کلیدهایش در <bdi>`/opt/awg-router/awg-server`</bdi> است، پس تا وقتی کار می‌کند پوشه را پاک نکنید) |
 
 ### دسترسی از راه تونل SSH
 
@@ -355,7 +355,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>قانون‌های دامنه با جابه‌جایی داده درون هسته <a href="https://github.com/r-slashslash/AWG-Router/pull/19">&lrm;#19&lrm;</a>، بررسی درگاه اشغال‌شده در نصب‌کننده <a href="https://github.com/r-slashslash/AWG-Router/pull/17">&lrm;#17&lrm;</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a>، موتور ماژول هسته <a href="https://github.com/r-slashslash/AWG-Router/issues/24">&lrm;#24&lrm;</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a>، موتور ماژول هسته <a href="https://github.com/r-slashslash/AWG-Router/issues/24">&lrm;#24&lrm;</a>، انتقال سرور و حذف <a href="https://github.com/r-slashslash/AWG-Router/issues/25">&lrm;#25&lrm;</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>اعتبارسنجی Let's Encrypt از راه وب‌سرور روی درگاه 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">&lrm;#21&lrm;</a></sub></td>
 </tr>
 </table>

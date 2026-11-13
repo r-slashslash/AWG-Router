@@ -53,6 +53,20 @@ it grows, so every user-visible change gets a new version.
   to do instead of hanging on "no connection"; README → Limitations shows how to turn on IPv6 in Docker. The
   check looks at the route, so servers with IPv6 in Docker keep working. Thanks to @paris19891 (#20).
 
+- **Moving the AWG server from its container to the host.** `awg-router reconfigure` (and the installer when
+  it finds an Amnezia container) now offers to move the server to the host with the same files: keys, port,
+  obfuscation parameters and clients stay, so client configs keep working (`app.movehost`; unattended —
+  `AWGR_MODE=host AWGR_MOVE=yes`). The container is only stopped and renamed (`…-moved-<date>`); if the server
+  doesn't come up on the host, the container is put back and the panel keeps managing it. The container's own
+  hooks are not carried over: on the host the panel's NAT is used, as for a server it creates. The network
+  tests move a server on a GitHub machine and connect a client with its old config. Thanks to @paris19891 (#25).
+- **Uninstall no longer deletes the AWG server by surprise.** A server the installer put into a container
+  keeps its keys and clients in `/opt/awg-router/awg-server/data`, so "delete the folder to remove the
+  settings" after `awg-router uninstall` deleted the server too, while its container kept running empty and
+  held the UDP port. `awg-router uninstall` now asks whether to keep that server (or the one on the host) or
+  remove it as well, says when the folder must stay, and leaves containers of the AmneziaVPN app alone. The
+  installer recognises an Amnezia container without a config, says so and sets it aside (stopped and renamed)
+  instead of offering to manage it, so the port is free for a new server. Thanks to @paris19891 (#25).
 - **Smaller fixes.** Restoring a backup from another server no longer takes the old server's public address
   and "Address in configs" when this server has none of its own (`PUBLIC_HOST` from `.env` stays in force);
   before, configs, the panel link and the certificate got the old IP. An exit whose fallback chain leads back
