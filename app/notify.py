@@ -32,7 +32,7 @@ router = None
 alt_routes = None
 LANGS = ("ru", "en", "zh", "fa")
 # категории событий, которые можно включать по отдельности
-KINDS = ("exit", "server", "clients", "login", "tls", "update")
+KINDS = ("exit", "server", "system", "clients", "login", "tls", "update")
 
 TEXTS = {
     "ru": {
@@ -50,6 +50,11 @@ TEXTS = {
         "target_back": "✅ Сервер AmneziaWG снова доступен.",
         "target_restarted": "ℹ️ Сервер AmneziaWG перезапустился, правила применены заново.",
         "server_start_failed": "⚠️ Сервер AmneziaWG не запускается.",
+        "server_iface_gone": "⚠️ Интерфейс {iface} сервера AmneziaWG пропал — например, ядро завершило amneziawg-go из-за нехватки памяти. Панель перезапускает сервер.",
+        "mem_high": "⚠️ Память сервера занята на {pct}% уже {min} мин. Если она кончится, ядро начнёт завершать процессы и туннели могут упасть.",
+        "mem_ok": "✅ Память сервера снова в норме: занято {pct}%.",
+        "cpu_high": "⚠️ Процессор сервера загружен на {pct}% уже {min} мин.",
+        "cpu_ok": "✅ Процессор сервера снова в норме: {pct}%.",
         "login_ok": "🔑 Вход в панель с адреса {ip}.",
         "login_blocked": "🚫 Много неверных попыток входа с адреса {ip}. Вход с него заблокирован на 10 минут.",
         "tls_fail": "⚠️ Не удаётся продлить сертификат HTTPS панели. Текущий действует до {date}.",
@@ -79,6 +84,11 @@ TEXTS = {
         "target_back": "✅ The AmneziaWG server is reachable again.",
         "target_restarted": "ℹ️ The AmneziaWG server restarted; rules were re-applied.",
         "server_start_failed": "⚠️ The AmneziaWG server fails to start.",
+        "server_iface_gone": "⚠️ The AmneziaWG server's {iface} interface is gone — for example, the kernel killed amneziawg-go when memory ran out. The panel is restarting the server.",
+        "mem_high": "⚠️ Server memory has been {pct}% full for {min} min. If it runs out, the kernel starts killing processes and tunnels may go down.",
+        "mem_ok": "✅ Server memory is back to normal: {pct}% in use.",
+        "cpu_high": "⚠️ Server CPU has been at {pct}% for {min} min.",
+        "cpu_ok": "✅ Server CPU is back to normal: {pct}%.",
         "login_ok": "🔑 Panel sign-in from {ip}.",
         "login_blocked": "🚫 Too many failed sign-in attempts from {ip}. It is blocked for 10 minutes.",
         "tls_fail": "⚠️ The panel's HTTPS certificate can't be renewed. The current one is valid until {date}.",
@@ -108,6 +118,11 @@ TEXTS = {
         "target_back": "✅ AmneziaWG 服务器已恢复访问。",
         "target_restarted": "ℹ️ AmneziaWG 服务器已重启，规则已重新应用。",
         "server_start_failed": "⚠️ AmneziaWG 服务器无法启动。",
+        "server_iface_gone": "⚠️ AmneziaWG 服务器的 {iface} 接口消失了——例如内存不足时内核终止了 amneziawg-go。面板正在重启服务器。",
+        "mem_high": "⚠️ 服务器内存占用已达 {pct}%，持续 {min} 分钟。内存耗尽时内核会开始终止进程，隧道可能中断。",
+        "mem_ok": "✅ 服务器内存已恢复正常：已用 {pct}%。",
+        "cpu_high": "⚠️ 服务器 CPU 负载已达 {pct}%，持续 {min} 分钟。",
+        "cpu_ok": "✅ 服务器 CPU 已恢复正常：{pct}%。",
         "login_ok": "🔑 来自 {ip} 的面板登录。",
         "login_blocked": "🚫 来自 {ip} 的错误登录尝试过多，已封锁 10 分钟。",
         "tls_fail": "⚠️ 无法续期面板的 HTTPS 证书。当前证书有效期至 {date}。",
@@ -137,6 +152,11 @@ TEXTS = {
         "target_back": "✅ سرور AmneziaWG دوباره در دسترس است.",
         "target_restarted": "ℹ️ سرور AmneziaWG دوباره راه‌اندازی شد و قوانین دوباره اعمال شدند.",
         "server_start_failed": "⚠️ سرور AmneziaWG راه‌اندازی نمی‌شود.",
+        "server_iface_gone": "⚠️ رابط {iface} سرور AmneziaWG از بین رفت — مثلاً هسته به دلیل کمبود حافظه amneziawg-go را بست. پنل سرور را دوباره راه‌اندازی می‌کند.",
+        "mem_high": "⚠️ حافظهٔ سرور {min} دقیقه است که {pct}% پر است. اگر تمام شود، هسته شروع به بستن پردازه‌ها می‌کند و ممکن است تونل‌ها قطع شوند.",
+        "mem_ok": "✅ حافظهٔ سرور دوباره عادی است: {pct}% در حال استفاده.",
+        "cpu_high": "⚠️ پردازندهٔ سرور {min} دقیقه است که روی {pct}% است.",
+        "cpu_ok": "✅ پردازندهٔ سرور دوباره عادی است: {pct}%.",
         "login_ok": "🔑 ورود به پنل از نشانی {ip}.",
         "login_blocked": "🚫 تلاش‌های ناموفق زیاد برای ورود از نشانی {ip}. ورود از آن ۱۰ دقیقه مسدود شد.",
         "tls_fail": "⚠️ تمدید گواهی HTTPS پنل ممکن نیست. گواهی فعلی تا {date} معتبر است.",
@@ -166,6 +186,11 @@ ENGINE_EVENTS = {
     "ev.target_lost": ("server", "target_lost"),
     "ev.target_restarted": ("server", "target_restarted"),
     "ev.server_start_failed": ("server", "server_start_failed"),
+    "ev.server_iface_gone": ("server", "server_iface_gone"),
+    "ev.mem_high": ("system", "mem_high"),
+    "ev.mem_ok": ("system", "mem_ok"),
+    "ev.cpu_high": ("system", "cpu_high"),
+    "ev.cpu_ok": ("system", "cpu_ok"),
     "ev.client_expired": ("clients", "client_expired"),
     "ev.client_quota": ("clients", "client_quota"),
     "ev.client_quota_reset": ("clients", "client_quota_reset"),
@@ -434,7 +459,7 @@ class Notifier:
         m = ENGINE_EVENTS.get(msg.key)
         if m:
             self.event(m[0], m[1], refs={k: v for k, v in msg.p.items() if k in ("pk", "uid")},
-                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days")})
+                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min")})
 
     def target_ok(self) -> None:
         if self._target_lost:

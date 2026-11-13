@@ -315,5 +315,137 @@ class SysMonTest(unittest.TestCase):
         self.assertLess(len(json.dumps(st["system"])), 120)      # /api/state опрашивается часто
 
 
+class ServerWatchTest(unittest.TestCase):
+    """Интерфейс сервера пропал (OOM завершил amneziawg-go), а контейнер работает: панель перезапускает сервер
+    сама — контейнер после SERVER_GRACE, дальше с паузами SERVER_PAUSES; кнопка — сразу."""
+
+    def setUp(self):
+        self.e = main.engine
+        self.ev = []
+        self.now = [1_000_000.0]
+        self.patches = [mock.patch.object(self.e, "event", side_effect=lambda lvl, m: self.ev.append(m.key)),
+                        mock.patch.object(config, "DRY_RUN", False),
+                        mock.patch.object(engine.time, "time", side_effect=lambda: self.now[0])]
+        for p in self.patches:
+            p.start()
+        self.e._srv_down, self.e._srv_tries, self.e._srv_next = None, 0, 0.0
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.e._srv_down, self.e._srv_tries, self.e._srv_next = None, 0, 0.0
+
+    def target(self, kind, up):
+        t = mock.Mock(kind=kind, iface="awg0", exists=True)
+        t.is_up = lambda: up[0]
+        return t
+
+    def test_container_restarts_after_grace_with_pauses(self):
+        up = [False]
+        t = self.target("container", up)
+        self.e._watch_server(t)
+        self.now[0] += engine.SERVER_GRACE - 1
+        self.e._watch_server(t)
+        t.restart.assert_not_called()                     # интерфейс мог пропасть ненадолго (смена порта)
+        self.now[0] += 2
+        self.e._watch_server(t)
+        self.assertEqual(t.restart.call_count, 1)
+        self.assertEqual(self.ev, ["ev.server_iface_gone"])
+        self.now[0] += engine.SERVER_PAUSES[0] - 1
+        self.e._watch_server(t)
+        self.assertEqual(t.restart.call_count, 1)         # не чаще паузы
+        self.now[0] += 2
+        self.e._watch_server(t)
+        self.assertEqual(t.restart.call_count, 2)
+        up[0] = True
+        self.e._watch_server(t)                          # поднялся — счёт сначала
+        self.assertEqual((self.e._srv_down, self.e._srv_tries), (None, 0))
+
+    def test_host_restarts_at_once(self):
+        t = self.target("host", [False])
+        self.e._watch_server(t)
+        self.assertEqual(t.restart.call_count, 1)
+        self.assertEqual(t.native.call_args[0][0][:2], ["systemctl", "enable"])
+
+    def test_restart_failure_is_reported(self):
+        t = self.target("container", [False])
+        t.restart.side_effect = system.SysError("docker: no such container")
+        self.e._watch_server(t)
+        self.now[0] += engine.SERVER_GRACE + 1
+        self.e._watch_server(t)
+        self.assertEqual(self.ev, ["ev.server_iface_gone", "ev.server_start_failed"])
+
+    def test_button(self):
+        t = self.target("container", [True])
+        with mock.patch.object(self.e, "target", t):
+            self.assertEqual(main.restart_server(None), {"ok": True})
+        t.restart.assert_called_once()
+        with mock.patch.object(self.e, "target", None):
+            with self.assertRaises(web.HTTPError):
+                main.restart_server(None)
+
+
+class ResourceAlertTest(unittest.TestCase):
+    """Память или процессор выше порога RES_ALERT_SECS — одно событие, ниже MEM_OK / CPU_OK — второе."""
+
+    def setUp(self):
+        self.e = main.engine
+        self.ev, self.now, self.mem, self.cpu = [], [2_000_000.0], [50], [10.0]
+        self.patches = [
+            mock.patch.object(self.e, "event", side_effect=lambda lvl, m: self.ev.append((m.key, m.p))),
+            mock.patch.object(config, "DRY_RUN", False),
+            mock.patch.object(engine.time, "time", side_effect=lambda: self.now[0]),
+            mock.patch.object(engine.hostnet, "memory", side_effect=lambda: (self.mem[0] * 2**20, 100 * 2**20)),
+            mock.patch.object(engine.hostnet.cpu, "percent", side_effect=lambda: self.cpu[0])]
+        for p in self.patches:
+            p.start()
+        self.e._res = {}
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.e._res = {}
+
+    def step(self, secs, mem=None, cpu=None):
+        self.now[0] += secs
+        if mem is not None:
+            self.mem[0] = mem
+        if cpu is not None:
+            self.cpu[0] = cpu
+        self.e._watch_resources()
+
+    def test_memory(self):
+        self.step(0, mem=93)
+        self.step(engine.RES_ALERT_SECS - 10)
+        self.assertEqual(self.ev, [])                     # короткий всплеск — не тревога
+        self.step(20)
+        self.assertEqual(self.ev, [("ev.mem_high", {"pct": 93, "min": engine.RES_ALERT_SECS // 60})])
+        self.step(600)
+        self.assertEqual(len(self.ev), 1)                 # одно сообщение, а не каждую минуту
+        self.step(10, mem=88)                             # между порогами — ещё не норма
+        self.assertEqual(len(self.ev), 1)
+        self.step(10, mem=60)
+        self.assertEqual(self.ev[-1], ("ev.mem_ok", {"pct": 60}))
+
+    def test_cpu(self):
+        self.step(0, cpu=99.0)
+        self.step(engine.RES_ALERT_SECS + 1)
+        self.step(5, cpu=20.0)
+        self.assertEqual([k for k, _ in self.ev], ["ev.cpu_high", "ev.cpu_ok"])
+
+    def test_telegram_kind(self):
+        from app import notify
+        self.assertIn("system", notify.KINDS)
+        self.assertEqual(notify.ENGINE_EVENTS["ev.mem_high"], ("system", "mem_high"))
+        self.assertEqual(notify.ENGINE_EVENTS["ev.server_iface_gone"], ("server", "server_iface_gone"))
+        n = notify.Notifier.__new__(notify.Notifier)
+        n._target_lost = False
+        got = []
+        n.event = lambda kind, key, refs=None, **p: got.append((kind, key, p))
+        n.engine_event(engine.Msg("ev.mem_high", pct=93, min=5))
+        self.assertEqual(got, [("system", "mem_high", {"pct": 93, "min": 5})])
+        self.assertIn("93%", notify.render("ru", "mem_high", **got[0][2]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,14 @@ it grows, so every user-visible change gets a new version.
   refreshed with the rest of the state; 90% and above is highlighted, and the hint has the load average and
   the memory in use. CPU is measured between two reads of `/proc/stat` (`hostnet.CpuMeter`), so it is the whole
   server, not the panel's container.
+- **The AWG server comes back by itself.** When the server's interface is gone while its container keeps running
+  (for example, the kernel's OOM killer ended `amneziawg-go`, and clients dropped until someone restarted it by
+  hand), the panel restarts the container after `engine.SERVER_GRACE` and then with growing pauses
+  (`SERVER_PAUSES`) if that doesn't help. In host mode the `awg-quick` service is restarted the same way: before,
+  `systemctl enable --now` left a service that was "active" without its interface as it was. **Server → Restart
+  the AWG server** does it by hand.
+- **Telegram: server resources.** A new notification kind with its own checkbox: memory above 90% or CPU above
+  95% for 5 minutes, and back to normal. The server restart above is reported under "server".
 - **The panel over IPv6.** The panel now listens on IPv6 as well as IPv4 (one socket for all addresses; IPv4
   only if the kernel has no IPv6), so an IPv6 server public address works as one field was meant to: the panel
   opens at it, gets its certificate for it and clients connect to it unless "Address in configs" picks another

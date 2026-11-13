@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 
-from . import awgconf, balance, config, domains, limits, lists, nftgen, shaping, socks, system
+from . import awgconf, balance, config, domains, hostnet, limits, lists, nftgen, shaping, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
@@ -52,6 +52,11 @@ def _sha(s: str) -> str:
 
 
 UP_PAUSES = (10, 30, 60, 120, 300)      # пауза перед новой попыткой запустить выход, с
+SERVER_GRACE = 30        # с: столько интерфейса сервера в контейнере может не быть, прежде чем панель его поднимет
+SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытками поднять сервер, если не помогает, с
+MEM_ALERT, MEM_OK = 90, 85   # % занятой памяти: выше — тревога, ниже — снова норма
+CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
+RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
 FLAP_SECS = 60                          # туннель упал раньше — считаем неудачным запуском
 
 
@@ -110,7 +115,10 @@ class Engine:
         self.srv = ServerManager(self)
         self._runtime_checked = False
         self._masking_checked = None     # Target.key, на котором уже проверен старый I1
-        self._last_start_try = 0.0
+        self._srv_down: float | None = None   # с какого момента нет интерфейса сервера (_watch_server)
+        self._srv_tries = 0
+        self._srv_next = 0.0
+        self._res: dict[str, dict] = {}       # тревоги по памяти и процессору (_watch_resources)
         self.domain_matcher = domains.Matcher()
         self.sni: HelperRT | None = None
         self.sni_state: dict | None = None      # для интерфейса: state, listen, error
@@ -1234,7 +1242,74 @@ class Engine:
             t.ns(["sysctl", "-qw", kv], check=False)
 
     # ------------------------------------------------------------ reconcile
+    def _watch_server(self, t: system.Target) -> None:
+        """Интерфейса сервера нет, а цель на месте — например, ядро завершило amneziawg-go при нехватке памяти:
+        контейнер работает дальше без awg0, служба на хосте числится запущенной, клиенты отваливаются.
+        Поднимаем перезапуском (контейнер — docker restart, хост — служба awg-quick). Контейнер — не сразу
+        (SERVER_GRACE: при смене порта и S1–S4 интерфейс пропадает ненадолго), дальше с растущими паузами."""
+        if config.DRY_RUN:
+            return
+        now = time.time()
+        if t.is_up():
+            self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
+            return
+        if self._srv_down is None:
+            self._srv_down = now
+        grace = SERVER_GRACE if t.kind == "container" else 0
+        if now - self._srv_down < grace or now < self._srv_next:
+            return
+        self._srv_tries += 1
+        self._srv_next = now + SERVER_PAUSES[min(self._srv_tries, len(SERVER_PAUSES)) - 1]
+        self.event("warn", Msg("ev.server_iface_gone", iface=t.iface))
+        try:
+            if t.kind == "host":
+                t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
+            t.restart()
+        except Exception as e:  # noqa: BLE001
+            self.event("error", Msg("ev.server_start_failed", error=msg_of(e)))
+
+    def restart_server(self) -> None:
+        """Кнопка «Перезапустить сервер AWG». Дальше всё применит reconcile: у контейнера сменится Target.key."""
+        with self.lock:
+            t = self.target
+            if not t or not t.exists:
+                raise system.SysError(Msg("srv.no_server"))
+            if t.kind == "host" and not config.DRY_RUN:
+                t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
+            t.restart()
+            self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
+        self.reconcile_soon()
+
+    def _watch_resources(self) -> None:
+        """Память или процессор сервера держатся выше порога RES_ALERT_SECS — одно событие (и уведомление
+        «Ресурсы сервера»), вернулись ниже MEM_OK / CPU_OK — второе. Нехватка памяти — частая причина
+        падения туннелей: ядро завершает amneziawg-go."""
+        if config.DRY_RUN:
+            return
+        mem = hostnet.memory()
+        vals = {"mem": (100 * mem[0] / mem[1]) if mem and mem[1] else None, "cpu": hostnet.cpu.percent()}
+        now = time.time()
+        for kind, (hi, lo) in (("mem", (MEM_ALERT, MEM_OK)), ("cpu", (CPU_ALERT, CPU_OK))):
+            v = vals[kind]
+            if v is None:
+                continue
+            s = self._res.setdefault(kind, {"since": None, "alert": False})
+            if v >= hi:
+                s["since"] = s["since"] or now
+                if not s["alert"] and now - s["since"] >= RES_ALERT_SECS:
+                    s["alert"] = True
+                    self.event("warn", Msg(f"ev.{kind}_high", pct=round(v), min=RES_ALERT_SECS // 60))
+            else:
+                s["since"] = None
+                if s["alert"] and v < lo:
+                    s["alert"] = False
+                    self.event("info", Msg(f"ev.{kind}_ok", pct=round(v)))
+
     def reconcile(self) -> None:
+        try:
+            self._watch_resources()
+        except Exception:  # noqa: BLE001  — тревога по ресурсам не должна мешать применению правил
+            log.exception("resources")
         with self.lock:
             st = self.store.snapshot()
             try:
@@ -1258,19 +1333,12 @@ class Engine:
                     self.target = t
                     self.srv.init_host(config.AWG_INIT_PORT, config.AWG_INIT_SUBNET)
                     self._runtime_checked = True
-                if t.exists and not t.is_up() and time.time() - self._last_start_try > 60:
-                    # сервер на хосте не запущен (например, после неудачного старта) — поднимаем
-                    self._last_start_try = time.time()
-                    p = t.native(["systemctl", "enable", "--now", f"awg-quick@{t.iface}"],
-                                 check=False, timeout=60)
-                    if p.returncode != 0:
-                        self.event("error", Msg("ev.server_start_failed",
-                                                error=(p.stderr or p.stdout).strip()[-300:]))
             if not t.exists:
                 self.target = t
                 self.target_error = Msg("sys.host_no_server")
                 self.clients = []
                 return
+            self._watch_server(t)
             self.target_error = None
             if self.notifier:
                 self.notifier.target_ok()

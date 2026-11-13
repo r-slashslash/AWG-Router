@@ -1870,6 +1870,16 @@ def put_server(req):
     return res
 
 
+@app.post("/api/server/restart")
+def restart_server(req):
+    """Кнопка «Перезапустить сервер AWG»: клиенты отключатся на несколько секунд."""
+    try:
+        engine.restart_server()
+    except Exception as e:  # noqa: BLE001  — docker или systemctl не смогли: показать почему
+        bad(msg_of(e), 409)
+    return {"ok": True}
+
+
 @app.post("/api/server/generate")
 def gen_server_params(req):
     return {"params": engine.srv.regenerate_params()}

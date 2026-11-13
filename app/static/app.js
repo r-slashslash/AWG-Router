@@ -1592,7 +1592,7 @@ function viewServer() {
   return `
   <div class="grid2 pair">
     <section class="section">
-      <div class="section-head"><h2>${esc(t("srv.title"))}</h2></div>
+      <div class="section-head"><h2>${esc(t("srv.title"))}</h2><button class="btn" id="s-restart">${esc(t("srv.restart"))}</button></div>
       <div class="panel panel-pad">
         <div class="kv" style="margin-bottom:14px">
           <div><span>${esc(t("srv.kind"))}</span><b>${esc(kindLabel)}</b></div>
@@ -1743,6 +1743,14 @@ bind.server = () => {
   const ch = $("#s-ch");
   if (ch) ch.onchange = () => { $("#s-ch-hint").innerHTML = clientHostHint(ch.value); showBar(); };
   showBar();
+  $("#s-restart").onclick = async () => {
+    if (!confirm(t("srv.restart_confirm"))) return;
+    const b = $("#s-restart");
+    b.disabled = true;
+    try { await api("POST", "server/restart", {}); toast(t("srv.restarting")); }
+    catch (e) { toast(e.message, true); }
+    finally { b.disabled = false; refresh(); }
+  };
   $("#s-gen").onclick = async () => {
     if (!confirm(t("srv.generate_confirm"))) return;
     const r = await api("POST", "server/generate", {});
@@ -2106,7 +2114,7 @@ function bindUpdate() {
 }
 
 /* ===================================================== уведомления в Telegram */
-const TG_KINDS = ["exit", "server", "clients", "login", "tls", "update"];
+const TG_KINDS = ["exit", "server", "system", "clients", "login", "tls", "update"];
 function viewTelegram() {
   const c = S.settings.telegram || {};
   const ev = c.events || {};

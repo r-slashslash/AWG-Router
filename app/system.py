@@ -225,6 +225,10 @@ class Target:
 
     sync_tmp = "/tmp/awgr-sync.conf"
 
+    def is_up(self) -> bool:
+        """Есть ли интерфейс сервера в его сети (контейнер мог остаться без awg0, если упал amneziawg-go)."""
+        return self.ns(["ip", "link", "show", self.iface], check=False).returncode == 0
+
     def restart(self) -> None:
         raise NotImplementedError
 
