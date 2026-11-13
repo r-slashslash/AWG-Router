@@ -272,7 +272,9 @@ class ServerManager:
         net = sc.network
         return {
             "exists": True, "kind": t.kind, "iface": t.iface, "conf": t.conf_path,
-            "port": sc.port, "address": str(net) if net else "",
+            # подсеть, а не адрес сервера с маской: на хосте в Address стоит 10.8.1.1/24 (сервер — первый адрес),
+            # у AmneziaVPN — 10.8.1.0/24, и «10.8.1.1/24» в поле «Подсеть» выглядело ошибкой (#26)
+            "port": sc.port, "address": str(net.network) if net else "",
             "subnet_locked": bool(sc.peers) or not self.subnet_follows_conf(t),
             "subnet_lock": "clients" if sc.peers else (None if self.subnet_follows_conf(t) else "container"),
             "port_locked": t.kind != "host",
@@ -294,6 +296,26 @@ class ServerManager:
             "keepalive_auto": awgserver.default_keepalive(params),
             "server_pub": self.server_pub(sc),
         }
+
+    @staticmethod
+    def _same_subnet(value, sc: awgserver.ServerConf) -> bool:
+        """В поле — подсеть (10.8.1.0/24); старое значение с адресом сервера (10.8.1.1/24) — та же подсеть."""
+        try:
+            return sc.network is not None and ipaddress.ip_interface(str(value)).network == sc.network.network
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _server_address(i: ipaddress.IPv4Interface, sc: awgserver.ServerConf) -> str:
+        """Адрес сервера в новой подсети в том же виде, что был: адрес сети (как у AmneziaVPN) или первый адрес
+        (как создаёт панель). Введён конкретный адрес сервера (10.66.0.5/24) — он и остаётся."""
+        net = i.network
+        if i.ip != net.network_address:
+            return str(i)
+        old = sc.network
+        if old is not None and old.ip == old.network.network_address:
+            return str(i)                               # стиль AmneziaVPN: адрес сети
+        return f"{next(net.hosts())}/{net.prefixlen}"
 
     @staticmethod
     def subnet_follows_conf(t: system.Target) -> bool:
@@ -380,7 +402,7 @@ class ServerManager:
                 if isinstance(t, system.HostTarget):
                     system.open_firewall_udp(t, port)
             drop_nat = None
-            if body.get("address") and body["address"] != str(sc.network or ""):
+            if body.get("address") and not self._same_subnet(body["address"], sc):
                 if sc.peers:
                     raise UserError(Msg("srv.subnet_locked"))
                 if not self.subnet_follows_conf(t):
@@ -392,7 +414,7 @@ class ServerManager:
                 if i.version != 4 or i.network.prefixlen > 29:
                     raise UserError(Msg("srv.bad_subnet"))
                 old_net = str(sc.network.network) if sc.network else None
-                sc.set("Address", str(i))
+                sc.set("Address", self._server_address(i, sc))
                 # NAT на хосте задан в PostUp для подсети: без замены клиенты новой подсети
                 # остались бы без интернета
                 if t.kind == "host" and old_net and old_net != str(i.network) and \

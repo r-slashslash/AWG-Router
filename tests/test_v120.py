@@ -21,7 +21,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, engine, main, system, tlsconf, tlsmgr, web, webfront  # noqa: E402
+from app import awgserver, config, engine, main, system, tlsconf, tlsmgr, web, webfront  # noqa: E402
 
 
 class SelfTestPathTest(unittest.TestCase):
@@ -789,6 +789,46 @@ class ReviewFixesTest(unittest.TestCase):
             main.edit_upstream(R({"fallback": "up:" + c}), a)              # цепочка без круга — можно
         finally:
             main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+
+class SubnetViewTest(unittest.TestCase):
+    """#26: в поле «Подсеть» — подсеть (10.8.1.0/24), а не адрес сервера на хосте (10.8.1.1/24); смена
+    подсети сохраняет вид адреса сервера (первый адрес у панели, адрес сети у AmneziaVPN)."""
+
+    PRIV = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
+
+    def run_with(self, amnezia_style, body=None):
+        class HostDemo(system.DemoTarget):
+            kind = "host"
+
+            def __init__(s):
+                super().__init__()
+                s.conf_path = "/etc/amnezia/amneziawg/awg0.conf"
+        t = HostDemo()
+        sc = awgserver.new_server(self.PRIV, 51820, "10.8.1.0/24", {}, amnezia_style=amnezia_style)
+        t.write_file(t.conf_path, sc.render())
+        old = main.engine.target
+        main.engine.target = t
+        try:
+            view = main.engine.srv.server_view()
+            if body:
+                main.engine.srv.update_server(body)
+        finally:
+            main.engine.target = old
+        return view, awgserver.parse(t.read_file(t.conf_path)).get("Address")
+
+    def test_view_shows_subnet(self):
+        self.assertEqual(self.run_with(False)[0]["address"], "10.8.1.0/24")
+        self.assertEqual(self.run_with(True)[0]["address"], "10.8.1.0/24")
+
+    def test_same_subnet_changes_nothing(self):
+        for value in ("10.8.1.0/24", "10.8.1.1/24"):          # старая панель в открытой вкладке шлёт адрес
+            self.assertEqual(self.run_with(False, {"address": value})[1], "10.8.1.1/24")
+
+    def test_new_subnet_keeps_address_style(self):
+        self.assertEqual(self.run_with(False, {"address": "10.66.0.0/24"})[1], "10.66.0.1/24")
+        self.assertEqual(self.run_with(True, {"address": "10.66.0.0/24"})[1], "10.66.0.0/24")
+        self.assertEqual(self.run_with(False, {"address": "10.66.0.5/24"})[1], "10.66.0.5/24")   # свой адрес
+
 
 if __name__ == "__main__":
     unittest.main()
