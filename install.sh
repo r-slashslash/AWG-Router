@@ -10,6 +10,7 @@
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
 #   panel port:                AWGR_PORT=4821 (empty — a random free 4-digit one)
 #   panel domain:              AWGR_DOMAIN=panel.example.com (empty — by IP)
+#   panel domain in client configs instead of the IP: AWGR_CLIENT_DOMAIN=yes|no
 #   port 80 taken by nginx or Apache: AWGR_WEB=yes adds the Let's Encrypt validation file to it
 #   build the images here instead of downloading the ready ones: AWGR_BUILD=1
 #   how long to wait for a ready image before building it here: AWGR_PULL_TIMEOUT=600 (seconds)
@@ -436,10 +437,18 @@ fi
 
 # ------------------------------------------------------------------ settings
 step "Preparing settings"
+# PUBLIC_HOST is the address in client configs: the server's IP or a domain.
+# SERVER_IP is always the IP: the domain check compares DNS answers with it.
+is_ipv4() { [[ "$1" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; }
 PUBLIC_HOST="$(envget PUBLIC_HOST)"
-{ [ -n "$PUBLIC_HOST" ] && [ "$RECONF" = 0 ]; } || PUBLIC_HOST="$(public_ip)"
-[ -n "$PUBLIC_HOST" ] || die "Could not detect the server's public IP"
-ok "Public address: $PUBLIC_HOST"
+if [ -n "$PUBLIC_HOST" ] && is_ipv4 "$PUBLIC_HOST" && [ "$RECONF" = 0 ]; then
+  SERVER_IP="$PUBLIC_HOST"
+else
+  SERVER_IP="$(public_ip)"
+  [ -n "$SERVER_IP" ] || die "Could not detect the server's public IP"
+fi
+{ [ -z "$PUBLIC_HOST" ] || is_ipv4 "$PUBLIC_HOST"; } && PUBLIC_HOST="$SERVER_IP"
+ok "Public address: $SERVER_IP"
 
 PANEL_PORT="$(envget PANEL_PORT)"
 CUR_PORT="$PANEL_PORT"
@@ -491,9 +500,9 @@ elif [ "$ACCESS" = public ] && [ "$ASK_DOMAIN" = 1 ]; then
   printf '\n%sPanel domain%s — only if you have one and it points to this server (an A record).\n' "$B" "$N"
   while true; do
     if [ -n "$PANEL_DOMAIN" ]; then
-      ask "Domain (Enter — keep $PANEL_DOMAIN, type ip — open by IP $PUBLIC_HOST): " "$PANEL_DOMAIN"
+      ask "Domain (Enter — keep $PANEL_DOMAIN, type ip — open by IP $SERVER_IP): " "$PANEL_DOMAIN"
     else
-      ask "Domain (Enter — open the panel by IP $PUBLIC_HOST): " ""
+      ask "Domain (Enter — open the panel by IP $SERVER_IP): " ""
     fi
     d="$(echo "$REPLY" | tr 'A-Z' 'a-z' | tr -d '[:space:]')"; d="${d%.}"
     [ "$d" = ip ] && d=""
@@ -502,14 +511,48 @@ elif [ "$ACCESS" = public ] && [ "$ASK_DOMAIN" = 1 ]; then
   done
   SET_DOMAIN=1
 fi
+DNS_OK=0
 if [ "$ACCESS" = public ] && [ -n "$PANEL_DOMAIN" ]; then
   dns=$(getent ahostsv4 "$PANEL_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
   if [ -z "$dns" ]; then
     warn "$PANEL_DOMAIN is not found in DNS yet — the panel uses a temporary certificate until it is"
-  elif [[ " $dns" != *" $PUBLIC_HOST "* ]]; then
-    warn "$PANEL_DOMAIN points to ${dns% }, this server is $PUBLIC_HOST — Let's Encrypt fails until DNS is fixed"
+  elif [[ " $dns" != *" $SERVER_IP "* ]]; then
+    warn "$PANEL_DOMAIN points to ${dns% }, this server is $SERVER_IP — Let's Encrypt fails until DNS is fixed"
+  else
+    DNS_OK=1
   fi
   ok "Panel domain: $PANEL_DOMAIN"
+fi
+
+# Client configs: the panel domain instead of the IP keeps them working when the IP changes.
+OLD_DOMAIN="$(cur_domain)"
+if [ -n "$OLD_DOMAIN" ] && [ "$PUBLIC_HOST" = "$OLD_DOMAIN" ] && [ "$PANEL_DOMAIN" != "$OLD_DOMAIN" ]; then
+  PUBLIC_HOST="$SERVER_IP"    # configs used the old panel domain — ask again below
+fi
+if [ "$ACCESS" = public ] && [ -n "$PANEL_DOMAIN" ] && [ "$PUBLIC_HOST" != "$PANEL_DOMAIN" ] \
+   && { [ "$SET_DOMAIN" = 1 ] || [ -n "${AWGR_CLIENT_DOMAIN:-}" ]; }; then
+  ans="${AWGR_CLIENT_DOMAIN:-}"
+  if [ -z "$ans" ]; then
+    q="Which address should client configs use?"
+    use_domain="$PANEL_DOMAIN — configs keep working if the IP changes"
+    if [ "$DNS_OK" = 1 ]; then
+      choose "$q" "$use_domain (recommended)" "$PUBLIC_HOST"
+      [ "$CHOICE" = 1 ] && ans=yes
+    else
+      choose "$q" "$PUBLIC_HOST (recommended)" \
+             "$use_domain; it must lead straight to this server, without a proxy such as Cloudflare"
+      [ "$CHOICE" = 2 ] && ans=yes
+    fi
+  fi
+  [[ "$ans" =~ ^[Yy] ]] && PUBLIC_HOST="$PANEL_DOMAIN"
+fi
+ok "Address in client configs: $PUBLIC_HOST"
+# Server → Server public address in the panel is kept in data/state.json and overrides PUBLIC_HOST
+PANEL_HOST_SET=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["settings"].get("public_host") or "")' \
+  "$DIR/data/state.json" 2>/dev/null || true)
+if [ -n "$PANEL_HOST_SET" ] && [ "$PANEL_HOST_SET" != "$PUBLIC_HOST" ]; then
+  warn "The panel has its own server address $PANEL_HOST_SET, so client configs use it, not $PUBLIC_HOST."
+  warn "To use $PUBLIC_HOST, change it in the panel: Server → Server public address"
 fi
 TLS_HOST="${PANEL_DOMAIN:-$PUBLIC_HOST}"
 
