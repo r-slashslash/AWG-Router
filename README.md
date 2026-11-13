@@ -164,6 +164,7 @@ It asks for the panel port (Enter — a random free 4-digit one); the rest is au
 | `awg-router restart` | restart the panel |
 | `awg-router logs` | show the panel log |
 | `awg-router reconfigure` | choose the mode and access method again |
+| `awg-router install-kernel` | build and load the AmneziaWG kernel module (see [AmneziaWG engine](#amneziawg-engine)) |
 | `awg-router uninstall` | remove the panel and its routing rules; the AmneziaWG server and its clients stay |
 
 ### Access through an SSH tunnel
@@ -217,6 +218,20 @@ If the AWG Router installer created the container, its configs live on the host 
 The panel installs `awg`, `awg-quick`, `amneziawg-go` (AWG 3.1) and the `awg-quick@awg0` service.
 - The config is at `/etc/amnezia/amneziawg/awg0.conf`.
 - NAT and forwarding are set up in `PostUp`, so the VPN keeps working even when the panel is stopped. When you change the subnet, the panel moves NAT to the new one.
+
+## AmneziaWG engine
+
+AmneziaWG runs either as the `amneziawg-go` program or as a Linux kernel module.
+
+- **amneziawg-go** (default) works the same on any server and comes with the panel. Encryption takes a noticeable share of the CPU: on a small VPS with many clients, or in a cascade, where every packet is encrypted twice (on the server and in the tunnel to the exit), it can become the limit.
+- **The kernel module** encrypts inside the kernel: several times less CPU and more speed. It is built for your kernel (DKMS) and rebuilt when the kernel is updated; a module older than 3.x doesn't understand AWG 3.1. If the CPU isn't busy, stay on amneziawg-go.
+
+To switch:
+1. On the server: `sudo awg-router install-kernel`. Ubuntu 22.04+ or Debian 12+, x86_64 or aarch64, and a VPS that isn't OpenVZ/LXC are needed. The command builds the module from the Amnezia PPA, checks that it is 3.x and removes an older one, so the server keeps working.
+2. In the panel: **Server → Restart the AWG server**. The server picks the module by itself (awg-quick prefers the kernel).
+3. Tunnels to exits: **Server → AmneziaWG engine → Kernel module**. If the module can't start a tunnel, the panel moves the exits back to amneziawg-go by itself.
+
+**Server → AmneziaWG engine** shows what the server runs on and which module is loaded. The AmneziaVPN app may install a kernel module by itself; if it is older than 3.x while the server uses AWG 3.1 parameters, the panel warns (in Telegram too): such a server may not come up. To go back to amneziawg-go: `apt remove amneziawg-dkms`, then reboot the server.
 
 ## DNS on the server
 
@@ -307,7 +322,7 @@ They found problems, traced them down to the line of code and suggested solution
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>domain rules relayed inside the kernel <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>, busy port check in the installer <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>IPv6 exits and the panel address in the container mode <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>IPv6 exits and the panel address in the container mode <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, the kernel module engine <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>Let's Encrypt validation through a web server on port 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>

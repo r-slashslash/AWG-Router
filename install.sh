@@ -313,7 +313,8 @@ install_kernel() {
   pkg=amneziawg-dkms; apt-cache show "$pkg" >/dev/null 2>&1 || pkg=amneziawg
   echo "  Building the module ($pkg) …"
   if ! apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
-    die "The module did not build. Details: /var/lib/dkms/amneziawg/*/build/make.log. The panel keeps using amneziawg-go."
+    apt-get remove -y -qq "$pkg" >/dev/null 2>&1   # a failed DKMS build would retry on every kernel update
+    die "The module did not build for kernel $(uname -r): the Amnezia PPA may not support this kernel yet (details: /var/lib/dkms/amneziawg/*/build/make.log). Nothing changed — the panel keeps using amneziawg-go."
   fi
   [ -n "$v" ] && rmmod amneziawg 2>/dev/null       # the old one goes if nothing uses it
   if ! modprobe amneziawg 2>/dev/null; then

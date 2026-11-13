@@ -189,6 +189,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router restart` | راه‌اندازی دوبارهٔ پنل |
 | `awg-router logs` | نمایش گزارش پنل |
 | `awg-router reconfigure` | انتخاب دوبارهٔ حالت و روش دسترسی |
+| `awg-router install-kernel` | ساخت و بارگذاری ماژول هستهٔ AmneziaWG (بخش «موتور AmneziaWG» را ببینید) |
 | `awg-router uninstall` | حذف پنل و قانون‌های مسیریابی آن؛ سرور AmneziaWG و کلاینت‌هایش باقی می‌مانند |
 
 ### دسترسی از راه تونل SSH
@@ -246,6 +247,20 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 پنل ابزارهای `awg`، ‏`awg-quick`، ‏`amneziawg-go` (AWG 3.1) و سرویس `awg-quick@awg0` را روی میزبان نصب می‌کند.
 - پیکربندی: `/etc/amnezia/amneziawg/awg0.conf`.
 - ‏NAT و قانون‌های فوروارد در `PostUp` تنظیم می‌شوند، پس VPN حتی وقتی پنل متوقف است کار می‌کند. با تغییر زیرشبکه، پنل NAT را به زیرشبکهٔ تازه منتقل می‌کند.
+
+## موتور AmneziaWG
+
+‏AmneziaWG یا با برنامهٔ `amneziawg-go` کار می‌کند یا با ماژول هستهٔ لینوکس.
+
+- **amneziawg-go** (پیش‌فرض) روی هر سروری یکسان کار می‌کند و همراه پنل می‌آید. رمزنگاری بخش قابل‌توجهی از پردازنده را می‌گیرد: روی VPS ضعیف با کلاینت‌های زیاد، یا در آبشاری که هر بسته دو بار رمزنگاری می‌شود (روی سرور و در تونل به خروجی)، ممکن است سقف شود.
+- **ماژول هسته** درون هسته رمزنگاری می‌کند: چند برابر پردازندهٔ کمتر و سرعت بیشتر. برای هستهٔ شما ساخته می‌شود (DKMS) و با به‌روزرسانی هسته دوباره ساخته می‌شود؛ ماژول قدیمی‌تر از 3.x پروتکل AWG 3.1 را نمی‌فهمد. اگر پردازنده درگیر نیست، روی amneziawg-go بمانید.
+
+روش جابه‌جایی:
+1. روی سرور: `sudo awg-router install-kernel`. اوبونتو 22.04 یا جدیدتر، یا دبیان 12 یا جدیدتر، x86_64 یا aarch64 و VPS غیر OpenVZ/LXC لازم است. فرمان ماژول را از PPA امنزیا می‌سازد، بررسی می‌کند که 3.x باشد و نسخهٔ قدیمی‌تر را حذف می‌کند تا سرور خراب نشود.
+2. در پنل: **سرور ← راه‌اندازی دوبارهٔ سرور AWG**. سرور خودش ماژول را برمی‌دارد (awg-quick هسته را ترجیح می‌دهد).
+3. تونل‌ها به خروجی‌ها: **سرور ← موتور AmneziaWG ← ماژول هسته**. اگر ماژول نتواند تونلی را راه بیندازد، پنل خودش خروجی‌ها را به amneziawg-go برمی‌گرداند.
+
+**سرور ← موتور AmneziaWG** نشان می‌دهد سرور با چه چیزی کار می‌کند و کدام ماژول بارگذاری شده است. برنامهٔ AmneziaVPN ممکن است خودش ماژول هسته نصب کند؛ اگر قدیمی‌تر از 3.x باشد و سرور پارامترهای AWG 3.1 داشته باشد، پنل هشدار می‌دهد (در تلگرام هم): چنین سروری ممکن است بالا نیاید. بازگشت به amneziawg-go: `apt remove amneziawg-dkms` و سپس راه‌اندازی دوبارهٔ سرور.
 
 ## DNS روی سرور
 
@@ -340,7 +355,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>قانون‌های دامنه با جابه‌جایی داده درون هسته <a href="https://github.com/r-slashslash/AWG-Router/pull/19">&lrm;#19&lrm;</a>، بررسی درگاه اشغال‌شده در نصب‌کننده <a href="https://github.com/r-slashslash/AWG-Router/pull/17">&lrm;#17&lrm;</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a>، موتور ماژول هسته <a href="https://github.com/r-slashslash/AWG-Router/issues/24">&lrm;#24&lrm;</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>اعتبارسنجی Let's Encrypt از راه وب‌سرور روی درگاه 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">&lrm;#21&lrm;</a></sub></td>
 </tr>
 </table>

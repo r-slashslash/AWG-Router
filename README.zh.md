@@ -164,6 +164,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router restart` | 重启面板 |
 | `awg-router logs` | 查看面板日志 |
 | `awg-router reconfigure` | 重新选择模式和访问方式 |
+| `awg-router install-kernel` | 编译并加载 AmneziaWG 内核模块（见 [AmneziaWG 引擎](#amneziawg-引擎)） |
 | `awg-router uninstall` | 删除面板及其路由规则；AmneziaWG 服务器和客户端保持不变 |
 
 ### 通过 SSH 隧道访问
@@ -217,6 +218,20 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 面板会在主机上安装 `awg`、`awg-quick`、`amneziawg-go`（AWG 3.1）和 `awg-quick@awg0` 服务。
 - 配置文件位于 `/etc/amnezia/amneziawg/awg0.conf`。
 - NAT 和转发规则通过 `PostUp` 设置，因此即使面板停止，VPN 仍可工作。更改子网时，面板会把 NAT 移到新子网。
+
+## AmneziaWG 引擎
+
+AmneziaWG 可以作为 `amneziawg-go` 程序运行，也可以作为 Linux 内核模块运行。
+
+- **amneziawg-go**（默认）在任何服务器上表现一致，随面板一起提供。加密会占用相当一部分 CPU：在客户端多的低配 VPS 上，或在每个数据包都要加密两次（在服务器上和通往出口的隧道中）的级联中，它可能成为瓶颈。
+- **内核模块** 在内核中加密：CPU 占用低数倍，速度更高。它针对你的内核编译（DKMS），内核更新时会重新编译；低于 3.x 的模块不支持 AWG 3.1。如果 CPU 不忙，请继续使用 amneziawg-go。
+
+切换方法：
+1. 在服务器上运行：`sudo awg-router install-kernel`。需要 Ubuntu 22.04+ 或 Debian 12+、x86_64 或 aarch64，且 VPS 不是 OpenVZ/LXC。该命令从 Amnezia PPA 编译模块，检查其版本为 3.x，若得到更旧的版本则将其删除，以免服务器出问题。
+2. 在面板中：**服务器 → 重启 AWG 服务器**。服务器会自行改用模块（awg-quick 优先使用内核）。
+3. 通往出口的隧道：**服务器 → AmneziaWG 引擎 → 内核模块**。如果模块无法启动隧道，面板会自动把出口切回 amneziawg-go。
+
+**服务器 → AmneziaWG 引擎** 显示服务器使用的引擎和已加载的模块。AmneziaVPN 应用可能会自行安装内核模块；如果其版本低于 3.x 而服务器使用 AWG 3.1 参数，面板会发出警告（Telegram 中也会）：这样的服务器可能无法启动。要改回 amneziawg-go：`apt remove amneziawg-dkms`，然后重启服务器。
 
 ## 服务器上的 DNS
 
@@ -307,7 +322,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>域名规则在内核中转发 <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>、安装程序检查端口是否被占用 <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>、内核模块引擎 <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>通过 80 端口上的 Web 服务器进行 Let's Encrypt 验证 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>

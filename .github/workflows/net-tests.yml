@@ -77,7 +77,13 @@ jobs:
   kernel:
     # Не держит выпуск: сборка DKMS зависит от PPA Amnezia и ядра машины GitHub. Падение видно в прогоне
     # (и в нём же — почему), а черновик всё равно создаётся: по умолчанию панель на amneziawg-go.
-    runs-on: ubuntu-24.04
+    # Две машины: на 24.04 ядро 7.x (модуль PPA может не собраться — проверяется честный отказ команды),
+    # на 22.04 — ядро постарше, на нём проверяется сам туннель на модуле.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     continue-on-error: true
     steps:
@@ -100,13 +106,14 @@ jobs:
           uname -r
 
       - name: Kernel module (install.sh --install-kernel)
+        id: module
         run: sudo env AWGR_YES=y bash install.sh --install-kernel
 
       - name: Real tunnel on the kernel module
         run: sudo env AWGT_ENGINE=kernel PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/awg_real_e2e.py
 
       - name: Kernel server, amneziawg-go client
-        if: always()
+        if: always() && steps.module.outcome == 'success'
         run: sudo env AWGT_ENGINE=mixed PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/awg_real_e2e.py
 
       - name: DKMS build log

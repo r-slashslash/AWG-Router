@@ -5,6 +5,15 @@ it grows, so every user-visible change gets a new version.
 
 ## 1.20.0 — 2026-11-14
 
+- **AmneziaWG engine: amneziawg-go or the kernel module.** A new block on the Server tab shows what the server
+  runs on (the link type of `awg0`) and which kernel module is loaded, and lets tunnels to exits run on the
+  kernel module (only with a 3.x module; any failure moves them back to amneziawg-go at once). The server picks
+  the module by itself, as `awg-quick` does. A loaded module older than 3.x with an AWG 3.1 config — the
+  server then doesn't come up — is reported in the panel and in Telegram. `awg-router install-kernel` builds
+  the module from the Amnezia PPA (Ubuntu 22.04+, Debian 12+ with the PPA key checked by Launchpad's full
+  fingerprint; x86_64 and aarch64; not in OpenVZ/LXC), installs only `amneziawg-dkms` and removes a module older
+  than 3.x again. The network tests install the module with the same command and run a real tunnel on it.
+  Thanks to @paris19891 (#24).
 - **CPU and memory in the status line.** The panel's status line shows the server's CPU and memory load,
   refreshed with the rest of the state; 90% and above is highlighted, and the hint has the load average and
   the memory in use. CPU is measured between two reads of `/proc/stat` (`hostnet.CpuMeter`), so it is the whole

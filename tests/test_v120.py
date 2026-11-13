@@ -523,6 +523,16 @@ class KernelInstallTest(unittest.TestCase):
         self.assertIn("reboot the server", out)
         self.assertNotIn("apt-get remove", calls)
 
+    def test_build_failure_changes_nothing(self):
+        """Модуль не собрался под ядро (так было с PPA на ядре 7.0): пакет убран, панель на amneziawg-go."""
+        with open(os.path.join(self.bin, "apt-get"), "w") as f:
+            f.write('#!/bin/bash\necho "apt-get $*" >> "$LOG"\n[[ "$*" == *"install -y -qq amneziawg-dkms"* ]] && exit 100\nexit 0\n')
+        rc, out, calls = self.run_sh()
+        self.assertEqual(rc, 1)
+        self.assertIn("did not build for kernel 6.8.0-45-generic", out)
+        self.assertIn("apt-get remove -y -qq amneziawg-dkms", calls)
+        self.assertNotIn("modprobe", calls)
+
     def test_refusals(self):
         for kw, text in (({"virt": "lxc"}, "is a container (lxc)"),
                          ({"os_id": "debian", "ver": "11"}, "Debian 12 or newer"),

@@ -34,6 +34,13 @@ Peers are changed with `awg syncconf`. Port, S1–S4, H1–H4 and HeaderProtecti
 interface restart. A disabled client is kept in the config as a commented block marked
 `#awgr:disabled`, so its address stays taken.
 
+The server's interface comes from `awg-quick`, which takes the AmneziaWG kernel module when it is loaded
+and `amneziawg-go` otherwise; the panel shows which one runs and warns when a module older than 3.x meets
+an AWG 3.1 config. Tunnels to exits run on `amneziawg-go` unless the kernel module is picked on the Server
+tab; any failure on the module moves them back. If the server's interface disappears while its target is
+still there (for example, the kernel killed `amneziawg-go` when memory ran out), the engine restarts the
+server with growing pauses.
+
 ## Routing
 
 For every exit N the panel creates a tunnel interface `awgrN` and sets up:

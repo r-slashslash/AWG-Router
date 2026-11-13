@@ -164,6 +164,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router restart` | перезапустить панель |
 | `awg-router logs` | журнал панели |
 | `awg-router reconfigure` | заново выбрать режим и способ входа |
+| `awg-router install-kernel` | собрать и загрузить модуль ядра AmneziaWG (см. [Движок AmneziaWG](#движок-amneziawg)) |
 | `awg-router uninstall` | удалить панель и её правила маршрутизации; сервер AmneziaWG и клиенты остаются |
 
 ### Вход через SSH-туннель
@@ -217,6 +218,20 @@ ssh -N -L ПОРТ:127.0.0.1:ПОРТ root@IP-СЕРВЕРА
 Панель ставит на хост `awg`, `awg-quick`, `amneziawg-go` (AWG 3.1) и службу `awg-quick@awg0`.
 - Конфиг: `/etc/amnezia/amneziawg/awg0.conf`.
 - NAT и правила пересылки добавляются через `PostUp`, поэтому VPN работает, даже когда панель остановлена. При смене подсети панель переносит NAT на новую.
+
+## Движок AmneziaWG
+
+AmneziaWG работает либо программой `amneziawg-go`, либо модулем ядра Linux.
+
+- **amneziawg-go** (по умолчанию) одинаково работает на любом сервере и приходит вместе с панелью. Шифрование забирает заметную долю процессора: на слабом VPS с многими клиентами или в каскаде, где каждый пакет шифруется дважды (на сервере и в туннеле к выходу), это может стать потолком.
+- **Модуль ядра** шифрует внутри ядра: процессора уходит в разы меньше, скорость выше. Он собирается под ваше ядро (DKMS) и пересобирается при его обновлении; модуль старше 3.x не понимает AWG 3.1. Если процессор не загружен, оставайтесь на amneziawg-go.
+
+Как перейти:
+1. На сервере: `sudo awg-router install-kernel`. Нужны Ubuntu 22.04+ или Debian 12+, x86_64 или aarch64 и VPS не на OpenVZ/LXC. Команда собирает модуль из PPA Amnezia, проверяет, что он 3.x, а более старый удаляет, чтобы сервер не сломался.
+2. В панели: **«Сервер» → «Перезапустить сервер AWG»**. Сервер сам возьмёт модуль (awg-quick предпочитает ядро).
+3. Туннели к выходам: **«Сервер» → «Движок AmneziaWG» → «Модуль ядра»**. Если модуль не запустит туннель, панель сама вернёт выходы на amneziawg-go.
+
+**«Сервер» → «Движок AmneziaWG»** показывает, чем работает сервер и какой модуль загружен. Приложение AmneziaVPN может само поставить модуль ядра; если он старше 3.x, а сервер с параметрами AWG 3.1, панель предупредит (и в Telegram): такой сервер может не подняться. Вернуться на amneziawg-go: `apt remove amneziawg-dkms`, затем перезагрузить сервер.
 
 ## DNS на сервере
 
@@ -307,7 +322,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # дем
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>правила по доменам с пересылкой внутри ядра <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>, проверка занятого порта в установщике <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, движок на модуле ядра <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>проверка Let's Encrypt через веб-сервер на порту 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>
