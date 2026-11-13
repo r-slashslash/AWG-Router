@@ -5,6 +5,8 @@
 #   tests/domains_socks_e2e.py — выход SOCKS5 (hev-socks5-tunnel) и правила по доменам (sniproxy);
 #   tests/shaping_e2e.py       — ограничение скорости (tc: клиенты, все вместе, выходы) и балансировка
 #                                (открытое соединение остаётся на прежнем выходе).
+# Задание kernel: модуль ядра AmneziaWG ставится той же командой, что у пользователей
+# (install.sh --install-kernel), и настоящий туннель идёт на нём и вперемешку с amneziawg-go.
 # awg, amneziawg-go и hev-socks5-tunnel собираются из стадий текущего Dockerfile — те же версии и флаги,
 # что попадут в образ следующего релиза. pyroute2 и nftables ставятся только на машину CI (в панель
 # не попадают: там по-прежнему только стандартная библиотека).
@@ -71,3 +73,42 @@ jobs:
       - name: Speed limits and load balancing (shaping_e2e.py)
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/shaping_e2e.py
+
+  kernel:
+    # Не держит выпуск: сборка DKMS зависит от PPA Amnezia и ядра машины GitHub. Падение видно в прогоне
+    # (и в нём же — почему), а черновик всё равно создаётся: по умолчанию панель на amneziawg-go.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: "3.13"
+
+      - name: Tools (pyroute2, awg, amneziawg-go)
+        run: |
+          python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2
+          mkdir -p "$RUNNER_TEMP/bin"
+          for stage in awg-go awg-tools; do
+            docker build -q --target "$stage" -t "e2e-$stage" . >/dev/null
+            id=$(docker create "e2e-$stage")
+            docker cp "$id:/out/." "$RUNNER_TEMP/bin/"
+            docker rm "$id" >/dev/null
+          done
+          uname -r
+
+      - name: Kernel module (install.sh --install-kernel)
+        run: sudo env AWGR_YES=y bash install.sh --install-kernel
+
+      - name: Real tunnel on the kernel module
+        run: sudo env AWGT_ENGINE=kernel PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/awg_real_e2e.py
+
+      - name: Kernel server, amneziawg-go client
+        if: always()
+        run: sudo env AWGT_ENGINE=mixed PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/awg_real_e2e.py
+
+      - name: DKMS build log
+        if: failure()
+        run: sudo sh -c 'cat /var/lib/dkms/amneziawg/*/build/make.log 2>/dev/null | tail -80' || true

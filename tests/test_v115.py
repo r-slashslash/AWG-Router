@@ -122,6 +122,7 @@ class StartUpTest(unittest.TestCase):
         self.eng = engine.Engine.__new__(engine.Engine)
         self.eng.rt = {}
         self.eng.event = mock.Mock()
+        self.eng.exit_engine = lambda st=None: "kernel"   # модуль ядра: без запуска amneziawg-go
         self.written = None
 
     def run_start(self):

@@ -55,6 +55,8 @@ TEXTS = {
         "mem_ok": "✅ Память сервера снова в норме: занято {pct}%.",
         "cpu_high": "⚠️ Процессор сервера загружен на {pct}% уже {min} мин.",
         "cpu_ok": "✅ Процессор сервера снова в норме: {pct}%.",
+        "kernel_old": "⚠️ На сервере загружен модуль ядра AmneziaWG {version}: параметры AWG 3.1 он не понимает, и сервер может не подняться. Нужен модуль {min}.x — обновите его (awg-router install-kernel) или удалите.",
+        "kernel_fallback": "⚠️ Модуль ядра не запустил туннель {iface}. Туннели к выходам работают на amneziawg-go.",
         "login_ok": "🔑 Вход в панель с адреса {ip}.",
         "login_blocked": "🚫 Много неверных попыток входа с адреса {ip}. Вход с него заблокирован на 10 минут.",
         "tls_fail": "⚠️ Не удаётся продлить сертификат HTTPS панели. Текущий действует до {date}.",
@@ -89,6 +91,8 @@ TEXTS = {
         "mem_ok": "✅ Server memory is back to normal: {pct}% in use.",
         "cpu_high": "⚠️ Server CPU has been at {pct}% for {min} min.",
         "cpu_ok": "✅ Server CPU is back to normal: {pct}%.",
+        "kernel_old": "⚠️ The server has AmneziaWG kernel module {version} loaded: it doesn't understand AWG 3.1 parameters, and the server may not come up. Module {min}.x is needed — update it (awg-router install-kernel) or remove it.",
+        "kernel_fallback": "⚠️ The kernel module couldn't start tunnel {iface}. Tunnels to exits run on amneziawg-go.",
         "login_ok": "🔑 Panel sign-in from {ip}.",
         "login_blocked": "🚫 Too many failed sign-in attempts from {ip}. It is blocked for 10 minutes.",
         "tls_fail": "⚠️ The panel's HTTPS certificate can't be renewed. The current one is valid until {date}.",
@@ -123,6 +127,8 @@ TEXTS = {
         "mem_ok": "✅ 服务器内存已恢复正常：已用 {pct}%。",
         "cpu_high": "⚠️ 服务器 CPU 负载已达 {pct}%，持续 {min} 分钟。",
         "cpu_ok": "✅ 服务器 CPU 已恢复正常：{pct}%。",
+        "kernel_old": "⚠️ 服务器加载了 AmneziaWG 内核模块 {version}：它不支持 AWG 3.1 参数，服务器可能无法启动。需要 {min}.x 版本的模块——请更新（awg-router install-kernel）或将其删除。",
+        "kernel_fallback": "⚠️ 内核模块无法启动隧道 {iface}。通往出口的隧道改用 amneziawg-go 运行。",
         "login_ok": "🔑 来自 {ip} 的面板登录。",
         "login_blocked": "🚫 来自 {ip} 的错误登录尝试过多，已封锁 10 分钟。",
         "tls_fail": "⚠️ 无法续期面板的 HTTPS 证书。当前证书有效期至 {date}。",
@@ -157,6 +163,8 @@ TEXTS = {
         "mem_ok": "✅ حافظهٔ سرور دوباره عادی است: {pct}% در حال استفاده.",
         "cpu_high": "⚠️ پردازندهٔ سرور {min} دقیقه است که روی {pct}% است.",
         "cpu_ok": "✅ پردازندهٔ سرور دوباره عادی است: {pct}%.",
+        "kernel_old": "⚠️ ماژول هستهٔ AmneziaWG نسخهٔ {version} روی سرور بارگذاری شده است: پارامترهای AWG 3.1 را نمی‌فهمد و ممکن است سرور بالا نیاید. ماژول {min}.x لازم است — آن را به‌روز کنید (awg-router install-kernel) یا حذفش کنید.",
+        "kernel_fallback": "⚠️ ماژول هسته نتوانست تونل {iface} را راه بیندازد. تونل‌ها به خروجی‌ها با amneziawg-go کار می‌کنند.",
         "login_ok": "🔑 ورود به پنل از نشانی {ip}.",
         "login_blocked": "🚫 تلاش‌های ناموفق زیاد برای ورود از نشانی {ip}. ورود از آن ۱۰ دقیقه مسدود شد.",
         "tls_fail": "⚠️ تمدید گواهی HTTPS پنل ممکن نیست. گواهی فعلی تا {date} معتبر است.",
@@ -191,6 +199,8 @@ ENGINE_EVENTS = {
     "ev.mem_ok": ("system", "mem_ok"),
     "ev.cpu_high": ("system", "cpu_high"),
     "ev.cpu_ok": ("system", "cpu_ok"),
+    "ev.kernel_old": ("server", "kernel_old"),
+    "ev.kernel_fallback": ("exit", "kernel_fallback"),
     "ev.client_expired": ("clients", "client_expired"),
     "ev.client_quota": ("clients", "client_quota"),
     "ev.client_quota_reset": ("clients", "client_quota_reset"),
@@ -459,7 +469,7 @@ class Notifier:
         m = ENGINE_EVENTS.get(msg.key)
         if m:
             self.event(m[0], m[1], refs={k: v for k, v in msg.p.items() if k in ("pk", "uid")},
-                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min")})
+                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min", "version", "error")})
 
     def target_ok(self) -> None:
         if self._target_lost:

@@ -447,5 +447,188 @@ class ResourceAlertTest(unittest.TestCase):
         self.assertIn("93%", notify.render("ru", "mem_high", **got[0][2]))
 
 
+class KernelInstallTest(unittest.TestCase):
+    """awg-router install-kernel: настоящий кусок install.sh с поддельными apt-get, modprobe и прочими."""
+
+    def setUp(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        with open(os.path.join(root, "install.sh")) as f:
+            sh = f.read()
+        self.part = sh[sh.index('AWG_SYS="${AWGR_SYS:-/sys}"'):sh.index('if [ "$INFO_ONLY" = 1 ]')]
+        self.tmp = tempfile.mkdtemp()
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        self.sys = os.path.join(self.tmp, "sys")
+        self.log = os.path.join(self.tmp, "calls")
+        stubs = {
+            "systemd-detect-virt": 'echo "${VIRT:-none}"',
+            "uname": 'case "$1" in -m) echo "${ARCH:-x86_64}";; -r) echo 6.8.0-45-generic;; *) echo Linux;; esac',
+            "apt-get": 'echo "apt-get $*" >> "$LOG"',
+            "apt-cache": 'exit 0',
+            "add-apt-repository": 'echo "add-apt-repository $*" >> "$LOG"',
+            "modprobe": 'echo "modprobe $*" >> "$LOG"; mkdir -p "$AWGR_SYS/module/amneziawg"; '
+                        'echo "$NEWVER" > "$AWGR_SYS/module/amneziawg/version"',
+            "rmmod": 'echo "rmmod $*" >> "$LOG"; rm -rf "$AWGR_SYS/module/amneziawg"',
+            "modinfo": 'echo "${FILEVER:-$NEWVER}"',
+        }
+        for name, body in stubs.items():
+            path = os.path.join(self.bin, name)
+            with open(path, "w") as f:
+                f.write("#!/bin/bash\n" + body + "\n")
+            os.chmod(path, 0o755)
+
+    def run_sh(self, os_id="ubuntu", ver="24.04", loaded=None, newver="3.1.20260812", virt="none", yes="y", **env):
+        osr = os.path.join(self.tmp, "os-release")
+        with open(osr, "w") as f:
+            f.write(f'ID={os_id}\nVERSION_ID="{ver}"\n')
+        if loaded:
+            os.makedirs(os.path.join(self.sys, "module", "amneziawg"), exist_ok=True)
+            with open(os.path.join(self.sys, "module", "amneziawg", "version"), "w") as f:
+                f.write(loaded + "\n")
+        script = ("set -uo pipefail\nstep() { echo \"STEP $1\"; }; ok() { echo \"OK $1\"; }; warn() { echo \"WARN $1\"; }\n"
+                  "die() { echo \"DIE $1\"; exit 1; }\nask() { REPLY=\"$2\"; }\n" + self.part + "\ninstall_kernel\n")
+        e = {"PATH": self.bin + ":/usr/bin:/bin", "AWGR_SYS": self.sys, "AWGR_OS_RELEASE": osr, "LOG": self.log,
+             "NEWVER": newver, "VIRT": virt, "AWGR_YES": yes, **env}
+        p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, timeout=30)
+        calls = open(self.log).read() if os.path.exists(self.log) else ""
+        return p.returncode, p.stdout, calls
+
+    def test_already_new_enough(self):
+        rc, out, calls = self.run_sh(loaded="3.1.20260812")
+        self.assertEqual(rc, 0)
+        self.assertIn("OK Already loaded: version 3.1.20260812", out)
+        self.assertEqual(calls, "")
+
+    def test_ubuntu_installs_module_only(self):
+        rc, out, calls = self.run_sh()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("add-apt-repository -y ppa:amnezia/ppa", calls)
+        self.assertIn("apt-get install -y -qq amneziawg-dkms", calls)      # без amneziawg-tools
+        self.assertIn("OK Kernel module loaded: version 3.1.20260812", out)
+
+    def test_old_module_from_ppa_is_removed(self):
+        rc, out, calls = self.run_sh(newver="1.0.20251009")
+        self.assertEqual(rc, 1)
+        self.assertIn("apt-get remove -y -qq amneziawg-dkms", calls)
+        self.assertIn("doesn't speak AWG 3.1", out)
+
+    def test_old_loaded_new_installed_asks_reboot(self):
+        # старый модуль занят сервером и не выгружается: установлен новый — нужна перезагрузка
+        with open(os.path.join(self.bin, "rmmod"), "w") as f:
+            f.write("#!/bin/bash\necho \"rmmod $*\" >> \"$LOG\"; exit 1\n")
+        with open(os.path.join(self.bin, "modprobe"), "w") as f:
+            f.write("#!/bin/bash\necho \"modprobe $*\" >> \"$LOG\"\n")
+        rc, out, calls = self.run_sh(loaded="1.0.20251009", FILEVER="3.1.20260812")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("reboot the server", out)
+        self.assertNotIn("apt-get remove", calls)
+
+    def test_refusals(self):
+        for kw, text in (({"virt": "lxc"}, "is a container (lxc)"),
+                         ({"os_id": "debian", "ver": "11"}, "Debian 12 or newer"),
+                         ({"os_id": "fedora", "ver": "40"}, "Only Ubuntu and Debian"),
+                         ({"ARCH": "armv7l"}, "Only x86_64 and aarch64"),
+                         ({"yes": "n"}, "Cancelled")):
+            if os.path.exists(self.log):
+                os.remove(self.log)
+            rc, out, calls = self.run_sh(**kw)
+            self.assertEqual(rc, 1, kw)
+            self.assertIn(text, out, kw)
+            self.assertEqual(calls, "", kw)                  # ничего не поставлено
+
+    def test_helper_command(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        with open(os.path.join(root, "install.sh")) as f:
+            sh = f.read()
+        self.assertIn('install-kernel) bash "\\$DIR/install.sh" --install-kernel ;;', sh)
+        self.assertIn("--install-kernel) KERNEL_ONLY=1 ;;", sh)
+
+
+class ExitEngineTest(unittest.TestCase):
+    """Туннели к выходам: модуль ядра — только по выбору и с модулем 3.x; отказ ядра — сразу amneziawg-go."""
+
+    def setUp(self):
+        self.e = main.engine
+        self.e.kernel_fallback = None
+
+    def tearDown(self):
+        self.e.kernel_fallback = None
+        main.store.mutate(lambda st: st["settings"].pop("exit_engine", None))
+
+    def test_choice_needs_module(self):
+        self.assertEqual(self.e.exit_engine(), "go")                    # по умолчанию
+        with mock.patch.object(self.e, "module_info", return_value={"loaded": True, "version": "1.0.2025", "ok": False}):
+            with self.assertRaises(system.SysError) as cm:
+                self.e.set_exit_engine("kernel")
+            self.assertEqual(cm.exception.msg.key, "eng.no_module")
+        self.e.set_exit_engine("kernel")                                 # демо: модуль 3.1 «загружен»
+        self.assertEqual(self.e.exit_engine(), "kernel")
+        with mock.patch.object(self.e, "module_info", return_value={"loaded": False, "version": None, "ok": False}):
+            self.assertEqual(self.e.exit_engine(), "go")                # модуль пропал — amneziawg-go
+        self.e.kernel_fallback = {"error": "x", "at": 0}
+        self.assertEqual(self.e.exit_engine(), "go")                    # отказ ядра — до нового выбора
+        self.e.set_exit_engine("kernel")
+        self.assertIsNone(self.e.kernel_fallback)
+
+    def test_kernel_failure_falls_back_to_go(self):
+        from app import awgconf
+        e = engine.Engine.__new__(engine.Engine)
+        e.rt, e.kernel_fallback, events = {}, None, []
+        e.event = lambda lvl, m: events.append(m.key)
+        e.exit_engine = lambda st=None: "kernel" if not e.kernel_fallback else "go"
+        calls = []
+
+        def ns(cmd, **kw):
+            calls.append(cmd)
+            if cmd[:3] == ["ip", "link", "add"]:
+                raise system.SysError("RTNETLINK answers: Operation not supported")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        t = mock.Mock(pid=1, key="k")
+        t.ns = ns
+        from test_v115 import conf
+        pc = awgconf.parse_upstream(conf("203.0.113.7:51820"))
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine.subprocess, "Popen") as po, \
+                mock.patch.object(engine.os.path, "exists", return_value=True), \
+                mock.patch.object(engine.Engine, "_setconf"):
+            po.return_value.poll.return_value = None
+            e._start_up(t, "u1", {"num": 3, "name": "X"}, pc, "h")
+        self.assertEqual(e.rt["u1"].engine, "go")
+        self.assertIn("ev.kernel_fallback", events)
+        self.assertIn(["ip", "link", "del", "awgr3"], calls)            # недосозданный интерфейс убран
+        self.assertIn("amneziawg-go", po.call_args[0][0])
+
+    def test_server_engine_and_old_module(self):
+        e = engine.Engine.__new__(engine.Engine)
+        e.server_engine, e._srv_engine_at, e.module_warn, e._module_warned = None, ("", 0.0), None, None
+        events = []
+        e.event = lambda lvl, m: events.append((m.key, m.p))
+        out = {"kernel": "5: awg0: <POINTOPOINT,NOARP,UP> mtu 1376\n    link/none promiscuity 0\n    amneziawg \n",
+               "go": "5: awg0: <POINTOPOINT> mtu 1376\n    link/none\n    tun type tun pi off vnet_hdr off\n"}
+        for want, text in out.items():
+            t = mock.Mock(key=want, iface="awg0", conf_path="/c")
+            t.ns = lambda cmd, text=text, **kw: subprocess.CompletedProcess(cmd, 0, text, "")
+            t.read_file = lambda p: "[Interface]\nHeaderProtectionKey = x\n"
+            info = {"loaded": True, "version": "1.0.20251009", "ok": False}
+            with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(e, "module_info", return_value=info, create=True):
+                e._watch_engine(t)
+            self.assertEqual(e.server_engine, want)
+        self.assertEqual(e.module_warn, "1.0.20251009")
+        self.assertEqual(len(events), 2)                                 # по одному на каждый Target.key
+        self.assertEqual(events[0], ("ev.kernel_old", {"version": "1.0.20251009", "min": engine.KERNEL_MIN}))
+
+    def test_state_and_api(self):
+        main.engine.reconcile()
+        st = main.get_state(None)
+        self.assertEqual(sorted(st["awg_engine"]), ["exits", "exits_now", "fallback", "min", "module", "old", "server"])
+        self.assertEqual(main.set_engine(type("R", (), {"json": lambda self: {"exits": "kernel"}})()), {"ok": True})
+        self.assertEqual(main.store.snapshot()["settings"]["exit_engine"], "kernel")
+        with self.assertRaises(web.HTTPError):
+            main.set_engine(type("R", (), {"json": lambda self: {"exits": "nope"}})())
+        from test_api import good_state
+        g = good_state()
+        g.setdefault("settings", {})["exit_engine"] = "kernel"
+        self.assertEqual(main.clean_backup_state(g)["settings"]["exit_engine"], "kernel")
+
+
 if __name__ == "__main__":
     unittest.main()

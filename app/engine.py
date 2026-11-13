@@ -57,6 +57,12 @@ SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытк
 MEM_ALERT, MEM_OK = 90, 85   # % занятой памяти: выше — тревога, ниже — снова норма
 CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
+ENGINES = ("go", "kernel")   # чем работают туннели к выходам: amneziawg-go или модуль ядра
+KERNEL_MIN = 3           # старший номер версии модуля ядра, с которой он понимает AWG 3.1
+# параметры AWG 3.1: модуль ядра старше KERNEL_MIN их не принимает, и сервер не поднимается
+AWG31_KEYS = re.compile(r"^\s*(HeaderProtectionKey|ContentPaddingAddition|RandomTrailers|DisableCookies)\s*=",
+                        re.M | re.I)
+SERVER_ENGINE_EVERY = 60     # с: как часто заново смотреть, чем работает интерфейс сервера
 FLAP_SECS = 60                          # туннель упал раньше — считаем неудачным запуском
 
 
@@ -71,6 +77,7 @@ class UpRT:
         self.proc: subprocess.Popen | None = None
         self.started = time.time()
         self.socks_ip: str | None = None        # адрес прокси SOCKS5 (имя разрешает панель)
+        self.engine = "go"                      # go (amneziawg-go) | kernel (модуль ядра amneziawg)
         self.reresolved = 0.0                   # когда последний раз заново разбирали имя из Endpoint
 
 
@@ -119,6 +126,12 @@ class Engine:
         self._srv_tries = 0
         self._srv_next = 0.0
         self._res: dict[str, dict] = {}       # тревоги по памяти и процессору (_watch_resources)
+        self.kernel_fallback: dict | None = None   # модуль ядра не запустил выход: {"error", "at"}
+        self.server_engine: str | None = None      # чем работает сервер AWG: kernel | go | None
+        self._srv_engine_at: tuple = ("", 0.0)     # (Target.key, когда смотрели)
+        self.module_warn: str | None = None        # загружен модуль старше KERNEL_MIN, а конфиг 3.1
+        self._module_warned: tuple | None = None
+        self._modinfo: tuple = (0.0, "")              # (когда, версия) от modinfo хоста
         self.domain_matcher = domains.Matcher()
         self.sni: HelperRT | None = None
         self.sni_state: dict | None = None      # для интерфейса: state, listen, error
@@ -308,9 +321,20 @@ class Engine:
                 raise system.SysError(e.msg) from None
             self._v6_route(t, ip)
             setconf = awgconf.setconf_for(pc, ip)
-            if config.UPSTREAM_BACKEND == "kernel":
-                t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
-            else:
+        r.engine = self.exit_engine()
+        if r.engine == "kernel":
+            # модуль ядра: при любом отказе (ip link add, awg setconf) — сразу amneziawg-go, а выбор
+            # «ядро» ждёт, пока его не сохранят снова (kernel_fallback)
+            try:
+                if not config.DRY_RUN:
+                    t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
+                self._setconf(t, ifn, setconf)
+            except Exception as e:  # noqa: BLE001
+                t.ns(["ip", "link", "del", ifn], check=False)
+                self._kernel_failed(ifn, msg_of(e))
+                r.engine = "go"
+        if r.engine == "go":
+            if not config.DRY_RUN:
                 sock = f"{SOCK_DIR}/{ifn}.sock"
                 try:
                     os.remove(sock)
@@ -335,7 +359,87 @@ class Engine:
                     except subprocess.TimeoutExpired:
                         pass
                     raise system.SysError(Msg("sys.awg_start_failed", iface=ifn))
-        self.rt[uid] = r
+            self.rt[uid] = r
+            self._setconf(t, ifn, setconf)
+        else:
+            self.rt[uid] = r
+        # Служебный link-local адрес: без IPv4-адреса ядро при включённом rp_filter
+        # отбрасывает входящие пакеты на интерфейсе. Настоящий адрес туннеля (часто
+        # из той же подсети 10.8.1.0/24, что и наши клиенты) подставляется через SNAT.
+        t.ns(["ip", "addr", "replace", f"169.254.200.{u['num']}/32", "dev", ifn])
+        t.ns(["ip", "link", "set", ifn, "mtu", str(pc.mtu), "up"])
+        t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
+        self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
+
+    # ------------------------------------------------------------- движок AWG
+    def module_info(self) -> dict:
+        """Модуль ядра на хосте: {"loaded", "version", "ok"} (ok — версия не меньше KERNEL_MIN)."""
+        if config.DRY_RUN:
+            m = {"loaded": True, "version": "3.1.20260812"}
+        else:
+            m = hostnet.awg_module()
+            if m["loaded"] and not m["version"]:
+                # у сборки без /sys/module/amneziawg/version версию знает modinfo хоста (не чаще раза в минуту)
+                at, v = self._modinfo
+                if time.time() - at > 60:
+                    from . import webfront
+                    p = webfront.host_run(["modinfo", "-F", "version", "amneziawg"], timeout=10)
+                    v = (p.stdout or "").strip() if p.returncode == 0 else ""
+                    self._modinfo = (time.time(), v)
+                m["version"] = v or None
+        return {**m, "ok": m["loaded"] and hostnet.module_major(m["version"]) >= KERNEL_MIN}
+
+    def exit_engine(self, st: dict | None = None) -> str:
+        """Чем запускать туннели к выходам. Модуль ядра — только если его выбрали, загружен модуль 3.x и
+        он не отказал при запуске (kernel_fallback: тогда amneziawg-go, пока выбор не сохранят снова)."""
+        st = st or self.store.snapshot()
+        want = st["settings"].get("exit_engine") or ("kernel" if config.UPSTREAM_BACKEND == "kernel" else "go")
+        if want == "kernel" and not self.kernel_fallback and self.module_info()["ok"]:
+            return "kernel"
+        return "go"
+
+    def set_exit_engine(self, value: str) -> None:
+        if value not in ENGINES:
+            raise system.SysError(Msg("eng.bad"))
+        if value == "kernel" and not self.module_info()["ok"]:
+            raise system.SysError(Msg("eng.no_module", min=KERNEL_MIN))
+        self.store.mutate(lambda st: st["settings"].update(exit_engine=value))
+        self.kernel_fallback = None             # выбрали снова — снова пробуем модуль
+        self.reconcile_soon()
+
+    def _watch_engine(self, t: system.Target) -> None:
+        """Чем работает интерфейс сервера (тип ссылки: amneziawg/wireguard — ядро, tun — amneziawg-go) и не
+        загружен ли модуль старше KERNEL_MIN при конфиге 3.1: awg-quick сам берёт модуль, если он есть, и
+        тогда сервер не поднимается — этого не видно ни в приложении AmneziaVPN, ни в панели."""
+        now = time.time()
+        if config.DRY_RUN:
+            self.server_engine = "kernel"
+            return
+        if self._srv_engine_at[0] != t.key or now - self._srv_engine_at[1] >= SERVER_ENGINE_EVERY \
+                or self.server_engine is None:
+            p = t.ns(["ip", "-d", "link", "show", t.iface], check=False, timeout=10)
+            out = p.stdout if p.returncode == 0 else ""
+            self.server_engine = ("kernel" if re.search(r"^\s+(amneziawg|wireguard)\b", out, re.M) else
+                                  "go" if re.search(r"^\s+tun\b", out, re.M) else None)
+            self._srv_engine_at = (t.key, now)
+        m = self.module_info()
+        old = bool(m["loaded"] and m["version"]) and not m["ok"]     # версию не узнать — не пугаем
+        if not old:
+            self.module_warn = None
+            return
+        if not AWG31_KEYS.search(t.read_file(t.conf_path) or ""):
+            self.module_warn = None
+            return
+        self.module_warn = m["version"] or "?"
+        if self._module_warned != (t.key, self.module_warn):
+            self._module_warned = (t.key, self.module_warn)
+            self.event("warn", Msg("ev.kernel_old", version=self.module_warn, min=KERNEL_MIN))
+
+    def _kernel_failed(self, ifn: str, err) -> None:
+        self.kernel_fallback = {"error": err, "at": time.time()}
+        self.event("warn", Msg("ev.kernel_fallback", iface=ifn, error=err))
+
+    def _setconf(self, t: system.Target, ifn: str, setconf: str) -> None:
         path = os.path.join(RUN_DIR, f"{ifn}.conf")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -345,13 +449,6 @@ class Engine:
         finally:
             if not config.DRY_RUN:
                 os.remove(path)
-        # Служебный link-local адрес: без IPv4-адреса ядро при включённом rp_filter
-        # отбрасывает входящие пакеты на интерфейсе. Настоящий адрес туннеля (часто
-        # из той же подсети 10.8.1.0/24, что и наши клиенты) подставляется через SNAT.
-        t.ns(["ip", "addr", "replace", f"169.254.200.{u['num']}/32", "dev", ifn])
-        t.ns(["ip", "link", "set", ifn, "mtu", str(pc.mtu), "up"])
-        t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
-        self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
 
     @staticmethod
     def _v6_route(t: system.Target, ip: str) -> None:
@@ -434,6 +531,7 @@ class Engine:
                 self._up_fail.pop(uid, None)
         links = self._links(t)
         now = time.time()
+        eng = self.exit_engine()
         for uid, u in wanted.items():
             try:
                 pc = self.parsed(u)
@@ -452,6 +550,9 @@ class Engine:
             if r and alive and f and now - r.started >= FLAP_SECS:
                 self._up_fail.pop(uid, None)            # туннель держится — счёт неудач сначала
                 f = None
+            if r and pc.kind == "awg" and r.engine != eng and alive:
+                self._stop_up(uid)                      # выбрали другой движок — перезапуск на нём
+                r = None
             if r and (r.conf_hash != h or not alive):
                 if not alive:
                     if not f:
@@ -1339,6 +1440,10 @@ class Engine:
                 self.clients = []
                 return
             self._watch_server(t)
+            try:
+                self._watch_engine(t)
+            except Exception:  # noqa: BLE001
+                log.exception("engine check")
             self.target_error = None
             if self.notifier:
                 self.notifier.target_ok()

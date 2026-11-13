@@ -8,6 +8,8 @@
 
 Нужны root, /dev/net/tun, amneziawg-go и awg в PATH.
 Запуск: PATH=<bin>:$PATH python3 tests/awg_real_e2e.py
+Модуль ядра: AWGT_ENGINE=kernel — обе стороны на модуле amneziawg, mixed — сервер на модуле, клиент на
+amneziawg-go (так работает панель с модулем: сервер берёт ядро, у клиентов — свои программы).
 """
 import os
 import subprocess
@@ -19,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app import awgconf, awgserver  # noqa: E402
 
 NS = ["awgt_srv", "awgt_cli"]
+ENGINE = os.environ.get("AWGT_ENGINE", "go")
 
 
 def sh(*cmd, ns=None, check=True, **kw):
@@ -72,13 +75,17 @@ class Net:
         return p
 
     def up_awg(self, ns, ifn, setconf_text, addr, prefix, mtu=1376):
-        log = open(f"/tmp/{ifn}.log", "w")
-        self.procs.append(subprocess.Popen(["nsenter", f"--net=/var/run/netns/{ns}", "--",
-                                            "amneziawg-go", "-f", ifn], stdout=log, stderr=log))
-        for _ in range(50):
-            if os.path.exists(f"/var/run/amneziawg/{ifn}.sock"):
-                break
-            time.sleep(0.1)
+        kernel = ENGINE == "kernel" or (ENGINE == "mixed" and ns == NS[0])
+        if kernel:
+            self.nsrun(ns, "ip", "link", "add", ifn, "type", "amneziawg")
+        else:
+            log = open(f"/tmp/{ifn}.log", "w")
+            self.procs.append(subprocess.Popen(["nsenter", f"--net=/var/run/netns/{ns}", "--",
+                                                "amneziawg-go", "-f", ifn], stdout=log, stderr=log))
+            for _ in range(50):
+                if os.path.exists(f"/var/run/amneziawg/{ifn}.sock"):
+                    break
+                time.sleep(0.1)
         with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f:
             f.write(setconf_text)
         self.nsrun(ns, "awg", "setconf", ifn, f.name)
@@ -182,6 +189,7 @@ def scenario(net, label, params, use_link, amnezia_style=False):
 def main():
     net = Net()
     results = []
+    print(f"движок: {ENGINE}")
     try:
         results += scenario(net, "AWG 3.1", awgserver.generate_params(True), use_link=False)
         results += scenario(net, "AWG 3.1", awgserver.generate_params(True), use_link=True)

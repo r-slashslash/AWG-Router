@@ -5,6 +5,7 @@
 #   bash install.sh --update       — download the latest version from GitHub and update
 #   bash install.sh --reconfigure  — choose the server mode and access method again
 #   bash install.sh --info         — show the panel link and password
+#   bash install.sh --install-kernel — build and load the AmneziaWG kernel module (awg-router install-kernel)
 # Non-interactive:
 #   AWGR_MODE=container|host  AWGR_ACCESS=public|ssh  bash install.sh
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
@@ -109,11 +110,12 @@ IMAGE=awg-router:latest
 SRV_NAME=amnezia-awg2                 # same name as AmneziaVPN uses — the app recognises it
 SRV_DATA="$DIR/awg-server/data"
 HOSTCONF="/etc/amnezia/amneziawg/awg0.conf"
-RECONF=0; INFO_ONLY=0
+RECONF=0; INFO_ONLY=0; KERNEL_ONLY=0
 for a in "$@"; do
   case "$a" in
     --reconfigure) RECONF=1 ;;
     --info) INFO_ONLY=1 ;;
+    --install-kernel) KERNEL_ONLY=1 ;;
   esac
 done
 
@@ -235,8 +237,114 @@ PY
   printf '\n'
 }
 
+# ------------------------------------------------------------------ kernel module
+# awg-router install-kernel: the AmneziaWG kernel module encrypts inside the kernel (several times less CPU
+# than amneziawg-go). The panel keeps amneziawg-go unless asked: with the module the AWG server moves to it
+# by itself (awg-quick prefers the kernel), and exits can be moved in the panel (Server → AmneziaWG engine).
+# Only a 3.x module speaks AWG 3.1 — an older one leaves the server without awg0, so it is removed again.
+AWG_SYS="${AWGR_SYS:-/sys}"; OS_RELEASE="${AWGR_OS_RELEASE:-/etc/os-release}"
+KERNEL_MIN=3
+module_version() { # loaded module: /sys, or modinfo for builds without a version file
+  [ -d "$AWG_SYS/module/amneziawg" ] || return 0
+  cat "$AWG_SYS/module/amneziawg/version" 2>/dev/null || modinfo -F version amneziawg 2>/dev/null || true
+}
+module_new_enough() { local m="${1%%.*}"; [[ "$m" =~ ^[0-9]+$ ]] && [ "$m" -ge "$KERNEL_MIN" ]; }
+
+# The Amnezia PPA on Debian: the key is the one Launchpad says signs the PPA (full fingerprint, not a
+# short id), fetched from the Ubuntu keyserver and checked before apt trusts it.
+amnezia_ppa_debian() {
+  local fp tmp key=/usr/share/keyrings/amnezia-ppa.gpg src=https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu
+  fp=$(curl -fsS --max-time 30 https://api.launchpad.net/1.0/~amnezia/+archive/ubuntu/ppa 2>/dev/null \
+       | grep -o '"signing_key_fingerprint": *"[0-9A-F]*"' | grep -o '[0-9A-F]\{40\}' | head -1)
+  [ -n "$fp" ] || return 1
+  tmp=$(mktemp -d)
+  if ! curl -fsS --max-time 30 "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$fp" -o "$tmp/key.asc" \
+     || ! gpg --batch --quiet --dearmor -o "$tmp/key.gpg" "$tmp/key.asc" \
+     || ! gpg --batch --show-keys --with-colons "$tmp/key.gpg" 2>/dev/null | grep -q "^fpr:::::::::$fp:"; then
+    rm -rf "$tmp"; return 1
+  fi
+  install -m 0644 "$tmp/key.gpg" "$key"; rm -rf "$tmp"
+  # the source package is the same for every release; deb-src lets DKMS fetch what it needs
+  printf 'deb [signed-by=%s] %s focal main\ndeb-src [signed-by=%s] %s focal main\n' "$key" "$src" "$key" "$src" \
+    > /etc/apt/sources.list.d/amnezia-ppa.list
+}
+
+install_kernel() {
+  step "AmneziaWG kernel module"
+  local v virt id ver pkg
+  v=$(module_version)
+  if [ -n "$v" ] && module_new_enough "$v"; then
+    ok "Already loaded: version $v"
+    kernel_next; return 0
+  fi
+  virt=$(systemd-detect-virt -c 2>/dev/null || true)
+  if [ -n "$virt" ] && [ "$virt" != none ]; then
+    die "This server is a container ($virt): it can't load kernel modules. The panel keeps using amneziawg-go."
+  fi
+  case "$(uname -m)" in
+    x86_64|aarch64) ;;
+    *) die "Only x86_64 and aarch64 are supported (this is $(uname -m)). The panel keeps using amneziawg-go." ;;
+  esac
+  id=$(. "$OS_RELEASE" 2>/dev/null && echo "${ID:-}"); ver=$(. "$OS_RELEASE" 2>/dev/null && echo "${VERSION_ID:-0}")
+  case "$id" in
+    ubuntu) [ "${ver%%.*}" -ge 22 ] 2>/dev/null || die "Ubuntu 22.04 or newer is needed (this is $ver)." ;;
+    debian) [ "${ver%%.*}" -ge 12 ] 2>/dev/null || die "Debian 12 or newer is needed (this is $ver)." ;;
+    *) die "Only Ubuntu and Debian are supported (this is ${id:-unknown}). To build the module by hand: https://github.com/amnezia-vpn/amneziawg-linux-kernel-module" ;;
+  esac
+  [ -n "$v" ] && warn "Module $v is loaded: it is older than $KERNEL_MIN.x and doesn't speak AWG 3.1 — it will be replaced."
+  if command -v mokutil >/dev/null && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+    warn "Secure Boot is on: a module built here won't load unless you enroll a signing key (mokutil)."
+  fi
+  echo "  The module is built for kernel $(uname -r) from the Amnezia PPA; this takes a few minutes."
+  ask "Continue? [y/N]: " "${AWGR_YES:-n}"
+  [[ "$REPLY" =~ ^[Yy] ]] || die "Cancelled: nothing was changed."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq >/dev/null || die "apt-get update failed"
+  apt-get install -y -qq "linux-headers-$(uname -r)" dkms gnupg curl >/dev/null \
+    || die "Could not install the kernel headers for $(uname -r) (a custom kernel?). The panel keeps using amneziawg-go."
+  if [ "$id" = ubuntu ]; then
+    apt-get install -y -qq software-properties-common python3-launchpadlib >/dev/null \
+      && add-apt-repository -y ppa:amnezia/ppa >/dev/null || die "Could not add ppa:amnezia/ppa"
+  else
+    amnezia_ppa_debian || die "Could not add the Amnezia repository (Launchpad or the key server is unreachable)."
+  fi
+  apt-get update -qq >/dev/null || die "apt-get update failed"
+  # only the module: the panel brings its own awg and awg-quick, and the AWG server has its own
+  pkg=amneziawg-dkms; apt-cache show "$pkg" >/dev/null 2>&1 || pkg=amneziawg
+  echo "  Building the module ($pkg) …"
+  if ! apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
+    die "The module did not build. Details: /var/lib/dkms/amneziawg/*/build/make.log. The panel keeps using amneziawg-go."
+  fi
+  [ -n "$v" ] && rmmod amneziawg 2>/dev/null       # the old one goes if nothing uses it
+  if ! modprobe amneziawg 2>/dev/null; then
+    apt-get remove -y -qq "$pkg" >/dev/null 2>&1
+    die "The module was built but doesn't load (Secure Boot?) — removed again. The panel keeps using amneziawg-go."
+  fi
+  v=$(module_version)
+  if [ -z "$v" ]; then
+    warn "The module is loaded, but its version can't be read."
+  elif ! module_new_enough "$v"; then
+    local file; file=$(modinfo -F version amneziawg 2>/dev/null || true)
+    if [ -n "$file" ] && module_new_enough "$file"; then
+      warn "Version $file is installed, but the old $v is still in use: reboot the server to switch to it."
+    else
+      rmmod amneziawg 2>/dev/null; apt-get remove -y -qq "$pkg" >/dev/null 2>&1
+      die "The PPA gave module $v, which doesn't speak AWG 3.1 ($KERNEL_MIN.x is needed) — removed again so the server keeps working."
+    fi
+  fi
+  ok "Kernel module loaded: version ${v:-?}"
+  kernel_next
+}
+
+kernel_next() {
+  echo "  Next: the AWG server moves to the module after a restart — in the panel, Server → Restart the AWG server"
+  echo "  (clients drop for a few seconds). Tunnels to exits: Server → AmneziaWG engine → Kernel module."
+  echo "  To go back to amneziawg-go: apt remove amneziawg-dkms, then reboot the server."
+}
+
 if [ "$INFO_ONLY" = 1 ]; then print_info; exit 0; fi
 [ "$(id -u)" = 0 ] || die "Run as root: sudo bash install.sh"
+if [ "$KERNEL_ONLY" = 1 ]; then install_kernel; exit $?; fi
 
 # ------------------------------------------------------------------ system
 step "Checking the system"
@@ -797,6 +905,7 @@ case "\${1:-info}" in
   restart)     cd "\$DIR" && docker compose restart && bash "\$DIR/install.sh" --info ;;
   logs)        if [ -t 1 ]; then docker logs --tail 100 -f awg-router; else docker logs --tail 2000 awg-router 2>&1; fi ;;
   update)      bash "\$DIR/install.sh" --update ;;
+  install-kernel) bash "\$DIR/install.sh" --install-kernel ;;
   reconfigure) bash "\$DIR/install.sh" --reconfigure ;;
   password)    P=\$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)
                sed -i "s/^PANEL_PASSWORD=.*/PANEL_PASSWORD=\$P/" "\$DIR/.env"
@@ -812,7 +921,7 @@ case "\${1:-info}" in
                [ -n "\$I" ] && docker image rm -f "\$I" >/dev/null 2>&1
                rm -f /usr/local/bin/awg-router
                echo "Done. Settings are kept in \$DIR — delete the folder to remove them too." ;;
-  *) echo "awg-router info | restart | logs | password | 2fa-off | update | reconfigure | uninstall" ;;
+  *) echo "awg-router info | restart | logs | password | 2fa-off | update | reconfigure | install-kernel | uninstall" ;;
 esac
 EOF
 chmod 755 /usr/local/bin/awg-router

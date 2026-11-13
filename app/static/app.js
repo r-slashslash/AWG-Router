@@ -1639,7 +1639,42 @@ function viewServer() {
     <div class="savebar" id="s-bar" ${srvDirty() ? "" : "hidden"}><span id="s-bar-text">${esc(t("srv.save_hint"))}</span>
       <span class="actions"><button class="btn sm" id="s-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="s-save">${esc(t("btn.save"))}</button></span></div>
   </section>
-  ${shapingSection()}`;
+  ${shapingSection()}
+  ${engineSection()}`;
+}
+const KERNEL_CMD = "sudo awg-router install-kernel";
+/** движок AmneziaWG: чем работают сервер и туннели к выходам, выбор для выходов, установка модуля ядра */
+function engineSection() {
+  const E = S.awg_engine;
+  if (!E) return "";
+  const m = E.module || {};
+  const srv = E.server === "kernel" ? t("eng.kernel") : E.server === "go" ? "amneziawg-go" : t("eng.unknown");
+  const mod = !m.loaded ? t("eng.mod_none") : m.ok ? t("eng.mod_ok", { version: m.version || "?" })
+    : t("eng.mod_old", { version: m.version || "?", min: E.min });
+  return `
+  <section class="section" id="engine">
+    <div class="section-head"><div><h2>${esc(t("eng.title"))}</h2><p class="muted small">${esc(t("eng.sub"))}</p></div></div>
+    <div class="panel panel-pad">
+      ${E.old ? `<div class="banner bad">${esc(t("eng.old_warn", { version: E.old, min: E.min }))}</div>` : ""}
+      ${E.fallback ? `<div class="banner bad">${esc(t("eng.fallback", { error: tm(E.fallback.error) }))}</div>` : ""}
+      <div class="kv" style="margin-bottom:14px">
+        <div><span>${esc(t("eng.server"))}</span><b><bdi>${esc(srv)}</bdi></b></div>
+        <div><span>${esc(t("eng.module"))}</span><b><bdi>${esc(mod)}</bdi></b></div>
+      </div>
+      <label class="field"><span>${esc(t("eng.exits"))}</span>
+        <select id="eng-exits">
+          <option value="go" ${E.exits !== "kernel" ? "selected" : ""}>${esc(t("eng.opt_go"))}</option>
+          <option value="kernel" ${E.exits === "kernel" ? "selected" : ""} ${m.ok ? "" : "disabled"}>${esc(t("eng.opt_kernel"))}</option>
+        </select>
+        <span class="hint">${esc(t(m.ok ? "eng.exits_hint" : "eng.need_module", { min: E.min }))}</span></label>
+      <p class="small muted">${esc(t("eng.server_auto"))}</p>
+      <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel", "eng.what_cost"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
+      <div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
+        <pre class="code" dir="ltr">${esc(KERNEL_CMD)}</pre>
+        <span class="hint">${esc(t("eng.install_hint"))}</span>
+        <div><button class="btn sm" id="eng-copy">${esc(t("web.copy"))}</button></div></div>
+    </div>
+  </section>`;
 }
 /** общее ограничение скорости клиентов (своё сохранение, без перезапуска интерфейса) */
 function shapingSection() {
@@ -1711,6 +1746,15 @@ bind.server = () => {
     return;
   }
   if (!SRV || !SRV.exists) return;
+  const ec = $("#eng-copy");
+  if (ec) ec.onclick = () => copyText(KERNEL_CMD);
+  const ee = $("#eng-exits");
+  if (ee) ee.onchange = async () => {
+    ee.disabled = true;
+    try { await api("POST", "engine", { exits: ee.value }); toast(t("eng.saved")); }
+    catch (e) { toast(e.message, true); }
+    finally { ee.disabled = false; refresh(); }
+  };
   $("#sh-save").onclick = async () => {
     const b = $("#sh-save"); b.disabled = true;
     try {

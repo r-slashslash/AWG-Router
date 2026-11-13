@@ -133,3 +133,24 @@ def system_view() -> dict:
     mem = memory()
     return {"cpu": cpu.percent(), "cores": os.cpu_count(), "load": loadavg(),
             "mem": list(mem) if mem else None}
+
+
+def awg_module(sys_root: str = "/sys") -> dict:
+    """Модуль ядра amneziawg: загружен ли и какой версии (/sys/module общий для всех контейнеров)."""
+    d = os.path.join(sys_root, "module", "amneziawg")
+    if not os.path.isdir(d):
+        return {"loaded": False, "version": None}
+    try:
+        with open(os.path.join(d, "version")) as f:
+            v = f.read().strip() or None
+    except OSError:
+        v = None
+    return {"loaded": True, "version": v}
+
+
+def module_major(version: str | None) -> int:
+    """«3.1.20260812» → 3; неизвестная версия — 0 (считается старой: AWG 3.1 с ней не проверить)."""
+    try:
+        return int(str(version).split(".", 1)[0])
+    except (TypeError, ValueError):
+        return 0
