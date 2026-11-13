@@ -317,7 +317,9 @@ class ServerManager:
                 h = str(body["public_host"] or "").strip()
                 if h and not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]{1,253}", h):
                     raise UserError(Msg("srv.bad_host"))
-                settings_patch["public_host"] = h.strip("[]")
+                h = h.strip("[]")
+                # пусто или то же, что PUBLIC_HOST в .env, — своей настройки нет: адрес берётся из .env
+                settings_patch["public_host"] = None if not h or h.lower() == config.PUBLIC_HOST.lower() else h
             if "client_host" in body:
                 ch = str(body["client_host"] or "").strip().strip("[]")
                 if ch:
@@ -400,7 +402,11 @@ class ServerManager:
             host_before = self.client_host(self.e.store.snapshot())
             dns_before = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live())
             if settings_patch:
-                self.e.store.mutate(lambda st: st["settings"].update(settings_patch))
+                def apply(st):
+                    st["settings"].update(settings_patch)
+                    if st["settings"].get("public_host") is None:
+                        st["settings"].pop("public_host", None)
+                self.e.store.mutate(apply)
             host_changed = self.client_host(self.e.store.snapshot()) != host_before
             dns_changed = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live()) != dns_before
             changed_conf = sc.render() != (t.read_file(t.conf_path) or "")
