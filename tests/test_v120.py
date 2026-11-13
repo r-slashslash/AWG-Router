@@ -597,8 +597,11 @@ class ExitEngineTest(unittest.TestCase):
         t.ns = ns
         from test_v115 import conf
         pc = awgconf.parse_upstream(conf("203.0.113.7:51820"))
+        # без настоящих /var/run/amneziawg и журналов: тесты в CI идут не от root
         with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine.subprocess, "Popen") as po, \
                 mock.patch.object(engine.os.path, "exists", return_value=True), \
+                mock.patch.object(engine.os, "makedirs"), mock.patch.object(engine.os, "remove"), \
+                mock.patch("builtins.open", mock.mock_open()), \
                 mock.patch.object(engine.Engine, "_setconf"):
             po.return_value.poll.return_value = None
             e._start_up(t, "u1", {"num": 3, "name": "X"}, pc, "h")
