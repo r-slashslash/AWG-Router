@@ -393,8 +393,12 @@ def resolve_many(hosts, timeout: float) -> dict[str, str]:
 def setconf_resolved(pc: UpstreamConf) -> str:
     """Текст для `awg setconf` с IP-адресом вместо имени в Endpoint. Исходный конфиг (`pc.raw`) не
     меняется: имя разбирается при каждом запуске туннеля, поэтому смена записи DNS подхватывается."""
+    return setconf_for(pc, resolve_host(split_endpoint(pc.endpoint)[0]))
+
+
+def setconf_for(pc: UpstreamConf, ip: str) -> str:
+    """Текст для `awg setconf` с уже найденным адресом Endpoint (`resolve_host`)."""
     host, port = split_endpoint(pc.endpoint)
-    ip = resolve_host(host)
     if ip == host:
         return pc.setconf
     addr = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"

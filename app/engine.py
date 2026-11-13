@@ -295,9 +295,11 @@ class Engine:
             # имя из Endpoint разбираем здесь, в сети панели, до создания интерфейса: в сети
             # контейнера Amnezia свой резолвер не работает (127.0.0.53 от systemd-resolved)
             try:
-                setconf = awgconf.setconf_resolved(pc)
+                ip = awgconf.resolve_host(awgconf.split_endpoint(pc.endpoint)[0])
             except awgconf.ConfigError as e:
                 raise system.SysError(e.msg) from None
+            self._v6_route(t, ip)
+            setconf = awgconf.setconf_for(pc, ip)
             if config.UPSTREAM_BACKEND == "kernel":
                 t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
             else:
@@ -343,6 +345,18 @@ class Engine:
         t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
         self.event("info", Msg("ev.tunnel_up", iface=ifn, name=u["name"], endpoint=pc.endpoint))
 
+    @staticmethod
+    def _v6_route(t: system.Target, ip: str) -> None:
+        """Выход по адресу IPv6: есть ли до него путь в сети сервера AWG. У сети Docker контейнера
+        Amnezia по умолчанию IPv6 нет, и туннель без проверки висел бы «без связи» (issue #20).
+        Смотрим сам маршрут, а не режим: у кого IPv6 в Docker включён, выход работает."""
+        if ":" not in ip:
+            return
+        p = t.ns(["ip", "-6", "route", "get", ip], check=False, timeout=10)
+        if p.returncode != 0:
+            raise system.SysError(Msg("sys.no_v6_container" if t.kind == "container" else "sys.no_v6_route",
+                                      ip=ip))
+
     def _start_socks(self, t: system.Target, r: UpRT, u: dict, pc: awgconf.UpstreamConf) -> None:
         """hev-socks5-tunnel в сети сервера: создаёт TUN awgrN и отправляет всё из него в прокси."""
         if config.DRY_RUN:
@@ -355,6 +369,7 @@ class Engine:
             ip = socks.resolve(pc.socks["host"])
         except socks.SocksError as e:
             raise system.SysError(e.msg) from None
+        self._v6_route(t, ip)
         r.socks_ip = ip
         path = os.path.join(RUN_DIR, f"{r.iface}.yml")      # в нём пароль прокси — только для root
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -536,6 +551,9 @@ class Engine:
                 cur = peer.get("endpoint")
                 if cur == addr or uid not in self.rt or self.rt[uid] is not r:
                     return
+                # имя стало указывать только на IPv6, а пути туда нет: адрес не меняем. Только журнал —
+                # проверка идёт раз в RERESOLVE_EVERY, событие с уведомлением повторялось бы каждую минуту
+                self._v6_route(t, ip)
                 t.ns(["awg", "set", r.iface, "peer", pc.peer_public_key, "endpoint", addr], timeout=15)
                 self.event("info", Msg("ev.endpoint_changed", name=u["name"], host=host,
                                        old=cur or "—", new=addr))

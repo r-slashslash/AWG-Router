@@ -111,7 +111,25 @@ class TLSManager:
         return True
 
     def _le_paths(self) -> tuple[str, str]:
-        base = os.path.join(ACME_DIR, "certificates", self.host())
+        d, host = os.path.join(ACME_DIR, "certificates"), self.host()
+        base = os.path.join(d, host)
+        if os.path.exists(base + ".crt") or not host:
+            return base + ".crt", base + ".key"
+        # lego меняет в имени файла «:» на «-» (адрес IPv6) и «*» на «_»: правило не угадываем, а берём
+        # самый свежий сертификат, выданный на этот адрес (иначе «certificate not found after lego run»)
+        found = []
+        try:
+            names = os.listdir(d)
+        except OSError:
+            names = []
+        for n in names:
+            c = os.path.join(d, n)
+            if n.endswith(".crt") and not n.endswith(".issuer.crt") and os.path.exists(c[:-4] + ".key") \
+                    and _san_matches(c, host):
+                found.append((os.path.getmtime(c), c))
+        if found:
+            c = max(found)[1]
+            return c, c[:-4] + ".key"
         return base + ".crt", base + ".key"
 
     def _selfsigned(self) -> None:
