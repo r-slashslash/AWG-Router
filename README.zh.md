@@ -272,6 +272,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 - 隧道内仅支持 IPv4。客户端可通过 IPv4 或 IPv6 连接服务器。
 - 域名规则只能看到 HTTPS 和 HTTP（443 和 80 端口），浏览器隐藏名称时（Encrypted Client Hello）看不到网站，这类连接按地址规则走。在“主机上的 AWG”模式下，如果防火墙只用 nftables（例如 firewalld），请允许客户端接口上 TCP 10443 端口的入站流量；使用 iptables 或 ufw 时面板会自动处理。
 - SOCKS5 出口需要内核支持 IPv6（除了以 `ipv6.disable=1` 启动的服务器，都具备）。
+- AmneziaVPN 容器模式下经 IPv6 的出口需要 Docker 启用 IPv6：容器网络默认没有 IPv6，面板会直接说明原因，而不只是显示“无连接”。在 `/etc/docker/daemon.json` 中加入 `"ipv6": true, "fixed-cidr-v6": "fd5a:3c71:9e20::/64", "ip6tables": true`（保留文件中已有的设置；Docker 27 之前的版本还需要 `"experimental": true`），然后运行 `systemctl restart docker`——这会重启所有容器。也可以为出口改用 IPv4 地址或带 A 记录的域名。
 - 国家列表基于注册数据生成。针对特定服务，ASN 列表更准确。
 - 限制客户端上传和出口下载需要内核的 `ifb` 模块。安装程序会自动安装（云服务器内核使用 `linux-modules-extra` 软件包）；如果该内核没有这样的软件包，面板会提示，其他限制照常生效。
 
@@ -303,6 +304,8 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>域名规则在内核中转发 <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>、安装程序检查端口是否被占用 <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>通过 80 端口上的 Web 服务器进行 Let's Encrypt 验证 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>
 

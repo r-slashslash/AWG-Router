@@ -3,6 +3,22 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.19.5 — 2026-11-13
+
+- **Let's Encrypt through a web server on port 80.** Since 1.14.0 the self-check put its test file next to
+  `.well-known/acme-challenge/` instead of inside it (`host_path` drops the trailing slash), so validation
+  through nginx, Apache or Caddy always got HTTP 404 and was rolled back, in the panel and in the installer
+  alike. Thanks to @xiaomiiraqly-alt (#21).
+- **Exits at an IPv6 address.** When the AWG server's network has no IPv6 route to an AWG or SOCKS5 exit (in
+  the AmneziaVPN container mode Docker gives the container no IPv6 by default), the exit now says so and what
+  to do instead of hanging on "no connection"; README → Limitations shows how to turn on IPv6 in Docker. The
+  check looks at the route, so servers with IPv6 in Docker keep working. Thanks to @paris19891 (#20).
+- **Server public address.** The field is also the panel's address and the name in its certificate, and the
+  panel listens on IPv4 only, so it no longer takes an IPv6 address and its hint says what it is for; clients
+  get IPv6 through "Address in configs". An IPv6 address already saved there moves to "Address in configs",
+  and one from a backup is not restored. A Let's Encrypt certificate for an IPv6 address is now found under
+  the file name lego gives it. Thanks to @paris19891 (#20).
+
 ## 1.19.4 — 2026-11-13
 
 - **Faster domain rules.** `sniproxy.py`, which carries all TCP 80/443 of clients with domain rules,

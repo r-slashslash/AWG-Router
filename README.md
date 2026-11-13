@@ -272,6 +272,7 @@ The panel effectively has root access to the server.
 - Inside the tunnel, IPv4 only. Clients connect to the server over IPv4 or IPv6.
 - Domain rules see only HTTPS and HTTP (ports 443 and 80) and can't see the site when the browser hides the name (Encrypted Client Hello); such connections follow the address rules. In host mode with an nftables-only firewall (for example, firewalld), allow incoming TCP port 10443 on the clients' interface; with iptables or ufw the panel does it itself.
 - SOCKS5 exits need IPv6 support in the kernel (always there, except on servers booted with `ipv6.disable=1`).
+- Exits over IPv6 in the AmneziaVPN container mode need IPv6 in Docker: by default the container's network has none, and the panel says so instead of a bare “no connection”. Add `"ipv6": true, "fixed-cidr-v6": "fd5a:3c71:9e20::/64", "ip6tables": true` to `/etc/docker/daemon.json` (keep what is already there; Docker older than 27 also needs `"experimental": true`) and run `systemctl restart docker` — this restarts every container. Or give the exit an IPv4 address or a domain with an A record.
 - Country lists are built from registry data. For a specific service, an ASN list is more accurate.
 - Upload limits for clients and download limits for exits need the kernel's `ifb` module. The installer adds it (`linux-modules-extra` on cloud kernels); if the kernel has no such package, the panel says so and the other limits still work.
 
@@ -303,6 +304,8 @@ They found problems, traced them down to the line of code and suggested solution
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>domain rules relayed inside the kernel <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>, busy port check in the installer <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>IPv6 exits and the panel address in the container mode <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>Let's Encrypt validation through a web server on port 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>
 

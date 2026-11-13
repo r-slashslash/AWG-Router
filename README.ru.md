@@ -272,6 +272,7 @@ ssh -N -L ПОРТ:127.0.0.1:ПОРТ root@IP-СЕРВЕРА
 - В туннеле только IPv4. Подключение к серверу — по IPv4 или IPv6.
 - Правила по доменам видят только HTTPS и HTTP (порты 443 и 80) и не видят сайт, если браузер прячет имя (Encrypted Client Hello): тогда соединение идёт по правилам адресов. В режиме «AWG на хосте» с файрволом только на nftables (например, firewalld) разрешите вход на TCP-порт 10443 с интерфейса клиентов; для iptables и ufw панель делает это сама.
 - Выходам SOCKS5 нужна поддержка IPv6 в ядре (она есть всегда, кроме серверов, загруженных с `ipv6.disable=1`).
+- Выходам по IPv6 в режиме контейнера AmneziaVPN нужен IPv6 в Docker: по умолчанию в сети контейнера его нет, и панель пишет об этом вместо «нет связи». Добавьте в `/etc/docker/daemon.json` `"ipv6": true, "fixed-cidr-v6": "fd5a:3c71:9e20::/64", "ip6tables": true` (не стирая то, что там уже есть; Docker до версии 27 нужен ещё `"experimental": true`) и выполните `systemctl restart docker` — перезапустятся все контейнеры. Или укажите у выхода IPv4-адрес либо домен с записью A.
 - Списки стран построены по регистрационным данным. Для конкретных сервисов точнее списки по ASN.
 - Для ограничения отдачи клиентов и загрузки через выходы нужен модуль ядра `ifb`. Установщик ставит его сам (на облачных ядрах — пакет `linux-modules-extra`); если для ядра такого пакета нет, панель об этом пишет, остальные ограничения работают.
 
@@ -303,6 +304,8 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # дем
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>правила по доменам с пересылкой внутри ядра <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>, проверка занятого порта в установщике <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>проверка Let's Encrypt через веб-сервер на порту 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 </table>
 

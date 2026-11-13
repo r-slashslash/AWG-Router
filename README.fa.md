@@ -301,6 +301,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 - درون تونل فقط IPv4. اتصال به سرور با IPv4 یا IPv6.
 - قانون‌های دامنه فقط HTTPS و HTTP (درگاه‌های 443 و 80) را می‌بینند و وقتی مرورگر نام را پنهان کند (Encrypted Client Hello) سایت را نمی‌بینند؛ چنین اتصال‌هایی طبق قانون‌های نشانی می‌روند. در حالت «AWG روی میزبان» با دیوارهٔ آتشی که فقط nftables است (مثلاً firewalld)، ورود TCP روی درگاه 10443 از رابط کلاینت‌ها را مجاز کنید؛ با iptables یا ufw پنل خودش این کار را می‌کند.
 - خروجی‌های SOCKS5 به پشتیبانی IPv6 در هسته نیاز دارند (همیشه هست، مگر سروری که با `ipv6.disable=1` راه‌اندازی شده باشد).
+- خروجی‌های IPv6 در حالت کانتینر AmneziaVPN به IPv6 در Docker نیاز دارند: شبکهٔ کانتینر به‌طور پیش‌فرض IPv6 ندارد و پنل به‌جای «بدون اتصال» همین را می‌گوید. این را به `/etc/docker/daemon.json` اضافه کنید: `"ipv6": true, "fixed-cidr-v6": "fd5a:3c71:9e20::/64", "ip6tables": true` (تنظیمات موجود را نگه دارید؛ Docker پیش از نسخهٔ 27 به `"experimental": true` هم نیاز دارد) و `systemctl restart docker` را اجرا کنید — همهٔ کانتینرها دوباره راه‌اندازی می‌شوند. یا برای خروجی نشانی IPv4 یا دامنه‌ای با رکورد A بدهید.
 - فهرست کشورها از داده‌های ثبت نشانی‌ها ساخته می‌شود. برای یک سرویس مشخص، فهرست ASN دقیق‌تر است.
 - محدود کردن آپلود کلاینت‌ها و دانلود از خروجی‌ها به ماژول `ifb` هسته نیاز دارد. نصب‌کننده خودش آن را نصب می‌کند (در هسته‌های ابری بستهٔ `linux-modules-extra`)؛ اگر برای هسته چنین بسته‌ای نباشد، پنل این را می‌گوید و بقیهٔ محدودیت‌ها کار می‌کنند.
 
@@ -336,6 +337,8 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>قانون‌های دامنه با جابه‌جایی داده درون هسته <a href="https://github.com/r-slashslash/AWG-Router/pull/19">&lrm;#19&lrm;</a>، بررسی درگاه اشغال‌شده در نصب‌کننده <a href="https://github.com/r-slashslash/AWG-Router/pull/17">&lrm;#17&lrm;</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>اعتبارسنجی Let's Encrypt از راه وب‌سرور روی درگاه 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">&lrm;#21&lrm;</a></sub></td>
 </tr>
 </table>
 
