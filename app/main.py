@@ -813,8 +813,7 @@ def clean_backup_state(new: dict) -> dict:
         if v:
             out["shaping"] = v
     h = s.get("public_host")
-    # IPv6 из копий до 1.19.5 не берём: это адрес панели, а она слушает только IPv4 (issue #20)
-    if isinstance(h, str) and re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", h) and not hostnet.is_v6(h):
+    if isinstance(h, str) and re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", h):
         out["public_host"] = h
     dns = s.get("client_dns")
     if dns is not None:

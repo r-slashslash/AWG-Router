@@ -317,12 +317,7 @@ class ServerManager:
                 h = str(body["public_host"] or "").strip()
                 if h and not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]{1,253}", h):
                     raise UserError(Msg("srv.bad_host"))
-                h = h.strip("[]")
-                if hostnet.is_v6(h):
-                    # это ещё и адрес панели и имя в её сертификате, а панель слушает только IPv4
-                    # (web.Server — AF_INET); IPv6 для клиентов — в «Адрес в конфигах» (issue #20)
-                    raise UserError(Msg("srv.host_v6"))
-                settings_patch["public_host"] = h
+                settings_patch["public_host"] = h.strip("[]")
             if "client_host" in body:
                 ch = str(body["client_host"] or "").strip().strip("[]")
                 if ch:

@@ -269,7 +269,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 
 ## 限制
 
-- 隧道内仅支持 IPv4。客户端可通过 IPv4 或 IPv6 连接服务器。
+- 隧道内仅支持 IPv4。客户端可通过 IPv4 或 IPv6 连接服务器，面板也可通过两者打开。
 - 域名规则只能看到 HTTPS 和 HTTP（443 和 80 端口），浏览器隐藏名称时（Encrypted Client Hello）看不到网站，这类连接按地址规则走。在“主机上的 AWG”模式下，如果防火墙只用 nftables（例如 firewalld），请允许客户端接口上 TCP 10443 端口的入站流量；使用 iptables 或 ufw 时面板会自动处理。
 - SOCKS5 出口需要内核支持 IPv6（除了以 `ipv6.disable=1` 启动的服务器，都具备）。
 - AmneziaVPN 容器模式下经 IPv6 的出口需要 Docker 启用 IPv6：容器网络默认没有 IPv6，面板会直接说明原因，而不只是显示“无连接”。在 `/etc/docker/daemon.json` 中加入 `"ipv6": true, "fixed-cidr-v6": "fd5a:3c71:9e20::/64", "ip6tables": true`（保留文件中已有的设置；Docker 27 之前的版本还需要 `"experimental": true`），然后运行 `systemctl restart docker`——这会重启所有容器。也可以为出口改用 IPv4 地址或带 A 记录的域名。

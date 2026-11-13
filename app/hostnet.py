@@ -8,14 +8,6 @@ _SKIP_FLAGS = 0x01 | 0x08 | 0x20 | 0x40
 _SKIP_IFACES = ("lo", "docker", "br-", "veth", "awg", "wg", "tun", "tap")
 
 
-def is_v6(host) -> bool:
-    """Строка — адрес IPv6 (в скобках или без)."""
-    try:
-        return ipaddress.ip_address(str(host).strip("[]")).version == 6
-    except ValueError:
-        return False
-
-
 def global_ipv6(path: str = "/proc/net/if_inet6", limit: int = 4) -> list[str]:
     """Публичные IPv6-адреса сервера (глобальные, постоянные; без ULA и служебных)."""
     out = []

@@ -3,8 +3,14 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.19.5 — 2026-11-13
+## 1.20.0 — 2026-11-14
 
+- **The panel over IPv6.** The panel now listens on IPv6 as well as IPv4 (one socket for all addresses; IPv4
+  only if the kernel has no IPv6), so an IPv6 server public address works as one field was meant to: the panel
+  opens at it, gets its certificate for it and clients connect to it unless "Address in configs" picks another
+  one; the field's hint now says all three. A Let's Encrypt certificate for an IPv6 address is found under the
+  file name lego gives it (`:` becomes `-`), so it is no longer requested again every 30 minutes. Connection
+  limits and the sign-in lockout count IPv6 clients by their /64. Thanks to @paris19891 (#20).
 - **Let's Encrypt through a web server on port 80.** Since 1.14.0 the self-check put its test file next to
   `.well-known/acme-challenge/` instead of inside it (`host_path` drops the trailing slash), so validation
   through nginx, Apache or Caddy always got HTTP 404 and was rolled back, in the panel and in the installer
@@ -13,11 +19,6 @@ it grows, so every user-visible change gets a new version.
   the AmneziaVPN container mode Docker gives the container no IPv6 by default), the exit now says so and what
   to do instead of hanging on "no connection"; README → Limitations shows how to turn on IPv6 in Docker. The
   check looks at the route, so servers with IPv6 in Docker keep working. Thanks to @paris19891 (#20).
-- **Server public address.** The field is also the panel's address and the name in its certificate, and the
-  panel listens on IPv4 only, so it no longer takes an IPv6 address and its hint says what it is for; clients
-  get IPv6 through "Address in configs". An IPv6 address already saved there moves to "Address in configs",
-  and one from a backup is not restored. A Let's Encrypt certificate for an IPv6 address is now found under
-  the file name lego gives it. Thanks to @paris19891 (#20).
 
 ## 1.19.4 — 2026-11-13
 

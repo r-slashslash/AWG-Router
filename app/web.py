@@ -1,6 +1,8 @@
 """Минимальный HTTP-фреймворк на стандартной библиотеке (без внешних зависимостей)."""
 from __future__ import annotations
 
+import errno
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -24,6 +26,21 @@ MAX_BODY = 4 * 1024 * 1024
 MAX_CONNECTIONS = 128      # одновременных соединений; лишние закрываются сразу
 MAX_PER_IP = 24            # с одного адреса: один источник не займёт все места
 IDLE_TIMEOUT = 60          # секунд на заголовки, тело и ожидание следующего запроса
+
+
+def client_key(addr: str) -> str:
+    """Адрес клиента для пределов и блокировки подбора пароля. IPv4 из сокета IPv6 (`::ffff:a.b.c.d`) — как
+    IPv4; IPv6 — его сеть /64: у одного абонента обычно целая /64, и по отдельным адресам блокировку
+    обошли бы сменой адреса."""
+    try:
+        a = ipaddress.ip_address(addr.split("%", 1)[0])
+    except ValueError:
+        return addr
+    if a.version == 6:
+        if a.ipv4_mapped:
+            return str(a.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{a}/64", strict=False))
+    return str(a)
 
 
 def content_length(headers) -> int:
@@ -61,7 +78,7 @@ class Request:
         self.path = path
         self.params = params
         self.headers = h.headers
-        self.client_ip = h.client_address[0]
+        self.client_ip = client_key(h.client_address[0])     # IPv6 — сетью /64 (client_key)
         c = httpcookies.SimpleCookie()
         try:
             c.load(h.headers.get("Cookie", ""))
@@ -255,8 +272,18 @@ class App:
         return H
 
     def serve(self, host: str, port: int, tls=None) -> ThreadingHTTPServer:
-        """tls — функция, возвращающая текущий SSLContext (или None для HTTP)."""
-        srv = Server((host, port), self.handler())
+        """tls — функция, возвращающая текущий SSLContext (или None для HTTP).
+        «Все адреса» (`0.0.0.0`, `::`) — один сокет IPv6, который принимает и IPv4; без IPv6 в ядре
+        (`ipv6.disable=1`) — только IPv4. Конкретный адрес (127.0.0.1 для SSH-туннеля) — как есть."""
+        if host in ("", "0.0.0.0", "::"):
+            try:
+                srv = DualServer(("::", port), self.handler())
+            except OSError as e:
+                if e.errno != errno.EAFNOSUPPORT:
+                    raise
+                srv = Server(("0.0.0.0", port), self.handler())
+        else:
+            srv = (DualServer if ":" in host else Server)((host, port), self.handler())
         srv.tls = tls
         return srv
 
@@ -293,8 +320,8 @@ class Server(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         # Поток на соединение, но с пределом: иначе тысячи «висящих» соединений
-        # без пароля съедят память, а один адрес не должен занять все места
-        ip = client_address[0]
+        # без пароля съедят память, а один адрес (для IPv6 — сеть /64) не должен занять все места
+        ip = client_key(client_address[0])
         if not self._take(ip):
             now = time.monotonic()
             if now - self._warned > 60:          # не засоряем журнал при наплыве
@@ -312,7 +339,7 @@ class Server(ThreadingHTTPServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._give(client_address[0])
+            self._give(client_key(client_address[0]))
 
     def finish_request(self, request, client_address):
         ctx = self.tls() if self.tls else None
@@ -342,6 +369,15 @@ class Server(ThreadingHTTPServer):
 
     def handle_error(self, request, client_address):  # без трассировок на каждый обрыв
         log.debug("connection error from %s", client_address)
+
+
+class DualServer(Server):
+    """Сокет IPv6 с IPV6_V6ONLY = 0: те же порт и сокет принимают и IPv4 (адреса `::ffff:a.b.c.d`)."""
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
 
 
 def _redirect_plain(sock) -> None:

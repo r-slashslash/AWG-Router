@@ -1,13 +1,16 @@
-"""1.19.5: проверка Let's Encrypt через веб-сервер кладёт файл в папку токенов (issue #21); выход по IPv6
-без пути до него и IPv6 во «Внешнем адресе сервера» (issue #20).
+"""1.20.0: проверка Let's Encrypt через веб-сервер кладёт файл в папку токенов (issue #21); выход по IPv6
+без пути до него, панель по IPv6 и сертификат на адрес IPv6 (issue #20).
 
 python3 -m unittest discover tests
 """
+import http.client
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -16,8 +19,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, engine, hostnet, main, system, tlsconf, tlsmgr, users, webfront  # noqa: E402
-from app.store import Store  # noqa: E402
+from app import config, engine, main, system, tlsconf, tlsmgr, web, webfront  # noqa: E402
 
 
 class SelfTestPathTest(unittest.TestCase):
@@ -38,7 +40,11 @@ class SelfTestPathTest(unittest.TestCase):
             def request(self, method, path, headers=None):
                 fp = root + webroot + path
                 seen.append(fp)
-                self.status, self.body = (200, open(fp).read()) if os.path.isfile(fp) else (404, "")
+                if os.path.isfile(fp):
+                    with open(fp) as f:
+                        self.status, self.body = 200, f.read()
+                else:
+                    self.status, self.body = 404, ""
 
             def getresponse(self):
                 me = self
@@ -91,40 +97,55 @@ class V6RouteTest(unittest.TestCase):
         engine.Engine._v6_route(t, "2001:db8::7")
 
 
-class PublicHostV6Test(unittest.TestCase):
-    """«Внешний адрес сервера» — ещё и адрес панели и имя в её сертификате, а панель слушает только IPv4."""
+class PanelV6Test(unittest.TestCase):
+    """Панель слушает и IPv6: «Внешний адрес сервера» может быть IPv6 — по нему открывается панель, на него
+    выписан сертификат и к нему подключаются клиенты, как и задумано у одного поля (issue #20)."""
 
-    def test_is_v6(self):
-        self.assertTrue(hostnet.is_v6("2001:db8::1"))
-        self.assertTrue(hostnet.is_v6("[2001:db8::1]"))
-        self.assertFalse(hostnet.is_v6("203.0.113.5"))
-        self.assertFalse(hostnet.is_v6("panel.example.com"))
-        self.assertFalse(hostnet.is_v6(""))
-
-    def test_input_rejects_v6(self):
+    def test_v6_public_host_accepted(self):
         main.engine.reconcile()            # демо-сервер AWG как цель
-        with self.assertRaises(users.UserError) as cm:
+        try:
             main.engine.srv.update_server({"public_host": "[2001:db8::5]"})
-        self.assertEqual(cm.exception.msg.key, "srv.host_v6")
+            self.assertEqual(main.store.snapshot()["settings"]["public_host"], "2001:db8::5")
+            self.assertEqual(main.panel_url().split("//", 1)[1].split("/", 1)[0][:14], "[2001:db8::5]:")
+        finally:
+            main.engine.srv.update_server({"public_host": "203.0.113.5"})
 
-    def test_upgrade_moves_v6_to_client_host(self):
-        d = tempfile.mkdtemp()
-        path = os.path.join(d, "state.json")
-        for settings, want in (({"public_host": "2001:0db8::5"}, {"client_host": "2001:db8::5"}),
-                               ({"public_host": "2001:db8::5", "client_host": "203.0.113.9"},
-                                {"client_host": "203.0.113.9"}),            # выбранный адрес не трогаем
-                               ({"public_host": "203.0.113.5"}, {"public_host": "203.0.113.5"})):
-            with open(path, "w") as f:
-                json.dump({"settings": settings}, f)
-            s = Store(path).snapshot()["settings"]
-            self.assertEqual({k: s[k] for k in ("public_host", "client_host") if k in s}, want)
+    def test_client_key(self):
+        self.assertEqual(web.client_key("203.0.113.5"), "203.0.113.5")
+        self.assertEqual(web.client_key("::ffff:203.0.113.5"), "203.0.113.5")      # IPv4 через сокет IPv6
+        # один абонент — одна /64: смена адреса внутри неё не обходит блокировку подбора пароля
+        self.assertEqual(web.client_key("2001:db8:1:2::1"), web.client_key("2001:db8:1:2:abcd::9"))
+        self.assertEqual(web.client_key("2001:db8:1:2::1"), "2001:db8:1:2::/64")
+        self.assertNotEqual(web.client_key("2001:db8:1:2::1"), web.client_key("2001:db8:1:3::1"))
+        self.assertEqual(web.client_key("fe80::1%eth0"), "fe80::/64")
 
-    def test_restore_drops_v6(self):
-        from test_api import good_state
-        for h, kept in (("2001:db8::5", False), ("203.0.113.5", True), ("panel.example.com", True)):
-            st = good_state()
-            st.setdefault("settings", {})["public_host"] = h
-            self.assertEqual(main.clean_backup_state(st)["settings"].get("public_host") == h, kept)
+    def test_listens_v4_and_v6(self):
+        """Один сокет на «все адреса» принимает IPv4 и IPv6; без IPv6 в ядре — только IPv4."""
+        app = web.App()
+
+        @app.get("/ping")
+        def ping(req):
+            return {"ip": req.client_ip}
+
+        srv = app.serve("0.0.0.0", 0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            port = srv.server_address[1]
+
+            def get(host):
+                c = http.client.HTTPConnection(host, port, timeout=5)
+                c.request("GET", "/ping")
+                r = c.getresponse()
+                return json.loads(r.read())["ip"]
+            self.assertEqual(get("127.0.0.1"), "127.0.0.1")
+            if srv.address_family == socket.AF_INET6:
+                self.assertEqual(get("::1"), "::/64")
+            else:
+                with self.assertRaises(OSError):
+                    socket.socket(socket.AF_INET6)         # уходит на IPv4 только без IPv6 в ядре
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
 
 class LePathsTest(unittest.TestCase):

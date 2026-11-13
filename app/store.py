@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import ipaddress
 import json
 import os
 import re
@@ -10,7 +9,7 @@ import secrets
 import threading
 import time
 
-from . import config, hostnet
+from . import config
 from .i18n import Msg, MsgError
 
 STATE_PATH = os.path.join(config.DATA_DIR, "state.json")
@@ -64,7 +63,7 @@ class Store:
 
     def _upgrade(self) -> bool:
         """Прежние имена шаблонов маскировки у клиентов (cps.RENAMED), шифрование DNS на сервере у тех, кто
-        включил его до 1.16.0, IPv6 во «Внешнем адресе сервера» (до 1.19.5). True — что-то поменялось."""
+        включил его до 1.16.0. True — что-то поменялось."""
         from .cps import RENAMED
         changed = False
         for e in (self.state.get("cps") or {}).values():
@@ -72,13 +71,6 @@ class Store:
                 e["preset"] = RENAMED[e["preset"]]
                 changed = True
         s = self.state.get("settings") or {}
-        if hostnet.is_v6(s.get("public_host") or ""):
-            # до 1.19.5 сюда можно было вписать IPv6, а это ещё и адрес панели (она слушает только IPv4)
-            # и имя в её сертификате (issue #20). Клиентам он остаётся — в «Адрес в конфигах»
-            v6 = s.pop("public_host").strip("[]")
-            if not s.get("client_host"):
-                s["client_host"] = str(ipaddress.ip_address(v6))
-            changed = True
         if s.get("panel_dns") and "panel_dns_enc" not in s:
             # DNS на сервере включили в 1.15.0, до шифрования: оставляем как было — DoH по умолчанию
             # сломал бы DNS клиентов, если серверы в настройках его не умеют

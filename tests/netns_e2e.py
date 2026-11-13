@@ -7,17 +7,20 @@
 Туннель AWG заменён veth — для маршрутизации разницы нет.
 Запуск: PYTHONPATH=<pyroute2>:. python3 tests/netns_e2e.py
 """
+import http.client
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from pyroute2 import IPRoute, NetNS, netns
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from app import config, nftgen  # noqa: E402
+from app import config, nftgen, web  # noqa: E402
 
 NS = ["cli", "amz", "inet", "up1"]
 TARGETS = {"foreign": "8.8.8.8", "russian": "77.88.55.242"}
@@ -160,9 +163,38 @@ def expect(label, target, want, src="10.8.1.2"):
     return ok
 
 
+def panel_dual_stack():
+    """Панель слушает «все адреса» одним сокетом IPv6 и отвечает и по IPv4, и по IPv6 (issue #20).
+    Здесь, а не в юнит-тестах: юнит-тесты на ветке идут и там, где IPv6 в ядре нет."""
+    app = web.App()
+
+    @app.get("/ping")
+    def ping(req):
+        return {"ip": req.client_ip}
+
+    srv = app.serve("0.0.0.0", 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def get(host):
+        try:
+            c = http.client.HTTPConnection(host, srv.server_address[1], timeout=5)
+            c.request("GET", "/ping")
+            return json.loads(c.getresponse().read())["ip"]
+        except OSError as e:
+            return f"FAIL {e}"
+    try:
+        v4, v6 = get("127.0.0.1"), get("::1")
+        return [check("панель: один сокет IPv6 на все адреса", srv.address_family == socket.AF_INET6),
+                check(f"панель по IPv4: {v4}", v4 == "127.0.0.1"),
+                check(f"панель по IPv6, адрес сетью /64: {v6}", v6 == "::/64")]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def main():
+    results = panel_dual_stack()
     procs = setup()
-    results = []
     try:
         # таблица учёта стоит с самого начала: все проверки маршрутов ниже идут с ней
         nft("amz", nftgen.acct_ruleset("awg0"))
