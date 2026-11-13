@@ -391,7 +391,8 @@ def self_test(webroot: str, host: str, tries: int = 6) -> tuple[bool, str]:
     name = "awgr-check-" + secrets.token_hex(8)
     body = secrets.token_hex(16)
     _mkdirs(webroot)
-    fp = host_path(webroot.rstrip("/") + CHALLENGE) + name
+    # имя файла — внутри пути для host_path: он отрезает «/» в конце, и файл лёг бы рядом с папкой (#21)
+    fp = host_path(webroot.rstrip("/") + CHALLENGE + name)
     with open(fp, "w") as f:
         f.write(body)
     os.chmod(fp, 0o644)
