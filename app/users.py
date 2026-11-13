@@ -307,15 +307,13 @@ class ServerManager:
 
     @staticmethod
     def _server_address(i: ipaddress.IPv4Interface, sc: awgserver.ServerConf) -> str:
-        """Адрес сервера в новой подсети в том же виде, что был: адрес сети (как у AmneziaVPN) или первый адрес
-        (как создаёт панель). Введён конкретный адрес сервера (10.66.0.5/24) — он и остаётся."""
+        """В поле — только подсеть: 10.66.0.5/24 значит подсеть 10.66.0.0/24. Адрес сервера в ней панель ставит
+        сама в том же виде, что был: адрес сети (как у AmneziaVPN) или первый адрес (как создаёт панель)."""
         net = i.network
-        if i.ip != net.network_address:
-            return str(i)
         old = sc.network
         if old is not None and old.ip == old.network.network_address:
-            return str(i)                               # стиль AmneziaVPN: адрес сети
-        return f"{next(net.hosts())}/{net.prefixlen}"
+            return str(net)                              # стиль AmneziaVPN: 10.66.0.0/24
+        return f"{next(net.hosts())}/{net.prefixlen}"    # 10.66.0.1/24
 
     @staticmethod
     def subnet_follows_conf(t: system.Target) -> bool:

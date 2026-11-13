@@ -792,7 +792,8 @@ class ReviewFixesTest(unittest.TestCase):
 
 class SubnetViewTest(unittest.TestCase):
     """#26: в поле «Подсеть» — подсеть (10.8.1.0/24), а не адрес сервера на хосте (10.8.1.1/24); смена
-    подсети сохраняет вид адреса сервера (первый адрес у панели, адрес сети у AmneziaVPN)."""
+    подсети меняет подсеть, а адрес сервера в ней панель ставит сама (первый адрес у панели, адрес сети у
+    AmneziaVPN)."""
 
     PRIV = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
 
@@ -827,7 +828,9 @@ class SubnetViewTest(unittest.TestCase):
     def test_new_subnet_keeps_address_style(self):
         self.assertEqual(self.run_with(False, {"address": "10.66.0.0/24"})[1], "10.66.0.1/24")
         self.assertEqual(self.run_with(True, {"address": "10.66.0.0/24"})[1], "10.66.0.0/24")
-        self.assertEqual(self.run_with(False, {"address": "10.66.0.5/24"})[1], "10.66.0.5/24")   # свой адрес
+        # в поле — только подсеть: адрес внутри неё значит ту же подсеть, сервер — по-прежнему первый адрес
+        self.assertEqual(self.run_with(False, {"address": "10.66.0.5/24"})[1], "10.66.0.1/24")
+        self.assertEqual(self.run_with(True, {"address": "10.66.0.5/24"})[1], "10.66.0.0/24")
 
 
 if __name__ == "__main__":

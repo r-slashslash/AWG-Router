@@ -74,8 +74,9 @@ it grows, so every user-visible change gets a new version.
   certificate thread survives an unexpected error instead of stopping renewals until a restart; a self-signed
   certificate is reissued when only the second address changes. `Infinity`, `NaN` and very deeply nested JSON
   in a request get HTTP 400 instead of 500. The Server tab's "Subnet" field shows the subnet (`10.8.1.0/24`) in host
-  mode too, not the server's own address with the mask (`10.8.1.1/24`), which looked like a wrong subnet; a new
-  subnet keeps the server address in the form it had (thanks to @paris19891, #26).
+  mode too, not the server's own address with the mask (`10.8.1.1/24`), which looked like a wrong subnet. The
+  field takes only the subnet: the panel puts the server's address in it by itself, in the form it had (the
+  first address, or the network address as AmneziaVPN writes it) (thanks to @paris19891, #26).
 
 ## 1.19.4 — 2026-11-13
 
