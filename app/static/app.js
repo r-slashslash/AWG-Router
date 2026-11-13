@@ -287,14 +287,30 @@ function renderBrandTraffic() {
   el.innerHTML = `${esc(t("status.traffic"))}: <b>${esc(fmtBytes(sum))}</b>`;
 }
 
+// процессор и память сервера — в строке состояния; 90 % и выше выделяются цветом
+function sysmonHtml() {
+  const m = S.system;
+  if (!m || (m.cpu == null && !m.mem)) return "";
+  const pct = (v) => `<b class="${v >= 90 ? "hot" : ""}"><bdi>${esc(fmtNum(Math.round(v)))}%</bdi></b>`;
+  const out = [];
+  if (m.cpu != null) {
+    const load = (m.load || []).map((x) => x.toLocaleString(LANG, { minimumFractionDigits: 2, maximumFractionDigits: 2 })).join(" · ");
+    out.push(`<span title="${esc(t("status.cpu_hint", { cores: m.cores ? fmtNum(m.cores) : "?", load: load || "—" }))}">${esc(t("status.cpu"))} ${pct(m.cpu)}</span>`);
+  }
+  if (m.mem && m.mem[1]) {
+    out.push(`<span title="${esc(t("status.ram_hint", { used: fmtBytes(m.mem[0]), total: fmtBytes(m.mem[1]) }))}">${esc(t("status.ram"))} ${pct(100 * m.mem[0] / m.mem[1])}</span>`);
+  }
+  return `<span class="sysmon">${out.join("")}</span>`;
+}
+
 function renderStatus() {
   const tg = S.target;
   const online = S.clients.filter((c) => c.live && c.live.handshake && S.now - c.live.handshake < 180).length;
   renderBrandTraffic();
   $("#status").innerHTML = tg
     ? `<span class="state"><span class="dot ${tg.exists === false ? "warn" : "ok"}"></span><b>${esc(tg.kind === "host" ? t("srv.kind_host") : tg.container)}</b> · ${esc(tg.iface)}</span>
-       <span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>`
-    : `<span class="state"><span class="dot bad"></span>${esc(t("status.no_target"))}</span>`;
+       <span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>${sysmonHtml()}`
+    : `<span class="state"><span class="dot bad"></span>${esc(t("status.no_target"))}</span>${sysmonHtml()}`;
   // новая версия: метка в строке состояния (видна и на телефоне) и точка на вкладке «Система»
   const v = S.version || {};
   const chip = updatingTo ? t("status.updating") : v.available ? t("status.update", { version: v.latest }) : "";

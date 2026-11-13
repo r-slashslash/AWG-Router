@@ -90,6 +90,8 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 .summary { margin: 0; padding-inline-start: 20px; display: grid; gap: 6px; }
 .status { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: .88rem; color: var(--muted); }
 .status b { color: var(--ink); font-weight: 600; }
+.sysmon { display: inline-flex; gap: 10px; white-space: nowrap; }
+.sysmon b.hot { color: var(--bad); }
 .tabs {
   display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none;
   padding: 0 max(16px, calc((100vw - 1180px) / 2)); border-bottom: 1px solid var(--rule);

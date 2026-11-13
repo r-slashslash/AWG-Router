@@ -279,5 +279,41 @@ class TwoAddressCertTest(unittest.TestCase):
             main.store.mutate(lambda s: s["settings"].update({k: st.get(k, "") for k in ("public_host", "client_host")}))
 
 
+class SysMonTest(unittest.TestCase):
+    """Процессор и память сервера в шапке: загрузка между двумя чтениями /proc/stat."""
+
+    def stat(self, user, idle):
+        with open(self.path, "w") as f:
+            f.write(f"cpu  {user} 0 0 {idle} 0 0 0 0 0 0\ncpu0 1 2 3 4 5 6 7 8\n")
+
+    def setUp(self):
+        self.path = os.path.join(tempfile.mkdtemp(), "stat")
+
+    def test_percent_between_reads(self):
+        from app import hostnet
+        self.stat(100, 900)
+        m = hostnet.CpuMeter(self.path)
+        m.MIN_GAP = 0
+        self.stat(130, 970)                  # +30 работы, +70 простоя → 30 %
+        self.assertEqual(m.percent(), 30.0)
+        m.MIN_GAP = 3600
+        self.stat(200, 970)
+        self.assertEqual(m.percent(), 30.0)  # чаще MIN_GAP не пересчитывает
+        m.MIN_GAP = 0
+        self.assertEqual(m.percent(), 100.0)
+        self.assertEqual(m.percent(), 100.0)  # тиков не прибавилось — прежнее значение
+
+    def test_unreadable(self):
+        from app import hostnet
+        m = hostnet.CpuMeter(self.path + "-none")
+        self.assertIsNone(m.percent())
+
+    def test_in_state(self):
+        main.engine.reconcile()            # демо-сервер AWG как цель
+        st = main.get_state(None)
+        self.assertEqual(sorted(st["system"]), ["cores", "cpu", "load", "mem"])
+        self.assertLess(len(json.dumps(st["system"])), 120)      # /api/state опрашивается часто
+
+
 if __name__ == "__main__":
     unittest.main()

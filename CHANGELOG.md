@@ -5,6 +5,10 @@ it grows, so every user-visible change gets a new version.
 
 ## 1.20.0 — 2026-11-14
 
+- **CPU and memory in the status line.** The panel's status line shows the server's CPU and memory load,
+  refreshed with the rest of the state; 90% and above is highlighted, and the hint has the load average and
+  the memory in use. CPU is measured between two reads of `/proc/stat` (`hostnet.CpuMeter`), so it is the whole
+  server, not the panel's container.
 - **The panel over IPv6.** The panel now listens on IPv6 as well as IPv4 (one socket for all addresses; IPv4
   only if the kernel has no IPv6), so an IPv6 server public address works as one field was meant to: the panel
   opens at it, gets its certificate for it and clients connect to it unless "Address in configs" picks another

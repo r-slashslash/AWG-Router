@@ -1199,6 +1199,9 @@ def get_state(req):
         "shaping": engine.shape_state and {k: v for k, v in engine.shape_state.items() if k != "sig"},
         "direct_traffic": engine.traffic.out_view("direct"),
         "server_traffic": engine.traffic.server_view(),
+        # демо: постоянные числа — снимки README не меняются от загрузки машины, где их снимали
+        "system": {"cpu": 7.0, "cores": 2, "load": [0.14, 0.11, 0.09], "mem": [770 * 2**20, 2 * 2**30]}
+        if config.DRY_RUN else hostnet.system_view(),
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),

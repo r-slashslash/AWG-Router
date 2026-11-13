@@ -1,6 +1,9 @@
 """Адреса хоста без внешних запросов. Панель работает в сети хоста (network_mode: host),
 поэтому /proc/net здесь показывает сетевые интерфейсы и сокеты самого сервера."""
 import ipaddress
+import os
+import threading
+import time
 
 # флаги адреса в /proc/net/if_inet6: временный, ошибка DAD, устаревший, ещё проверяется
 _SKIP_FLAGS = 0x01 | 0x08 | 0x20 | 0x40
@@ -75,3 +78,58 @@ def memory(path: str = "/proc/meminfo") -> tuple[int, int] | None:
     if "MemTotal" not in vals or "MemAvailable" not in vals:
         return None
     return vals["MemTotal"] - vals["MemAvailable"], vals["MemTotal"]
+
+
+class CpuMeter:
+    """Загрузка процессоров сервера в процентах между двумя чтениями /proc/stat (не делится по
+    контейнерам — это весь хост). Чаще MIN_GAP не пересчитывает: опрос /api/state идёт с каждой вкладки."""
+    MIN_GAP = 1.0
+
+    def __init__(self, path: str = "/proc/stat"):
+        self.path = path
+        self._lock = threading.Lock()
+        self._prev = self._read()
+        self._at = time.monotonic()
+        self._pct: float | None = None
+
+    def _read(self) -> tuple[int, int] | None:
+        """(всего, простой) в тиках по строке «cpu»: простой — idle + iowait."""
+        try:
+            with open(self.path) as f:
+                v = [int(x) for x in f.readline().split()[1:]]
+        except (OSError, ValueError):
+            return None
+        if len(v) < 5:
+            return None
+        return sum(v[:8]), v[3] + v[4]          # guest уже входит в user — дальше 8 полей не считаем
+
+    def percent(self) -> float | None:
+        with self._lock:
+            now = time.monotonic()
+            if now - self._at < self.MIN_GAP and self._pct is not None:
+                return self._pct
+            cur = self._read()
+            if cur and self._prev and cur[0] > self._prev[0]:
+                total, idle = cur[0] - self._prev[0], cur[1] - self._prev[1]
+                self._pct = round(max(0.0, min(100.0, 100.0 * (total - idle) / total)), 1)
+            if cur:
+                self._prev, self._at = cur, now
+            return self._pct
+
+
+def loadavg(path: str = "/proc/loadavg") -> list[float] | None:
+    try:
+        with open(path) as f:
+            return [float(x) for x in f.read().split()[:3]]
+    except (OSError, ValueError):
+        return None
+
+
+cpu = CpuMeter()
+
+
+def system_view() -> dict:
+    """Шапка панели: процессор и память сервера. Маленький словарь — уходит в каждый /api/state."""
+    mem = memory()
+    return {"cpu": cpu.percent(), "cores": os.cpu_count(), "load": loadavg(),
+            "mem": list(mem) if mem else None}
