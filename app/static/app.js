@@ -328,8 +328,8 @@ function renderStatus() {
   // «Работает» или «Ошибка»: причина — во всплывающей подсказке, подробности — в полосах под шапкой (по нажатию)
   const problem = statusProblem();
   $("#status").innerHTML = `<span class="state${problem ? " state-bad" : ""}" id="state" title="${esc(problem || "")}"><span class="dot ${problem ? "bad" : "ok"}"></span><b>${esc(t(problem ? "status.err" : "status.ok"))}</b></span>`
-    + (tg ? `<span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>` : "")
-    + sysmonHtml();
+    + sysmonHtml()   // порядок: статус → ресурсы сервера → клиенты
+    + (tg ? `<span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>` : "");
   if (problem) $("#state").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
   // новая версия: метка в строке состояния (видна и на телефоне) и точка на вкладке «Система»
   const v = S.version || {};
