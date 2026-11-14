@@ -69,7 +69,7 @@ Details are in [How routing works](#how-routing-works).
 - A disabled client stays in the config as a comment, so nobody else takes its address.
 - Traffic per client for the month and all time; it survives restarts. Sort by name, address, traffic or activity.
 - All-time traffic through the server next to the panel name (it stays when clients are deleted).
-- The server's CPU and memory load in the panel's status line; hover for the load average and how much memory is in use.
+- The panel's status line starts with **Running** or **Error** (hover for the reason, click to jump to the messages at the top), then the server's CPU and memory load (hover for the load average and how much memory is in use), then clients online.
 - If the AmneziaWG server's interface disappears while the container keeps running (for example, the kernel killed `amneziawg-go` when memory ran out), the panel restarts the server by itself and tells you in Telegram. **Server → Restart the AWG server** does it by hand.
 - An end date and a traffic limit (per month or in total). When they run out, the client turns off by itself; a monthly limit resets on the 1st at 00:00 UTC (the panel shows when that is in your time) and the client turns back on. Three days before the end date and at 90% of the limit you get a warning, and **Ending soon** in the client list shows who is close.
 - Speed limits (off until you set them): a cap for all clients together, a personal cap per client and a cap per exit, download and upload separately. Within the common cap the speed is split evenly between those downloading right now. Connections don't drop, the internet just gets slower, and latency stays low under load.
