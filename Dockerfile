@@ -9,7 +9,7 @@ ARG HEV_REF=2.9.3
 
 FROM ${LEGO_IMAGE} AS lego
 
-FROM golang:1.26-alpine AS awg-go
+FROM golang:1.27-alpine AS awg-go
 ARG AWG_GO_REF
 RUN apk add --no-cache git
 RUN git clone --depth 1 --branch "${AWG_GO_REF}" https://github.com/amnezia-vpn/amneziawg-go /src
