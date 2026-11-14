@@ -16,7 +16,7 @@ RUN git clone --depth 1 --branch "${AWG_GO_REF}" https://github.com/amnezia-vpn/
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/amneziawg-go .
 
-FROM alpine:3.22 AS awg-tools
+FROM alpine:3.24 AS awg-tools
 ARG AWG_TOOLS_REF
 RUN apk add --no-cache git build-base linux-headers
 # статическая сборка: этот же awg копируется на хост в режиме «AWG на хосте»
@@ -26,7 +26,7 @@ RUN git clone --depth 1 --branch "${AWG_TOOLS_REF}" https://github.com/amnezia-v
  && install -D -m 0755 /src/src/wg-quick/linux.bash /out/awg-quick
 
 # hev-socks5-tunnel (MIT): TUN → SOCKS5 для выходов через прокси
-FROM alpine:3.22 AS hev
+FROM alpine:3.24 AS hev
 ARG HEV_REF
 RUN apk add --no-cache git make gcc musl-dev linux-headers
 RUN git clone --depth 1 --branch "${HEV_REF}" --recurse-submodules --shallow-submodules \
