@@ -92,6 +92,20 @@ if (tab === "lists") { tab = "routing"; history.replaceState(null, "", "#routing
 let routingDraft = null;
 const probes = {};
 let pollTimer = null;
+let pollOn = false;
+// Опрос состояния: раз в POLL_MS, но перерисовка занимает не больше 1/POLL_BUSY времени. На тысяче клиентов
+// перерисовка вкладки «Клиенты» — четверть секунды на компьютере и секунда-две на телефоне: опрос раз в 5 с
+// держал бы телефон занятым. Пауза растёт до POLL_MAX_MS; считается только перерисовка, не ожидание сети.
+const POLL_MS = 5000, POLL_MAX_MS = 30000, POLL_BUSY = 20;
+let renderCost = 0;
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  if (!pollOn) return;
+  pollTimer = setTimeout(async () => {
+    if (!document.hidden) await refresh(true);
+    schedulePoll();
+  }, Math.min(POLL_MAX_MS, Math.max(POLL_MS, renderCost * POLL_BUSY)));
+}
 
 const LINE_COLORS = 8;
 function upstreamById(id) { return S.upstreams.find((u) => u.id === id); }
@@ -194,7 +208,8 @@ function applyStaticTexts() {
 
 /* ================================================================ вход */
 function showLogin() {
-  clearInterval(pollTimer);
+  pollOn = false;
+  clearTimeout(pollTimer);
   closeModal();
   $("#app").hidden = true;
   $("#login").hidden = false;
@@ -249,7 +264,9 @@ async function refresh(auto = false) {
   const a = document.activeElement;
   if (auto && a && $("#main").contains(a) && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName)
       && Date.now() - lastTyping < 15000) return;
+  const t0 = performance.now();
   render();
+  renderCost = performance.now() - t0;
 }
 
 async function boot() {
@@ -261,8 +278,8 @@ async function boot() {
     if (done) { sessionStorage.removeItem("awgr.updated"); toast(t("sy.update_done", { version: done })); }
   } catch { /* нет хранилища */ }
   $("#app").hidden = false;
-  clearInterval(pollTimer);
-  pollTimer = setInterval(() => { if (!document.hidden) refresh(true); }, 5000);
+  pollOn = true;
+  schedulePoll();
 }
 
 $("#tabs").addEventListener("click", (e) => {

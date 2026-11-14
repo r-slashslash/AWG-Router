@@ -125,6 +125,12 @@ class Store:
         with self.lock:
             return copy.deepcopy(self.state)
 
+    def peek(self, fn):
+        """fn(state) под блокировкой, без копии: для маленьких ответов (есть ли токен ссылки). fn ничего не
+        меняет и возвращает только неизменяемое — строку, число, bool, копию нужного куска."""
+        with self.lock:
+            return fn(self.state)
+
     def mutate(self, fn):
         """fn(state) изменяет состояние; при исключении изменения откатываются."""
         with self.lock:

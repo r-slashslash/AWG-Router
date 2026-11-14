@@ -80,7 +80,8 @@ it grows, so every user-visible change gets a new version.
   `TLS_MODE=selfsigned|off`, a `PANEL_HOST` other than `0.0.0.0` and `RECONCILE_INTERVAL` were reset. Every key
   of the previous `.env` that the installer doesn't write itself is now carried over (for a name written twice
   the last line wins, as for Docker); `TLS_MODE` and `PANEL_HOST` are kept while the access mode stays public,
-  and `RECONCILE_INTERVAL` is kept when it is a number.
+  and `RECONCILE_INTERVAL` is kept when it is a number. Keys come only from this run's copy of `.env`: a `.env.bak`
+  left from an earlier install does not bring old settings back when `.env` was deleted on purpose.
 - **After the server's container restarts.** The new container's network had no rules until the end of the
   first pass, while tunnels to exits were already being started — clients went out directly, even with the
   "Block" fallback. Now a pass on a new target first puts in rules where every exit without a tunnel yet is
@@ -94,7 +95,15 @@ it grows, so every user-visible change gets a new version.
   awaited `web.KEEP_IDLE` seconds, and with half the connection slots in use responses close the connection as
   before) instead of a new TLS handshake for every state poll, and compresses text responses from 1 KB
   (`/api/state` for 1000 clients: 234 → 29 KB, first load of the panel: 526 → 144 KB). `/api/state` no longer
-  copies the whole state for every client with a personal link: 1.5 s → 30 ms for 1000 such clients.
+  copies the whole state for every client with a personal link: 1.5 s → 30 ms for 1000 such clients. Static files
+  are compressed once per version (`web.gzip_static`), and the public pages (`/s/…`) look up a link's token
+  without copying the state: a request from anyone no longer costs the panel milliseconds of CPU. The browser
+  polls the state every 5 s, but the page redraw now takes at most a twentieth of the time: with 1000 clients
+  (a quarter of a second on a computer, one to two seconds on a phone) the pause grows up to 30 s.
+- **Requests from other pages of the same site.** The session cookie (`SameSite=Strict`) is also sent from
+  another port of the same IP or a sibling subdomain, and a form there could send an empty POST — restart the
+  server, start an update. Requests that change something are now refused (HTTP 403, `err.cross_site`) when
+  the browser says they came from another page (`Sec-Fetch-Site`, or `Origin` in older browsers).
 - **Domain rules: a direct connection to the handler.** A client that opened the handler's port
   (`SNI_PROXY_PORT`) at the server's tunnel address directly made it connect to itself, again and again, until
   it ran out of file descriptors and stopped serving every client with domain rules. Such a connection is now
@@ -114,7 +123,12 @@ it grows, so every user-visible change gets a new version.
   config nested too deeply is "not recognized" instead of HTTP 500. `state.json`, the clients' traffic and the
   server's files are written with `fsync`, and the previous `state.json` is kept as `state.json.bak`: the panel
   starts from it when `state.json` is damaged (the damaged file is kept as `state.json.broken`) instead of not
-  starting at all. The Server tab's "Subnet" field shows the subnet (`10.8.1.0/24`) in host
+  starting at all. A field of the wrong type in the Telegram settings or a client's name gets HTTP 400 instead of
+  500 (a name like `true` no longer becomes "True"); a client's end date later than the year 9999 is refused,
+  and one in a backup is dropped (the bot failed on such a client's card). A loop of fallbacks (A → B → A) in a
+  backup made before 1.20.0 is broken with "direct" when restoring. Reading traffic totals waits for the
+  accounting (a new month appearing mid-read could fail the state request), and the cache of parsed exit
+  configs no longer grows with every edit. The Server tab's "Subnet" field shows the subnet (`10.8.1.0/24`) in host
   mode too, not the server's own address with the mask (`10.8.1.1/24`), which looked like a wrong subnet. The
   field takes only the subnet: the panel puts the server's address in it by itself, in the form it had (the
   first address, or the network address as AmneziaVPN writes it) (thanks to @paris19891, #26).

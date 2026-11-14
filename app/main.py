@@ -198,7 +198,26 @@ app.public_files = {"share.js", "i18n.js", "qrcode.js", "app.css", "fonts/GolosT
 app.index_file = os.path.join(STATIC, "index.html")
 
 
+def same_origin(req) -> bool:
+    """Запрос, меняющий что-то, пришёл со страницы самой панели. Cookie с SameSite=Strict не уходит с чужих
+    сайтов, но уходит со страниц того же сайта: другой порт этого IP, соседний поддомен. Форма оттуда отправит
+    POST без тела — его не останавливает проверка JSON. Браузер говорит, откуда запрос (Sec-Fetch-Site), а
+    без этого заголовка — Origin; нет ни того, ни другого (curl, старый браузер) — пропускаем, как раньше."""
+    if req.method in ("GET", "HEAD"):
+        return True
+    site = (req.headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if site:
+        return site in ("same-origin", "none")
+    origin = (req.headers.get("Origin") or "").strip()
+    if not origin or origin == "null":
+        return not origin
+    host = (req.headers.get("Host") or "").strip().lower()
+    return origin.split("://", 1)[-1].rstrip("/").lower() == host
+
+
 def auth_mw(req) -> None:
+    if not same_origin(req):
+        raise HTTPError(403, "err.cross_site")
     if req.path == BASE + "/api/login":
         return
     if not check_session(req.cookies.get(COOKIE)):
@@ -408,7 +427,7 @@ def _tg_draft(body: dict) -> dict:
             bad("err.tg_chat")
         c["chat_id"] = chat
     if "lang" in body:
-        if body["lang"] not in notify.LANGS:
+        if not isinstance(body["lang"], str) or body["lang"] not in notify.LANGS:
             bad("err.bad_value")
         c["lang"] = body["lang"]
     if "via" in body:
@@ -423,7 +442,7 @@ def _tg_draft(body: dict) -> dict:
     if "control" in body:
         c["control"] = bool(body["control"])
     if "backup" in body:
-        if body["backup"] not in notify.BACKUP_PERIODS:
+        if not isinstance(body["backup"], str) or body["backup"] not in notify.BACKUP_PERIODS:
             bad("err.bad_value")
         c["backup"] = body["backup"]
     pw = str(body.get("backup_pw") or "")
@@ -657,6 +676,12 @@ def _int_or_none(v):
     return int(v) if _num(v) and v > 0 else None
 
 
+def _exp_or_none(v):
+    """Дата (unix) из копии: позже limits.EXPIRES_MAX её не перевести в дату — как без срока."""
+    v = _int_or_none(v)
+    return v if v is not None and v <= limits.EXPIRES_MAX else None
+
+
 QUOTA_KEY_RE = re.compile(r"^(\d{4}-\d{2}|total)$")
 MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
@@ -739,9 +764,15 @@ def clean_backup_state(new: dict) -> dict:
         if fb == "up:" + u["id"]:
             fail(f"upstreams[{i}].fallback")
         st["upstreams"][i]["fallback"] = fb
+    for u in st["upstreams"]:
+        # круг резервов (A → B → A) из копии, сделанной до 1.20.0: в панели его теперь не сохранить, а когда
+        # все в круге лежат, клиенты остались бы без связи. Разрываем его резервом «напрямую».
+        if _fallback_loops(st, u["id"], u["fallback"]):
+            u["fallback"] = "direct"
+    for i, u in enumerate(raw_ups):
         qa = u.get("quota_action") or "notify"
         if qa == "fallback":          # первые сборки 1.3.0: «как резерв»
-            qa = fb
+            qa = st["upstreams"][i]["fallback"]
         if qa != "notify":
             qa = check(f"upstreams[{i}].quota_action", lambda: v_outbound(st, qa))
             if qa == "up:" + u["id"]:
@@ -782,13 +813,13 @@ def clean_backup_state(new: dict) -> dict:
         ao = L.get("auto_off")
         qd, qw = L.get("quota_done"), L.get("quota_warned")
         st["limits"][pk] = {
-            "expires": _int_or_none(L.get("expires")), "quota": _int_or_none(L.get("quota")),
+            "expires": _exp_or_none(L.get("expires")), "quota": _int_or_none(L.get("quota")),
             "period": L.get("period") if L.get("period") in ("month", "total") else "month",
             "auto_off": ao if ao == "exp" or (isinstance(ao, str) and ao.startswith("quota:")
                                               and QUOTA_KEY_RE.match(ao[6:])) else None,
-            "exp_done": _int_or_none(L.get("exp_done")),
+            "exp_done": _exp_or_none(L.get("exp_done")),
             "quota_done": qd if isinstance(qd, str) and QUOTA_KEY_RE.match(qd) else None,
-            "exp_warned": _int_or_none(L.get("exp_warned")),
+            "exp_warned": _exp_or_none(L.get("exp_warned")),
             "quota_warned": qw if isinstance(qw, str) and QUOTA_KEY_RE.match(qw) else None}
         for k in ("rate_down", "rate_up"):
             v = check(f"limits.{pk[:12]}.{k}", lambda: v_rate(L.get(k)))
@@ -1001,6 +1032,8 @@ def put_limits(req, pk):
             bad("err.bad_value")
         if exp <= 0:
             exp = None
+        elif exp > limits.EXPIRES_MAX:
+            bad("err.bad_value")
     quota = body.get("quota_gb")
     if quota not in (None, ""):
         try:
@@ -1102,7 +1135,21 @@ TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,40}$")
 
 
 def _share_exists(token: str) -> bool:
-    return bool(TOKEN_RE.match(token)) and token in store.snapshot().get("shares", {})
+    # без копии состояния: адреса /s/… открыты без входа, и чужой запрос не должен стоить панели копии
+    # всего state.json (на тысяче клиентов — миллисекунды процессора на каждый)
+    return bool(TOKEN_RE.match(token)) and store.peek(lambda st: token in st.get("shares", {}))
+
+
+def _share_of(token: str) -> tuple[str | None, bool, dict | None]:
+    """Клиент личной ссылки: (ключ, есть ли его закрытый ключ, копия его срока и лимита)."""
+    if not TOKEN_RE.match(token):
+        return None, False, None
+
+    def fn(st):
+        pk = (st.get("shares", {}).get(token) or {}).get("pk")
+        lim = st.get("limits", {}).get(pk) if pk else None
+        return pk, bool(pk) and pk in st.get("keys", {}), dict(lim) if isinstance(lim, dict) else None
+    return store.peek(fn)
 
 
 @app.get("/s/{token}", public=True)
@@ -1115,14 +1162,13 @@ def share_page(req, token):
 
 @app.get("/s/api/{token}", public=True)
 def share_data(req, token):
-    st = store.snapshot()
-    sh = st.get("shares", {}).get(token) if TOKEN_RE.match(token) else None
-    c = next((x for x in engine.clients if x["public_key"] == (sh or {}).get("pk")), None)
+    spk, has_key, lim = _share_of(token)
+    c = next((x for x in engine.clients if x["public_key"] == spk), None) if spk else None
     if not c:
         bad("err.share_gone", 404)
     pk = c["public_key"]
     cfg = None
-    if pk in st.get("keys", {}):
+    if has_key:
         try:
             cfg = engine.srv.client_config(pk)
             cfg.pop("warn_host", None)
@@ -1133,7 +1179,7 @@ def share_data(req, token):
             "handshake": live.get("handshake") or None, "config": cfg,
             # разбивка по выходам — только в панели: на публичной странице она ни к чему
             "traffic": {k: v for k, v in engine.traffic.view(pk).items() if k != "by_out"},
-            "limits": limits.view(st.get("limits", {}).get(pk))}
+            "limits": limits.view(lim)}
 
 
 # -------------------------------------------------------------------- state
@@ -1826,6 +1872,15 @@ def _pk(pk: str) -> str:
     return pk
 
 
+def _client_name(v) -> str:
+    """Имя клиента из запроса: только строка (true или 5 стали бы именами «True» и «5»)."""
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        bad("err.name_required")
+    return v
+
+
 def _user_errors(fn):
     try:
         return fn()
@@ -1836,7 +1891,7 @@ def _user_errors(fn):
 @app.post("/api/users")
 def add_user(req):
     body = req.json()
-    pk = _user_errors(lambda: engine.srv.add_client(str(body.get("name") or "")))
+    pk = _user_errors(lambda: engine.srv.add_client(_client_name(body.get("name"))))
     engine.reconcile_soon()
     return {"public_key": pk}
 
@@ -1846,7 +1901,8 @@ def edit_user(req, pk):
     body = req.json()
     _pk(pk)
     if body.get("name") is not None:
-        _user_errors(lambda: engine.srv.update_client(pk, name=body.get("name")))
+        name = _client_name(body["name"])
+        _user_errors(lambda: engine.srv.update_client(pk, name=name))
     if body.get("enabled") is not None:
         set_client_enabled(pk, bool(body["enabled"]))
     engine.reconcile_soon()

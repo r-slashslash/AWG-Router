@@ -19,6 +19,7 @@ from .traffic import month_key
 log = logging.getLogger("awgr.limits")
 
 GB = 1024 ** 3
+EXPIRES_MAX = 253402300799    # 9999-12-31 23:59:59 UTC: дальше дату не перевести в текст (time.gmtime)
 WARN_DAYS = 3          # предупредить о конце срока заранее
 WARN_SHARE = 0.9       # и о лимите трафика
 

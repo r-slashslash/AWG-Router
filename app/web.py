@@ -32,6 +32,21 @@ KEEP_IDLE = 15             # секунд ожидания следующего 
 GZIP_MIN = 1024            # байт: ответы короче не сжимаются
 GZIP_TYPES = ("text/", "application/json", "application/javascript", "application/manifest+json",
               "image/svg+xml")
+_gz_cache: dict[str, tuple[str, bytes]] = {}     # путь файла статики → (ETag, сжатое тело)
+_gz_lock = threading.Lock()
+
+
+def gzip_static(path: str, etag: str, body: bytes) -> bytes:
+    """Сжатый файл статики — один раз на версию файла (ETag): сжатие `i18n.js` стоит несколько миллисекунд
+    процессора, а `/s/assets/*` открыт без входа — каждый запрос заново сжимал бы его за счёт панели."""
+    with _gz_lock:
+        hit = _gz_cache.get(path)
+    if hit and hit[0] == etag:
+        return hit[1]
+    z = gzip.compress(body, 6, mtime=0)
+    with _gz_lock:
+        _gz_cache[path] = (etag, z)
+    return z
 
 
 def _no_constant(name: str):
@@ -191,11 +206,13 @@ class App:
             def log_message(self, fmt, *args):  # тихо
                 pass
 
-            def _send(self, code: int, body: bytes, ctype: str, extra: list[tuple[str, str]] = ()):
-                # сжатие: состояние панели и её скрипты — текст, который сжимается в несколько раз
+            def _send(self, code: int, body: bytes, ctype: str, extra: list[tuple[str, str]] = (),
+                      cached: tuple[str, str] | None = None):
+                # сжатие: состояние панели и её скрипты — текст, который сжимается в несколько раз;
+                # cached — (путь, ETag) файла статики: его сжатая копия берётся из памяти (gzip_static)
                 if len(body) >= GZIP_MIN and ctype.startswith(GZIP_TYPES) \
                         and "gzip" in (self.headers.get("Accept-Encoding") or "").lower():
-                    body = gzip.compress(body, 5, mtime=0)
+                    body = gzip_static(*cached, body) if cached else gzip.compress(body, 5, mtime=0)
                     extra = [*extra, ("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
@@ -317,7 +334,7 @@ class App:
                     self.end_headers()
                     return
                 with open(p, "rb") as f:
-                    self._send(200, f.read(), ctype, hdrs)
+                    self._send(200, f.read(), ctype, hdrs, cached=(p, etag))
 
             do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = _dispatch
 

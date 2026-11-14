@@ -91,7 +91,10 @@ only reads the name and counts bytes.
 - `tls.json` — HTTPS settings for this particular server; not part of backups.
 - `/api/state` is polled every few seconds, so keep it small; load big data with separate requests,
   and read the state once per request (`store.snapshot()` copies all of it). The server keeps connections
-  open (HTTP/1.1) and compresses text responses from `web.GZIP_MIN` bytes.
+  open (HTTP/1.1) and compresses text responses from `web.GZIP_MIN` bytes; static files are compressed once per
+  version (`web.gzip_static`). Public routes (`/s/…`) read the state with `store.peek`, without a copy.
+- Requests that change something must come from the panel's own page (`main.same_origin`: `Sec-Fetch-Site`,
+  or `Origin`): the `SameSite=Strict` cookie is also sent from other pages of the same site.
 
 ## Interface and texts
 

@@ -660,7 +660,7 @@ class EnvKeepTest(unittest.TestCase):
             sh = f.read()
         a = sh.index('if [ "$ACCESS" = ssh ]; then PANEL_HOST=127.0.0.1')
         self.modes = sh[a:sh.index('ok "Panel port:', a)]
-        b = sh.index('[ -f "$ENV_FILE" ] && cp "$ENV_FILE" "$ENV_FILE.bak"')
+        b = sh.index('HAD_ENV=0')
         self.write = sh[b:sh.index("# ------------------------------------------------------------------ Docker", b)]
         e = sh.index("envget() {")
         self.envget = sh[e:sh.index("\n", e) + 1]

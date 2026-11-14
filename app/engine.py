@@ -270,9 +270,13 @@ class Engine:
         return v
 
     # ----------------------------------------------------------- upstreams
+    PARSED_MAX = 256       # разобранных конфигов в кэше; больше — кэш начинается заново
+
     def parsed(self, u: dict) -> awgconf.UpstreamConf:
         h = _sha(u["config"])
         if h not in self._parsed:
+            if len(self._parsed) >= self.PARSED_MAX:
+                self._parsed = {}       # каждая правка конфига выхода добавляла запись навсегда
             self._parsed[h] = awgconf.parse_upstream(u["config"])
         return self._parsed[h]
 
@@ -585,7 +589,10 @@ class Engine:
         now = time.time()
         eng = self.exit_engine()
         wait_engine = self.engine_pending()
-        self._prefetch_hosts(wanted, now)
+        if wait_engine:
+            self._pre, self._pre_failed = {}, set()     # выходы AWG ждут сервер: разбирать имена незачем
+        else:
+            self._prefetch_hosts(wanted, now)
         for uid, u in wanted.items():
             try:
                 pc = self.parsed(u)

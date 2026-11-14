@@ -90,7 +90,7 @@ def _clean_by_out(v) -> dict:
 class Traffic:
     def __init__(self, path: str = PATH):
         self.path = path
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()      # чтение (view) тоже под ней: оно идёт из потоков HTTP
         self.data: dict[str, dict] = {}
         self.outs: dict[str, dict] = {}        # итоги выходов: {выход: {"total", "months"}}
         self.acct: dict[str, list[int]] = {}   # последние значения счётчиков nftables
@@ -354,44 +354,52 @@ class Traffic:
                 if isinstance(k, str) and ACCT_KEY_RE.match(k) and _pair(x)}
 
     # -------------------------------------------------------------- чтение
+    # Чтение — под той же блокировкой, что и учёт: обход словаря месяцев, в который поток движка как раз
+    # добавляет новый месяц, падал бы с RuntimeError (а с ним ответ /api/state).
     def month(self, pk: str, mk: str | None = None) -> list[int]:
-        d = self.data.get(pk) or {}
-        return list((d.get("months") or {}).get(mk or month_key(), [0, 0]))
+        with self.lock:
+            d = self.data.get(pk) or {}
+            return list((d.get("months") or {}).get(mk or month_key(), [0, 0]))
 
     def total(self, pk: str) -> list[int]:
-        return list((self.data.get(pk) or {}).get("total") or [0, 0])
+        with self.lock:
+            return list((self.data.get(pk) or {}).get("total") or [0, 0])
 
     def used(self, pk: str, period: str) -> int:
         return sum(self.month(pk) if period == "month" else self.total(pk))
 
     def view(self, pk: str) -> dict:
-        m, t = self.month(pk), self.total(pk)
-        d = self.data.get(pk) or {}
-        hist = sorted((d.get("months") or {}).items())[-12:]
-        by_out = (d.get("by_out") or {}).get(month_key()) or {}
+        with self.lock:
+            m, t = self.month(pk), self.total(pk)
+            d = self.data.get(pk) or {}
+            hist = sorted((d.get("months") or {}).items())[-12:]
+            by_out = dict((d.get("by_out") or {}).get(month_key()) or {})
         return {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1],
                 "history": [[k, v[0], v[1]] for k, v in hist],
                 "by_out": {k: list(v) for k, v in by_out.items()}}
 
     def out_month(self, out: str, mk: str | None = None) -> list[int]:
-        o = self.outs.get(out) or {}
-        return list((o.get("months") or {}).get(mk or month_key(), [0, 0]))
+        with self.lock:
+            o = self.outs.get(out) or {}
+            return list((o.get("months") or {}).get(mk or month_key(), [0, 0]))
 
     def out_used(self, out: str) -> int:
         """Трафик выхода за текущий месяц (оба направления) — для квоты."""
         return sum(self.out_month(out))
 
     def out_view(self, out: str) -> dict:
-        m = self.out_month(out)
-        t = (self.outs.get(out) or {}).get("total") or [0, 0]
-        hist = sorted(((self.outs.get(out) or {}).get("months") or {}).items())[-12:]
+        with self.lock:
+            m = self.out_month(out)
+            t = list((self.outs.get(out) or {}).get("total") or [0, 0])
+            hist = sorted(((self.outs.get(out) or {}).get("months") or {}).items())[-12:]
         return {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1],
                 "history": [[k, v[0], v[1]] for k, v in hist]}
 
     def server_view(self) -> dict:
         """Трафик всего сервера: за текущий месяц и за всё время."""
-        m = (self.server.get("months") or {}).get(month_key()) or [0, 0]
-        t = self.server.get("total") or [0, 0]
+        with self.lock:
+            m = list((self.server.get("months") or {}).get(month_key()) or [0, 0])
+            t = list(self.server.get("total") or [0, 0])
         return {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1]}
 
     def export(self) -> dict:
