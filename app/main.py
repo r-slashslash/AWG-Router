@@ -1252,7 +1252,6 @@ def get_state(req):
         "panel": {"url": panel_url(), "access": "ssh" if config.PANEL_HOST.startswith("127.") else "public",
                   "tls": tls.status(), "mode": config.AWG_MODE, "ip": engine.srv.public_host(st)},
         "target_error": engine.target_error,
-        "backend": config.UPSTREAM_BACKEND,
         "engine": {"last_apply": engine.last_apply, "last_reconcile": engine.last_reconcile,
                    "last_error": engine.last_error, "ruleset_size": len(engine.ruleset)},
         "routing": st["routing"],

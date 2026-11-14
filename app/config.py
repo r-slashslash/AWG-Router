@@ -42,7 +42,6 @@ AWG_IFACE = os.environ.get("AWG_IFACE", "").strip()
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 
 # userspace (amneziawg-go, по умолчанию) или kernel (модуль amneziawg на хосте)
-UPSTREAM_BACKEND = os.environ.get("UPSTREAM_BACKEND", "userspace").strip().lower()
 # туннели к выходам: auto — тем же, чем сервер (модуль ядра или amneziawg-go); go / kernel — принудительно
 EXIT_ENGINE = os.environ.get("EXIT_ENGINE", "auto").strip().lower()
 if EXIT_ENGINE not in ("auto", "go", "kernel"):

@@ -33,7 +33,10 @@ it grows, so every user-visible change gets a new version.
   again** reinstalls, which lifts the block). Installing the module also sets `kernel.panic = 10` unless there is an
   own value, so a crash in the kernel reboots the server instead of leaving it hanging. Texts of the engine block
   rewritten: the module is the recommended engine, in terms of system resources; the install part is gone once the
-  module runs, and the panel no longer lists requirements it has already checked.
+  module runs, and the panel no longer lists requirements it has already checked. **System → Connection to Amnezia**
+  showed "Exit tunnels: amneziawg-go" from a leftover `.env` line (`UPSTREAM_BACKEND`, written by every install and
+  never used): it now shows the real engine with the module version, and exits separately only when they differ
+  from the server; the line is no longer written, and updates drop it from `.env`.
 - **CPU and memory in the status line.** The panel's status line shows the server's CPU and memory load,
   refreshed with the rest of the state; 90% and above is highlighted, and the hint has the load average and
   the memory in use. CPU is measured between two reads of `/proc/stat` (`hostnet.CpuMeter`), so it is the whole

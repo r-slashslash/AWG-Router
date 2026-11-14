@@ -1684,11 +1684,24 @@ function engineSection() {
       </div>
       ${E.forced ? `<p class="small muted">${esc(t("eng.forced", { value: E.forced }))}</p>` : ""}
       <p class="small muted">${esc(t("eng.server_auto"))}</p>
-      <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel", "eng.what_cost"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
+      <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
       ${E.disabled ? `<div class="banner bad">${esc(t(E.disabled.error ? "eng.n_disabled_reboot" : "eng.n_disabled"))}</div>` : ""}
       ${engInstallBlock(E, m)}
     </div>
   </section>`;
+}
+
+/** «Движок» в «Подключении к Amnezia»: на чём работает сервер (у модуля — с версией). Туннели к выходам идут за
+ *  сервером, поэтому отдельной строкой — только если движки разошлись (модуль не запустил туннель, EXIT_ENGINE). */
+function engineKv() {
+  const E = S.awg_engine;
+  if (!E) return "";
+  const m = E.module || {};
+  const name = (e) => e === "kernel" ? t("sy.kernel") : e === "go" ? "amneziawg-go" : t("eng.unknown");
+  const srv = E.server === "kernel" && m.version ? `${t("sy.kernel")} ${m.version}` : name(E.server);
+  let h = `<div><span>${esc(t("sy.engine"))}</span><b><bdi>${esc(srv)}</bdi></b></div>`;
+  if (E.server && E.exits_now !== E.server) h += `<div><span>${esc(t("sy.tunnels"))}</span><b><bdi>${esc(name(E.exits_now))}</bdi></b></div>`;
+  return h;
 }
 
 /* ---------------------------------------- модуль ядра: оповещение сверху и установка кнопкой */
@@ -2007,7 +2020,7 @@ function viewSystem() {
           <div><span>${esc(t("sy.container"))}</span><b><bdi>${esc(tg ? (tg.kind === "host" ? t("srv.kind_host") : tg.container) : t("sy.not_found"))}</bdi></b></div>
           <div><span>${esc(t("sy.iface"))}</span><b>${esc(tg ? tg.iface : "—")}</b></div>
           <div><span>${esc(t("sy.conf"))}</span><b><bdi>${esc(tg ? tg.conf : "—")}</bdi></b></div>
-          <div><span>${esc(t("sy.tunnels"))}</span><b>${esc(S.backend === "kernel" ? t("sy.kernel") : "amneziawg-go")}</b></div>
+          ${engineKv()}
           <div><span>${esc(t("sy.last_check"))}</span><b>${esc(fmtTime(S.engine.last_reconcile))}</b></div>
           <div><span>${esc(t("sy.applied"))}</span><b>${esc(fmtTime(S.engine.last_apply))}</b></div>
         </div>

@@ -884,7 +884,6 @@ TLS_DOMAIN=$TLS_DOMAIN
 ACME_EMAIL=$ACME_EMAIL
 AWG_MODE=$AWG_MODE
 AWG_INIT_PORT=$AWG_INIT_PORT
-UPSTREAM_BACKEND=userspace
 RECONCILE_INTERVAL=$RECONCILE_INTERVAL
 EOF
 umask 022
@@ -901,6 +900,7 @@ keep_env() { # $1 previous .env, $2 new .env
     k="${line%%=*}"
     [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     [[ "$known" == *" $k "* ]] && continue
+    [ "$k" = UPSTREAM_BACKEND ] && continue     # written by installers before 1.20.0, never did anything
     printf '%s\n' "$line" >> "$2"; known="$known$k "
   done < <(tac "$1")
 }

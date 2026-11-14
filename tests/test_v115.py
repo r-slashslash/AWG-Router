@@ -132,7 +132,7 @@ class StartUpTest(unittest.TestCase):
         def fake_open(path, flags, mode=0o777):
             return real_open(os.path.join(d, os.path.basename(path)), flags, mode)
 
-        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(config, "UPSTREAM_BACKEND", "kernel"), \
+        with mock.patch.object(config, "DRY_RUN", False), \
                 mock.patch("os.open", side_effect=fake_open), mock.patch("os.remove", side_effect=lambda p: None):
             self.eng._start_up(self.t, "u1", self.u, self.pc, "h")
         with open(os.path.join(d, "awgr2.conf")) as f:

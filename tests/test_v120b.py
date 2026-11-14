@@ -693,6 +693,7 @@ class EnvKeepTest(unittest.TestCase):
                          ("my-awg", "10444", "8081"))
         self.assertEqual(env["WITH_EQ"], "a=b c")
         self.assertEqual(env["PANEL_PORT"], "4821")
+        self.assertNotIn("UPSTREAM_BACKEND", env)                       # старая строка, ни на что не влияла
         self.assertEqual(os.stat(self.env).st_mode & 0o777, 0o600)
 
     def test_own_tls_mode_host_and_interval_stay(self):
