@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import errno
+import gzip
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -25,11 +27,24 @@ log = logging.getLogger("awgr.web")
 MAX_BODY = 4 * 1024 * 1024
 MAX_CONNECTIONS = 128      # одновременных соединений; лишние закрываются сразу
 MAX_PER_IP = 24            # с одного адреса: один источник не займёт все места
-IDLE_TIMEOUT = 60          # секунд на заголовки, тело и ожидание следующего запроса
+IDLE_TIMEOUT = 60          # секунд на заголовки и тело запроса
+KEEP_IDLE = 15             # секунд ожидания следующего запроса в том же соединении (панель опрашивает раз в 5)
+GZIP_MIN = 1024            # байт: ответы короче не сжимаются
+GZIP_TYPES = ("text/", "application/json", "application/javascript", "application/manifest+json",
+              "image/svg+xml")
 
 
 def _no_constant(name: str):
     raise ValueError(f"{name} is not allowed")
+
+
+def _finite(text: str) -> float:
+    """Число из JSON. `1e999` — правильный JSON, но в Python это бесконечность, и int() на ней падает:
+    такой запрос неверен (400), как Infinity и NaN."""
+    v = float(text)
+    if not math.isfinite(v):
+        raise ValueError("number out of range")
+    return v
 
 
 def client_key(addr: str) -> str:
@@ -100,7 +115,7 @@ class Request:
             try:
                 # Infinity и NaN — не JSON по стандарту, а int() на них падает; слишком глубокая
                 # вложенность — RecursionError: всё это неверный запрос (400), а не ошибка панели (500)
-                self._body = json.loads(raw or b"{}", parse_constant=_no_constant)
+                self._body = json.loads(raw or b"{}", parse_constant=_no_constant, parse_float=_finite)
             except (ValueError, RecursionError):
                 raise HTTPError(400, "err.bad_json")
             if not isinstance(self._body, dict):
@@ -151,6 +166,24 @@ class App:
             server_version = "awg-router"
             sys_version = ""
             timeout = IDLE_TIMEOUT    # медленный или молчащий клиент не держит поток вечно
+            # Соединение остаётся открытым между запросами: панель опрашивает /api/state каждые несколько
+            # секунд, и с HTTP/1.0 каждый опрос был новым соединением с рукопожатием TLS. У каждого ответа
+            # есть Content-Length (_send); заголовки и тело уходят двумя записями, поэтому без алгоритма
+            # Нейгла — иначе тело ждало бы подтверждения заголовков.
+            protocol_version = "HTTP/1.1"
+            disable_nagle_algorithm = True
+            served = False
+
+            def handle_one_request(self):
+                # Следующего запроса ждём меньше, чем читаем начатый: простаивающее соединение занимает
+                # место из MAX_CONNECTIONS и MAX_PER_IP.
+                self.connection.settimeout(KEEP_IDLE if self.served else IDLE_TIMEOUT)
+                super().handle_one_request()
+                self.served = True
+
+            def parse_request(self):
+                self.connection.settimeout(IDLE_TIMEOUT)        # строка запроса пришла — читаем остальное
+                return super().parse_request()
 
             def version_string(self):  # заголовок Server не выдаёт панель сканерам
                 return "httpd"
@@ -159,6 +192,11 @@ class App:
                 pass
 
             def _send(self, code: int, body: bytes, ctype: str, extra: list[tuple[str, str]] = ()):
+                # сжатие: состояние панели и её скрипты — текст, который сжимается в несколько раз
+                if len(body) >= GZIP_MIN and ctype.startswith(GZIP_TYPES) \
+                        and "gzip" in (self.headers.get("Accept-Encoding") or "").lower():
+                    body = gzip.compress(body, 5, mtime=0)
+                    extra = [*extra, ("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
@@ -167,6 +205,10 @@ class App:
                 self.send_header("Referrer-Policy", "no-referrer")
                 for k, v in extra:
                     self.send_header(k, v)
+                crowded = getattr(self.server, "crowded", None)
+                if not self.close_connection and crowded and crowded(client_key(self.client_address[0])):
+                    # мест осталось мало — соединения не держим: как до keep-alive, одно на запрос
+                    self.send_header("Connection", "close")
                 self.end_headers()
                 if self.command != "HEAD":
                     self.wfile.write(body)
@@ -204,6 +246,10 @@ class App:
             def _dispatch_inner(self):
                 path = unquote(urlsplit(self.path).path)
                 try:
+                    if self.headers.get("Transfer-Encoding"):
+                        # тело читается только по Content-Length: нечитаемое оставалось бы в соединении
+                        # и разбиралось как следующий запрос
+                        raise HTTPError(411, "err.bad_json")
                     # статика
                     for mount in (app.static, app.public_static):
                         if mount and path.startswith(mount[0] + "/") and self.command in ("GET", "HEAD"):
@@ -239,7 +285,7 @@ class App:
                     raise HTTPError(404, "err.not_found")
                 except HTTPError as e:
                     extra = ()
-                    if e.code == 413:
+                    if e.code in (411, 413):
                         self.close_connection = True
                         extra = [("Connection", "close")]
                     self._json(e.code, {"detail": e.detail}, extra)
@@ -314,6 +360,11 @@ class Server(ThreadingHTTPServer):
             self._conns += 1
             self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
             return True
+
+    def crowded(self, ip: str) -> bool:
+        """Занята половина мест (всех или этого адреса): ответы закрывают соединение."""
+        with self._conn_lock:
+            return self._conns * 2 >= MAX_CONNECTIONS or self._per_ip.get(ip, 0) * 2 >= MAX_PER_IP
 
     def _give(self, ip: str) -> None:
         with self._conn_lock:

@@ -146,18 +146,36 @@ class ServerManager:
     # ------------------------------------------------------------ применение
     def _write(self, t: system.Target, sc: ServerConf, rows: list[dict] | None = None,
                restart: bool = False) -> None:
+        old_conf = t.read_file(t.conf_path)
+        old_rows = t.read_file(t.clients_table_path) if rows is not None else None
         t.write_file(t.conf_path, sc.render())
         if rows is not None:
             t.write_file(t.clients_table_path, awgserver.render_clients_table(rows), 0o644)
         if restart:
             t.restart()
         else:
-            t.sync(sc)
+            try:
+                t.sync(sc)
+            except Exception:
+                # Интерфейс остался прежним — прежними возвращаем и файлы: иначе панель показывала бы клиента
+                # отключённым (или удалённым), а его пир работал бы дальше до перезапуска сервера.
+                self._put_back(t, old_conf, old_rows)
+                raise
             try:
                 self.e.clients = self.list_clients(t)
             except Exception:  # noqa: BLE001
                 pass
         self.e.trigger()
+
+    @staticmethod
+    def _put_back(t: system.Target, conf: str | None, rows: str | None) -> None:
+        try:
+            if conf is not None:
+                t.write_file(t.conf_path, conf)
+            if rows is not None:
+                t.write_file(t.clients_table_path, rows, 0o644)
+        except OSError as e:
+            log.warning("could not put the server config back: %s", e)
 
     # ---------------------------------------------------------------- клиенты
     def add_client(self, name: str) -> str:
@@ -203,11 +221,13 @@ class ServerManager:
                 else:
                     rows.append({"clientId": pk, "userData": {
                         "clientName": name, "creationDate": awgserver.amnezia_date()}})
-            if enabled is not None and p.enabled != bool(enabled):
+            switched = enabled is not None and p.enabled != bool(enabled)
+            if switched:
                 p.enabled = bool(enabled)
+            self._write(t, sc, rows)
+            if switched:        # после записи: о несостоявшемся отключении журнал и Telegram не сообщают
                 self.e.event("info", Msg("ev.user_enabled" if p.enabled else "ev.user_disabled",
                                          name=self._name(rows, pk)))
-            self._write(t, sc, rows)
 
     def delete_client(self, pk: str) -> None:
         with self.e.lock:

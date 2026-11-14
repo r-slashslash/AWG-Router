@@ -128,6 +128,9 @@ class Engine:
         self.kernel_fallback: dict | None = None   # модуль ядра не запустил выход: {"error", "at"}
         self.server_engine: str | None = None      # чем работает сервер AWG: kernel | go | None
         self._srv_engine_at: tuple = ("", 0.0)     # (Target.key, когда смотрели)
+        self._srv_iface = True                     # интерфейс сервера был на месте, когда смотрели его тип
+        self._pre: dict[str, str] = {}             # имена Endpoint, разобранные заранее в этом проходе
+        self._pre_failed: set[str] = set()         # имена, которые заранее разобрать не удалось
         self.module_warn: str | None = None        # загружен модуль старше KERNEL_MIN, а конфиг 3.1
         self._module_warned: tuple | None = None
         self._modinfo: tuple = (0.0, "")              # (когда, версия) от modinfo хоста
@@ -314,10 +317,15 @@ class Engine:
         if not config.DRY_RUN:
             # имя из Endpoint разбираем здесь, в сети панели, до создания интерфейса: в сети
             # контейнера Amnezia свой резолвер не работает (127.0.0.53 от systemd-resolved)
-            try:
-                ip = awgconf.resolve_host(awgconf.split_endpoint(pc.endpoint)[0])
-            except awgconf.ConfigError as e:
-                raise system.SysError(e.msg) from None
+            host = awgconf.split_endpoint(pc.endpoint)[0]
+            if host in getattr(self, "_pre_failed", ()):       # уже ждали его в _prefetch_hosts
+                raise system.SysError(Msg("cfg.endpoint_resolve", host=host))
+            ip = getattr(self, "_pre", {}).get(host)
+            if ip is None:
+                try:
+                    ip = awgconf.resolve_host(host)
+                except awgconf.ConfigError as e:
+                    raise system.SysError(e.msg) from None
             self._v6_route(t, ip)
             setconf = awgconf.setconf_for(pc, ip)
         r.engine = self.exit_engine()
@@ -421,6 +429,7 @@ class Engine:
                 or self.server_engine is None:
             p = t.ns(["ip", "-d", "link", "show", t.iface], check=False, timeout=10)
             out = p.stdout if p.returncode == 0 else ""
+            self._srv_iface = p.returncode == 0
             seen = ("kernel" if re.search(r"^\s+(amneziawg|wireguard)\b", out, re.M) else
                     "go" if re.search(r"^\s+tun\b", out, re.M) else None)
             if seen is not None or self._srv_engine_at[0] != t.key:
@@ -440,6 +449,43 @@ class Engine:
         if self._module_warned != (t.key, self.module_warn):
             self._module_warned = (t.key, self.module_warn)
             self.event("warn", Msg("ev.kernel_old", version=self.module_warn, min=KERNEL_MIN))
+
+    def engine_pending(self) -> bool:
+        """Чем запускать выходы, пока не ясно: модуль 3.x загружен, выходы идут за сервером, а его интерфейса
+        ещё нет (контейнер только что перезапущен). Запуск сейчас поднял бы их на amneziawg-go, а следующий
+        проход, увидев сервер на модуле, пересоздал бы на модуле — два запуска вместо одного. Интерфейс есть,
+        но тип не распознан — не ждём: выходы идут на amneziawg-go, как раньше."""
+        return (not config.DRY_RUN and config.EXIT_ENGINE == "auto" and not self.kernel_fallback
+                and self.server_engine is None and not getattr(self, "_srv_iface", True)
+                and self.module_info()["ok"])
+
+    def _prefetch_hosts(self, wanted: dict, now: float) -> None:
+        """Имена из Endpoint выходов AWG, которые этот проход будет запускать, разбираются разом
+        (`awgconf.resolve_many`): по очереди каждое неразрешимое имя держало бы проход — а с ним блокировку
+        движка, выдачу конфигов и личные страницы клиентов — по RESOLVE_TIMEOUT секунд. Одно имя разбирает
+        сам `_start_up`, как раньше."""
+        self._pre, self._pre_failed = {}, set()
+        if config.DRY_RUN:
+            return
+        hosts = set()
+        for uid, u in wanted.items():
+            f = self._up_fail.get(uid)
+            if uid in self.rt or (f and now < f["next"]):
+                continue
+            try:
+                pc = self.parsed(u)
+            except awgconf.ConfigError:
+                continue
+            if pc.kind != "awg":
+                continue
+            host = awgconf.split_endpoint(pc.endpoint)[0]
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                hosts.add(host)
+        if len(hosts) > 1:
+            self._pre = awgconf.resolve_many(sorted(hosts), awgconf.RESOLVE_TIMEOUT)
+            self._pre_failed = hosts - set(self._pre)
 
     def _kernel_failed(self, ifn: str, err) -> None:
         self.kernel_fallback = {"error": err, "at": time.time()}
@@ -538,6 +584,8 @@ class Engine:
         links = self._links(t)
         now = time.time()
         eng = self.exit_engine()
+        wait_engine = self.engine_pending()
+        self._prefetch_hosts(wanted, now)
         for uid, u in wanted.items():
             try:
                 pc = self.parsed(u)
@@ -572,6 +620,8 @@ class Engine:
             if not r:
                 if f and now < f["next"]:
                     continue                            # пауза после неудачи (UP_PAUSES)
+                if wait_engine and pc.kind == "awg":
+                    continue                            # интерфейса сервера ещё нет: см. engine_pending
                 try:
                     self._start_up(t, uid, u, pc, h)
                 except Exception as e:  # noqa: BLE001
@@ -1374,8 +1424,25 @@ class Engine:
             t.restart()
         except Exception as e:  # noqa: BLE001
             self.event("error", Msg("ev.server_start_failed", error=msg_of(e)))
-        # True: цель перезапущена — у контейнера новый PID, и этот проход работал бы со старым
+        # True: цель перезапущена — у контейнера новый PID, и этот проход работал бы со старым. Следующий —
+        # сразу, а не через RECONCILE_INTERVAL: в новой сети контейнера ещё нет наших правил (_hold_rules)
+        self.wake.set()
         return True
+
+    def _hold_rules(self, t: system.Target, st: dict) -> None:
+        """Новая цель (контейнер перезапустился, панель запустилась): в её сети ещё нет наших правил, и до
+        конца прохода — а в нём запуск всех туннелей — клиенты шли бы напрямую, даже с резервом «Блокировать».
+        Поэтому правила ставятся до запуска туннелей: выход, туннеля которого ещё нет, `nftgen.layout` ведёт в
+        блок. `applied_hash` не меняется: обычное применение в конце прохода заменит эти правила настоящими."""
+        if config.DRY_RUN:
+            return
+        try:
+            path = os.path.join(RUN_DIR, "ruleset.nft")
+            with open(path, "w") as f:
+                f.write(self.build_ruleset(t, st, None))
+            t.ns(["nft", "-f", path], timeout=60)
+        except Exception as e:  # noqa: BLE001  — обычное применение в конце прохода скажет об ошибке само
+            log.warning("rules before tunnels: %s", e)
 
     def restart_server(self) -> None:
         """Кнопка «Перезапустить сервер AWG». Дальше всё применит reconcile: у контейнера сменится Target.key."""
@@ -1460,7 +1527,8 @@ class Engine:
             self.target_error = None
             if self.notifier:
                 self.notifier.target_ok()
-            if self.target is None or self.target.key != t.key or not self.target.exists:
+            fresh = self.target is None or self.target.key != t.key or not self.target.exists
+            if fresh:
                 if self.target is not None and self.target.exists:
                     self.event("warn", Msg("ev.target_restarted"))
                 self._stop_all()
@@ -1497,6 +1565,8 @@ class Engine:
                 log.exception("exit traffic")
             self.balancer.feed(self.traffic.take_recent(), time.time())
 
+            if fresh:
+                self._hold_rules(t, st)
             self._sync_upstreams(t, st)
             self._update_health(t, st)
             try:

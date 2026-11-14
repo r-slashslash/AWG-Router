@@ -1173,6 +1173,12 @@ def get_state(req):
     bal_counts = {}
     for uid in engine.bal.values():
         bal_counts[uid] = bal_counts.get(uid, 0) + 1
+    # Адрес панели и ссылки — один раз на запрос: share_url() на каждого клиента заново копировал всё
+    # состояние (panel_url → snapshot), и ответ на тысячу клиентов со ссылками занимал полторы секунды.
+    origin = panel_origin()
+    share_of: dict = {}
+    for tok, sh in st.get("shares", {}).items():
+        share_of.setdefault(sh.get("pk"), tok)
     clients = []
     for c in engine.clients:
         cp = st["clients"].get(c["public_key"], {})
@@ -1182,8 +1188,7 @@ def get_state(req):
             **c,
             "traffic": engine.traffic.view(c["public_key"]),
             "limits": limits.view(st.get("limits", {}).get(c["public_key"])),
-            "share_url": next((share_url(k) for k, v in st.get("shares", {}).items()
-                               if v.get("pk") == c["public_key"]), None),
+            "share_url": f"{origin}/s/{share_of[c['public_key']]}" if c["public_key"] in share_of else None,
             "cps": cps_view(st.get("cps", {}).get(c["public_key"])),
             "policy": {"outbound": cp.get("outbound", "inherit"),
                        "rules_mode": cp.get("rules_mode", "inherit"),

@@ -31,6 +31,9 @@ class ConfigError(MsgError, ValueError):
 
 # Сколько ждать ответа DNS при разборе имени из Endpoint (секунды)
 RESOLVE_TIMEOUT = 8
+# Предел распакованной ссылки vpn:// в байтах. Настоящие — килобайты, а zlib сжимает нули в тысячу раз:
+# ссылка в полмегабайта без предела заняла бы гигабайт памяти.
+LINK_MAX = 4 * 1024 * 1024
 
 
 # Параметры, по которым определяем поколение протокола AmneziaWG
@@ -182,8 +185,27 @@ def _find_conf_in_json(obj) -> str | None:
     return None
 
 
+def _inflate(data: bytes) -> bytes | None:
+    """zlib с пределом размера (LINK_MAX). None — это не поток zlib или он оборван."""
+    d = zlib.decompressobj()
+    try:
+        out = d.decompress(data, LINK_MAX + 1)
+    except zlib.error:
+        return None
+    if len(out) > LINK_MAX:
+        raise ConfigError(Msg("cfg.bad_vpn_link"))
+    return out if d.eof else None
+
+
 def extract_conf_text(user_input: str) -> str:
     """Принимает .conf, JSON или vpn://… и возвращает текст .conf."""
+    try:
+        return _extract_conf_text(user_input)
+    except RecursionError:              # JSON с тысячами уровней вложенности — не конфиг
+        raise ConfigError(Msg("cfg.unrecognized")) from None
+
+
+def _extract_conf_text(user_input: str) -> str:
     t = user_input.strip()
     if not t:
         raise ConfigError(Msg("cfg.empty"))
@@ -203,11 +225,9 @@ def extract_conf_text(user_input: str) -> str:
     data = None
     # qCompress: 4 байта длины (big-endian) + zlib
     for cand in (raw[4:], raw):
-        try:
-            data = zlib.decompress(cand)
+        data = _inflate(cand)
+        if data is not None:
             break
-        except Exception:
-            continue
     if data is None:
         data = raw
     text = data.decode("utf-8", errors="replace")

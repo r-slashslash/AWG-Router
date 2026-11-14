@@ -195,6 +195,8 @@ class Target:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
         with os.fdopen(fd, "w") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())        # конфиг сервера с клиентами: после сбоя питания не должен оказаться пустым
         os.replace(tmp, hp)
 
     # ------------------------------------------------------------- сервер

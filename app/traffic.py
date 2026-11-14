@@ -278,6 +278,8 @@ class Traffic:
                 with open(tmp, "w") as f:
                     json.dump({"_v": FORMAT, "clients": self.data, "outs": self.outs, "acct": self.acct,
                                "sni": self.sni, "server": self.server}, f)
+                    f.flush()
+                    os.fsync(f.fileno())
                 os.replace(tmp, self.path)
                 self._dirty = False
                 self._saved = time.time()

@@ -27,12 +27,20 @@ def _name(c: dict) -> str:
     return c.get("name") or c.get("ip") or c["public_key"][:8]
 
 
+WARN_EVERY = 600       # с: неудачную попытку включить или отключить клиента пишем в журнал не чаще
+_warned: dict[str, float] = {}
+
+
 def _set_enabled(engine, pk: str, on: bool) -> bool:
     try:
         engine.srv.update_client(pk, enabled=on)
+        _warned.pop(pk, None)
         return True
     except Exception as e:  # noqa: BLE001
-        log.warning("limits: %s %s: %s", "enable" if on else "disable", pk[:8], e)
+        # попытка повторится на следующем проходе (enforce): журнал не засоряем
+        if time.time() - _warned.get(pk, 0) >= WARN_EVERY:
+            _warned[pk] = time.time()
+            log.warning("limits: %s %s: %s", "enable" if on else "disable", pk[:8], e)
         return False
 
 
@@ -58,9 +66,13 @@ def enforce(engine, now: float | None = None) -> None:
         if ao and c["enabled"]:
             p["auto_off"] = None            # клиента включили вручную
             ao = None
+        # Отметка «сделано» ставится, только когда клиент действительно отключён: сбой отключения (awg
+        # syncconf не прошёл) иначе оставил бы клиента работать после срока или сверх лимита насовсем.
         if expired and L.get("exp_done") != exp:
-            p["exp_done"] = exp
-            if c["enabled"] and _set_enabled(engine, pk, False):
+            if not c["enabled"]:
+                p["exp_done"] = exp
+            elif _set_enabled(engine, pk, False):
+                p["exp_done"] = exp
                 p["auto_off"] = "exp"
                 engine.event("warn", Msg("ev.client_expired", name=_name(c), pk=pk))
         if exp and not expired and c["enabled"] and exp - now <= WARN_DAYS * 86400 \
@@ -76,8 +88,10 @@ def enforce(engine, now: float | None = None) -> None:
             p["quota_warned"] = key
             engine.event("warn", Msg("ev.client_quota_warn", name=_name(c), pk=pk, gb=round(q / GB, 2)))
         if q and not expired and engine.traffic.used(pk, period) >= q and L.get("quota_done") != key:
-            p["quota_done"] = key
-            if c["enabled"] and _set_enabled(engine, pk, False):
+            if not c["enabled"]:
+                p["quota_done"] = key
+            elif _set_enabled(engine, pk, False):
+                p["quota_done"] = key
                 p["auto_off"] = "quota:" + key
                 engine.event("warn", Msg("ev.client_quota", name=_name(c), pk=pk, gb=round(q / GB, 2)))
         if ao and ao.startswith("quota:") and ao != "quota:" + key and period == "month" \

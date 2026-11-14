@@ -245,8 +245,8 @@ PY
 
 # ------------------------------------------------------------------ kernel module
 # awg-router install-kernel: the AmneziaWG kernel module encrypts inside the kernel (several times less CPU
-# than amneziawg-go). The panel keeps amneziawg-go unless asked: with the module the AWG server moves to it
-# by itself (awg-quick prefers the kernel), and exits can be moved in the panel (Server → AmneziaWG engine).
+# than amneziawg-go). With the module the AWG server moves to it by itself after a restart (awg-quick prefers
+# the kernel), and tunnels to exits follow the server.
 # Only a 3.x module speaks AWG 3.1 — an older one leaves the server without awg0, so it is removed again.
 AWG_SYS="${AWGR_SYS:-/sys}"; OS_RELEASE="${AWGR_OS_RELEASE:-/etc/os-release}"
 MODLOAD="${AWGR_MODLOAD:-/etc/modules-load.d/amneziawg.conf}"
@@ -718,6 +718,14 @@ PANEL_BASE_PATH="$(envget PANEL_BASE_PATH)"
 [ -n "$PANEL_BASE_PATH" ] || PANEL_BASE_PATH="/$(openssl rand -hex 6)"
 
 if [ "$ACCESS" = ssh ]; then PANEL_HOST=127.0.0.1; TLS_MODE=off; else PANEL_HOST=0.0.0.0; TLS_MODE=letsencrypt; fi
+# Values set by hand in .env stay while the access method does: another listen address, selfsigned, or
+# TLS off behind a reverse proxy. An .env of the first version (no AWGR_VERSION) is migrated as before.
+if [ "$ACCESS" = public ] && [ "$(envget PANEL_ACCESS)" = public ] && [ -n "$(envget AWGR_VERSION)" ]; then
+  old="$(envget TLS_MODE)"; [[ "$old" =~ ^(selfsigned|off)$ ]] && TLS_MODE="$old"
+  old="$(envget PANEL_HOST)"; [ -n "$old" ] && [[ "$old" != 127.* ]] && PANEL_HOST="$old"
+fi
+RECONCILE_INTERVAL="$(envget RECONCILE_INTERVAL)"
+[[ "$RECONCILE_INTERVAL" =~ ^[0-9]+$ ]] && [ "$RECONCILE_INTERVAL" -ge 1 ] || RECONCILE_INTERVAL=10
 ok "Panel port: $PANEL_PORT"
 
 # Panel domain: asked on a new install and with --reconfigure; Enter — the panel opens by IP.
@@ -823,9 +831,25 @@ ACME_EMAIL=$ACME_EMAIL
 AWG_MODE=$AWG_MODE
 AWG_INIT_PORT=$AWG_INIT_PORT
 UPSTREAM_BACKEND=userspace
-RECONCILE_INTERVAL=10
+RECONCILE_INTERVAL=$RECONCILE_INTERVAL
 EOF
 umask 022
+# Everything else the previous .env had (EXIT_ENGINE, AWG_CONTAINER, SNI_PROXY_PORT, ACME_HTTP_PORT …) is
+# carried over: this file is rewritten on every update, and settings added by hand must not vanish with it.
+# tac: for a name written twice the last line wins, as it does for Docker.
+keep_env() { # $1 previous .env, $2 new .env
+  local line k known
+  [ -f "$1" ] || return 0
+  known=" $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$2" | tr -d '=' | tr '\n' ' ')"
+  while IFS= read -r line; do
+    [[ "$line" == *=* ]] || continue
+    k="${line%%=*}"
+    [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [[ "$known" == *" $k "* ]] && continue
+    printf '%s\n' "$line" >> "$2"; known="$known$k "
+  done < <(tac "$1")
+}
+keep_env "$ENV_FILE.bak" "$ENV_FILE"
 
 # ------------------------------------------------------------------ Docker
 step "Docker"

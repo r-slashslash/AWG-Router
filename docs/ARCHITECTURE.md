@@ -41,6 +41,13 @@ pin them); any failure on the module moves them back to `amneziawg-go` until the
 still there (for example, the kernel killed `amneziawg-go` when memory ran out), the engine restarts the
 server with growing pauses.
 
+On a new target (the container restarted, so its network is empty) a pass puts in the rule set before it
+starts any tunnel, with every exit that has no tunnel yet treated as down (`Engine._hold_rules`); the usual
+apply at the end of the pass replaces it. AWG exits wait while the 3.x module is loaded and the server's
+interface is not up yet (`Engine.engine_pending`), so they don't start on `amneziawg-go` first. If
+`awg syncconf` fails, the server's files are put back (`users._put_back`), so the files always match the
+interface.
+
 ## Routing
 
 For every exit N the panel creates a tunnel interface `awgrN` and sets up:
@@ -64,7 +71,8 @@ fallback; an exit over its monthly quota follows `quota_action`. With load balan
 Domain rules apply to SOCKS5 exits only. nftables redirects TCP 80/443 of such clients to
 `sniproxy.py`, which reads the site name (SNI or Host header): a match goes through the proxy by name,
 anything else goes to its original address. QUIC is blocked for these clients because the name
-cannot be read from it. Once the path is chosen, data is relayed inside the kernel (`splice`), so Python
+cannot be read from it. A connection whose original address is the handler itself was opened to its port
+directly, not redirected, and is closed. Once the path is chosen, data is relayed inside the kernel (`splice`), so Python
 only reads the name and counts bytes.
 
 ## Speed limits
@@ -77,10 +85,13 @@ only reads the name and counts bytes.
 
 - `state.json` — settings, clients, exits, rules. A new field needs a default in
   `store.DEFAULT_STATE`, input checks in the API handler in `main.py`, and handling in backup
-  restore (`clean_backup_state` drops unknown fields).
+  restore (`clean_backup_state` drops unknown fields). It is written with `fsync`; the previous version
+  stays as `state.json.bak`, and the panel starts from it when `state.json` is damaged.
 - `traffic.json` — counters (`traffic.FORMAT` stays 2 so older panels can still read it).
 - `tls.json` — HTTPS settings for this particular server; not part of backups.
-- `/api/state` is polled every few seconds, so keep it small; load big data with separate requests.
+- `/api/state` is polled every few seconds, so keep it small; load big data with separate requests,
+  and read the state once per request (`store.snapshot()` copies all of it). The server keeps connections
+  open (HTTP/1.1) and compresses text responses from `web.GZIP_MIN` bytes.
 
 ## Interface and texts
 

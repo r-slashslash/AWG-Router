@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import re
 import secrets
@@ -11,6 +12,8 @@ import time
 
 from . import config
 from .i18n import Msg, MsgError
+
+log = logging.getLogger("awgr.store")
 
 STATE_PATH = os.path.join(config.DATA_DIR, "state.json")
 
@@ -51,11 +54,10 @@ class Store:
         self.rev = 0
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path):
-            with open(path) as f:
-                self.state = json.load(f)
+            self.state = self._read()
             for k, v in DEFAULT_STATE.items():
                 self.state.setdefault(k, copy.deepcopy(v))
-            if self._upgrade():
+            if self._upgrade() or not os.path.exists(path):     # нет файла — взяли запасную копию (_read)
                 self._write()
         else:
             self.state = copy.deepcopy(DEFAULT_STATE)
@@ -78,11 +80,45 @@ class Store:
             changed = True
         return changed
 
+    def _read(self) -> dict:
+        """state.json, а если он повреждён (оборван при сбое питания, диск переполнился) — прежняя версия
+        из state.json.bak: раньше панель с таким файлом не запускалась вовсе. Повреждённый файл остаётся
+        рядом как state.json.broken. Нет и запасной копии — ошибка, как прежде: запуск с пустыми
+        настройками молча пустил бы всех клиентов напрямую."""
+        def load(p: str) -> dict:
+            with open(p) as f:
+                d = json.load(f)
+            if not isinstance(d, dict):
+                raise ValueError("state is not an object")
+            return d
+        try:
+            return load(self.path)
+        except (OSError, ValueError) as e:
+            try:
+                state = load(self.path + ".bak")
+            except (OSError, ValueError):
+                raise e from None
+            log.warning("state.json is damaged (%s): using the previous version from state.json.bak; "
+                        "the damaged file is kept as state.json.broken", e)
+            os.replace(self.path, self.path + ".broken")
+            return state
+
     def _write(self) -> None:
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(self.state, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        # прежняя версия — жёсткой ссылкой рядом (тот же файл, без копирования): её читает _read
+        bak = self.path + ".bak"
+        try:
+            if os.path.exists(self.path):
+                if os.path.lexists(bak):
+                    os.remove(bak)
+                os.link(self.path, bak)
+        except OSError:
+            pass                        # файловая система без жёстких ссылок — живём без запасной копии
         os.replace(tmp, self.path)
 
     def snapshot(self) -> dict:

@@ -644,6 +644,12 @@ class Sniffer:
             raw = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
             dport = struct.unpack("!H", raw[2:4])[0]
             dip = socket.inet_ntoa(raw[4:8])
+            if (dip, dport) == sock.getsockname()[:2]:
+                # Исходный адрес — сам посредник: соединение не перенаправлял nftables, клиент открыл порт
+                # напрямую. Без совпадения по домену посредник соединился бы с этим адресом, то есть сам
+                # с собой, и так по кругу, пока не кончатся дескрипторы.
+                self.stats["direct"] = self.stats.get("direct", 0) + 1
+                return
             self.stats["conns"] += 1
             self.stats["active"] += 1
             counted = True

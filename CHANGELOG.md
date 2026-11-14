@@ -75,13 +75,46 @@ it grows, so every user-visible change gets a new version.
   Removing a host server with `awg-router uninstall` also removes the service file and the `awg`,
   `awg-quick`, `amneziawg-go` the panel had put into `/usr/local/bin` — only when the service file is the
   panel's own. Thanks to @paris19891 (#27).
+- **Updates keep `.env`.** The installer writes `.env` anew on every install and `awg-router update`; settings
+  added by hand (`EXIT_ENGINE`, `AWG_CONTAINER`, `SNI_PROXY_PORT`, `ACME_HTTP_PORT` …) were dropped, and
+  `TLS_MODE=selfsigned|off`, a `PANEL_HOST` other than `0.0.0.0` and `RECONCILE_INTERVAL` were reset. Every key
+  of the previous `.env` that the installer doesn't write itself is now carried over (for a name written twice
+  the last line wins, as for Docker); `TLS_MODE` and `PANEL_HOST` are kept while the access mode stays public,
+  and `RECONCILE_INTERVAL` is kept when it is a number.
+- **After the server's container restarts.** The new container's network had no rules until the end of the
+  first pass, while tunnels to exits were already being started — clients went out directly, even with the
+  "Block" fallback. Now a pass on a new target first puts in rules where every exit without a tunnel yet is
+  treated as down (`engine._hold_rules`), and the usual apply replaces them at the end. With the 3.x kernel
+  module loaded and the server's interface not up yet, AWG exits wait for it (`engine_pending`) instead of
+  starting on amneziawg-go and being recreated on the module a pass later; after the panel restarts the server
+  by itself, the next pass starts at once instead of after `RECONCILE_INTERVAL`. Exit endpoint names are resolved
+  together (`awgconf.resolve_many`): three names that don't resolve held the pass, and the engine lock with
+  config downloads and personal pages, for 3 × `RESOLVE_TIMEOUT`.
+- **A faster panel.** The panel keeps its connection open between requests (HTTP/1.1; the next request is
+  awaited `web.KEEP_IDLE` seconds, and with half the connection slots in use responses close the connection as
+  before) instead of a new TLS handshake for every state poll, and compresses text responses from 1 KB
+  (`/api/state` for 1000 clients: 234 → 29 KB, first load of the panel: 526 → 144 KB). `/api/state` no longer
+  copies the whole state for every client with a personal link: 1.5 s → 30 ms for 1000 such clients.
+- **Domain rules: a direct connection to the handler.** A client that opened the handler's port
+  (`SNI_PROXY_PORT`) at the server's tunnel address directly made it connect to itself, again and again, until
+  it ran out of file descriptors and stopped serving every client with domain rules. Such a connection is now
+  closed at once (`direct` in the handler's counters).
 - **Smaller fixes.** Restoring a backup from another server no longer takes the old server's public address
   and "Address in configs" when this server has none of its own (`PUBLIC_HOST` from `.env` stays in force);
   before, configs, the panel link and the certificate got the old IP. An exit whose fallback chain leads back
   to itself (A → B → A) is refused with a clear message: with all of them down clients would be blocked. The
   certificate thread survives an unexpected error instead of stopping renewals until a restart; a self-signed
   certificate is reissued when only the second address changes. `Infinity`, `NaN` and very deeply nested JSON
-  in a request get HTTP 400 instead of 500. The Server tab's "Subnet" field shows the subnet (`10.8.1.0/24`) in host
+  in a request get HTTP 400 instead of 500, and so does a number out of range such as `1e999` (it was infinity in
+  Python and failed in `int()`); a request with `Transfer-Encoding` gets 411. When `awg syncconf` fails, the
+  server's files are put back as they were: before, the panel showed a client disabled or deleted while the
+  peer kept working until the server restarted, and a client past its date or quota was marked as switched off
+  and never tried again — now the switch-off is retried every pass, and the event comes only once it worked.
+  A `vpn://` link is unpacked with a 4 MB limit (a link of half a megabyte took a gigabyte of memory), and a
+  config nested too deeply is "not recognized" instead of HTTP 500. `state.json`, the clients' traffic and the
+  server's files are written with `fsync`, and the previous `state.json` is kept as `state.json.bak`: the panel
+  starts from it when `state.json` is damaged (the damaged file is kept as `state.json.broken`) instead of not
+  starting at all. The Server tab's "Subnet" field shows the subnet (`10.8.1.0/24`) in host
   mode too, not the server's own address with the mask (`10.8.1.1/24`), which looked like a wrong subnet. The
   field takes only the subnet: the panel puts the server's address in it by itself, in the form it had (the
   first address, or the network address as AmneziaVPN writes it) (thanks to @paris19891, #26).
