@@ -32,7 +32,8 @@ it grows, so every user-visible change gets a new version.
   `ip link add` can't load it again), its autoload removed and the module unloaded (`ev.kernel_disabled`; **Try
   again** reinstalls, which lifts the block). Installing the module also sets `kernel.panic = 10` unless there is an
   own value, so a crash in the kernel reboots the server instead of leaving it hanging. Texts of the engine block
-  rewritten: the module is the recommended engine, in terms of system resources.
+  rewritten: the module is the recommended engine, in terms of system resources; the install part is gone once the
+  module runs, and the panel no longer lists requirements it has already checked.
 - **CPU and memory in the status line.** The panel's status line shows the server's CPU and memory load,
   refreshed with the rest of the state; 90% and above is highlighted, and the hint has the load average and
   the memory in use. CPU is measured between two reads of `/proc/stat` (`hostnet.CpuMeter`), so it is the whole

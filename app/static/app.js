@@ -1686,12 +1686,7 @@ function engineSection() {
       <p class="small muted">${esc(t("eng.server_auto"))}</p>
       <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel", "eng.what_cost"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
       ${E.disabled ? `<div class="banner bad">${esc(t(E.disabled.error ? "eng.n_disabled_reboot" : "eng.n_disabled"))}</div>` : ""}
-      <div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
-        ${E.fit ? engInstallHtml(E, m) : `<p class="small">${esc(t("eng.no_fit"))} <bdi>${esc(tm(E.fit_why))}</bdi></p>`}
-        <span class="hint">${esc(t("eng.or_ssh"))}</span>
-        <pre class="code" dir="ltr">${esc(KERNEL_CMD)}</pre>
-        <span class="hint">${esc(t("eng.install_hint"))}</span>
-        <div><button class="btn sm" id="eng-copy">${esc(t("web.copy"))}</button></div></div>
+      ${engInstallBlock(E, m)}
     </div>
   </section>`;
 }
@@ -1720,6 +1715,20 @@ function engineBanner() {
   if (kind === "installing") acts = btn("open", "eng.btn_details");
   else acts += " " + btn("hide", "eng.btn_hide", "ghost");
   return `<div class="banner ${["disabled", "old"].includes(kind) ? "bad" : "info"}"><b>${esc(text)}</b> ${acts}</div>`;
+}
+
+/** «Установка модуля ядра»: модуль уже работает — блока нет; сервер не подходит — только почему; иначе кнопка,
+ *  журнал и та же команда для SSH. Требования не перечисляются: панель проверила сервер сама (kernelmod.fit). */
+function engInstallBlock(E, m) {
+  const job = engJob || E.install || {};
+  if (m.loaded && m.ok && job.state !== "running" && !(engJob && engJob.state === "failed")) return "";
+  if (!E.fit) return `<div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
+    <p class="small">${esc(t("eng.no_fit"))} <bdi>${esc(tm(E.fit_why))}</bdi></p></div>`;
+  return `<div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
+    ${engInstallHtml(E, m)}
+    <span class="hint">${esc(t("eng.or_ssh"))}</span>
+    <pre class="code" dir="ltr">${esc(KERNEL_CMD)}</pre>
+    <div><button class="btn sm" id="eng-copy">${esc(t("web.copy"))}</button></div></div>`;
 }
 
 /** Кнопка установки и журнал в разделе «Движок AmneziaWG». */
