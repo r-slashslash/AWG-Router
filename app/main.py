@@ -18,8 +18,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-from . import (awgconf, awgserver, config, cps, domains, hostnet, limits, lists, notify, selfupdate, shaping, system,
-               tgbot, tlsconf, tlsmgr, totp, users, webfront)
+from . import (awgconf, awgserver, config, cps, domains, hostnet, kernelmod, limits, lists, notify, selfupdate, shaping,
+               system, tgbot, tlsconf, tlsmgr, totp, users, webfront)
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
@@ -1276,7 +1276,7 @@ def get_state(req):
         "awg_engine": {"module": engine.module_info(), "server": engine.server_engine,
                        "exits_now": engine.exit_engine(st), "fallback": engine.kernel_fallback,
                        "forced": None if config.EXIT_ENGINE == "auto" else config.EXIT_ENGINE,
-                       "old": engine.module_warn, "min": engine_mod.KERNEL_MIN},
+                       "old": engine.module_warn, "min": engine_mod.KERNEL_MIN, **engine_offer(t)},
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**_list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),
@@ -1955,6 +1955,60 @@ def put_server(req):
     if tls.names() != names:
         tls.reconfigure()              # адрес панели или второй адрес сертификата сменился
     return res
+
+
+# ------------------------------------------------------- модуль ядра (рекомендуемый движок)
+ENGINE_HIDE_RE = re.compile(r"^[a-z]{3,10}(:\d{1,12})?$")
+
+
+def engine_offer(t) -> dict:
+    """Модуль ядра в /api/state: подходит ли сервер, идёт ли установка и какое оповещение показать сверху.
+    notice — вид оповещения (offer: модуля нет; old: модуль старше 3.x; lost: модуль пропал, сервер на
+    amneziawg-go; disabled: панель сама отключила модуль после сбоя; restart: модуль есть, а сервер ещё на
+    amneziawg-go; installing). Вид с отметкой времени (lost:…, disabled:…) — новый случай снова показывается,
+    даже если прошлый скрыли."""
+    f = kernelmod.fit()
+    ks = kernelmod.load()
+    job = kernelmod.status()
+    m = engine.module_info()
+    notice = None
+    if t and t.exists:
+        if job["state"] == "running":
+            notice = "installing"
+        elif ks.get("disabled"):
+            notice = f"disabled:{int((ks['disabled'] or {}).get('at') or 0)}"
+        elif m["loaded"] and m["ok"]:
+            notice = "restart" if engine.server_engine == "go" else None
+        elif f["ok"]:
+            notice = "old" if m["loaded"] else f"lost:{int(ks['lost'])}" if ks.get("lost") else "offer"
+        if notice and notice != "installing" and ks.get("hidden") == notice:
+            notice = None
+    return {"fit": f["ok"], "fit_why": f["why"], "install": job, "notice": notice,
+            "disabled": ks.get("disabled"), "lost": ks.get("lost")}
+
+
+@app.post("/api/engine/install")
+def engine_install(req):
+    """Кнопка «Установить модуль»: install.sh --install-kernel на хосте (kernelmod.start)."""
+    try:
+        return kernelmod.start()
+    except MsgError as e:
+        bad(e.msg, 409)
+
+
+@app.get("/api/engine/install")
+def engine_install_status(req):
+    return {**kernelmod.status(), "log": kernelmod.log_lines(40)}
+
+
+@app.put("/api/engine")
+def put_engine(req):
+    """«Скрыть» у оповещения про модуль ядра: hidden — его вид (engine_offer), пусто — показывать снова."""
+    h = req.json().get("hidden")
+    if h is not None and not (isinstance(h, str) and ENGINE_HIDE_RE.match(h)):
+        bad("err.bad_value")
+    kernelmod.update(hidden=h or None)
+    return {"ok": True}
 
 
 @app.post("/api/server/restart")

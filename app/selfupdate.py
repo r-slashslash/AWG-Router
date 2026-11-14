@@ -71,10 +71,11 @@ def _write_state(s: dict) -> None:
     os.replace(STATE + ".tmp", STATE)
 
 
-def log_lines(n: int = 30) -> list[str]:
-    """Последние строки журнала без цветов и строк с паролем (их печатает итоговая сводка)."""
+def log_lines(n: int = 30, path: str | None = None) -> list[str]:
+    """Последние строки журнала (по умолчанию — обновления) без цветов и строк с паролем (их печатает итоговая
+    сводка)."""
     try:
-        with open(LOG, "rb") as f:
+        with open(path or LOG, "rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 64 * 1024))
             text = f.read().decode("utf-8", "replace")

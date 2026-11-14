@@ -273,6 +273,7 @@ async function boot() {
   $("#login").hidden = true;
   await refresh();
   if (!S) return;
+  if (((S.awg_engine || {}).install || {}).state === "running") { engWatching = true; engWatch(); }
   try {
     const done = sessionStorage.getItem("awgr.updated");
     if (done) { sessionStorage.removeItem("awgr.updated"); toast(t("sy.update_done", { version: done })); }
@@ -355,6 +356,7 @@ function render(force = false) {
   const bindTab = new Map(Object.entries(bind)).get(tab);
   if (bindTab) bindTab();
   $$(".banner [data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
+  $$("[data-eng]").forEach((b) => b.onclick = () => engAction(b.dataset.eng, b));
   if (keepSearch !== null && $("#client-search")) { $("#client-search").value = keepSearch; filterClients(); }
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
 }
@@ -367,6 +369,7 @@ function banners() {
   if (!S.target) h += `<div class="banner bad"><b>${esc(t("banner.no_target_title"))}</b> ${esc(tm(S.target_error))}<br><span class="small">${th("banner.no_target_hint", { a: code("pid: host"), b: code("privileged: true") })}</span></div>`;
   else if (serverMissing() && tab !== "server") h += `<div class="banner info"><b>${esc(t("srv.missing"))}</b> <button class="btn sm" data-goto="server">${esc(t("srv.create_title"))}</button></div>`;
   if (S.engine.last_error) h += `<div class="banner bad"><b>${esc(t("banner.apply_error"))}</b> ${esc(tm(S.engine.last_error))}</div>`;
+  h += engineBanner();
   const goSys = `<button class="btn sm" data-goto="system">${esc(t("tab.system"))}</button>`;
   // Сертификат и обновление подробно показаны первыми на вкладке «Система» — там полоса не нужна
   if (tab !== "system") {
@@ -1682,12 +1685,104 @@ function engineSection() {
       ${E.forced ? `<p class="small muted">${esc(t("eng.forced", { value: E.forced }))}</p>` : ""}
       <p class="small muted">${esc(t("eng.server_auto"))}</p>
       <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel", "eng.what_cost"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
+      ${E.disabled ? `<div class="banner bad">${esc(t(E.disabled.error ? "eng.n_disabled_reboot" : "eng.n_disabled"))}</div>` : ""}
       <div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
+        ${E.fit ? engInstallHtml(E, m) : `<p class="small">${esc(t("eng.no_fit"))} <bdi>${esc(tm(E.fit_why))}</bdi></p>`}
+        <span class="hint">${esc(t("eng.or_ssh"))}</span>
         <pre class="code" dir="ltr">${esc(KERNEL_CMD)}</pre>
         <span class="hint">${esc(t("eng.install_hint"))}</span>
         <div><button class="btn sm" id="eng-copy">${esc(t("web.copy"))}</button></div></div>
     </div>
   </section>`;
+}
+
+/* ---------------------------------------- модуль ядра: оповещение сверху и установка кнопкой */
+let engJob = null;          // последний ответ GET engine/install (журнал установки)
+let engTimer = null;
+let engWatching = false;    // установку запустили или застали в этой вкладке: по окончании — спросить о перезапуске
+
+function engKind() {
+  const n = (S.awg_engine || {}).notice;
+  return n ? n.split(":")[0] : null;
+}
+
+/** Оповещение про модуль ядра (вид — engine_offer в main.py); «Скрыть» запоминает вид на сервере. */
+function engineBanner() {
+  const E = S.awg_engine || {}, kind = engKind();
+  if (!kind) return "";
+  const btn = (act, key, cls = "") => `<button class="btn sm ${cls}" data-eng="${act}">${esc(t(key))}</button>`;
+  const text = kind === "disabled" && E.disabled && E.disabled.error ? t("eng.n_disabled_reboot")
+    : t("eng.n_" + kind, { version: (E.module || {}).version || "?" });
+  let acts = "";
+  if (["offer", "old", "lost"].includes(kind)) acts = btn("install", "eng.btn_install");
+  else if (kind === "disabled") acts = btn("install", "eng.btn_retry");
+  else if (kind === "restart") acts = btn("restart", "srv.restart");
+  if (kind === "installing") acts = btn("open", "eng.btn_details");
+  else acts += " " + btn("hide", "eng.btn_hide", "ghost");
+  return `<div class="banner ${["disabled", "old"].includes(kind) ? "bad" : "info"}"><b>${esc(text)}</b> ${acts}</div>`;
+}
+
+/** Кнопка установки и журнал в разделе «Движок AmneziaWG». */
+function engInstallHtml(E, m) {
+  const job = engJob || E.install || {};
+  const ready = m.loaded && m.ok;
+  let h = "";
+  if (job.state === "running") h += `<p class="small"><b>${esc(t("eng.inst_progress"))}</b></p>`;
+  else if (job.state === "failed") h += `<p class="small bad">${esc(t("eng.inst_failed"))}</p>`;
+  else if (job.state === "done" && ready) h += `<p class="small">${esc(t("eng.inst_done"))}</p>`;
+  if (!ready && job.state !== "running")
+    h += `<div><button class="btn sm primary" data-eng="install">${esc(t(E.disabled ? "eng.btn_retry" : "eng.btn_install"))}</button></div>`;
+  if (engJob && engJob.log && engJob.log.length)
+    h += `<pre class="code" dir="ltr" id="eng-log" style="margin-top:8px;max-height:220px">${esc(engJob.log.join("\n"))}</pre>`;
+  return h;
+}
+
+async function engAction(act, b) {
+  if (act === "open") { goTab("server"); setTimeout(() => { const el = $("#engine"); if (el) el.scrollIntoView(); }, 50); return; }
+  if (act === "hide") {
+    try { await api("PUT", "engine", { hidden: S.awg_engine.notice }); await refresh(); } catch (e) { toast(e.message, true); }
+    return;
+  }
+  if (act === "restart") {
+    if (!confirm(t("srv.restart_confirm"))) return;
+    try { await api("POST", "server/restart", {}); toast(t("srv.restarting")); } catch (e) { toast(e.message, true); }
+    refresh();
+    return;
+  }
+  if (act === "install") {
+    if (!confirm(t("eng.inst_confirm"))) return;
+    if (b) b.disabled = true;
+    try {
+      await api("POST", "engine/install", {});
+      engWatching = true;
+      engWatch();
+      goTab("server");
+      setTimeout(() => { const el = $("#engine"); if (el) el.scrollIntoView(); }, 50);
+    } catch (e) { toast(e.message, true); if (b) b.disabled = false; }
+  }
+}
+
+/** Пока модуль ставится — журнал раз в 2 с; по окончании — предложить перезапуск сервера. */
+function engWatch() {
+  clearTimeout(engTimer);
+  const tick = async () => {
+    try { engJob = await api("GET", "engine/install"); } catch { engTimer = setTimeout(tick, 4000); return; }
+    const log = $("#eng-log");
+    if (log) { log.textContent = (engJob.log || []).join("\n"); log.scrollTop = log.scrollHeight; }
+    else if (tab === "server") render();
+    if (engJob.state === "running") { engTimer = setTimeout(tick, 2000); return; }
+    await refresh();
+    if (tab === "server") render();
+    if (!engWatching) return;
+    engWatching = false;
+    if (engJob.state === "done") {
+      if (confirm(t("eng.inst_restart"))) {
+        try { await api("POST", "server/restart", {}); toast(t("srv.restarting")); } catch (e) { toast(e.message, true); }
+        refresh();
+      }
+    } else toast(t("eng.inst_failed"), true);
+  };
+  tick();
 }
 /** общее ограничение скорости клиентов (своё сохранение, без перезапуска интерфейса) */
 function shapingSection() {

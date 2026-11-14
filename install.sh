@@ -244,12 +244,19 @@ PY
 }
 
 # ------------------------------------------------------------------ kernel module
-# awg-router install-kernel: the AmneziaWG kernel module encrypts inside the kernel (several times less CPU
-# than amneziawg-go). With the module the AWG server moves to it by itself after a restart (awg-quick prefers
-# the kernel), and tunnels to exits follow the server.
+# The AmneziaWG kernel module (recommended) encrypts inside the kernel and uses far fewer system resources
+# than amneziawg-go. A new install asks for it when the server fits (kernel_fit); `awg-router install-kernel`
+# and the panel's "Install the module" button run install_kernel too. With the module the AWG server moves
+# to it by itself after a restart (awg-quick prefers the kernel), and tunnels to exits follow the server.
 # Only a 3.x module speaks AWG 3.1 — an older one leaves the server without awg0, so it is removed again.
+# Any failure leaves the server on amneziawg-go: during an install (KERNEL_SOFT=1) it is a warning, not a stop.
 AWG_SYS="${AWGR_SYS:-/sys}"; OS_RELEASE="${AWGR_OS_RELEASE:-/etc/os-release}"
 MODLOAD="${AWGR_MODLOAD:-/etc/modules-load.d/amneziawg.conf}"
+# Written by the panel when the AWG server didn't come up on the module (it switched the server to
+# amneziawg-go): without it the next `ip link add … type amneziawg` would load the module again.
+MODBLOCK="${AWGR_MODBLOCK:-/etc/modprobe.d/awg-router-amneziawg.conf}"
+PANIC_CONF="${AWGR_PANIC_CONF:-/etc/sysctl.d/90-awg-router-panic.conf}"
+kfail() { [ "${KERNEL_SOFT:-0}" = 1 ] || die "$1"; warn "$1"; }
 # Loaded at boot, before Docker starts the AWG container: otherwise the module comes only when awg-quick asks
 # for it, and a server whose container starts first could quietly come up on amneziawg-go.
 module_autoload() { mkdir -p "$(dirname "$MODLOAD")" && echo amneziawg > "$MODLOAD"; }
@@ -259,6 +266,34 @@ module_version() { # loaded module: /sys, or modinfo for builds without a versio
   cat "$AWG_SYS/module/amneziawg/version" 2>/dev/null || modinfo -F version amneziawg 2>/dev/null || true
 }
 module_new_enough() { local m="${1%%.*}"; [[ "$m" =~ ^[0-9]+$ ]] && [ "$m" -ge "$KERNEL_MIN" ]; }
+
+# Can this server build and load the module? 0 — yes; otherwise KERNEL_WHY says why not.
+kernel_fit() {
+  local virt id ver
+  KERNEL_WHY=""
+  virt=$(systemd-detect-virt -c 2>/dev/null || true)
+  if [ -n "$virt" ] && [ "$virt" != none ]; then
+    KERNEL_WHY="This server is a container ($virt): it can't load kernel modules."; return 1
+  fi
+  case "$(uname -m)" in
+    x86_64|aarch64) ;;
+    *) KERNEL_WHY="Only x86_64 and aarch64 are supported (this is $(uname -m))."; return 1 ;;
+  esac
+  id=$(. "$OS_RELEASE" 2>/dev/null && echo "${ID:-}"); ver=$(. "$OS_RELEASE" 2>/dev/null && echo "${VERSION_ID:-0}")
+  case "$id" in
+    ubuntu) [ "${ver%%.*}" -ge 22 ] 2>/dev/null || { KERNEL_WHY="Ubuntu 22.04 or newer is needed (this is $ver)."; return 1; } ;;
+    debian) [ "${ver%%.*}" -ge 12 ] 2>/dev/null || { KERNEL_WHY="Debian 12 or newer is needed (this is $ver)."; return 1; } ;;
+    *) KERNEL_WHY="Only Ubuntu and Debian are supported (this is ${id:-unknown}). To build the module by hand: https://github.com/amnezia-vpn/amneziawg-linux-kernel-module"; return 1 ;;
+  esac
+}
+
+# A crash in a kernel module takes the whole kernel down: with kernel.panic the server reboots by itself
+# instead of hanging until someone resets it at the hosting provider. An own setting is left alone.
+kernel_panic_reboot() {
+  [ "$(sysctl -n kernel.panic 2>/dev/null || echo 1)" = 0 ] || return 0
+  mkdir -p "$(dirname "$PANIC_CONF")" && echo "kernel.panic = 10" > "$PANIC_CONF"
+  sysctl -q -w kernel.panic=10 2>/dev/null || true
+}
 
 # The Amnezia PPA on Debian: the key is the one Launchpad says signs the PPA (full fingerprint, not a
 # short id), fetched from the Ubuntu keyserver and checked before apt trusts it.
@@ -281,56 +316,51 @@ amnezia_ppa_debian() {
 
 install_kernel() {
   step "AmneziaWG kernel module"
-  local v virt id ver pkg
+  local v id pkg
+  rm -f "$MODBLOCK"          # the panel switched the module off after a failure: trying again means allowing it
   v=$(module_version)
   if [ -n "$v" ] && module_new_enough "$v"; then
     ok "Already loaded: version $v"
-    module_autoload
+    module_autoload; kernel_panic_reboot
     kernel_next; return 0
   fi
-  virt=$(systemd-detect-virt -c 2>/dev/null || true)
-  if [ -n "$virt" ] && [ "$virt" != none ]; then
-    die "This server is a container ($virt): it can't load kernel modules. The panel keeps using amneziawg-go."
-  fi
-  case "$(uname -m)" in
-    x86_64|aarch64) ;;
-    *) die "Only x86_64 and aarch64 are supported (this is $(uname -m)). The panel keeps using amneziawg-go." ;;
-  esac
-  id=$(. "$OS_RELEASE" 2>/dev/null && echo "${ID:-}"); ver=$(. "$OS_RELEASE" 2>/dev/null && echo "${VERSION_ID:-0}")
-  case "$id" in
-    ubuntu) [ "${ver%%.*}" -ge 22 ] 2>/dev/null || die "Ubuntu 22.04 or newer is needed (this is $ver)." ;;
-    debian) [ "${ver%%.*}" -ge 12 ] 2>/dev/null || die "Debian 12 or newer is needed (this is $ver)." ;;
-    *) die "Only Ubuntu and Debian are supported (this is ${id:-unknown}). To build the module by hand: https://github.com/amnezia-vpn/amneziawg-linux-kernel-module" ;;
-  esac
+  kernel_fit || { kfail "$KERNEL_WHY The AWG server keeps using amneziawg-go."; return 1; }
+  id=$(. "$OS_RELEASE" 2>/dev/null && echo "${ID:-}")
   [ -n "$v" ] && warn "Module $v is loaded: it is older than $KERNEL_MIN.x and doesn't speak AWG 3.1 — it will be replaced."
   if command -v mokutil >/dev/null && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
     warn "Secure Boot is on: a module built here won't load unless you enroll a signing key (mokutil)."
   fi
   echo "  The module is built for kernel $(uname -r) from the Amnezia PPA; this takes a few minutes."
-  ask "Continue? [y/N]: " "${AWGR_YES:-n}"
-  [[ "$REPLY" =~ ^[Yy] ]] || die "Cancelled: nothing was changed."
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq >/dev/null || die "apt-get update failed"
-  apt-get install -y -qq "linux-headers-$(uname -r)" dkms gnupg curl >/dev/null \
-    || die "Could not install the kernel headers for $(uname -r) (a custom kernel?). The panel keeps using amneziawg-go."
-  if [ "$id" = ubuntu ]; then
-    apt-get install -y -qq software-properties-common python3-launchpadlib >/dev/null \
-      && add-apt-repository -y ppa:amnezia/ppa >/dev/null || die "Could not add ppa:amnezia/ppa"
-  else
-    amnezia_ppa_debian || die "Could not add the Amnezia repository (Launchpad or the key server is unreachable)."
+  if [ "${KERNEL_SOFT:-0}" != 1 ]; then    # during an install the answer was the engine question
+    ask "Continue? [y/N]: " "${AWGR_YES:-n}"
+    [[ "$REPLY" =~ ^[Yy] ]] || die "Cancelled: nothing was changed."
   fi
-  apt-get update -qq >/dev/null || die "apt-get update failed"
+  export DEBIAN_FRONTEND=noninteractive    # a fresh VM may run unattended-upgrades: wait for the apt lock
+  apt-get update -qq -o DPkg::Lock::Timeout=300 >/dev/null || { kfail "apt-get update failed. The AWG server keeps using amneziawg-go."; return 1; }
+  apt-get install -y -qq "linux-headers-$(uname -r)" dkms gnupg curl -o DPkg::Lock::Timeout=300 >/dev/null \
+    || { kfail "Could not install the kernel headers for $(uname -r) (a custom kernel?). The AWG server keeps using amneziawg-go."; return 1; }
+  if [ "$id" = ubuntu ]; then
+    apt-get install -y -qq software-properties-common python3-launchpadlib -o DPkg::Lock::Timeout=300 >/dev/null \
+      && add-apt-repository -y ppa:amnezia/ppa >/dev/null \
+      || { kfail "Could not add ppa:amnezia/ppa (Launchpad unreachable?). The AWG server keeps using amneziawg-go."; return 1; }
+  else
+    amnezia_ppa_debian \
+      || { kfail "Could not add the Amnezia repository (Launchpad or the key server is unreachable). The AWG server keeps using amneziawg-go."; return 1; }
+  fi
+  apt-get update -qq -o DPkg::Lock::Timeout=300 >/dev/null || { kfail "apt-get update failed. The AWG server keeps using amneziawg-go."; return 1; }
   # only the module: the panel brings its own awg and awg-quick, and the AWG server has its own
   pkg=amneziawg-dkms; apt-cache show "$pkg" >/dev/null 2>&1 || pkg=amneziawg
   echo "  Building the module ($pkg) …"
-  if ! apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
-    apt-get remove -y -qq "$pkg" >/dev/null 2>&1   # a failed DKMS build would retry on every kernel update
-    die "The module did not build for kernel $(uname -r): the Amnezia PPA may not support this kernel yet (details: /var/lib/dkms/amneziawg/*/build/make.log). Nothing changed — the panel keeps using amneziawg-go."
+  if ! apt-get install -y -qq "$pkg" -o DPkg::Lock::Timeout=300 >/dev/null 2>&1; then
+    apt-get remove -y -qq "$pkg" -o DPkg::Lock::Timeout=300 >/dev/null 2>&1   # a failed DKMS build would retry on every kernel update
+    kfail "The module did not build for kernel $(uname -r): the Amnezia PPA may not support this kernel yet (details: /var/lib/dkms/amneziawg/*/build/make.log). Nothing changed — the AWG server keeps using amneziawg-go."
+    return 1
   fi
   [ -n "$v" ] && rmmod amneziawg 2>/dev/null       # the old one goes if nothing uses it
   if ! modprobe amneziawg 2>/dev/null; then
-    apt-get remove -y -qq "$pkg" >/dev/null 2>&1
-    die "The module was built but doesn't load (Secure Boot?) — removed again. The panel keeps using amneziawg-go."
+    apt-get remove -y -qq "$pkg" -o DPkg::Lock::Timeout=300 >/dev/null 2>&1
+    kfail "The module was built but doesn't load (Secure Boot?) — removed again. The AWG server keeps using amneziawg-go."
+    return 1
   fi
   v=$(module_version)
   if [ -z "$v" ]; then
@@ -340,16 +370,19 @@ install_kernel() {
     if [ -n "$file" ] && module_new_enough "$file"; then
       warn "Version $file is installed, but the old $v is still in use: reboot the server to switch to it."
     else
-      rmmod amneziawg 2>/dev/null; apt-get remove -y -qq "$pkg" >/dev/null 2>&1
-      die "The PPA gave module $v, which doesn't speak AWG 3.1 ($KERNEL_MIN.x is needed) — removed again so the server keeps working."
+      rmmod amneziawg 2>/dev/null; apt-get remove -y -qq "$pkg" -o DPkg::Lock::Timeout=300 >/dev/null 2>&1
+      kfail "The PPA gave module $v, which doesn't speak AWG 3.1 ($KERNEL_MIN.x is needed) — removed again so the server keeps working."
+      return 1
     fi
   fi
   ok "Kernel module loaded: version ${v:-?}"
   module_autoload && ok "Loaded at boot too ($MODLOAD)"
+  kernel_panic_reboot
   kernel_next
 }
 
 kernel_next() {
+  [ "${KERNEL_NEW_SERVER:-0}" = 1 ] && return 0     # the server is created after this, right on the module
   echo "  Next: the AWG server moves to the module after a restart — in the panel, Server → Restart the AWG server"
   echo "  (clients drop for a few seconds); tunnels to exits follow it."
   echo "  To go back to amneziawg-go: apt remove amneziawg-dkms && rm -f $MODLOAD, then reboot the server."
@@ -671,6 +704,26 @@ if { [ "$RECONF" = 1 ] && [ -z "${AWGR_ACCESS:-}" ]; } || [ -z "$ACCESS" ]; then
 fi
 [ -z "$(envget PANEL_ACCESS)" ] && ASK_DOMAIN=1    # a new install
 
+# ------------------------------------------------------------------ AmneziaWG engine
+# A new install or reconfigure (never an update) on a server that can take the module: the kernel module is
+# recommended. AWGR_ENGINE=kernel|go answers without the question; without a terminal — the module.
+WANT_KERNEL=0
+if [ "$RECONF" = 1 ] || [ -z "$(envget PANEL_ACCESS)" ]; then
+  KV=$(module_version)
+  if [ -n "$KV" ] && module_new_enough "$KV"; then
+    :                                               # already on the module
+  elif [ "${AWGR_ENGINE:-}" = go ]; then
+    :
+  elif [ "${AWGR_ENGINE:-}" = kernel ]; then
+    WANT_KERNEL=1
+  elif kernel_fit; then
+    choose "Which AmneziaWG engine should the server use?" \
+           "The Linux kernel module (recommended)" \
+           "amneziawg-go, a regular program"
+    [ "$CHOICE" = 1 ] && WANT_KERNEL=1
+  fi
+fi
+
 # ------------------------------------------------------------------ settings
 step "Preparing settings"
 # PUBLIC_HOST is the address in client configs: the server's IP or a domain.
@@ -973,6 +1026,14 @@ if [ -z "$PANEL_REF" ]; then
   [ -f "$DIR/IMAGES" ] || no_ready_image "the panel"
   with_spinner build_image "$IMAGE" "$DIR" "$LOG" || { tail -n 25 "$LOG"; die "Build failed, see $LOG"; }
   ok "Done"
+fi
+
+# ------------------------------------------------------------------ kernel module
+# Before the AWG server is created, so a new server comes up right on the module. A failure is only a warning:
+# the server runs on amneziawg-go, and the panel offers the module again.
+if [ "${WANT_KERNEL:-0}" = 1 ]; then
+  [ -n "$INSTALL_AWG" ] && KERNEL_NEW_SERVER=1
+  KERNEL_SOFT=1 install_kernel || warn "Going on with amneziawg-go; the panel offers the module again (Server → AmneziaWG engine)."
 fi
 
 # ------------------------------------------------------------------ AmneziaWG in a container

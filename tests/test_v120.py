@@ -471,6 +471,7 @@ class KernelInstallTest(unittest.TestCase):
                         'echo "$NEWVER" > "$AWGR_SYS/module/amneziawg/version"',
             "rmmod": 'echo "rmmod $*" >> "$LOG"; rm -rf "$AWGR_SYS/module/amneziawg"',
             "modinfo": 'echo "${FILEVER:-$NEWVER}"',
+            "sysctl": 'case "$1" in -n) echo "${PANIC:-0}";; *) echo "sysctl $*" >> "$LOG";; esac',
         }
         for name, body in stubs.items():
             path = os.path.join(self.bin, name)
@@ -490,7 +491,8 @@ class KernelInstallTest(unittest.TestCase):
                   "die() { echo \"DIE $1\"; exit 1; }\nask() { REPLY=\"$2\"; }\n" + self.part + "\ninstall_kernel\n")
         self.modload = os.path.join(self.tmp, "modules-load.d", "amneziawg.conf")
         e = {"PATH": self.bin + ":/usr/bin:/bin", "AWGR_SYS": self.sys, "AWGR_OS_RELEASE": osr, "LOG": self.log,
-             "AWGR_MODLOAD": self.modload,
+             "AWGR_MODLOAD": self.modload, "AWGR_MODBLOCK": os.path.join(self.tmp, "modprobe.d", "block.conf"),
+             "AWGR_PANIC_CONF": os.path.join(self.tmp, "sysctl.d", "panic.conf"),
              "NEWVER": newver, "VIRT": virt, "AWGR_YES": yes, **env}
         p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, timeout=30)
         calls = open(self.log).read() if os.path.exists(self.log) else ""
@@ -500,7 +502,7 @@ class KernelInstallTest(unittest.TestCase):
         rc, out, calls = self.run_sh(loaded="3.1.20260812")
         self.assertEqual(rc, 0)
         self.assertIn("OK Already loaded: version 3.1.20260812", out)
-        self.assertEqual(calls, "")
+        self.assertEqual(calls, "sysctl -q -w kernel.panic=10\n")           # ничего не ставится; см. test_v120d
         self.assertTrue(os.path.exists(self.modload))                       # поставленный раньше — тоже
 
     def test_ubuntu_installs_module_only(self):
@@ -686,7 +688,8 @@ class ExitEngineTest(unittest.TestCase):
     def test_state_and_no_choice(self):
         main.engine.reconcile()
         st = main.get_state(None)
-        self.assertEqual(sorted(st["awg_engine"]), ["exits_now", "fallback", "forced", "min", "module", "old", "server"])
+        self.assertEqual(sorted(st["awg_engine"]), ["disabled", "exits_now", "fallback", "fit", "fit_why", "forced", "install",
+                                                    "lost", "min", "module", "notice", "old", "server"])
         self.assertIsNone(st["awg_engine"]["forced"])
         self.assertFalse(hasattr(main, "set_engine"))                    # переключателя больше нет
         from test_api import good_state

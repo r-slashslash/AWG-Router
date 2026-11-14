@@ -41,6 +41,14 @@ pin them); any failure on the module moves them back to `amneziawg-go` until the
 still there (for example, the kernel killed `amneziawg-go` when memory ran out), the engine restarts the
 server with growing pauses.
 
+The kernel module is the recommended engine. The installer asks for it on a new install (`kernel_fit`), and
+the panel offers it (`main.engine_offer`) with a button that runs `install.sh --install-kernel` on the host
+(`app/kernelmod.py`; its own state is `data/engine.json`, not part of backups). Whatever goes wrong, the
+server ends up on `amneziawg-go`: a failed build changes nothing; a module lost after a kernel update is
+reported (`Engine._watch_module`); a server that doesn't come up on a loaded module after `KERNEL_GIVE_UP`
+restarts gets the module blocked and unloaded (`Engine._drop_module`, `kernelmod.block`), because awg-quick
+falls back to `amneziawg-go` only when no module is loaded.
+
 On a new target (the container restarted, so its network is empty) a pass puts in the rule set before it
 starts any tunnel, with every exit that has no tunnel yet treated as down (`Engine._hold_rules`); the usual
 apply at the end of the pass replaces it. AWG exits wait while the 3.x module is loaded and the server's

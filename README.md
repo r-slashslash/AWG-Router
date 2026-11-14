@@ -221,17 +221,23 @@ The panel installs `awg`, `awg-quick`, `amneziawg-go` (AWG 3.1) and the `awg-qui
 
 ## AmneziaWG engine
 
-AmneziaWG runs either as the `amneziawg-go` program or as a Linux kernel module.
+AmneziaWG runs either as a Linux kernel module or as the `amneziawg-go` program.
 
-- **amneziawg-go** (default) works the same on any server and comes with the panel. Encryption takes a noticeable share of the CPU: on a small VPS with many clients, or in a cascade, where every packet is encrypted twice (on the server and in the tunnel to the exit), it can become the limit.
-- **The kernel module** encrypts inside the kernel: several times less CPU and more speed. It is built for your kernel (DKMS) and rebuilt when the kernel is updated; a module older than 3.x doesn't understand AWG 3.1. If the CPU isn't busy, stay on amneziawg-go.
+- **The kernel module** (recommended) encrypts inside the kernel and uses several times fewer system resources, with more speed. It shows most on a small VPS with many clients and in a cascade, where every packet is encrypted twice (on the server and in the tunnel to the exit). The module is built for your kernel (DKMS) and rebuilt by itself when the kernel is updated. Ubuntu 22.04+ or Debian 12+ (kernel 7.x included), x86_64 or aarch64, and a VPS that isn't OpenVZ/LXC are needed.
+- **amneziawg-go** works on any server, OpenVZ/LXC included, and comes with the panel, but encryption takes a noticeable share of system resources.
 
-To switch:
-1. On the server: `sudo awg-router install-kernel`. Ubuntu 22.04+ or Debian 12+, x86_64 or aarch64, and a VPS that isn't OpenVZ/LXC are needed. The command builds the module from the Amnezia PPA, checks that it is 3.x and removes an older one, so the server keeps working.
-2. In the panel: **Server → Restart the AWG server**. The server picks the module by itself (awg-quick prefers the kernel).
-3. Tunnels to exits follow the server: on the module too, with nothing to pick. If the module can't start a tunnel, the panel moves the exits back to amneziawg-go by itself and tries the module again after the next server restart. To keep exits on one engine regardless of the server (for example, to read the amneziawg-go logs while looking into a problem), set `EXIT_ENGINE=go` or `EXIT_ENGINE=kernel` in `/opt/awg-router/.env` and run `awg-router restart`.
+How to get the module:
+1. On a new install the installer asks which engine to use when the server fits; Enter picks the module. To answer in advance: `AWGR_ENGINE=kernel` or `AWGR_ENGINE=go`.
+2. On an installed panel: the **Install the module** button (in the notice at the top or in **Server → AmneziaWG engine**), or `sudo awg-router install-kernel` on the server. The module is built from the Amnezia PPA, checked to be 3.x (an older one is removed) and loaded at boot (`/etc/modules-load.d/amneziawg.conf`). Then the panel offers to restart the AWG server: it picks the module by itself (awg-quick prefers the kernel).
+3. Tunnels to exits follow the server: on the module too, with nothing to pick. To keep exits on one engine regardless of the server (for example, to read the amneziawg-go logs while looking into a problem), set `EXIT_ENGINE=go` or `EXIT_ENGINE=kernel` in `/opt/awg-router/.env` and run `awg-router restart`.
 
-**Server → AmneziaWG engine** shows what the server runs on and which module is loaded. The AmneziaVPN app may install a kernel module by itself; if it is older than 3.x while the server uses AWG 3.1 parameters, the panel warns (in Telegram too): such a server may not come up. To go back to amneziawg-go: `apt remove amneziawg-dkms && rm -f /etc/modules-load.d/amneziawg.conf`, then reboot the server. `install-kernel` also loads the module at boot (`/etc/modules-load.d/amneziawg.conf`), so a server in a container comes up on it after a reboot too.
+If something is wrong with the module, the server stays reachable:
+- the module didn't build or load — the installer or the button says so, and the server runs on amneziawg-go;
+- after a kernel update the module no longer loads — the server comes up on amneziawg-go by itself, and the panel says so (in Telegram too) and offers to install the module again;
+- the server didn't come up on the module after two restarts — the panel switches the module off, moves the server to amneziawg-go and tells you; **Try again** brings the module back;
+- the module couldn't start a tunnel to an exit — exits run on amneziawg-go until the next server restart.
+
+Installing the module also sets `kernel.panic = 10` unless you have your own value: after a crash in the kernel the server reboots by itself instead of hanging. **Server → AmneziaWG engine** shows what the server runs on and which module is loaded. The AmneziaVPN app may install a kernel module by itself; if it is older than 3.x while the server uses AWG 3.1 parameters, the panel warns (in Telegram too). To go back to amneziawg-go: `apt remove amneziawg-dkms && rm -f /etc/modules-load.d/amneziawg.conf`, then reboot the server.
 
 ## DNS on the server
 

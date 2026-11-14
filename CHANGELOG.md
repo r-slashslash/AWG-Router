@@ -18,6 +18,21 @@ it grows, so every user-visible change gets a new version.
   than 3.x again. It also loads the module at boot (`/etc/modules-load.d/amneziawg.conf`), so a server in
   a container that Docker starts early still comes up on it. The network tests install the module with the same command and run a real tunnel on it.
   Thanks to @paris19891 (#24).
+- **The kernel module is the recommended engine.** A new install or `--reconfigure` asks "Which AmneziaWG engine
+  should the server use?" when the server fits (`kernel_fit`: not OpenVZ/LXC, x86_64/aarch64, Ubuntu 22.04+ or
+  Debian 12+): the module first, "(recommended)", Enter picks it; `AWGR_ENGINE=kernel|go` answers in advance, an
+  update never asks. The module is installed before the AWG server is created, so a new server comes up right on
+  it; any failure is a warning (`KERNEL_SOFT`) and the install goes on with amneziawg-go. The panel offers the
+  module in a notice at the top (`engine_offer`: offer, old, lost, disabled, restart, installing; **Hide** is kept
+  per kind in `data/engine.json`) with an **Install the module** button that runs `install.sh --install-kernel` on
+  the host as a systemd job (`kernelmod.start`, log in `data/kernel.log`) and then asks to restart the AWG server.
+  A module that no longer loads after a kernel update (the server came up on amneziawg-go) is reported once
+  (`ev.kernel_gone`, Telegram). A server that doesn't come up on a loaded module after `KERNEL_GIVE_UP` restarts
+  is moved to amneziawg-go by the panel: the module is blocked (`/etc/modprobe.d/awg-router-amneziawg.conf`, so
+  `ip link add` can't load it again), its autoload removed and the module unloaded (`ev.kernel_disabled`; **Try
+  again** reinstalls, which lifts the block). Installing the module also sets `kernel.panic = 10` unless there is an
+  own value, so a crash in the kernel reboots the server instead of leaving it hanging. Texts of the engine block
+  rewritten: the module is the recommended engine, in terms of system resources.
 - **CPU and memory in the status line.** The panel's status line shows the server's CPU and memory load,
   refreshed with the rest of the state; 90% and above is highlighted, and the hint has the load average and
   the memory in use. CPU is measured between two reads of `/proc/stat` (`hostnet.CpuMeter`), so it is the whole

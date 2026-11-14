@@ -59,7 +59,7 @@ sum=$(curl -fsSL --retry 3 "$url.sha256" | awk '{print $1}')
 echo "$sum  $tmp/a.tgz" | sha256sum -c --status || fail "checksum of $url"
 mkdir -p "$DIR" && tar -xzf "$tmp/a.tgz" --strip-components=1 -C "$DIR"
 if [ -f "$DIR/IMAGES" ]; then ok "the archive has IMAGES"; else echo "  (the archive has no IMAGES: $FROM is built here)"; fi
-AWGR_INSTALL="$MODE" AWGR_ACCESS=ssh bash "$DIR/install.sh" </dev/null >"$LOGS/install.log" 2>&1
+AWGR_INSTALL="$MODE" AWGR_ACCESS=ssh AWGR_ENGINE=go bash "$DIR/install.sh" </dev/null >"$LOGS/install.log" 2>&1
 rc=$?
 tail -n 25 "$LOGS/install.log"
 [ "$rc" = 0 ] || fail "install.sh exit $rc"

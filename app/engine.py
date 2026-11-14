@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 
-from . import awgconf, balance, config, domains, hostnet, limits, lists, nftgen, shaping, socks, system
+from . import awgconf, balance, config, domains, hostnet, kernelmod, limits, lists, nftgen, shaping, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
@@ -54,6 +54,7 @@ def _sha(s: str) -> str:
 UP_PAUSES = (10, 30, 60, 120, 300)      # пауза перед новой попыткой запустить выход, с
 SERVER_GRACE = 30        # с: столько интерфейса сервера в контейнере может не быть, прежде чем панель его поднимет
 SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытками поднять сервер, если не помогает, с
+KERNEL_GIVE_UP = 2       # столько перезапусков сервер не поднялся на модуле ядра — панель переводит его на amneziawg-go
 MEM_ALERT, MEM_OK = 90, 85   # % занятой памяти: выше — тревога, ниже — снова норма
 CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
@@ -1425,6 +1426,8 @@ class Engine:
         self._srv_tries += 1
         self._srv_next = now + SERVER_PAUSES[min(self._srv_tries, len(SERVER_PAUSES)) - 1]
         self.event("warn", Msg("ev.server_iface_gone", iface=t.iface))
+        if self._srv_tries > KERNEL_GIVE_UP and self.module_info()["loaded"] and not kernelmod.load().get("disabled"):
+            self._drop_module()
         try:
             if t.kind == "host":
                 t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
@@ -1435,6 +1438,49 @@ class Engine:
         # сразу, а не через RECONCILE_INTERVAL: в новой сети контейнера ещё нет наших правил (_hold_rules)
         self.wake.set()
         return True
+
+    def _drop_module(self) -> None:
+        """Сервер не поднимается на модуле ядра уже KERNEL_GIVE_UP перезапусков: модуль загружен — awg-quick
+        берёт его и не переходит на amneziawg-go сам, клиенты так и остались бы без связи. Панель запрещает и
+        выгружает модуль (kernelmod.block), и следующий перезапуск поднимает сервер на amneziawg-go; выходы
+        идут следом. Снова — кнопкой «Попробовать снова» (install.sh --install-kernel снимает запрет)."""
+        self._stop_all()                       # туннели выходов на модуле держат его
+        try:
+            err = kernelmod.block()
+        except OSError as e:
+            err = str(e)[:200]
+        kernelmod.update(disabled={"at": time.time(), "error": err}, seen=None, lost=None)
+        self.kernel_fallback = None
+        if err:
+            log.warning("kernel module is blocked but still loaded: %s", err)
+            self.event("error", Msg("ev.kernel_disabled_reboot", n=self._srv_tries - 1))
+        else:
+            self.event("error", Msg("ev.kernel_disabled", n=self._srv_tries - 1))
+
+    def _watch_module(self) -> None:
+        """Модуль, на котором работал сервер, пропал (после обновления ядра не собрался или не загрузился):
+        awg-quick сам поднял сервер на amneziawg-go, но об этом надо сказать — событие и Telegram, а в панели
+        оповещение с кнопкой «Установить модуль». Версия модуля, на котором работал сервер, — в engine.json
+        (`seen`): после перезагрузки сервера память панели пуста. Модуль снова загружен — отметки сняты."""
+        if config.DRY_RUN:
+            return
+        m = self.module_info()
+        ks = kernelmod.load()
+        if m["loaded"]:
+            patch = {}
+            if m["ok"] and ks.get("disabled"):
+                patch["disabled"] = None       # модуль поставили снова («Попробовать снова»)
+            if ks.get("lost"):
+                patch["lost"] = None
+            seen = m["version"] or "?"
+            if m["ok"] and self.server_engine == "kernel" and ks.get("seen") != seen:
+                patch["seen"] = seen
+            if patch:
+                kernelmod.update(**patch)
+            return
+        if ks.get("seen") and self.server_engine == "go":
+            kernelmod.update(seen=None, lost=time.time())
+            self.event("warn", Msg("ev.kernel_gone", version=ks["seen"]))
 
     def _hold_rules(self, t: system.Target, st: dict) -> None:
         """Новая цель (контейнер перезапустился, панель запустилась): в её сети ещё нет наших правил, и до
@@ -1529,6 +1575,7 @@ class Engine:
                 return
             try:
                 self._watch_engine(t)
+                self._watch_module()
             except Exception:  # noqa: BLE001
                 log.exception("engine check")
             self.target_error = None

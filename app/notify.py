@@ -57,6 +57,9 @@ TEXTS = {
         "cpu_ok": "✅ Процессор сервера снова в норме: {pct}%.",
         "kernel_old": "⚠️ На сервере загружен модуль ядра AmneziaWG {version}: параметры AWG 3.1 он не понимает, и сервер может не подняться. Нужен модуль {min}.x — обновите его (awg-router install-kernel) или удалите.",
         "kernel_fallback": "⚠️ Модуль ядра не запустил туннель {iface}. Туннели к выходам работают на amneziawg-go.",
+        "kernel_gone": "⚠️ Модуль ядра AmneziaWG {version} больше не загружается (обновилось ядро?). Сервер работает на amneziawg-go; поставить модуль снова — в панели, «Сервер» → «Движок AmneziaWG».",
+        "kernel_disabled": "⚠️ Сервер AmneziaWG не поднялся на модуле ядра после {n} перезапусков. Панель отключила модуль и перевела сервер на amneziawg-go — клиенты снова подключаются.",
+        "kernel_disabled_reboot": "⚠️ Сервер AmneziaWG не поднялся на модуле ядра после {n} перезапусков. Панель отключила модуль, но выгрузить его не смогла — перезагрузите сервер, и он поднимется на amneziawg-go.",
         "login_ok": "🔑 Вход в панель с адреса {ip}.",
         "login_blocked": "🚫 Много неверных попыток входа с адреса {ip}. Вход с него заблокирован на 10 минут.",
         "tls_fail": "⚠️ Не удаётся продлить сертификат HTTPS панели. Текущий действует до {date}.",
@@ -93,6 +96,9 @@ TEXTS = {
         "cpu_ok": "✅ Server CPU is back to normal: {pct}%.",
         "kernel_old": "⚠️ The server has AmneziaWG kernel module {version} loaded: it doesn't understand AWG 3.1 parameters, and the server may not come up. Module {min}.x is needed — update it (awg-router install-kernel) or remove it.",
         "kernel_fallback": "⚠️ The kernel module couldn't start tunnel {iface}. Tunnels to exits run on amneziawg-go.",
+        "kernel_gone": "⚠️ AmneziaWG kernel module {version} no longer loads (a kernel update?). The server runs on amneziawg-go; to install the module again: Server → AmneziaWG engine in the panel.",
+        "kernel_disabled": "⚠️ The AmneziaWG server didn't come up on the kernel module after {n} restarts. The panel switched the module off and moved the server to amneziawg-go — clients are connecting again.",
+        "kernel_disabled_reboot": "⚠️ The AmneziaWG server didn't come up on the kernel module after {n} restarts. The panel switched the module off but couldn't unload it — reboot the server, and it comes up on amneziawg-go.",
         "login_ok": "🔑 Panel sign-in from {ip}.",
         "login_blocked": "🚫 Too many failed sign-in attempts from {ip}. It is blocked for 10 minutes.",
         "tls_fail": "⚠️ The panel's HTTPS certificate can't be renewed. The current one is valid until {date}.",
@@ -129,6 +135,9 @@ TEXTS = {
         "cpu_ok": "✅ 服务器 CPU 已恢复正常：{pct}%。",
         "kernel_old": "⚠️ 服务器加载了 AmneziaWG 内核模块 {version}：它不支持 AWG 3.1 参数，服务器可能无法启动。需要 {min}.x 版本的模块——请更新（awg-router install-kernel）或将其删除。",
         "kernel_fallback": "⚠️ 内核模块无法启动隧道 {iface}。通往出口的隧道改用 amneziawg-go 运行。",
+        "kernel_gone": "⚠️ AmneziaWG 内核模块 {version} 已无法加载（内核更新了？）。服务器改用 amneziawg-go 运行；如需重新安装模块：面板中的「服务器」→「AmneziaWG 引擎」。",
+        "kernel_disabled": "⚠️ AmneziaWG 服务器在内核模块上重启 {n} 次后仍未启动。面板已停用该模块并将服务器切换到 amneziawg-go——客户端正在重新连接。",
+        "kernel_disabled_reboot": "⚠️ AmneziaWG 服务器在内核模块上重启 {n} 次后仍未启动。面板已停用该模块，但无法将其卸载——请重启服务器，它将以 amneziawg-go 启动。",
         "login_ok": "🔑 来自 {ip} 的面板登录。",
         "login_blocked": "🚫 来自 {ip} 的错误登录尝试过多，已封锁 10 分钟。",
         "tls_fail": "⚠️ 无法续期面板的 HTTPS 证书。当前证书有效期至 {date}。",
@@ -165,6 +174,9 @@ TEXTS = {
         "cpu_ok": "✅ پردازندهٔ سرور دوباره عادی است: {pct}%.",
         "kernel_old": "⚠️ ماژول هستهٔ AmneziaWG نسخهٔ {version} روی سرور بارگذاری شده است: پارامترهای AWG 3.1 را نمی‌فهمد و ممکن است سرور بالا نیاید. ماژول {min}.x لازم است — آن را به‌روز کنید (awg-router install-kernel) یا حذفش کنید.",
         "kernel_fallback": "⚠️ ماژول هسته نتوانست تونل {iface} را راه بیندازد. تونل‌ها به خروجی‌ها با amneziawg-go کار می‌کنند.",
+        "kernel_gone": "⚠️ ماژول هستهٔ AmneziaWG نسخهٔ {version} دیگر بارگذاری نمی‌شود (هسته به‌روز شده؟). سرور با amneziawg-go کار می‌کند؛ برای نصب دوبارهٔ ماژول: در پنل، «سرور» ← «موتور AmneziaWG».",
+        "kernel_disabled": "⚠️ سرور AmneziaWG پس از {n} بار راه‌اندازی دوباره روی ماژول هسته بالا نیامد. پنل ماژول را غیرفعال کرد و سرور را به amneziawg-go برد — کلاینت‌ها دوباره وصل می‌شوند.",
+        "kernel_disabled_reboot": "⚠️ سرور AmneziaWG پس از {n} بار راه‌اندازی دوباره روی ماژول هسته بالا نیامد. پنل ماژول را غیرفعال کرد اما نتوانست آن را بیرون بکشد — سرور را دوباره راه‌اندازی کنید تا با amneziawg-go بالا بیاید.",
         "login_ok": "🔑 ورود به پنل از نشانی {ip}.",
         "login_blocked": "🚫 تلاش‌های ناموفق زیاد برای ورود از نشانی {ip}. ورود از آن ۱۰ دقیقه مسدود شد.",
         "tls_fail": "⚠️ تمدید گواهی HTTPS پنل ممکن نیست. گواهی فعلی تا {date} معتبر است.",
@@ -200,6 +212,9 @@ ENGINE_EVENTS = {
     "ev.cpu_high": ("system", "cpu_high"),
     "ev.cpu_ok": ("system", "cpu_ok"),
     "ev.kernel_old": ("server", "kernel_old"),
+    "ev.kernel_gone": ("server", "kernel_gone"),
+    "ev.kernel_disabled": ("server", "kernel_disabled"),
+    "ev.kernel_disabled_reboot": ("server", "kernel_disabled_reboot"),
     "ev.kernel_fallback": ("exit", "kernel_fallback"),
     "ev.client_expired": ("clients", "client_expired"),
     "ev.client_quota": ("clients", "client_quota"),
@@ -469,7 +484,7 @@ class Notifier:
         m = ENGINE_EVENTS.get(msg.key)
         if m:
             self.event(m[0], m[1], refs={k: v for k, v in msg.p.items() if k in ("pk", "uid")},
-                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min", "version", "error")})
+                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min", "version", "error", "n")})
 
     def target_ok(self) -> None:
         if self._target_lost:
