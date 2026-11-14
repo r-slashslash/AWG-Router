@@ -1976,6 +1976,8 @@ def engine_offer(t) -> dict:
             notice = "installing"
         elif ks.get("disabled"):
             notice = f"disabled:{int((ks['disabled'] or {}).get('at') or 0)}"
+        elif ks.get("choice") == "go":
+            notice = None                    # amneziawg-go выбран вручную — модуль не навязываем
         elif m["loaded"] and m["ok"]:
             notice = "restart" if engine.server_engine == "go" else None
         elif f["ok"]:
@@ -1983,7 +1985,21 @@ def engine_offer(t) -> dict:
         if notice and notice != "installing" and ks.get("hidden") == notice:
             notice = None
     return {"fit": f["ok"], "fit_why": f["why"], "install": job, "notice": notice,
-            "disabled": ks.get("disabled"), "lost": ks.get("lost")}
+            "disabled": ks.get("disabled"), "lost": ks.get("lost"), "choice": ks.get("choice")}
+
+
+@app.post("/api/engine/choose")
+def engine_choose(req):
+    """Ручной выбор движка: {"engine": "kernel" | "go"} — сервер перезапускается (или ставится модуль)."""
+    choice = req.json().get("engine")
+    if choice not in ("kernel", "go"):
+        bad("err.bad_value")
+    try:
+        return engine.switch_engine(choice)
+    except MsgError as e:
+        bad(e.msg, 409)
+    except Exception as e:  # noqa: BLE001  — docker или systemctl не смогли: показать почему
+        bad(msg_of(e), 409)
 
 
 @app.post("/api/engine/install")
@@ -2176,7 +2192,9 @@ def _bot_host_info() -> dict:
         v4, v6 = addrs.get("v4"), addrs.get("v6") or []
     except Exception as e:  # noqa: BLE001 — сервер не найден: показываем то, что есть
         log.info("bot host info: %s", e)
+    m = engine.module_info()
     return {"awg": awg, "v4": v4 or engine.public_v4, "v4_state": engine.public_v4_state,
+            "engine": {"server": engine.server_engine, "version": m.get("version") if m.get("loaded") else None},
             "v6": v6[0] if v6 else None, "dns": engine.dns_view(),
             "uptime": hostnet.uptime(), "memory": hostnet.memory()}
 

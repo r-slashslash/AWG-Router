@@ -237,7 +237,7 @@ If something is wrong with the module, the server stays reachable:
 - the server didn't come up on the module after two restarts — the panel switches the module off, moves the server to amneziawg-go and tells you; **Try again** brings the module back;
 - the module couldn't start a tunnel to an exit — exits run on amneziawg-go until the next server restart.
 
-Installing the module also sets `kernel.panic = 10` unless you have your own value: after a crash in the kernel the server reboots by itself instead of hanging. **Server → AmneziaWG engine** shows what the server runs on and which module is loaded. The AmneziaVPN app may install a kernel module by itself; if it is older than 3.x while the server uses AWG 3.1 parameters, the panel warns (in Telegram too). To go back to amneziawg-go: `apt remove amneziawg-dkms && rm -f /etc/modules-load.d/amneziawg.conf`, then reboot the server.
+Installing the module also sets `kernel.panic = 10` unless you have your own value: after a crash in the kernel the server reboots by itself instead of hanging. **Server → AmneziaWG engine** shows what the server runs on and which module is loaded. The AmneziaVPN app may install a kernel module by itself; if it is older than 3.x while the server uses AWG 3.1 parameters, the panel warns (in Telegram too). To switch engines by hand, use **Engine** in the same block: amneziawg-go restarts the AWG server without the module (the module stays installed but is not loaded), the kernel module loads it again (or installs it first) and restarts the server; clients reconnect within seconds. To remove the module completely: `apt remove amneziawg-dkms && rm -f /etc/modules-load.d/amneziawg.conf`, then reboot the server.
 
 ## DNS on the server
 

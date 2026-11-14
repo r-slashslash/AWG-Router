@@ -47,7 +47,9 @@ the panel offers it (`main.engine_offer`) with a button that runs `install.sh --
 server ends up on `amneziawg-go`: a failed build changes nothing; a module lost after a kernel update is
 reported (`Engine._watch_module`); a server that doesn't come up on a loaded module after `KERNEL_GIVE_UP`
 restarts gets the module blocked and unloaded (`Engine._drop_module`, `kernelmod.block`), because awg-quick
-falls back to `amneziawg-go` only when no module is loaded.
+falls back to `amneziawg-go` only when no module is loaded. The same block is how a manual choice of
+`amneziawg-go` works (`Engine.switch_engine`): stop the server, block and unload the module, start the server;
+choosing the module again lifts the block and restarts it (or installs the module first).
 
 On a new target (the container restarted, so its network is empty) a pass puts in the rule set before it
 starts any tunnel, with every exit that has no tunnel yet treated as down (`Engine._hold_rules`); the usual

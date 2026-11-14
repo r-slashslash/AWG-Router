@@ -234,6 +234,13 @@ class Target:
     def restart(self) -> None:
         raise NotImplementedError
 
+    def stop(self) -> None:
+        """Остановить сервер (интерфейс убран) — между stop и start выгружается модуль ядра."""
+        raise NotImplementedError
+
+    def start(self) -> None:
+        raise NotImplementedError
+
     def psk_for_new_client(self) -> str:
         return local_awg(["genpsk"])
 
@@ -252,6 +259,12 @@ class ContainerTarget(Target):
 
     def restart(self) -> None:
         docker_api("POST", f"/containers/{urllib.parse.quote(self.name)}/restart?t=3", timeout=40)
+
+    def stop(self) -> None:
+        docker_api("POST", f"/containers/{urllib.parse.quote(self.name)}/stop?t=3", timeout=40)
+
+    def start(self) -> None:
+        docker_api("POST", f"/containers/{urllib.parse.quote(self.name)}/start", timeout=40)
 
     def psk_for_new_client(self) -> str:
         # приложение AmneziaVPN использует один общий PSK на всех клиентов
@@ -285,6 +298,24 @@ class HostTarget(Target):
             self.native(["systemctl", "restart", unit], timeout=60)
         else:
             self.native(["awg-quick", "down", self.iface], check=False, timeout=30)
+            self.native(["awg-quick", "up", self.iface], timeout=60)
+
+    def _unit(self) -> str | None:
+        unit = f"awg-quick@{self.iface}"
+        return unit if self.native(["systemctl", "cat", unit], check=False).returncode == 0 else None
+
+    def stop(self) -> None:
+        unit = self._unit()
+        if unit:
+            self.native(["systemctl", "stop", unit], timeout=60)
+        else:
+            self.native(["awg-quick", "down", self.iface], check=False, timeout=30)
+
+    def start(self) -> None:
+        unit = self._unit()
+        if unit:
+            self.native(["systemctl", "start", unit], timeout=60)
+        else:
             self.native(["awg-quick", "up", self.iface], timeout=60)
 
 
@@ -444,6 +475,12 @@ class DemoTarget(Target):
 
     def restart(self) -> None:
         self.log.append("docker restart amnezia-awg2")
+
+    def stop(self) -> None:
+        self.log.append("docker stop amnezia-awg2")
+
+    def start(self) -> None:
+        self.log.append("docker start amnezia-awg2")
 
     def psk_for_new_client(self) -> str:
         return (self.read_file(f"{self.dir}/wireguard_psk.key") or "").strip()

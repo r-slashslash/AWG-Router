@@ -36,11 +36,18 @@ it grows, so every user-visible change gets a new version.
   module runs, and the panel no longer lists requirements it has already checked. **System → Connection to Amnezia**
   showed "Exit tunnels: amneziawg-go" from a leftover `.env` line (`UPSTREAM_BACKEND`, written by every install and
   never used): it now shows the real engine with the module version, and exits separately only when they differ
-  from the server; the line is no longer written, and updates drop it from `.env`.
+  from the server; the line is no longer written, and updates drop it from `.env`. The engine can also be picked by hand
+  for the whole server (**Server → AmneziaWG engine → Engine**, `POST /api/engine/choose`): amneziawg-go stops the
+  server, blocks and unloads the module and starts it again (`Engine.switch_engine`; `choice` in `engine.json`
+  keeps the notice away); the module lifts the choice and restarts the server, or installs the module first. An
+  already installed module is only loaded again, without the PPA (`install_kernel`). The move onto the module is
+  an event and a Telegram message (`ev.kernel_on`), and the bot's status shows the engine.
 - **CPU and memory in the status line.** The panel's status line shows the server's CPU and memory load,
   refreshed with the rest of the state; 90% and above is highlighted, and the hint has the load average and
   the memory in use. CPU is measured between two reads of `/proc/stat` (`hostnet.CpuMeter`), so it is the whole
   server, not the panel's container.
+  The status line shows **Running** or **Error** (with the reason in the hint; a click scrolls to the banners at
+  the top) instead of the container and interface names.
 - **The AWG server comes back by itself.** When the server's interface is gone while its container keeps running
   (for example, the kernel's OOM killer ended `amneziawg-go`, and clients dropped until someone restarted it by
   hand), the panel restarts the container after `engine.SERVER_GRACE` and then with growing pauses

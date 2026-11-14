@@ -44,13 +44,14 @@ class InstallerBase(unittest.TestCase):
         stubs = {
             "systemd-detect-virt": 'echo "${VIRT:-none}"',
             "uname": 'case "$1" in -m) echo "${ARCH:-x86_64}";; -r) echo 7.0.0-1017-azure;; *) echo Linux;; esac',
-            "apt-get": 'echo "apt-get $*" >> "$LOG"; [ -n "${FAIL_BUILD:-}" ] && [[ "$*" == *"install -y -qq amneziawg-dkms"* ]] && exit 100; exit 0',
+            "apt-get": 'echo "apt-get $*" >> "$LOG"; if [[ "$*" == *"install -y -qq amneziawg-dkms"* ]]; then '
+                       '[ -n "${FAIL_BUILD:-}" ] && exit 100; mkdir -p "$AWGR_SYS"; touch "$AWGR_SYS/dkms"; fi; exit 0',
             "apt-cache": "exit 0",
             "add-apt-repository": 'echo "add-apt-repository $*" >> "$LOG"',
             "modprobe": 'echo "modprobe $*" >> "$LOG"; mkdir -p "$AWGR_SYS/module/amneziawg"; '
                         'echo 3.1.20261113 > "$AWGR_SYS/module/amneziawg/version"',
             "rmmod": 'echo "rmmod $*" >> "$LOG"; rm -rf "$AWGR_SYS/module/amneziawg"',
-            "modinfo": "echo 3.1.20261113",
+            "modinfo": '[ -f "$AWGR_SYS/dkms" ] && echo 3.1.20261113 || exit 1',
             "sysctl": 'case "$1" in -n) echo "${PANIC:-0}";; *) echo "sysctl $*" >> "$LOG";; esac',
         }
         for name, body in stubs.items():
@@ -312,6 +313,10 @@ class EngineWatchTest(unittest.TestCase):
     def test_module_gone_after_kernel_update(self):
         self.watch()
         self.assertEqual(kernelmod.load().get("seen"), "3.1.20261113")
+        self.assertEqual([x[1] for x in self.e.events], ["ev.kernel_on"])   # сервер на модуле — сообщаем раз
+        self.watch()
+        self.assertEqual(len(self.e.events), 1)
+        self.e.events.clear()
         self.mod = {"loaded": False, "version": None, "ok": False}
         self.e.server_engine = None                    # сервер ещё не поднялся — молчим (модуль мог не успеть)
         self.watch()
@@ -466,3 +471,110 @@ class TelegramTextsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FastPathTest(InstallerBase):
+    """Модуль установлен, но не загружен (выбран amneziawg-go или отключён после сбоя): «Попробовать снова» и
+    переключатель только загружают его — без PPA и сборки (PPA из РФ бывает недоступен)."""
+
+    def test_installed_module_just_loads(self):
+        os.makedirs(self.sys, exist_ok=True)
+        rc, out, calls = self.run_sh('mkdir -p "$AWGR_SYS"; touch "$AWGR_SYS/dkms"\nKERNEL_SOFT=1 install_kernel\n')
+        self.assertEqual(rc, 0, out)
+        self.assertIn("OK Kernel module loaded: version 3.1.20261113", out)
+        self.assertIn("modprobe amneziawg", calls)
+        self.assertNotIn("apt-get", calls)
+        self.assertTrue(os.path.exists(self.modload))
+
+
+class SwitchEngineTest(unittest.TestCase):
+    """Ручной выбор движка: amneziawg-go — стоп сервера, запрет и выгрузка модуля, запуск; модуль — перезапуск
+    или установка."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        for name, val in (("STATE", os.path.join(self.d, "engine.json")), ("LOG", os.path.join(self.d, "kernel.log"))):
+            p = mock.patch.object(kernelmod, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        self.e = engine.Engine.__new__(engine.Engine)
+        self.e.lock = __import__("threading").RLock()
+        self.e.events, self.e.rt, self.e.kernel_fallback, self.e.server_engine = [], {}, None, "kernel"
+        self.e.event = lambda lvl, m: self.e.events.append(m.key)
+        self.e.wake = mock.Mock()
+        self.e._stop_all = mock.Mock()
+        self.calls = []
+        self.t = mock.Mock(exists=True)
+        self.t.stop.side_effect = lambda: self.calls.append("stop")
+        self.t.start.side_effect = lambda: self.calls.append("start")
+        self.e.target = self.t
+        self.mod = {"loaded": True, "version": "3.1.20261113", "ok": True}
+        self.e.module_info = lambda: dict(self.mod)
+
+    def test_to_go(self):
+        with mock.patch.object(config, "DRY_RUN", False), \
+                mock.patch.object(kernelmod, "block", side_effect=lambda: self.calls.append("block")) as blk:
+            r = self.e.switch_engine("go")
+        self.assertEqual(r, {"action": "restarted", "reboot": False})
+        self.assertEqual(self.calls, ["stop", "block", "start"])       # модуль выгружается, пока сервер стоит
+        self.e._stop_all.assert_called_once()
+        blk.assert_called_once()
+        self.assertEqual(kernelmod.load()["choice"], "go")
+        self.assertEqual(self.e.events, ["ev.engine_go"])
+
+    def test_to_go_server_starts_even_if_block_fails(self):
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(kernelmod, "block", side_effect=OSError("ro fs")):
+            r = self.e.switch_engine("go")
+        self.assertTrue(r["reboot"])
+        self.assertEqual(self.calls, ["stop", "start"])
+        self.assertEqual(self.e.events, ["ev.engine_go_reboot"])
+
+    def test_to_go_without_module(self):
+        self.mod = {"loaded": False, "version": None, "ok": False}
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(kernelmod, "block") as blk:
+            self.e.switch_engine("go")
+        blk.assert_not_called()
+        self.assertEqual(self.calls, [])                               # и так на amneziawg-go — без перезапуска
+        self.assertEqual(kernelmod.load()["choice"], "go")
+
+    def test_to_kernel(self):
+        kernelmod.update(choice="go")
+        self.e.restart_server = mock.Mock()
+        self.assertEqual(self.e.switch_engine("kernel"), {"action": "restarted"})
+        self.e.restart_server.assert_called_once()
+        self.assertNotIn("choice", kernelmod.load())
+        self.mod = {"loaded": False, "version": None, "ok": False}
+        with mock.patch.object(kernelmod, "start") as st:
+            self.assertEqual(self.e.switch_engine("kernel"), {"action": "install"})
+        st.assert_called_once()
+
+    def test_api_and_offer(self):
+        R = type("R", (), {"__init__": lambda s, b: setattr(s, "b", b), "json": lambda s: s.b})
+        for bad in ("auto", None, 1):
+            with self.assertRaises(web.HTTPError):
+                main.engine_choose(R({"engine": bad}))
+        with mock.patch.object(main.engine, "switch_engine", return_value={"action": "restarted"}) as sw:
+            self.assertEqual(main.engine_choose(R({"engine": "go"})), {"action": "restarted"})
+        sw.assert_called_once_with("go")
+        kernelmod.update(choice="go")
+        with mock.patch.object(main.engine, "module_info", return_value={"loaded": False, "version": None, "ok": False}), \
+                mock.patch.object(kernelmod, "fit", return_value={"ok": True, "why": None}):
+            o = main.engine_offer(mock.Mock(exists=True))
+        self.assertIsNone(o["notice"])                                 # выбрали amneziawg-go — модуль не навязываем
+        self.assertEqual(o["choice"], "go")
+
+
+class BotEngineLineTest(unittest.TestCase):
+    def test_line(self):
+        from app import tgbot
+        self.assertEqual(tgbot.Bot._engine_line("ru", {"server": "kernel", "version": "3.1.20261113"}),
+                         ["⚙️ Движок: модуль ядра 3.1.20261113"])
+        self.assertEqual(tgbot.Bot._engine_line("en", {"server": "go"}), ["⚙️ Engine: amneziawg-go"])
+        self.assertEqual(tgbot.Bot._engine_line("zh", {"server": None}), [])
+        for lang in notify.LANGS:
+            self.assertNotIn("{", tgbot.tr(lang, "st_engine_kernel", version="3.1"))
+            self.assertNotIn("{", notify.render(lang, "kernel_on", "", version="3.1"))
+        self.assertEqual(notify.ENGINE_EVENTS["ev.kernel_on"], ("server", "kernel_on"))
+        info = main._bot_host_info()
+        self.assertIn("engine", info)

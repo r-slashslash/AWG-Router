@@ -237,7 +237,7 @@ AmneziaWG 可以作为 Linux 内核模块运行，也可以作为 `amneziawg-go`
 - 服务器重启两次后仍无法在模块上启动——面板会停用模块，将服务器切换到 amneziawg-go 并通知你；**重试** 按钮可恢复模块；
 - 模块无法启动通往出口的隧道——出口改用 amneziawg-go，直到下次重启服务器。
 
-安装模块时还会设置 `kernel.panic = 10`（如果你没有自己的设置）：内核出错后服务器会自动重启，而不是卡死。**服务器 → AmneziaWG 引擎** 显示服务器使用的引擎和已加载的模块。AmneziaVPN 应用可能会自行安装内核模块；如果其版本低于 3.x 而服务器使用 AWG 3.1 参数，面板会发出警告（Telegram 中也会）。要改回 amneziawg-go：`apt remove amneziawg-dkms && rm -f /etc/modules-load.d/amneziawg.conf`，然后重启服务器。
+安装模块时还会设置 `kernel.panic = 10`（如果你没有自己的设置）：内核出错后服务器会自动重启，而不是卡死。**服务器 → AmneziaWG 引擎** 显示服务器使用的引擎和已加载的模块。AmneziaVPN 应用可能会自行安装内核模块；如果其版本低于 3.x 而服务器使用 AWG 3.1 参数，面板会发出警告（Telegram 中也会）。要手动切换引擎，请使用同一区块中的 **引擎**：选择 amneziawg-go 会在不使用模块的情况下重启 AWG 服务器（模块仍已安装，但不会加载）；选择内核模块会重新加载模块（或先安装）并重启服务器；客户端几秒内重新连接。要彻底删除模块：`apt remove amneziawg-dkms && rm -f /etc/modules-load.d/amneziawg.conf`，然后重启服务器。
 
 ## 服务器上的 DNS
 

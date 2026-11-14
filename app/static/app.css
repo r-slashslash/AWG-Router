@@ -234,6 +234,8 @@ textarea.short { min-height: 64px; }
 .dot.warn { background: var(--warn); }
 .dot.bad { background: var(--bad); }
 .state { display: inline-flex; align-items: center; gap: 7px; font-size: .88rem; }
+.state-bad { cursor: pointer; }
+.state-bad b { color: var(--bad); }
 
 /* ---------- tables ---------- */
 .table { width: 100%; border-collapse: collapse; }

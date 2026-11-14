@@ -396,7 +396,9 @@ class Engine:
     def module_info(self) -> dict:
         """Модуль ядра на хосте: {"loaded", "version", "ok"} (ok — версия не меньше KERNEL_MIN)."""
         if config.DRY_RUN:
-            m = {"loaded": True, "version": "3.1.20260812"}
+            # демо: выбор amneziawg-go вручную (switch_engine) «выгружает» модуль, как на настоящем сервере
+            m = {"loaded": False, "version": None} if kernelmod.load().get("choice") == "go" else \
+                {"loaded": True, "version": "3.1.20260812"}
         else:
             m = hostnet.awg_module()
             if m["loaded"] and not m["version"]:
@@ -428,7 +430,7 @@ class Engine:
         тогда сервер не поднимается — этого не видно ни в приложении AmneziaVPN, ни в панели."""
         now = time.time()
         if config.DRY_RUN:
-            self.server_engine = "kernel"
+            self.server_engine = "kernel" if self.module_info()["loaded"] else "go"
             return
         if self._srv_engine_at[0] != t.key or now - self._srv_engine_at[1] >= SERVER_ENGINE_EVERY \
                 or self.server_engine is None:
@@ -1457,6 +1459,45 @@ class Engine:
         else:
             self.event("error", Msg("ev.kernel_disabled", n=self._srv_tries - 1))
 
+    def switch_engine(self, choice: str) -> dict:
+        """Ручной выбор движка в панели — один на весь сервер (выходы идут следом). → {"action": …}.
+
+        go: модуль загружен — сервер останавливается, модуль запрещается и выгружается (kernelmod.block: иначе
+        awg-quick снова взял бы его), сервер запускается на amneziawg-go. Модуль остаётся установленным.
+        kernel: модуль уже загружен — перезапуск сервера (он сам возьмёт модуль); нет — установка
+        (`install.sh --install-kernel`: снимает запрет и, если пакет уже стоит, просто загружает модуль)."""
+        if choice == "go":
+            with self.lock:
+                t = self.target
+                if not t or not t.exists:
+                    raise system.SysError(Msg("srv.no_server"))
+                err = None
+                if self.module_info()["loaded"]:
+                    self._stop_all()                       # туннели выходов на модуле держат его
+                    t.stop()
+                    try:
+                        err = None if config.DRY_RUN else kernelmod.block()
+                    except OSError as e:
+                        err = str(e)[:200]
+                    finally:
+                        t.start()
+                kernelmod.update(choice="go", seen=None, lost=None, disabled=None)
+                self.kernel_fallback = None
+                self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
+                self.server_engine = None                  # перечитать после запуска
+                self.event("info", Msg("ev.engine_go_reboot" if err else "ev.engine_go"))
+            self.reconcile_soon()
+            return {"action": "restarted", "reboot": bool(err)}
+        if choice != "kernel":
+            raise ValueError(choice)
+        kernelmod.update(choice=None)
+        m = self.module_info()
+        if m["loaded"] and m["ok"]:
+            self.restart_server()
+            return {"action": "restarted"}
+        kernelmod.start()
+        return {"action": "install"}
+
     def _watch_module(self) -> None:
         """Модуль, на котором работал сервер, пропал (после обновления ядра не собрался или не загрузился):
         awg-quick сам поднял сервер на amneziawg-go, но об этом надо сказать — событие и Telegram, а в панели
@@ -1475,6 +1516,7 @@ class Engine:
             seen = m["version"] or "?"
             if m["ok"] and self.server_engine == "kernel" and ks.get("seen") != seen:
                 patch["seen"] = seen
+                self.event("info", Msg("ev.kernel_on", version=seen))     # сервер перешёл на модуль (или новую версию)
             if patch:
                 kernelmod.update(**patch)
             return

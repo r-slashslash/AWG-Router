@@ -325,6 +325,16 @@ install_kernel() {
     kernel_next; return 0
   fi
   kernel_fit || { kfail "$KERNEL_WHY The AWG server keeps using amneziawg-go."; return 1; }
+  # Installed but not loaded (amneziawg-go was picked in the panel, or the panel switched the module off after a
+  # failure): no build and no PPA needed, just load it.
+  if [ -z "$v" ] && module_new_enough "$(modinfo -F version amneziawg 2>/dev/null || true)" \
+     && modprobe amneziawg 2>/dev/null && v=$(module_version) && [ -n "$v" ] && module_new_enough "$v"; then
+    ok "Kernel module loaded: version $v"
+    module_autoload && ok "Loaded at boot too ($MODLOAD)"
+    kernel_panic_reboot
+    kernel_next; return 0
+  fi
+  v=$(module_version)
   id=$(. "$OS_RELEASE" 2>/dev/null && echo "${ID:-}")
   [ -n "$v" ] && warn "Module $v is loaded: it is older than $KERNEL_MIN.x and doesn't speak AWG 3.1 — it will be replaced."
   if command -v mokutil >/dev/null && mokutil --sb-state 2>/dev/null | grep -qi enabled; then

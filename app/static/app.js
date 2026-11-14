@@ -325,10 +325,12 @@ function renderStatus() {
   const tg = S.target;
   const online = S.clients.filter((c) => c.live && c.live.handshake && S.now - c.live.handshake < 180).length;
   renderBrandTraffic();
-  $("#status").innerHTML = tg
-    ? `<span class="state"><span class="dot ${tg.exists === false ? "warn" : "ok"}"></span><b>${esc(tg.kind === "host" ? t("srv.kind_host") : tg.container)}</b> · ${esc(tg.iface)}</span>
-       <span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>${sysmonHtml()}`
-    : `<span class="state"><span class="dot bad"></span>${esc(t("status.no_target"))}</span>${sysmonHtml()}`;
+  // «Работает» или «Ошибка»: причина — во всплывающей подсказке, подробности — в полосах под шапкой (по нажатию)
+  const problem = statusProblem();
+  $("#status").innerHTML = `<span class="state${problem ? " state-bad" : ""}" id="state" title="${esc(problem || "")}"><span class="dot ${problem ? "bad" : "ok"}"></span><b>${esc(t(problem ? "status.err" : "status.ok"))}</b></span>`
+    + (tg ? `<span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>` : "")
+    + sysmonHtml();
+  if (problem) $("#state").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
   // новая версия: метка в строке состояния (видна и на телефоне) и точка на вкладке «Система»
   const v = S.version || {};
   const chip = updatingTo ? t("status.updating") : v.available ? t("status.update", { version: v.latest }) : "";
@@ -337,6 +339,16 @@ function renderStatus() {
   if (uc) uc.onclick = () => goTab("system");
   $("#tabs [data-tab=system]").classList.toggle("has-news", !!v.available && !updatingTo);
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
+}
+
+/** Почему в шапке «Ошибка» (null — всё работает): нет сервера, его не создали, не применились правила. */
+function statusProblem() {
+  const tg = S.target;
+  if (!tg) return tm(S.target_error) || t("status.no_target");
+  if (tg.exists === false) return t("srv.missing");
+  if (S.target_error) return tm(S.target_error);
+  if (S.engine && S.engine.last_error) return t("banner.apply_error") + ": " + tm(S.engine.last_error);
+  return null;
 }
 
 function render(force = false) {
@@ -1669,8 +1681,10 @@ function engineSection() {
   if (!E) return "";
   const m = E.module || {};
   const srv = E.server === "kernel" ? t("eng.kernel") : E.server === "go" ? "amneziawg-go" : t("eng.unknown");
-  const mod = !m.loaded ? t("eng.mod_none") : m.ok ? t("eng.mod_ok", { version: m.version || "?" })
-    : t("eng.mod_old", { version: m.version || "?", min: E.min });
+  // версия — слева направо и без переноса: в fa «3.1.20260812» иначе рвалась на «.3» и «1.20260812»
+  const ver = `<bdi dir="ltr" class="nowrap">${esc(m.version || "?")}</bdi>`;
+  const mod = !m.loaded ? esc(t("eng.mod_none")) : m.ok ? th("eng.mod_ok", { version: ver })
+    : th("eng.mod_old", { version: ver, min: esc(E.min) });
   return `
   <section class="section" id="engine">
     <div class="section-head"><div><h2>${esc(t("eng.title"))}</h2><p class="muted small">${esc(t("eng.sub"))}</p></div></div>
@@ -1679,9 +1693,10 @@ function engineSection() {
       ${E.fallback ? `<div class="banner bad">${esc(t("eng.fallback", { error: tm(E.fallback.error) }))}</div>` : ""}
       <div class="kv" style="margin-bottom:14px">
         <div><span>${esc(t("eng.server"))}</span><b><bdi>${esc(srv)}</bdi></b></div>
-        <div><span>${esc(t("eng.module"))}</span><b><bdi>${esc(mod)}</bdi></b></div>
+        <div><span>${esc(t("eng.module"))}</span><b>${mod}</b></div>
         <div><span>${esc(t("eng.exits"))}</span><b><bdi>${esc(E.exits_now === "kernel" ? t("eng.kernel") : "amneziawg-go")}</bdi></b></div>
       </div>
+      ${engineChooser(E, m)}
       ${E.forced ? `<p class="small muted">${esc(t("eng.forced", { value: E.forced }))}</p>` : ""}
       <p class="small muted">${esc(t("eng.server_auto"))}</p>
       <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
@@ -1698,8 +1713,9 @@ function engineKv() {
   if (!E) return "";
   const m = E.module || {};
   const name = (e) => e === "kernel" ? t("sy.kernel") : e === "go" ? "amneziawg-go" : t("eng.unknown");
-  const srv = E.server === "kernel" && m.version ? `${t("sy.kernel")} ${m.version}` : name(E.server);
-  let h = `<div><span>${esc(t("sy.engine"))}</span><b><bdi>${esc(srv)}</bdi></b></div>`;
+  const srv = E.server === "kernel" && m.version ? `${esc(t("sy.kernel"))} <bdi dir="ltr" class="nowrap">${esc(m.version)}</bdi>`
+    : `<bdi>${esc(name(E.server))}</bdi>`;
+  let h = `<div><span>${esc(t("sy.engine"))}</span><b>${srv}</b></div>`;
   if (E.server && E.exits_now !== E.server) h += `<div><span>${esc(t("sy.tunnels"))}</span><b><bdi>${esc(name(E.exits_now))}</bdi></b></div>`;
   return h;
 }
@@ -1730,11 +1746,37 @@ function engineBanner() {
   return `<div class="banner ${["disabled", "old"].includes(kind) ? "bad" : "info"}"><b>${esc(text)}</b> ${acts}</div>`;
 }
 
+/** Ручной выбор движка — один на весь сервер (выходы идут следом). Модуль недоступен (сервер не подходит, модуля
+ *  нет) — кнопка модуля неактивна; пока ставится модуль — обе. */
+function engineChooser(E, m) {
+  const cur = E.server || (E.choice === "go" ? "go" : null);
+  const busy = ((engJob || E.install || {}).state) === "running";
+  const kernelOk = E.fit || (m.loaded && m.ok);
+  const b = (v, key, ok) => `<button type="button" data-eng-choose="${v}" aria-pressed="${cur === v}"${ok && !busy ? "" : " disabled"}>${esc(t(key))}</button>`;
+  return `<div class="field" style="margin:4px 0 12px"><span>${esc(t("eng.choose"))}</span>
+    <div class="seg">${b("kernel", "eng.opt_kernel", kernelOk)}${b("go", "eng.opt_go", true)}</div></div>`;
+}
+
+async function engChoose(v) {
+  const E = S.awg_engine || {};
+  if (v === E.server) return;
+  if (!confirm(t(v === "go" ? "eng.to_go_confirm" : "eng.to_kernel_confirm"))) return;
+  $$("[data-eng-choose]").forEach((x) => x.disabled = true);
+  try {
+    const r = await api("POST", "engine/choose", { engine: v });
+    if (r.action === "install") { engWatching = true; engWatch(); }
+    else toast(t(r.reboot ? "eng.go_reboot" : "srv.restarting"));
+  } catch (e) { toast(e.message, true); }
+  await refresh();
+  if (tab === "server") render();
+}
+
 /** «Установка модуля ядра»: модуль уже работает — блока нет; сервер не подходит — только почему; иначе кнопка,
  *  журнал и та же команда для SSH. Требования не перечисляются: панель проверила сервер сама (kernelmod.fit). */
 function engInstallBlock(E, m) {
   const job = engJob || E.install || {};
   if (m.loaded && m.ok && job.state !== "running" && !(engJob && engJob.state === "failed")) return "";
+  if (E.choice === "go" && job.state !== "running") return "";     // выбран amneziawg-go: вернуться — переключателем
   if (!E.fit) return `<div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
     <p class="small">${esc(t("eng.no_fit"))} <bdi>${esc(tm(E.fit_why))}</bdi></p></div>`;
   return `<div class="field" style="margin-top:14px"><span>${esc(t("eng.install"))}</span>
@@ -1876,6 +1918,7 @@ bind.server = () => {
     return;
   }
   if (!SRV || !SRV.exists) return;
+  $$("[data-eng-choose]").forEach((b) => b.onclick = () => engChoose(b.dataset.engChoose));
   const ec = $("#eng-copy");
   if (ec) ec.onclick = () => copyText(KERNEL_CMD);
   $("#sh-save").onclick = async () => {

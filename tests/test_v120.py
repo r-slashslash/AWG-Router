@@ -460,17 +460,19 @@ class KernelInstallTest(unittest.TestCase):
         self.bin = os.path.join(self.tmp, "bin")
         os.makedirs(self.bin)
         self.sys = os.path.join(self.tmp, "sys")
+        os.makedirs(self.sys)
         self.log = os.path.join(self.tmp, "calls")
         stubs = {
             "systemd-detect-virt": 'echo "${VIRT:-none}"',
             "uname": 'case "$1" in -m) echo "${ARCH:-x86_64}";; -r) echo 6.8.0-45-generic;; *) echo Linux;; esac',
-            "apt-get": 'echo "apt-get $*" >> "$LOG"',
+            "apt-get": 'echo "apt-get $*" >> "$LOG"; [[ "$*" == *"install -y -qq amneziawg-dkms"* ]] && touch "$AWGR_SYS/dkms"; exit 0',
             "apt-cache": 'exit 0',
             "add-apt-repository": 'echo "add-apt-repository $*" >> "$LOG"',
             "modprobe": 'echo "modprobe $*" >> "$LOG"; mkdir -p "$AWGR_SYS/module/amneziawg"; '
                         'echo "$NEWVER" > "$AWGR_SYS/module/amneziawg/version"',
             "rmmod": 'echo "rmmod $*" >> "$LOG"; rm -rf "$AWGR_SYS/module/amneziawg"',
-            "modinfo": 'echo "${FILEVER:-$NEWVER}"',
+            # файл модуля есть, только когда пакет поставлен (или задан FILEVER)
+            "modinfo": '[ -n "${FILEVER:-}" ] && { echo "$FILEVER"; exit 0; }; [ -f "$AWGR_SYS/dkms" ] && echo "$NEWVER" || exit 1',
             "sysctl": 'case "$1" in -n) echo "${PANIC:-0}";; *) echo "sysctl $*" >> "$LOG";; esac',
         }
         for name, body in stubs.items():
@@ -688,10 +690,10 @@ class ExitEngineTest(unittest.TestCase):
     def test_state_and_no_choice(self):
         main.engine.reconcile()
         st = main.get_state(None)
-        self.assertEqual(sorted(st["awg_engine"]), ["disabled", "exits_now", "fallback", "fit", "fit_why", "forced", "install",
-                                                    "lost", "min", "module", "notice", "old", "server"])
+        self.assertEqual(sorted(st["awg_engine"]), ["choice", "disabled", "exits_now", "fallback", "fit", "fit_why", "forced",
+                                                    "install", "lost", "min", "module", "notice", "old", "server"])
         self.assertIsNone(st["awg_engine"]["forced"])
-        self.assertFalse(hasattr(main, "set_engine"))                    # переключателя больше нет
+        self.assertFalse(hasattr(main, "set_engine"))   # отдельного выбора для выходов нет; ручной — на весь сервер
         from test_api import good_state
         g = good_state()
         g.setdefault("settings", {})["exit_engine"] = "kernel"           # из черновика 1.20.0 — отбрасывается

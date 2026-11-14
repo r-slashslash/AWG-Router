@@ -119,7 +119,7 @@ TEXTS = {
         "b_back_exits": "‹ Выходы", "sv_title": "🗄 <b>Сервер</b>\n<code>{host}</code>",
         "st_title": "📊 <b>Панель › Сервер</b>", "st_host": "🌍 Хост: <code>{host}</code>",
         "st_panel": "🏷 Версия панели: {version}", "st_panel_up": "🏷 Версия панели: {version} (доступна {latest})",
-        "st_awg": "🛡 Версия AWG: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_awg": "🛡 Версия AWG: {version}", "st_engine_kernel": "⚙️ Движок: модуль ядра {version}", "st_engine_go": "⚙️ Движок: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Время работы сервера: {time}",
         "st_v4_wait": "🌐 IPv4: определяется…",
         "st_v4_fail": "🌐 IPv4: не определён — проверка «напрямую» не прошла, панель пробует снова раз в 10 минут",
@@ -220,7 +220,7 @@ TEXTS = {
         "b_back_exits": "‹ Exits", "sv_title": "🗄 <b>Server</b>\n<code>{host}</code>",
         "st_title": "📊 <b>Panel › Server</b>", "st_host": "🌍 Host: <code>{host}</code>",
         "st_panel": "🏷 Panel version: {version}", "st_panel_up": "🏷 Panel version: {version} ({latest} available)",
-        "st_awg": "🛡 AWG version: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_awg": "🛡 AWG version: {version}", "st_engine_kernel": "⚙️ Engine: kernel module {version}", "st_engine_go": "⚙️ Engine: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Server uptime: {time}",
         "st_v4_wait": "🌐 IPv4: detecting…",
         "st_v4_fail": "🌐 IPv4: unknown — the “direct” check failed, the panel retries every 10 minutes",
@@ -318,7 +318,7 @@ TEXTS = {
         "b_back_exits": "‹ 出口", "sv_title": "🗄 <b>服务器</b>\n<code>{host}</code>",
         "st_title": "📊 <b>面板 › 服务器</b>", "st_host": "🌍 主机：<code>{host}</code>",
         "st_panel": "🏷 面板版本：{version}", "st_panel_up": "🏷 面板版本：{version}（可更新至 {latest}）",
-        "st_awg": "🛡 AWG 版本：{version}", "st_v4": "🌐 IPv4：<code>{ip}</code>",
+        "st_awg": "🛡 AWG 版本：{version}", "st_engine_kernel": "⚙️ 引擎：内核模块 {version}", "st_engine_go": "⚙️ 引擎：amneziawg-go", "st_v4": "🌐 IPv4：<code>{ip}</code>",
         "st_v6": "🌐 IPv6：<code>{ip}</code>", "st_uptime": "⏱ 服务器运行时间：{time}",
         "st_v4_wait": "🌐 IPv4：正在检测…",
         "st_v4_fail": "🌐 IPv4：未知——「直连」检测失败，面板每 10 分钟重试一次",
@@ -419,7 +419,7 @@ TEXTS = {
         "b_back_exits": "خروجی‌ها ›", "sv_title": "🗄 <b>سرور</b>\n<code>{host}</code>",
         "st_title": "📊 <b>پنل › سرور</b>", "st_host": "🌍 میزبان: <code>{host}</code>",
         "st_panel": "🏷 نسخهٔ پنل: {version}", "st_panel_up": "🏷 نسخهٔ پنل: {version} (نسخهٔ {latest} موجود است)",
-        "st_awg": "🛡 نسخهٔ AWG: {version}", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_awg": "🛡 نسخهٔ AWG: {version}", "st_engine_kernel": "⚙️ موتور: ماژول هسته {version}", "st_engine_go": "⚙️ موتور: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ مدت کارکرد سرور: {time}",
         "st_v4_wait": "🌐 IPv4: در حال تشخیص…",
         "st_v4_fail": "🌐 IPv4: نامشخص — بررسی «مستقیم» انجام نشد، پنل هر ۱۰ دقیقه دوباره تلاش می‌کند",
@@ -1090,6 +1090,7 @@ class Bot:
                  tr(L, "st_host", host=s.get("host") or "—"),
                  tr(L, "st_panel_up", version=cur, latest=v["latest"]) if upd else tr(L, "st_panel", version=cur),
                  tr(L, "st_awg", version=h.get("awg") or "—"),
+                 *self._engine_line(L, h.get("engine")),
                  tr(L, "st_v4", ip=h["v4"]) if h.get("v4") else
                  tr(L, "st_v4_fail" if h.get("v4_state") == "failed" else "st_v4_wait"),
                  tr(L, "st_v6", ip=h["v6"]) if h.get("v6") else tr(L, "st_v6_none"),
@@ -1104,6 +1105,16 @@ class Bot:
             rows.append([(tr(L, "b_update", False, version=v["latest"]), "up")])
         rows.append([(tr(L, "b_refresh"), "st")] + self._back_server(c))
         self._show(c, "\n".join(lines), kb(*rows), msg)
+
+    @staticmethod
+    def _engine_line(L: str, e: dict | None) -> list[str]:
+        """«Движок»: модуль ядра (с версией) или amneziawg-go; сервер ещё не прочитан — строки нет."""
+        e = e or {}
+        if e.get("server") == "kernel":
+            return [tr(L, "st_engine_kernel", version=e.get("version") or "?")]
+        if e.get("server") == "go":
+            return [tr(L, "st_engine_go")]
+        return []
 
     @staticmethod
     def _dns_lines(L: str, d: dict | None) -> list[str]:
