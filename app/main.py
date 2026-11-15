@@ -903,6 +903,7 @@ def clean_backup_state(new: dict) -> dict:
                 fail("settings.telegram.via")
         c["via"] = via
         out["telegram"] = c
+    Store.drop_auto_comments(st)          # копия до 1.21.0: правила из окна выхода с его именем
     return st
 
 
@@ -1374,7 +1375,8 @@ def merge_exit_rules(st: dict, out: str, dl: list[str], nl: list[str], name: str
         if host:
             host["lists"] = host["lists"] + add
         else:
-            new_rules.append({"lists": add, "outbound": out, "enabled": True, "comment": name[:80]})
+            # без подписи: строка правила сама показывает, что ловит правило и куда ведёт
+            new_rules.append({"lists": add, "outbound": out, "enabled": True, "comment": ""})
     if new_rules:
         last = max((i for i, r in enumerate(keep) if r["outbound"] == out), default=-1)
         keep[last + 1:last + 1] = new_rules

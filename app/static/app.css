@@ -88,6 +88,21 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 .lang-select { width: auto !important; min-height: 32px !important; padding-block: 4px !important; font-size: .88rem; }
 .login-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 24px; }
 .summary { margin: 0; padding-inline-start: 20px; display: grid; gap: 6px; }
+/* строка правила: слева — что ловит правило, справа — выход; своё название — серой строкой сверху */
+.rule-sum { padding-inline-start: 0; list-style: none; }
+.rule-sum li { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: baseline; }
+.rule-sum .rule-n { grid-column: 1; grid-row: 2; font-variant-numeric: tabular-nums; }
+.rule-sum .rule-name { grid-column: 2; grid-row: 1; }
+.rule-sum .rule-row { grid-column: 2; grid-row: 2; }
+.rule-sum .rule-row { display: flex; align-items: center; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap; }
+.rule-sum .rule-what { min-width: 0; overflow-wrap: anywhere; }
+.rule-sum .rule-name { font-size: .78rem; color: var(--muted); line-height: 1.2; }
+.rule-sum li.off { color: var(--muted); }
+.rule-sum li.off .rule-what { text-decoration: line-through; }
+.rule-sum li.off .line { opacity: .55; }
+.more-chip { font: inherit; font-size: .8rem; line-height: 1.4; padding: 0 7px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--rule-strong); background: transparent; color: var(--muted); vertical-align: 1px; }
+.more-chip:hover { color: var(--ink); }
 .status { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: .88rem; color: var(--muted); }
 .status b { color: var(--ink); font-weight: 600; }
 .sysmon { display: inline-flex; gap: 10px; white-space: nowrap; }
@@ -229,11 +244,16 @@ textarea.short { min-height: 64px; }
 }
 
 /* ---------- state dot ---------- */
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong); flex: none; }
+/* Точка состояния стоит на середине строчных букв (vertical-align: middle), а не на базовой линии.
+   .state — inline-block, а не inline-flex: у flex-контейнера базовая линия бралась бы от пустой точки,
+   и в строке с выравниванием по базовой линии (заголовок карточки выхода) текст уезжал вниз. */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong); flex: none;
+  vertical-align: middle; }
 .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
 .dot.warn { background: var(--warn); }
 .dot.bad { background: var(--bad); }
-.state { display: inline-flex; align-items: center; gap: 7px; font-size: .88rem; }
+.state { display: inline-block; font-size: .88rem; }
+.state > .dot { margin-inline-end: 7px; }
 .state-bad { cursor: pointer; }
 .state-bad b { color: var(--bad); }
 

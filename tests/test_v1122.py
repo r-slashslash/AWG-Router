@@ -113,8 +113,9 @@ class ExitWindowRulesTest(Fixture):
         main.edit_upstream(Req({"routing": {"domains": "example.com", "domain_lists": [],
                                             "net_lists": [a, b]}}), uid)
         own = Store.upstream(main.store.snapshot(), uid)["own_list"]
+        # с 1.21.0 без подписи именем выхода: строка правила и так показывает выход справа
         self.assertEqual(self.rules(), [("RU", ["ru"], "direct", True), ("Mine", [a, b], out, True),
-                                        ("NL", [own], out, True)])
+                                        ("", [own], out, True)])
 
 
 # --------------------------------------------- №4 восстановление, №11–12 API

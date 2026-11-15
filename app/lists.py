@@ -220,7 +220,8 @@ def refresh(lst: dict) -> dict:
             return {"error": Msg("list.fetch_failed", detail=str(e)[:300]).to_json(),
                     "checked": time.time()}
         domains.save(lst["id"], names)
-        return {"error": None, "count": len(names), "addresses": None, "skipped_v6": 0,
+        # first — первый домен списка: им подписано правило со своим списком выхода («youtube.com +19»)
+        return {"error": None, "count": len(names), "first": names[0][:80], "addresses": None, "skipped_v6": 0,
                 "updated": time.time(), "checked": time.time()}
     stats: dict = {}
     try:

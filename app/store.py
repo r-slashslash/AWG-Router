@@ -72,12 +72,32 @@ class Store:
             if isinstance(e, dict) and e.get("preset") in RENAMED:
                 e["preset"] = RENAMED[e["preset"]]
                 changed = True
+        if Store.drop_auto_comments(self.state):
+            changed = True
         s = self.state.get("settings") or {}
         if s.get("panel_dns") and "panel_dns_enc" not in s:
             # DNS на сервере включили в 1.15.0, до шифрования: оставляем как было — DoH по умолчанию
             # сломал бы DNS клиентов, если серверы в настройках его не умеют
             s["panel_dns_enc"] = "plain"
             changed = True
+        return changed
+
+    @staticmethod
+    def drop_auto_comments(state: dict) -> bool:
+        """До 1.21.0 окно выхода подписывало созданное им правило именем выхода, и строка правила
+        выглядела как «mobile — ● mobile». Такая подпись ничего не добавляет к выходу справа —
+        убираем её (у общих правил и правил клиентов). Своё название, отличное от имени выхода,
+        остаётся. True — что-то поменялось."""
+        names = {"up:" + u["id"]: u.get("name") for u in state.get("upstreams") or [] if isinstance(u, dict)
+                 and isinstance(u.get("id"), str)}
+        changed = False
+        groups = [(state.get("routing") or {}).get("rules")]
+        groups += [c.get("rules") for c in (state.get("clients") or {}).values() if isinstance(c, dict)]
+        for rules in groups:
+            for r in rules if isinstance(rules, list) else []:
+                if isinstance(r, dict) and r.get("comment") and r.get("comment") == names.get(r.get("outbound")):
+                    r["comment"] = ""
+                    changed = True
         return changed
 
     def _read(self) -> dict:

@@ -37,22 +37,29 @@ LINK_MAX = 4 * 1024 * 1024
 
 
 # Параметры, по которым определяем поколение протокола AmneziaWG
+# Ключи конфига по версиям протокола (amneziawg-go v3.1, README «[AWG 3+]»). Отдельного набора для 3.0
+# у amneziawg-go нет: всё «AWG 3+» — это 3.1, которую понимают amneziawg-go и модуль ядра 3.x.
 AWG3_KEYS = {"headerprotectionkey", "contentpaddingaddition", "rekeyaftertime", "rekeytimeout",
              "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts", "randomtrailers",
              "disablecookies", "advancedsecurity"}
-AWG2_KEYS = {"s3", "s4", "i1", "i2", "i3", "i4", "i5"}
+AWG2_KEYS = {"s3", "s4"}                          # 2.0: паддинг cookie и транспорта, H1–H4 — диапазоны
+AWG15_KEYS = {"i1", "i2", "i3", "i4", "i5"}        # 1.5: пакеты-имитации перед рукопожатием
 AWG1_KEYS = {"jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"}
 
 
-def protocol_version(keys) -> str:
-    """'3' | '2' | '1' | '' (обычный WireGuard)."""
-    k = {x.lower() for x in keys}
-    if k & AWG3_KEYS:
-        return "3"
-    if k & AWG2_KEYS:
-        return "2"
-    if k & AWG1_KEYS:
-        return "1"
+def protocol_version(params) -> str:
+    """Самая младшая версия AmneziaWG, которая понимает этот конфиг: '3.1' | '2.0' | '1.5' | '1.0' |
+    '' (обычный WireGuard). params — {ключ: значение} (регистр ключей любой); пустые значения не в счёт.
+    H1–H4 диапазоном («100-200») — это уже 2.0."""
+    p = {str(k).lower(): str(v).strip() for k, v in params.items() if str(v).strip()}
+    if p.keys() & AWG3_KEYS:
+        return "3.1"
+    if p.keys() & AWG2_KEYS or any("-" in p.get(h, "") for h in ("h1", "h2", "h3", "h4")):
+        return "2.0"
+    if p.keys() & AWG15_KEYS:
+        return "1.5"
+    if p.keys() & AWG1_KEYS:
+        return "1.0"
     return ""
 
 
@@ -333,7 +340,7 @@ def parse_upstream(user_input: str) -> UpstreamConf:
         peer_public_key=plow["publickey"],
         rekey_after=_range_max(ilow.get("rekeyaftertime", ""), 120),
         params=params,
-        version=protocol_version(ilow.keys()),
+        version=protocol_version(ilow),
     )
 
 

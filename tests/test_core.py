@@ -101,11 +101,15 @@ class ListsTest(unittest.TestCase):
         self.assertEqual(lists.parse_asns("AS13238, 15169 as47541;AS13238 junk 0"), [13238, 15169, 47541])
 
     def test_awg_versions(self):
-        self.assertEqual(awgconf.parse_upstream(CONF).version, "3")
+        self.assertEqual(awgconf.parse_upstream(CONF).version, "3.1")
         v2 = "\n".join(l for l in CONF.splitlines() if not l.startswith("RekeyAfterTime"))
-        self.assertEqual(awgconf.parse_upstream(v2).version, "2")
-        v1 = "\n".join(l for l in v2.splitlines() if not l.startswith(("S3", "S4", "I1")))
-        self.assertEqual(awgconf.parse_upstream(v1).version, "1")
+        self.assertEqual(awgconf.parse_upstream(v2).version, "2.0")
+        v2h = "\n".join(l for l in v2.splitlines() if not l.startswith(("S3", "S4")))
+        self.assertEqual(awgconf.parse_upstream(v2h).version, "2.0")         # H1 диапазоном — тоже 2.0
+        v15 = v2h.replace("H1 = 1023441523-1023441600", "H1 = 1023441523")
+        self.assertEqual(awgconf.parse_upstream(v15).version, "1.5")
+        v1 = "\n".join(l for l in v15.splitlines() if not l.startswith("I1"))
+        self.assertEqual(awgconf.parse_upstream(v1).version, "1.0")
 
     def test_keepalive_range(self):
         pc = awgconf.parse_upstream(CONF.replace("PersistentKeepalive = 0", "PersistentKeepalive = 22-30"))

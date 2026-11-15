@@ -3051,15 +3051,27 @@ Object.assign(I18N.fa, {
 
 /* 1.21.0: правила по доменам на любой выход, строка правила, статус в шапке, порты */
 Object.assign(I18N.ru, {
+  "rl.domains": "Домены {name}",
+  "rl.show_all": "Показать все списки правила",
+  "rl.off": "Правило выключено",
   "srv.port_dns": "Порт {port} занят DNS на сервере, выберите другой",
 });
 Object.assign(I18N.en, {
+  "rl.domains": "Domains {name}",
+  "rl.show_all": "Show all lists of the rule",
+  "rl.off": "The rule is off",
   "srv.port_dns": "Port {port} is used by DNS on the server, pick another",
 });
 Object.assign(I18N.zh, {
+  "rl.domains": "域名 {name}",
+  "rl.show_all": "显示该规则的全部列表",
+  "rl.off": "该规则已关闭",
   "srv.port_dns": "端口 {port} 已被服务器上的 DNS 使用，请选择其他端口",
 });
 Object.assign(I18N.fa, {
+  "rl.domains": "دامنه‌ها {name}",
+  "rl.show_all": "نمایش همهٔ فهرست‌های قانون",
+  "rl.off": "این قانون خاموش است",
   "srv.port_dns": "پورت {port} را DNS روی سرور به کار می‌برد، پورت دیگری انتخاب کنید",
 });
 

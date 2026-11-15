@@ -182,11 +182,54 @@ function shapingNotice() {
   const s = S.shaping;
   return s && s.state === "error" ? `<div class="notice warn">${esc(t("sh.error", { error: tm(s.error) || "?" }))}</div>` : "";
 }
-function rulesSummary(rules) {
-  const rs = rules.filter((r) => r.enabled);
-  if (!rs.length) return `<p class="muted small" style="margin:0">${esc(t("ov.no_rules"))}</p>`;
-  return `<ol class="summary">${rs.map((r) => `<li>${r.lists.map((l) => `<bdi>${esc(listName(l))}</bdi>`).join(esc(sep("list")))} — ${outChip(r.outbound)}</li>`).join("")}</ol>`;
+/** что ловит список — подпись в строке правила (HTML): «Домены work (20)»; свои сайты выхода — их первый
+ *  домен и сколько ещё («Домены youtube.com +19»): имя такого списка — имя выхода, а он и так справа;
+ *  «work (12 сетей)» у своего списка сетей; страны, ASN и списки по ссылке — просто имя */
+function listLabel(id) {
+  const l = listObj(id);
+  if (!l) return `<bdi>${esc(id)}</bdi>`;
+  if (l.kind === "domains") {
+    const own = S.upstreams.some((u) => u.own_list === id);
+    const name = own && l.first
+      ? `<bdi>${esc(l.first)}</bdi>${l.count > 1 ? ` <bdi dir="ltr" class="nowrap">+${esc(fmtNum(l.count - 1))}</bdi>` : ""}`
+      : `<bdi>${esc(listName(id))}</bdi>${l.count ? ` (${esc(fmtNum(l.count))})` : ""}`;
+    return th("rl.domains", { name });
+  }
+  if (l.kind === "manual" && l.count) return `<bdi>${esc(listName(id))}</bdi> (${esc(t("n.networks", { n: l.count }))})`;
+  return `<bdi>${esc(listName(id))}</bdi>`;
 }
+/** то же текстом — для подсказки */
+const listLabelText = (id) => { const d = document.createElement("div"); d.innerHTML = listLabel(id); return d.textContent; };
+/** своё название правила: не пустое и не повторяет то, что строка и так показывает, — имя выхода (так окно
+ *  выхода подписывало правила до 1.21.0) или имя его списка */
+const ruleOwnName = (r) => (r.comment && r.comment !== exitName(r.outbound)
+  && !r.lists.some((l) => listName(l) === r.comment) ? r.comment : "");
+const openRules = new Set();     // правила, у которых по нажатию на «+N» показан весь состав
+/** строки правил политики: слева — что ловит правило (его списки), справа — выход. Выключенное правило —
+ *  серое и зачёркнутое, со своим номером */
+function rulesSummary(rules) {
+  if (!rules.length) return `<p class="muted small" style="margin:0">${esc(t("ov.no_rules"))}</p>`;
+  return `<ol class="summary rule-sum">${rules.map((r, i) => {
+    const labels = r.lists.map(listLabel), open = openRules.has(r.id), n = labels.length - 2;
+    // больше двух списков: первые два и «+N»; нажатие показывает остальные на месте (и в окне клиента)
+    const rest = n > 0 ? `<span class="rule-rest"${open ? "" : " hidden"}>${esc(sep("list"))}${labels.slice(2).join(esc(sep("list")))}</span>`
+      + ` <button type="button" class="more-chip" dir="ltr" data-rule-more="${esc(r.id)}" data-n="${esc(fmtNum(n))}" aria-expanded="${open}" title="${esc(r.lists.map(listLabelText).join(sep("list")))}" aria-label="${esc(t("rl.show_all"))}">${open ? "−" : "+" + esc(fmtNum(n))}</button>` : "";
+    const name = ruleOwnName(r);
+    return `<li class="${r.enabled === false ? "off" : ""}"${r.enabled === false ? ` title="${esc(t("rl.off"))}"` : ""}>
+      <span class="rule-n">${esc(fmtNum(i + 1))}.</span>${name ? `<div class="rule-name"><bdi>${esc(name)}</bdi></div>` : ""}
+      <div class="rule-row"><span class="rule-what">${labels.slice(0, 2).join(esc(sep("list")))}${rest}</span>${outChip(r.outbound)}</div></li>`;
+  }).join("")}</ol>`;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("[data-rule-more]");
+  if (!b) return;
+  const id = b.dataset.ruleMore, open = !openRules.has(id);
+  if (open) openRules.add(id); else openRules.delete(id);
+  const rest = b.parentElement.querySelector(".rule-rest");
+  if (rest) rest.hidden = !open;
+  b.setAttribute("aria-expanded", open);
+  b.textContent = open ? "−" : "+" + b.dataset.n;
+});
 
 /* ================================================================ язык */
 function langSelect(id) {
@@ -924,7 +967,7 @@ function editClient(pk, section = null) {
     $$("#c-mode button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === draft.rules_mode));
     const box = $("#c-rules");
     if (draft.rules_mode === "inherit") {
-      box.innerHTML = S.routing.rules.some((r) => r.enabled) ? rulesSummary(S.routing.rules)
+      box.innerHTML = S.routing.rules.length ? rulesSummary(S.routing.rules)
         : `<p class="muted small">${esc(t("cl.no_global"))}</p>`;
     } else {
       rulesEditor(box, draft.rules, () => {});
@@ -1002,7 +1045,7 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
         <div class="rule-n">${esc(fmtNum(i + 1))}</div>
         <div>
           <div class="rule-lists">
-            ${r.lists.map((l) => `<span class="chip"><bdi>${esc(listName(l))}</bdi><button type="button" data-rm-list="${esc(l)}" aria-label="${esc(t("re.remove_list"))}">×</button></span>`).join("")}
+            ${r.lists.map((l) => `<span class="chip"><span>${listLabel(l)}</span><button type="button" data-rm-list="${esc(l)}" aria-label="${esc(t("re.remove_list"))}">×</button></span>`).join("")}
             <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
           </div>
           <input type="text" class="rule-comment" data-comment value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}" maxlength="80">
@@ -1157,7 +1200,7 @@ function viewExits() {
       <div class="exit-bar"></div>
       <div class="exit-main">
         <div class="exit-head">
-          <h3><bdi>${esc(u.name)}</bdi> <span class="tag">${esc(u.iface)}</span>${ver ? `<span class="tag">${esc(ver)}</span>` : ""}</h3>
+          <h3><bdi>${esc(u.name)}</bdi>${ver ? ` <span class="tag">${esc(ver)}</span>` : ""}</h3>
           <label class="switch" title="${esc(t(u.enabled ? "ex.turn_off" : "ex.turn_on"))}"><input type="checkbox" data-toggle="${u.id}" ${u.enabled ? "checked" : ""} aria-label="${esc(t("ex.enabled"))}"><span></span></label>
         </div>
         <div>${st}</div>

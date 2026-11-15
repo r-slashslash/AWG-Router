@@ -249,5 +249,34 @@ class InstallerPortsTest(unittest.TestCase):
         self.assertIn('SSH_USER="$(ssh_user 2>/dev/null)"', text)
 
 
+# ------------------------------------------------------------------ строка правила, карточка выхода
+class RuleLineTest(unittest.TestCase):
+    def test_auto_comment_dropped_own_kept(self):
+        st = {"upstreams": [{"id": "u1", "name": "mobile"}],
+              "routing": {"rules": [{"lists": ["l1"], "outbound": "up:u1", "comment": "mobile"},
+                                    {"lists": ["l2"], "outbound": "up:u1", "comment": "Work sites"},
+                                    {"lists": ["l3"], "outbound": "direct", "comment": "mobile"}]},
+              "clients": {"pk": {"rules": [{"lists": ["l1"], "outbound": "up:u1", "comment": "mobile"}]}}}
+        self.assertTrue(Store.drop_auto_comments(st))
+        self.assertEqual([r["comment"] for r in st["routing"]["rules"]], ["", "Work sites", "mobile"])
+        self.assertEqual(st["clients"]["pk"]["rules"][0]["comment"], "")
+        self.assertFalse(Store.drop_auto_comments(st))                      # второй раз — нечего менять
+
+    def test_domain_list_knows_its_first_domain(self):
+        with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")), \
+                mock.patch.object(lists.domains, "save"):
+            res = lists.refresh({"id": "lx", "kind": "domains", "source": "youtube.com\ngooglevideo.com"})
+        self.assertEqual((res["first"], res["count"]), ("youtube.com", 2))
+
+    def test_ui(self):
+        js = read("app", "static", "app.js")
+        self.assertIn("function listLabel(", js)
+        self.assertIn("data-rule-more", js)
+        self.assertNotIn("${esc(u.iface)}</span>", js)                   # имя awgrN в карточке выхода не показываем
+        css = read("app", "static", "app.css")
+        self.assertRegex(css, r"\.dot \{[^}]*vertical-align: middle")
+        self.assertNotRegex(css, r"\.state \{[^}]*inline-flex")         # базовая линия — от текста, не от точки
+
+
 if __name__ == "__main__":
     unittest.main()

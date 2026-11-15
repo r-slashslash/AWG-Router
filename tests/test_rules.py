@@ -113,7 +113,7 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
 
     # поля, которые восстановление не переносит намеренно
     DROPPED = {"lists[].addresses", "lists[].checked", "lists[].count", "lists[].error", "lists[].skipped_v6",
-               "lists[].updated",                       # пересчитываются при обновлении списков
+               "lists[].updated", "lists[].first",      # пересчитываются при обновлении списков
                "settings.client_host",                  # адрес этого сервера, а не из копии
                "settings.telegram.backup_last", "settings.telegram.backup_error",
                "await_first"}                           # ждать первого подключения — только на этом сервере
