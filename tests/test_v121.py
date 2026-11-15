@@ -358,7 +358,7 @@ import struct as _struct  # noqa: E402
 
 from app import config as _config, dnsproxy, nfqueue, quic, sniproxy  # noqa: E402
 
-DATA = os.path.join(os.path.dirname(__file__), "data")
+DATA = os.path.join(os.path.dirname(__file__), "fixtures")
 
 
 def chromium(v="v1"):

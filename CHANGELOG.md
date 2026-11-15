@@ -14,6 +14,30 @@ it grows, so every user-visible change gets a new version.
   while shared lists go to the replacement. A domain rule that leads where everything else goes, with no address
   rules, no longer turns on the redirect of all HTTPS/HTTP into the handler (`Engine._policies`). The network
   tests check a matched site going through a tunnel exit by its mark.
+- **HTTP/3 (QUIC) by site name.** Clients with domain rules no longer lose HTTP/3 for every site. The first
+  packets of a new QUIC connection go to a kernel queue (`nft queue … bypass`, chain `c_quic`; `nfqueue.py` speaks
+  nfnetlink_queue over a netlink socket with the standard library only), `quic.py` decrypts the Initial packets
+  (v1 and v2; the keys come from the connection ID, RFC 9001 / 9369; AES from libcrypto through ctypes or pure
+  Python; the GCM tag isn't needed for a routing decision), puts the ClientHello together from CRYPTO frames —
+  Chrome with ML-KEM splits it across two packets and shuffles the pieces — and `sniproxy.py` answers with a
+  mark: an AmneziaWG exit — its tunnel, Direct — `QUIC_DIRECT_MARK` (no ip rule, main table), SOCKS5 and Block
+  — reject (the browser takes HTTPS, where the proxy gets the name; UDP through proxies often doesn't work),
+  a site not on the lists — `QUIC_PASS_MARK` and the usual rules. The decision goes into the conntrack mark
+  (`QUIC_CT_BIT`) for the rest of the connection; repeated first packets of the same connection get the same
+  answer. A ClientHello that doesn't come together in `QUIC_HOLD` and QUIC that isn't Initial are rejected, so
+  a listed site never leaves through the wrong exit; no listener (`bypass`) means the old block. A kernel
+  without `nft_queue` (some OpenVZ/LXC) fails to load the ruleset with the queue: the panel loads it without
+  and says so once (`ev.quic_no_queue`); the domain list window shows that HTTP/3 is off. Tested on real
+  Initial packets of Chromium 153 (v1 and v2, checked against the GCM tag) and in the network tests.
+- **DNS on the server resolves names from domain rules through the rule's exit** (`dnsproxy.Proxy.domain_route`,
+  `Engine.dns_domains`): the address isn't spoofed on the way and a CDN gives a node near the exit. Block rules
+  and exits that are down resolve the usual way.
+- **Optional DNS filter for domain rules** (Server → "Domain rules only for addresses from this DNS's answers",
+  `settings.dom_filter`, works with DNS on the server): the handler gets only connections to addresses that DNS
+  on the server returned for names in domain rules (the `dom4` nftables set, timeout = TTL but at least
+  `SET_MIN`; after every rebuild of the table the panel sends SIGUSR1 and dnsproxy adds the live addresses
+  back). Other traffic goes through the kernel without the handler, and HTTP/3 to it isn't touched. A device
+  with its own DNS bypasses the filter — the hint says so.
 - **A rule line says what it catches.** In the global policy and on a client's page a rule reads as its lists on
   the left — `Domains work (20)`, an exit's own sites by their first domain `Domains youtube.com +19` (lists keep
   their `first` domain), `Office (12 networks)`, countries and ASNs by name; more than two lists collapse to `+N`,

@@ -105,8 +105,8 @@ try:
 except OSError as e: out.append("FAIL "+type(e).__name__)
 print(" ".join(out))
 """
-QUIC_V1 = os.path.join(HERE, "data", "quic-chromium153-v1.hex")
-QUIC_V2 = os.path.join(HERE, "data", "quic-chromium153-v2.hex")
+QUIC_V1 = os.path.join(HERE, "fixtures", "quic-chromium153-v1.hex")
+QUIC_V2 = os.path.join(HERE, "fixtures", "quic-chromium153-v2.hex")
 
 
 def sh(ns, *cmd, **kw):
