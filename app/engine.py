@@ -41,6 +41,9 @@ RERESOLVE_EVERY = 60     # и потом не чаще, чем раз в сто�
 SNIPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sniproxy.py")
 SNI_CONF = os.path.join(RUN_DIR, "sni.json")
 SNI_STATS = os.path.join(RUN_DIR, "sni-stats.json")
+SNI_BEAT = os.path.join(RUN_DIR, "sni-beat")      # пульс sniproxy.py: mtime обновляется раз в секунду
+SNI_WATCH_EVERY = 1                               # как часто панель смотрит на sniproxy.py, с
+SNI_HANG = 15                                     # пульса нет дольше — цикл событий стоит
 DNSPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dnsproxy.py")
 DNS_CONF = os.path.join(RUN_DIR, "dns.json")
 DNS_STATS = os.path.join(RUN_DIR, "dns-stats.json")
@@ -144,6 +147,7 @@ class Engine:
         self.sni: HelperRT | None = None
         self.sni_state: dict | None = None      # для интерфейса: state, listen, error
         self._sni_retry = 0.0
+        self.strict_on = False                  # действует блок «правила по доменам не работают»
         self.dns: HelperRT | None = None        # dnsproxy.py — DNS панели для клиентов
         self.dns_state: dict | None = None      # для интерфейса: state, listen, error
         self._dns_retry = 0.0
@@ -181,6 +185,23 @@ class Engine:
         threading.Thread(target=self._loop, name="reconcile", daemon=True).start()
         threading.Thread(target=self._lists_loop, name="lists", daemon=True).start()
         threading.Thread(target=self._detect_host, name="public-ip", daemon=True).start()
+        threading.Thread(target=self._watch_sni, name="sni-watch", daemon=True).start()
+
+    def _watch_sni(self) -> None:
+        """Присмотр за sniproxy.py раз в секунду (а не раз в RECONCILE_INTERVAL): процесс завершился
+        или его цикл событий стоит дольше SNI_HANG (не обновляет файл пульса) — сразу новый проход,
+        который его перезапустит. Пока посредника нет, перенаправленные к нему соединения клиентов
+        с правилами по доменам получают отказ."""
+        while not self.stop_ev.wait(SNI_WATCH_EVERY):
+            d = self.sni
+            if not d or config.DRY_RUN:
+                continue
+            if d.proc.poll() is None and not self._sni_hung():
+                continue
+            if d.proc.poll() is None:
+                log.warning("sniproxy: no heartbeat for %ss, killing", SNI_HANG)
+                d.proc.kill()
+            self.wake.set()
 
     def _detect_host(self) -> None:
         """Внешний IPv4 сервера: показывается на вкладке «Сервер» и в боте и становится внешним
@@ -1012,7 +1033,10 @@ class Engine:
                     pc = self.parsed(u)
                 except Exception:  # noqa: BLE001
                     continue
-                ups.append({"num": u["num"], "snat": pc.address, "mtu": pc.mtu})
+                # QUIC через SOCKS5 — только с галочкой: многие прокси без UDP, и браузер ждал бы
+                # QUIC впустую, прежде чем перейти на TCP
+                ups.append({"num": u["num"], "snat": pc.address, "mtu": pc.mtu,
+                            "no_quic": pc.kind == "socks5" and not u.get("quic")})
         return ups
 
     def build_ruleset(self, t: system.Target, st: dict, sniff_port: int | None = None, quic: bool = False) -> str:
@@ -1022,7 +1046,21 @@ class Engine:
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
         return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port, self.bal_nums,
-                               dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic)
+                               dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
+                               strict=sniff_port is None and self.strict(st))
+
+    @staticmethod
+    def strict(st: dict) -> bool:
+        """«Правила по доменам не работают — блокировать весь трафик их клиентов» (routing.strict)."""
+        return bool((st.get("routing") or {}).get("strict"))
+
+    def strict_blocked(self, st: dict, sniff: int | None) -> bool:
+        """Блок из-за неработающих правил по доменам сейчас действует: галочка, есть клиенты с
+        правилами по доменам, а посредника нет."""
+        if sniff is not None or not self.strict(st):
+            return False
+        gp, cps = self._policies(st)
+        return any(p.get("domain") for p in [gp, *cps.values()])
 
     def dom_filter(self, st: dict) -> bool:
         """Режим «фильтр по DNS» выбран (settings.dom_filter) и DNS на сервере включён."""
@@ -1053,16 +1091,17 @@ class Engine:
 
     def _quic_mark(self, st: dict, out: str) -> int:
         """Метка вердикта для первого пакета QUIC к сайту из правила: выход AWG — его туннель;
-        «напрямую» — метка без ip rule (основная таблица); SOCKS5 и «блок» — отказ: браузер сразу
-        переходит на TCP, где прокси получит имя сайта (UDP через прокси часто не работает и шёл бы
-        к адресу из DNS клиента). Неработающий выход — его резерв, как у TCP."""
+        «напрямую» — метка без ip rule (основная таблица); SOCKS5 — его туннель, только если у выхода
+        включён QUIC (иначе отказ: браузер сразу переходит на TCP, где прокси получит имя сайта; UDP
+        через прокси часто не работает и шёл бы к адресу из DNS клиента); «блок» — отказ.
+        Неработающий выход — его резерв, как у TCP."""
         eff = self.resolve(out, st)
         if eff == "direct":
             return config.QUIC_DIRECT_MARK
         if isinstance(eff, int):
             u = next((x for x in st["upstreams"] if x.get("num") == int(eff)), None)
             try:
-                if u and self.parsed(u).kind != "socks5":
+                if u and (self.parsed(u).kind != "socks5" or u.get("quic")):
                     return nftgen.mark_for(int(eff))
             except Exception:  # noqa: BLE001
                 pass
@@ -1193,16 +1232,15 @@ class Engine:
             log.info("input rule: %s", e)
 
     def _sni_hung(self) -> bool:
-        """Процесс жив, но цикл событий стоит: счётчики (пишет каждые 15 с) давно не обновлялись."""
+        """Процесс жив, но цикл событий стоит: файл пульса (sniproxy.py обновляет его каждую
+        секунду) старше SNI_HANG. Пульса нет вовсе — посредник ещё не дошёл до цикла."""
         d = self.sni
-        if not d or time.time() - d.started < 120:
+        if not d or time.time() - d.started < SNI_HANG:
             return False
         try:
-            with open(SNI_STATS) as f:
-                s = json.load(f)
-        except (OSError, ValueError):
-            return False
-        return s.get("pid") == d.proc.pid and time.time() - float(s.get("at") or 0) > 120
+            return time.time() - os.stat(SNI_BEAT).st_mtime > SNI_HANG
+        except OSError:
+            return time.time() - d.started > SNI_HANG * 4
 
     def _sync_sni(self, t: system.Target, st: dict) -> int | None:
         """Держит sniproxy.py запущенным, пока в правилах есть списки доменов.
@@ -1238,7 +1276,7 @@ class Engine:
                  if shaping.mbit(u.get("rate_up")) or shaping.mbit(u.get("rate_down"))}
         shared = self._sni_shared(st, rates)
         self._sni_shared_devs = {d["dev"] for dirs in shared.values() for d in dirs.values()}
-        cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS,
+        cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS, "beat": SNI_BEAT,
                "lists": files, "cidrs": cidrs, "rates": rates, "shared": shared,
                "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
                "quic": {"queue": config.QUIC_QUEUE, "pass": config.QUIC_PASS_MARK, "block": config.MARK_BLOCK},
@@ -1262,7 +1300,14 @@ class Engine:
                 json.dump(cfg, f)
             os.replace(SNI_CONF + ".tmp", SNI_CONF)
         if d is None:
-            if time.time() - self._sni_retry < 60:
+            wait = 60 - (time.time() - self._sni_retry)
+            if wait > 0:
+                # посредник недавно уже запускали и он остановился: следующая попытка позже
+                # (ошибку запуска с подробностями не затираем)
+                if not (self.sni_state and self.sni_state.get("state") == "error"
+                        and getattr(self.sni_state.get("error"), "key", "") != "sni.restart_wait"):
+                    self.sni_state = {"state": "error", "listen": listen,
+                                      "error": Msg("sni.restart_wait", s=max(1, round(wait)))}
                 return None
             self._sni_retry = time.time()
             logp = os.path.join(LOG_DIR, "sniproxy.log")
@@ -1453,6 +1498,7 @@ class Engine:
         if not self.sni_state:
             return None
         v = dict(self.sni_state)
+        v["strict"] = self.strict_on
         if self.sni and not config.DRY_RUN:
             s = self.sni_stats()
             v.update({k: s.get(k) for k in ("conns", "active", "matched", "errors", "by_list", "quic_matched")})
@@ -1804,6 +1850,10 @@ class Engine:
             if self._quic_key != t.key:              # другое ядро (новая цель) — проверить заново
                 self._quic_key, self._quic_nft = t.key, None
             quic = self.quic_wanted(sniff)
+            strict = self.strict_blocked(st, sniff)
+            if strict != self.strict_on:
+                self.strict_on = strict
+                self.event("warn" if strict else "info", Msg("ev.dom_strict_on" if strict else "ev.dom_strict_off"))
             text = self.build_ruleset(t, st, sniff, quic)
             h = _sha(text)
             present = t.ns(["nft", "list", "chain", "ip", config.NFT_TABLE, "c_prerouting"],
@@ -1889,7 +1939,8 @@ class Engine:
                     t = self.target
                     if t:
                         # без sniproxy.py перенаправление в него оборвало бы HTTPS у клиентов с
-                        # правилами по доменам: оставляем только правила по адресам
+                        # правилами по доменам: оставляем только правила по адресам (с галочкой
+                        # routing.strict у этих клиентов — блок до запуска панели)
                         try:
                             p = os.path.join(RUN_DIR, "ruleset.nft")
                             with open(p, "w") as f:
@@ -2076,12 +2127,22 @@ class Engine:
         if eff == "block":
             return {"ok": False, "error": Msg("probe.blocked")}
         mark = 0 if eff == "direct" else nftgen.mark_for(eff)
+        # у выхода SOCKS5 ещё и UDP: пропускает ли прокси QUIC (галочка выхода)
+        socks = False
+        if isinstance(eff, int):
+            u = next((x for x in st["upstreams"] if x.get("num") == eff), None)
+            try:
+                socks = bool(u) and self.parsed(u).kind == "socks5"
+            except Exception:  # noqa: BLE001
+                pass
         if config.DRY_RUN:
-            return {"ok": True, "ip": "203.0.113.%d" % (10 + (eff if eff != "direct" else 0)),
-                    "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
+            res = {"ok": True, "ip": "203.0.113.%d" % (10 + (eff if eff != "direct" else 0)),
+                   "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
+            return {**res, "udp": False} if socks else res
         # имена разбираем в сети панели — в сети контейнера может не быть DNS
         hosts = [f"{h}={ip}" for h, ip in awgconf.resolve_many(PROBE_HOSTS, 4).items()]
-        p = t.ns(["python3", PROBE, str(mark), *hosts], check=False, timeout=25)
+        p = t.ns(["python3", PROBE, str(mark), *(["--udp"] if socks else []), *hosts],
+                 check=False, timeout=35)
         try:
             res = json.loads(p.stdout)
         except ValueError:

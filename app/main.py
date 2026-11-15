@@ -290,6 +290,15 @@ def v_rates(body: dict, prefix: str = "rate_") -> dict:
     return {k: v_rate(body[prefix + k[5:]]) for k in ("rate_down", "rate_up") if prefix + k[5:] in body}
 
 
+def v_quic(body: dict) -> bool | None:
+    """Галочка «Пропускать QUIC» выхода SOCKS5: True / False, None — в запросе её нет."""
+    if "quic" not in body:
+        return None
+    if not isinstance(body["quic"], bool):
+        bad("err.bad_value")
+    return body["quic"]
+
+
 def v_balance(st: dict, b) -> dict:
     """Балансировка: {"on": bool, "skip": [id выходов, которые в ней не участвуют]}."""
     if not isinstance(b, dict) or not isinstance(b.get("skip", []), list):
@@ -742,6 +751,8 @@ def clean_backup_state(new: dict) -> dict:
                 st["upstreams"][-1][k] = check(f"{f}.{k}", lambda: v_rate(u[k]))
                 if not st["upstreams"][-1][k]:
                     del st["upstreams"][-1][k]
+        if u.get("quic") is True and pc.kind == "socks5":
+            st["upstreams"][-1]["quic"] = True
         # свой список сайтов выхода (окно выхода): только если это список доменов из этой же
         # копии и он ещё не принадлежит другому выходу
         own = u.get("own_list")
@@ -774,6 +785,8 @@ def clean_backup_state(new: dict) -> dict:
                      "rules": check("routing.rules", lambda: v_rules(st, r.get("rules", [])))}
     if r.get("balance") is not None:
         st["routing"]["balance"] = check("routing.balance", lambda: v_balance(st, r["balance"]))
+    if r.get("strict") is True:
+        st["routing"]["strict"] = True
 
     # политики клиентов
     for pk, c in obj("clients").items():
@@ -1185,6 +1198,7 @@ def _upstream_view(st: dict, u: dict, bal_members: set | None = None, bal_counts
         info = {"endpoint": pc.endpoint, "address": pc.address, "mtu": pc.mtu,
                 "version": pc.version, "kind": pc.kind, "own_list": u.get("own_list"),
                 "socks_user": pc.socks.get("user") if pc.kind == "socks5" else None,
+                "quic": bool(u.get("quic")) if pc.kind == "socks5" else True,
                 "config_error": None}
     except awgconf.ConfigError as e:
         info = {"config_error": str(e)}
@@ -1399,6 +1413,7 @@ def add_upstream(req):
     body = req.json()
     quota = v_exit_quota(body)
     rates = v_rates(body)
+    quic = v_quic(body)
     try:
         pc = awgconf.parse_upstream(str(body.get("config", "")))
     except awgconf.ConfigError as e:
@@ -1411,6 +1426,8 @@ def add_upstream(req):
              "enabled": True, "fallback": fb, "created": time.time(),
              "quota": quota, "quota_action": v_quota_action(st, body.get("quota_action"), None)}
         u.update({k: v for k, v in rates.items() if v})
+        if quic and pc.kind == "socks5":
+            u["quic"] = True
         st["upstreams"].append(u)
         if body.get("make_default") and st["routing"]["default"] in ("direct", "block"):
             st["routing"]["default"] = "up:" + u["id"]
@@ -1437,6 +1454,7 @@ def edit_upstream(req, uid):
     if "quota_gb" in body:
         quota = v_exit_quota(body)
     rates = v_rates(body)
+    quic = v_quic(body)
 
     def fn(st):
         u = Store.upstream(st, uid)
@@ -1479,6 +1497,15 @@ def edit_upstream(req, uid):
                 u[k] = v
             else:
                 u.pop(k, None)
+        if quic is not None:
+            try:
+                socks = engine.parsed(u).kind == "socks5"
+            except awgconf.ConfigError:
+                socks = False
+            if quic and socks:
+                u["quic"] = True
+            else:
+                u.pop("quic", None)
         if body.get("routing"):
             return apply_exit_routing(st, uid, body["routing"], u["name"])
         return None, None
@@ -1557,10 +1584,15 @@ def put_routing(req):
 
     def fn(st):
         bal = v_balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
+        strict = body["strict"] if "strict" in body else st["routing"].get("strict")
+        if strict is not None and not isinstance(strict, bool):
+            bad("err.bad_value")
         st["routing"] = {"default": v_outbound(st, body.get("default")),
                          "rules": v_rules(st, body.get("rules", []))}
         if bal:
             st["routing"]["balance"] = bal
+        if strict:
+            st["routing"]["strict"] = True
     store.mutate(fn)
     engine.trigger()
     return {"ok": True}

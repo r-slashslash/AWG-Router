@@ -172,6 +172,7 @@ class ProbeHostsTest(unittest.TestCase):
         eng.target = mock.Mock(pid=1)
         eng.target.ns.return_value = mock.Mock(stdout='{"ok": true, "ip": "198.51.100.1"}', stderr="")
         eng.store = mock.Mock()
+        eng.store.snapshot.return_value = {"upstreams": []}
         eng.resolve = lambda out, st: 3
         with mock.patch.object(config, "DRY_RUN", False), \
                 mock.patch("socket.getaddrinfo", return_value=answer("203.0.113.9")):

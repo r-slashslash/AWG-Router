@@ -429,12 +429,15 @@ class PanelTest(unittest.TestCase):
         old = e.sni
         e.sni = eng.HelperRT(mock.Mock(pid=4242), "k", "h")
         try:
+            # 1.21.0: по файлу пульса, который посредник обновляет каждую секунду
             e.sni.started = time.time() - 600
-            with open(eng.SNI_STATS, "w") as f:
-                f.write('{"pid": 4242, "at": %f}' % (time.time() - 300))
+            open(eng.SNI_BEAT, "a").close()
+            os.utime(eng.SNI_BEAT, (time.time() - 300, time.time() - 300))
             self.assertTrue(e._sni_hung())
-            with open(eng.SNI_STATS, "w") as f:
-                f.write('{"pid": 4242, "at": %f}' % time.time())
+            os.utime(eng.SNI_BEAT)
+            self.assertFalse(e._sni_hung())
+            e.sni.started = time.time() - 2          # только что запущен — рано судить
+            os.utime(eng.SNI_BEAT, (time.time() - 300, time.time() - 300))
             self.assertFalse(e._sni_hung())
         finally:
             e.sni = old

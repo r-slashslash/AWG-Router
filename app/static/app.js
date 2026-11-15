@@ -419,6 +419,7 @@ function statusProblem() {
   if (tg.exists === false) return t("srv.missing");
   if (S.target_error) return tm(S.target_error);
   if (S.engine && S.engine.last_error) return t("banner.apply_error") + ": " + tm(S.engine.last_error);
+  if (S.sni && S.sni.strict) return t("rt.strict_now");
   return null;
 }
 
@@ -499,6 +500,7 @@ function probeHtml(k) {
   const parts = [p.ip ? `<bdi>${esc(p.ip)}</bdi>` : esc(tm(p.warn) || "?")];
   if (p.cc) parts.push(esc(countryName(p.cc)));
   if (p.latency_ms != null) parts.push(esc(t("probe.ms", { n: p.latency_ms })));
+  if (p.udp != null) parts.push(esc(t(p.udp ? "probe.udp_ok" : "probe.udp_no")));
   return parts.join(" · ");
 }
 async function runProbe(k, after) {
@@ -1120,7 +1122,7 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
 /* ================================================================ правила */
 function routingNow() {
   return { default: S.routing.default, rules: S.routing.rules,
-    balance: { on: balOn(), skip: (S.routing.balance && S.routing.balance.skip) || [] } };
+    balance: { on: balOn(), skip: (S.routing.balance && S.routing.balance.skip) || [] }, strict: !!S.routing.strict };
 }
 function routingDirty() {
   if (!routingDraft) return false;
@@ -1156,6 +1158,10 @@ function viewRouting() {
       <label class="field" style="margin-bottom:0"><span>${esc(t("bal.fallback"))}</span>
         <select id="g-bal-fb">${outOptions(rd.default)}</select><span class="hint">${esc(t("bal.fallback_hint"))}</span></label>
     </div>
+    ${S.lists.some((l) => l.kind === "domains") || rd.strict ? `<div class="field" style="margin-top:14px">
+      <label class="check"><input type="checkbox" id="g-strict" ${rd.strict ? "checked" : ""}><span>${esc(t("rt.strict"))}</span></label>
+      <span class="hint">${esc(t("rt.strict_hint"))}</span>
+      ${S.sni && S.sni.strict ? `<div class="small warn-text">${esc(t("rt.strict_now"))}</div>` : ""}</div>` : ""}
     <div class="savebar" id="savebar" hidden><span>${esc(t("rt.unsaved"))}</span>
       <span class="actions"><button class="btn sm" id="g-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="g-save">${esc(t("rt.save"))}</button></span></div>
   </section>
@@ -1189,6 +1195,7 @@ bind.routing = () => {
     upd();
   };
   $("#g-bal-fb").onchange = (e) => { draft.default = e.target.value; upd(); };
+  if ($("#g-strict")) $("#g-strict").onchange = (e) => { draft.strict = e.target.checked; upd(); };
   $$("[data-bal]").forEach((i) => i.onchange = () => {
     const id = i.dataset.bal;
     draft.balance.skip = draft.balance.skip.filter((x) => x !== id);
@@ -1381,6 +1388,8 @@ async function editUpstream(id) {
         <label class="field"><span>${esc(t("ex.socks_user"))}</span><input type="text" id="u-su" dir="ltr" spellcheck="false" autocomplete="off" placeholder="${esc(t("ex.socks_opt"))}"></label>
         <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input type="password" id="u-sw" dir="ltr" autocomplete="new-password" placeholder="${esc(t("ex.socks_opt"))}"></label>
       </div>
+      <div class="field"><label class="check"><input type="checkbox" id="u-quic" ${u && u.quic === true && u.kind === "socks5" ? "checked" : ""}><span>${esc(t("ex.socks_quic"))}</span></label>
+        <span class="hint">${esc(t("ex.socks_quic_hint"))}</span></div>
     </div>
     <label class="field"><span id="u-conf-l"></span>
       <textarea id="u-conf" dir="ltr" spellcheck="false"></textarea>
@@ -1415,7 +1424,8 @@ async function editUpstream(id) {
         <input type="number" id="u-ru" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_up ? u.rate_up : ""}"></label>
     </div>
     <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.rate_hint"))}</p>
-  `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`);
+  `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`,
+  u && u.iface);
   const F = { host: $("#u-sh"), port: $("#u-sp"), user: $("#u-su"), pass: $("#u-sw") };
   const ta = $("#u-conf");
   let routeTouched = false;
@@ -1466,6 +1476,7 @@ async function editUpstream(id) {
       rate_down: $("#u-rd").value.trim() || null, rate_up: $("#u-ru").value.trim() || null };
     const c = ta.value.trim();
     if (!u || c !== conf.trim()) body.config = c;
+    if (kind === "socks5") body.quic = $("#u-quic").checked;
     if (routeTouched || !u) {
       const picked = $$("#u-route [data-rl]").filter((x) => x.checked).map((x) => x.dataset.rl);
       body.routing = { domains: $("#u-doms").value.trim(), default: $("#u-rdef").checked,
@@ -1724,7 +1735,7 @@ function viewServer() {
         <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
           `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
         <div class="field">
-          <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_how", "srv.panel_dns_cascade", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
+          <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_how", "srv.panel_dns_why", "srv.panel_dns_privacy", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
         </div>
         <div class="row2">
           <label class="field"><span>MTU</span><input type="number" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
@@ -2720,9 +2731,11 @@ function totpDisable() {
 }
 
 /* ================================================================ модалка */
-function openModal(title, body, foot) {
+function openModal(title, body, foot, tag) {
   const m = $("#modal");
-  $("#modal-body").innerHTML = `<div class="modal-head"><h2>${esc(title)}</h2><button class="icon-btn" data-close aria-label="${esc(t("btn.close"))}">✕</button></div>
+  // tag — короткая метка рядом с заголовком (интерфейс выхода awgrN)
+  const tg = tag ? ` <span class="tag mono" dir="ltr">${esc(tag)}</span>` : "";
+  $("#modal-body").innerHTML = `<div class="modal-head"><h2><bdi>${esc(title)}</bdi>${tg}</h2><button class="icon-btn" data-close aria-label="${esc(t("btn.close"))}">✕</button></div>
     <div class="modal-body">${body}</div><div class="modal-foot">${foot}</div>`;
   $$("[data-close]", m).forEach((b) => b.onclick = closeModal);
   m.showModal();

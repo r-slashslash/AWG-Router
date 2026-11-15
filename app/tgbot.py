@@ -92,7 +92,7 @@ TEXTS = {
         "rt_rule": "Правило: список {list} ({net})", "rt_default": "Ни одно правило не подошло: основной выход",
         "rt_now": "Сейчас: {out} (выход не работает)", "rt_local": "Локальный адрес: через выходы не идёт.",
         "rt_bad": "Это не похоже на IPv4-адрес или домен.", "rt_v6": "IPv6 внутри туннеля не маршрутизируется.",
-        "pr_wait": "Проверяю «{name}»…", "pr_ok": "🔍 «{name}»: выход в интернет с {ip} {cc}, {ms} мс",
+        "pr_wait": "Проверяю «{name}»…", "pr_ok": "🔍 «{name}»: выход в интернет с {ip} {cc}, {ms} мс", "pr_udp": ", UDP проходит", "pr_no_udp": ", UDP не проходит",
         "pr_fail": "🔍 «{name}» не отвечает: {error}",
         "df_ok": "⭐ Основной выход: {out}",
         "bk_wait": "Готовлю копию…", "bk_fail": "⚠️ Копия не отправлена: {error}",
@@ -193,7 +193,7 @@ TEXTS = {
         "rt_rule": "Rule: list {list} ({net})", "rt_default": "No rule matched: the default exit",
         "rt_now": "Right now: {out} (the exit isn't working)", "rt_local": "A local address: it doesn't go through exits.",
         "rt_bad": "That doesn't look like an IPv4 address or a domain.", "rt_v6": "IPv6 isn't routed inside the tunnel.",
-        "pr_wait": "Checking “{name}”…", "pr_ok": "🔍 “{name}”: internet via {ip} {cc}, {ms} ms",
+        "pr_wait": "Checking “{name}”…", "pr_ok": "🔍 “{name}”: internet via {ip} {cc}, {ms} ms", "pr_udp": ", UDP passes", "pr_no_udp": ", UDP doesn't pass",
         "pr_fail": "🔍 “{name}” doesn't answer: {error}",
         "df_ok": "⭐ Default exit: {out}",
         "bk_wait": "Preparing a backup…", "bk_fail": "⚠️ The backup wasn't sent: {error}",
@@ -293,7 +293,7 @@ TEXTS = {
         "rt_rule": "规则：列表 {list}（{net}）", "rt_default": "没有匹配的规则：默认出口",
         "rt_now": "当前：{out}（该出口无法工作）", "rt_local": "本地地址：不经过出口。",
         "rt_bad": "这看起来不像 IPv4 地址或域名。", "rt_v6": "隧道内不路由 IPv6。",
-        "pr_wait": "正在检查“{name}”…", "pr_ok": "🔍 “{name}”：经由 {ip} {cc} 访问互联网，{ms} 毫秒",
+        "pr_wait": "正在检查“{name}”…", "pr_ok": "🔍 “{name}”：经由 {ip} {cc} 访问互联网，{ms} 毫秒", "pr_udp": "，UDP 可通过", "pr_no_udp": "，UDP 不通",
         "pr_fail": "🔍 “{name}”无响应：{error}",
         "df_ok": "⭐ 默认出口：{out}",
         "bk_wait": "正在准备备份…", "bk_fail": "⚠️ 备份未发送：{error}",
@@ -392,7 +392,7 @@ TEXTS = {
         "rt_rule": "قانون: فهرست {list} ({net})", "rt_default": "هیچ قانونی جور نشد: خروجی اصلی",
         "rt_now": "اکنون: {out} (خروجی کار نمی‌کند)", "rt_local": "نشانی محلی: از خروجی‌ها نمی‌رود.",
         "rt_bad": "این شبیه نشانی IPv4 یا دامنه نیست.", "rt_v6": "IPv6 درون تونل مسیریابی نمی‌شود.",
-        "pr_wait": "در حال بررسی «{name}»…", "pr_ok": "🔍 «{name}»: اینترنت از {ip} {cc}، {ms} میلی‌ثانیه",
+        "pr_wait": "در حال بررسی «{name}»…", "pr_ok": "🔍 «{name}»: اینترنت از {ip} {cc}، {ms} میلی‌ثانیه", "pr_udp": "، UDP عبور می‌کند", "pr_no_udp": "، UDP عبور نمی‌کند",
         "pr_fail": "🔍 «{name}» پاسخ نمی‌دهد: {error}",
         "df_ok": "⭐ خروجی اصلی: {out}",
         "bk_wait": "در حال آماده کردن پشتیبان…", "bk_fail": "⚠️ پشتیبان فرستاده نشد: {error}",
@@ -1392,6 +1392,8 @@ class Bot:
             cc = r.get("cc") or ""
             text = tr(L, "pr_ok", name=name, ip=r.get("ip") or "?", cc=f"({cc})" if cc else "",
                       ms=r.get("latency_ms") if r.get("latency_ms") is not None else "?")
+            if r.get("udp") is not None:
+                text += tr(L, "pr_udp" if r["udp"] else "pr_no_udp", False)
         else:
             err = r.get("error")
             text = tr(L, "pr_fail", name=name, error=self._err(err) if isinstance(err, Msg) else (err or "?"))

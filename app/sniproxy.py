@@ -938,9 +938,28 @@ class Sniffer:
         log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
         self.open_queue()
         asyncio.ensure_future(self.share_loop())
+        n = 0
         while True:
-            self.write_stats()
-            await asyncio.sleep(STATS_EVERY)
+            if n % STATS_EVERY == 0:
+                self.write_stats()
+            self.beat()
+            n += 1
+            await asyncio.sleep(1)
+
+    def beat(self) -> None:
+        """Пульс для панели: цикл событий жив (mtime файла). Остановился — панель перезапустит."""
+        p = self.cfg.get("beat")
+        if not p:
+            return
+        try:
+            os.utime(p)
+        except FileNotFoundError:
+            try:
+                open(p, "a").close()
+            except OSError:
+                pass
+        except OSError:
+            pass
 
     @staticmethod
     def accept_stopped(task: asyncio.Task) -> None:

@@ -124,7 +124,7 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
             main.engine.reconcile()
             x = main.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080", "quota_gb": 5,
                                      "quota_action": "direct", "routing": {"domains": "a.example"},
-                                     "rate_down": 80, "rate_up": 20}))["id"]
+                                     "rate_down": 80, "rate_up": 20, "quic": True}))["id"]
             pk = main.engine.clients[0]["public_key"]
             st0 = main.store.snapshot()
             try:
@@ -136,14 +136,14 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                 main.put_client_cps(R({"preset": "stun"}), pk)
                 main.store.mutate(lambda s: s["settings"].update(panel_dns=True, panel_dns_enc="dot",
                                                                  shaping={"down": 100, "up": 50}))
-                main.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}))
+                main.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}, strict=True))
                 st = main.store.snapshot()
                 new = main.clean_backup_state(st)
             finally:
                 main.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],
                                                      shares=st0["shares"], cps=st0["cps"]))
                 main.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping")])
-                main.store.mutate(lambda s: s["routing"].pop("balance", None))
+                main.store.mutate(lambda s: [s["routing"].pop(k, None) for k in ("balance", "strict")])
                 main.del_upstream(R({"replace": "direct"}), x)
 
         def walk(a, b, path=""):

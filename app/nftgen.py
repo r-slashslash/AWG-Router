@@ -114,10 +114,16 @@ def _okey(o):
     return ("sticky", int(o)) if isinstance(o, Sticky) else o
 
 
-def _sticky_chain(name: str, num: int, alive: list[int]) -> str:
+def _no_quic(block: bool) -> str:
+    """Строка выхода без QUIC (SOCKS5 без галочки): UDP 443 — отказ, браузер сразу берёт TCP."""
+    return f"\t\tudp dport 443 meta mark set {config.MARK_BLOCK:#x} accept\n" if block else ""
+
+
+def _sticky_chain(name: str, num: int, alive: list[int], no_quic: bool = False) -> str:
     marks = ", ".join(f"{mark_for(n):#x}" for n in alive)
     m = mark_for(num)
-    return (f"\tchain {name} {{\n\t\tct mark {{ {marks} }} meta mark set ct mark accept\n"
+    # соединение, уже записанное на рабочий выход, доживает на нём; новое QUIC к выходу без QUIC — отказ
+    return (f"\tchain {name} {{\n\t\tct mark {{ {marks} }} meta mark set ct mark accept\n{_no_quic(no_quic)}"
             f"\t\tmeta mark set {m:#x} ct mark set {m:#x} accept\n\t}}")
 
 
@@ -212,14 +218,16 @@ def sniff_marks(policies: dict) -> dict[str, int]:
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
-             quic: bool = False) -> str:
+             quic: bool = False, strict: bool = False) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
     остаётся на нём (цепочки ob_u*, выход Sticky в политике).
     dom_filter — перехватывать только адреса из набора DOM_SET (его наполняет dnsproxy.py).
     quic — первые пакеты QUIC таких клиентов идут в очередь ядра (sniproxy.py разбирает имя), а не
-    блокируются: цепочка c_quic; без слушателя (bypass) пакет блокируется, как без очереди."""
+    блокируются: цепочка c_quic; без слушателя (bypass) пакет блокируется, как без очереди.
+    strict — правила по доменам сейчас не действуют (sniff_port None), а выбрано «тогда блокировать»:
+    у клиентов с правилами по доменам весь трафик (кроме местных сетей и самого сервера) — в блок."""
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
@@ -260,14 +268,19 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 \t}}""")
 
     for name in sorted(policies, key=lambda n: (n != "p_global", n)):
+        if strict and not sniff_port and policies[name].get("domain"):
+            out.append(f"\tchain {name} {{\n\t\tgoto o_block\n\t}}")
+            continue
         out.append(_policy_chain(name, policies[name], available, name in marks, dom=dom_filter, quic=quic))
 
     out.append("\tchain o_direct {\n\t\taccept\n\t}")
     out.append(f"\tchain o_block {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept\n\t}}")
+    no_quic = {u["num"] for u in upstreams if u.get("no_quic")}
     for u in sorted(upstreams, key=lambda x: x["num"]):
-        out.append(f"\tchain o_u{u['num']} {{\n\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
+        out.append(f"\tchain o_u{u['num']} {{\n{_no_quic(u['num'] in no_quic)}"
+                   f"\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
     for n in alive:
-        out.append(_sticky_chain(f"ob_u{n}", n, alive))
+        out.append(_sticky_chain(f"ob_u{n}", n, alive, n in no_quic))
 
     fwd = [
         "\tchain c_forward {",

@@ -218,9 +218,9 @@ UPS = [{"num": 1, "snat": "", "mtu": 8500}]
 IP_LISTS = {"via": ["8.8.4.4/32"]}
 
 
-def rules(policy, sniff=True, quic=False):
+def rules(policy, sniff=True, quic=False, strict=False):
     nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None,
-                               quic=quic))
+                               quic=quic, strict=strict))
 
 
 def quic_ok() -> bool:
@@ -364,6 +364,12 @@ def main():
         rules({"rules": [], "default": 1}, sniff=False)
         check("основной выход SOCKS5: TCP через прокси", tcp("8.8.8.8"), "PROXY")
         check("основной выход SOCKS5: UDP через прокси (UDP ASSOCIATE)", udp("8.8.8.8"), "PROXY-UDP")
+        # 1.21.0: у SOCKS5 без галочки «Пропускать QUIC» UDP 443 — отказ (браузер сразу берёт TCP)
+        UPS[0]["no_quic"] = True
+        rules({"rules": [], "default": 1}, sniff=False)
+        check("SOCKS5 без QUIC: UDP 443 → отказ", udp("8.8.8.8", 443), "FAIL")
+        check("SOCKS5 без QUIC: остальной UDP — через прокси", udp("8.8.8.8"), "PROXY-UDP")
+        UPS[0].pop("no_quic")
 
         # ---------------------------------------------------- правила по доменам
         pol = {"rules": [(["via"], 1)], "default": "direct", "domain": [(["dvid"], "up:u1")]}
@@ -386,6 +392,14 @@ def main():
         procs["sni"].terminate()
         procs["sni"].wait(5)
         shared_limit(procs, pol)
+
+        # 1.21.0: правила по доменам не работают (посредника нет) и выбран блок — у таких клиентов всё в блок
+        rules(pol, sniff=False, strict=True)
+        check("правила по доменам не работают, «блокировать»: TCP → отказ", tcp("77.88.55.242"), "FAIL")
+        check("правила по доменам не работают, «блокировать»: UDP → отказ", udp("8.8.8.8"), "FAIL")
+        rules(pol, sniff=False)
+        check("без галочки: сайт по правилу по адресам и основному пути", tcp("77.88.55.242"), "DIRECT")
+        rules(pol)
 
         # резервный путь вместо прокси: соединение по совпавшему домену — с меткой (напрямую)
         procs["sni"].terminate()
@@ -422,7 +436,8 @@ def main():
             qpol = {"rules": [], "default": "direct", "domain": [(["dq"], "up:u1")]}
             rules(qpol, quic=True)
             procs["sni"] = start_sni(sni_conf(qpol, {"mark": nftgen.mark_for(1)}, qmark=nftgen.mark_for(1)))
-            check("QUIC: сайт из правила → выход-туннель по метке (как AWG)", quic("8.8.8.8"), "PROXY-UDP")
+            check("QUIC: сайт из правила → выход-туннель по метке (AWG; SOCKS5 с «Пропускать QUIC» — через UDP ASSOCIATE)",
+                  quic("8.8.8.8"), "PROXY-UDP")
             procs["sni"].terminate()
             procs["sni"].wait(5)
             procs["sni"] = start_sni(sni_conf(qpol, {"socks": SOCKS}, qmark=config.MARK_BLOCK))

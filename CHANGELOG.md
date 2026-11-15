@@ -3,7 +3,7 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.21.0 — 2026-11-15
+## 1.21.0 — 2026-11-16
 
 - **Domain rules to any exit.** A domain list can now lead to an AmneziaWG exit, Direct or Block, not only to a
   SOCKS5 exit (`err.domains_need_socks` is gone). `sniproxy.py` already sent a matched site to its original address
@@ -20,8 +20,8 @@ it grows, so every user-visible change gets a new version.
   (v1 and v2; the keys come from the connection ID, RFC 9001 / 9369; AES from libcrypto through ctypes or pure
   Python; the GCM tag isn't needed for a routing decision), puts the ClientHello together from CRYPTO frames —
   Chrome with ML-KEM splits it across two packets and shuffles the pieces — and `sniproxy.py` answers with a
-  mark: an AmneziaWG exit — its tunnel, Direct — `QUIC_DIRECT_MARK` (no ip rule, main table), SOCKS5 and Block
-  — reject (the browser takes HTTPS, where the proxy gets the name; UDP through proxies often doesn't work),
+  mark: an AmneziaWG exit — its tunnel, Direct — `QUIC_DIRECT_MARK` (no ip rule, main table), Block and SOCKS5
+  without the QUIC box (below) — reject (the browser takes HTTPS, where the proxy gets the name),
   a site not on the lists — `QUIC_PASS_MARK` and the usual rules. The decision goes into the conntrack mark
   (`QUIC_CT_BIT`) for the rest of the connection; repeated first packets of the same connection get the same
   answer. A ClientHello that doesn't come together in `QUIC_HOLD` and QUIC that isn't Initial are rejected, so
@@ -38,6 +38,38 @@ it grows, so every user-visible change gets a new version.
   `SET_MIN`; after every rebuild of the table the panel sends SIGUSR1 and dnsproxy adds the live addresses
   back). Other traffic goes through the kernel without the handler, and HTTP/3 to it isn't touched. A device
   with its own DNS bypasses the filter — the hint says so.
+- **QUIC through a SOCKS5 exit is a choice.** A SOCKS5 exit's window has "Let QUIC (HTTP/3) through the proxy"
+  (`quic` on the exit, off by default). Off, UDP 443 to the exit is rejected (`o_uN` and `ob_uN`; in `ob_uN` after
+  the line that keeps live connections on their exit), so browsers switch to HTTPS at once instead of waiting for
+  QUIC through a proxy that may not carry UDP. This also covers clients whose main route is the SOCKS5 exit (their
+  QUIC went into UDP ASSOCIATE before); other UDP goes through the proxy as before. On, QUIC goes through UDP
+  ASSOCIATE, sites from domain rules included (the queue gives them the exit's mark, `Engine._quic_mark`). The
+  exit check tells whether the proxy passes UDP: a QUIC packet with a version-negotiation version to 1.1.1.1 or
+  8.8.8.8 port 443 has to get a Version Negotiation answer (`probe.py --udp`, only for SOCKS5 exits; also in the bot).
+- **Exit check: honest latency, and the reason when the IP isn't found.** Latency is the time to the first byte
+  of a TLS answer from 1.1.1.1 (or 8.8.8.8), not `connect()`: through SOCKS5 the connection is accepted by
+  hev-socks5-tunnel on this server, which showed 0 ms. The external IP is asked from `https://1.1.1.1/cdn-cgi/trace`
+  first (no DNS, port 443 — many proxies let only 80/443 through), then ip-api.com and ifconfig.me; when none
+  answers, "external IP is unknown" now says why.
+- **The domain handler is watched every second.** `sniproxy.py` touches a heartbeat file every second; the panel
+  looks at it and at the process every second (`Engine._watch_sni`) and restarts a handler that exited or whose
+  event loop stood still for `SNI_HANG` seconds (before: on the next pass, up to `RECONCILE_INTERVAL`, and two
+  minutes for a hang). While it is down the redirected connections are refused, not let through. A handler that
+  keeps dying is started again once a minute, and the domain list shows when.
+- **"If domain rules don't work, block all traffic of their clients"** (Routing, `routing.strict`, off by default).
+  When the handler isn't running — it didn't start, crashed and waits for a restart, or the panel is stopped with
+  "Block cascaded traffic" (also during an update) — the policies with domain rules turn into a block
+  (`nftgen.generate(strict=True)`), instead of sending listed sites by the address rules and the main route. The
+  header shows it as an error; the event log and Telegram say when it starts and ends (`ev.dom_strict_on` /
+  `ev.dom_strict_off`). Not covered: after a reboot until the panel starts, and a stop with "Send everything direct".
+- **Config file names the apps accept.** The AmneziaWG and WireGuard apps take the tunnel name from the file name
+  and accept only Latin letters, digits and `_=+.-`, up to 15 characters: a client named in Russian (or any
+  non-Latin script, or a long name) got a file the app refused. Latin names stay (other characters → `_`, cut to
+  15); the rest get 8 digits derived from the client's key — the same on every download (`users.conf_filename`).
+- **The exit window shows the exit's interface** (`awgrN`) next to its name.
+- **DNS on the server: the description says how it works** — which way a query takes (a domain rule's exit, else
+  the main exit, its fallback, direct, refusal for a block), why, encryption and cache, how to set it up — without
+  comparisons with other resolvers.
 - **A rule line says what it catches.** In the global policy and on a client's page a rule reads as its lists on
   the left — `Domains work (20)`, an exit's own sites by their first domain `Domains youtube.com +19` (lists keep
   their `first` domain), `Office (12 networks)`, countries and ASNs by name; more than two lists collapse to `+N`,

@@ -70,6 +70,16 @@ jobs:
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/domains_socks_e2e.py
 
+      - name: Exit check against the real internet (probe.py)
+        # настоящие 1.1.1.1 и 8.8.8.8: задержка до первого байта ответа, IP, UDP (QUIC). Интернет машины
+        # GitHub — не наш код, поэтому выпуск не держит
+        if: always()
+        continue-on-error: true
+        run: |
+          out=$(python3 app/probe.py 0 --udp)
+          echo "$out"
+          echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and d["ip"] and d["latency_ms"] > 0 and d["udp"] is True, d'
+
       - name: Speed limits and load balancing (shaping_e2e.py)
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/shaping_e2e.py
