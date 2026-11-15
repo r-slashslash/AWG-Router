@@ -1564,7 +1564,8 @@ function editList(id, kind, onSaved = null) {
   } else if (kind === "domains") {
     body = nameField("YouTube") + `<label class="field"><span>${esc(t("ls.domains"))}</span><textarea id="l-src" dir="ltr" spellcheck="false" placeholder="youtube.com&#10;googlevideo.com&#10;https://example.com/domains.txt">${esc(l ? l.source || "" : "")}</textarea>
       <span class="hint">${esc(t("ls.domains_hint"))}</span></label>
-      <p class="small muted" style="margin:0">${esc(t("ls.domains_how"))}</p>`;
+      <p class="small muted" style="margin:0">${esc(t("ls.domains_how"))}</p>
+      ${S.sni && S.sni.quic && S.sni.quic !== "on" ? `<p class="small warn-text" style="margin:6px 0 0">${esc(t("ls.quic_off"))}</p>` : ""}`;
   } else {
     body = nameField(t("ls.manual_ph")) + `<label class="field"><span>${esc(t("ls.cidrs"))}</span><textarea id="l-src" dir="ltr" placeholder="203.0.113.0/24&#10;198.51.100.7">${esc(l ? l.source : "")}</textarea>
       <span class="hint">${esc(t("ls.cidrs_hint"))}</span></label>`;
@@ -1714,6 +1715,11 @@ function viewServer() {
           <label class="check"><input type="checkbox" id="s-pdns" ${SRV.panel_dns ? "checked" : ""}><span>${esc(t("srv.panel_dns"))}</span></label>
           <span class="hint">${esc(t("srv.panel_dns_hint", { addr: SRV.panel_dns_addr || "—" }))}</span>
           ${panelDnsStatus()}
+        </div>
+        <div class="field">
+          <label class="check"><input type="checkbox" id="s-domf" ${SRV.dom_filter ? "checked" : ""}><span>${esc(t("srv.dom_filter"))}</span></label>
+          <span class="hint">${esc(t("srv.dom_filter_hint"))}</span>
+          ${SRV.dom_filter && !SRV.panel_dns ? `<div class="small warn-text">${esc(t("srv.dom_filter_needs_dns"))}</div>` : ""}
         </div>
         <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
           `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
@@ -1963,6 +1969,7 @@ function srvDirty() {
   const pdns = $("#s-pdns");
   return Object.keys(SRV.params).some((k) => (srvDraft[k] || "") !== (SRV.params[k] || "")) ||
     (pdns && pdns.checked !== !!SRV.panel_dns) ||
+    ($("#s-domf") && $("#s-domf").checked !== !!SRV.dom_filter) ||
     ["#s-host", "#s-ch", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
@@ -2044,7 +2051,7 @@ bind.server = () => {
     const restart = serverSide || (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
     if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
     const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, client_dns: $("#s-dns").value,
-      panel_dns: $("#s-pdns").checked, panel_dns_enc: $("#s-pdns-enc").value, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
+      panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
     if (!SRV.port_locked) body.port = port;
     if (!SRV.subnet_locked) body.address = addr;

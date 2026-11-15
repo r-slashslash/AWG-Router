@@ -144,16 +144,24 @@ def _set_block(name: str, cidrs: list[str], comment: str = "") -> str:
     return "\n".join(lines)
 
 
+DOM_SET = "dom4"     # адреса сайтов из правил по доменам по ответам DNS на сервере (режим «фильтр по DNS»)
+
+
 def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = False,
-                  outs=None) -> str:
+                  outs=None, dom: bool = False, quic: bool = False) -> str:
     """Цепочка политики. sniff — у политики есть правила по доменам: её TCP 80/443 идёт в
-    sniproxy.py, а QUIC (UDP 443) блокируется — имени сайта в нём не прочитать, и браузер
-    переходит на обычный HTTPS. outs — свои цепочки выходов (для q_* в hook output)."""
+    sniproxy.py, а QUIC (UDP 443) блокируется — кроме пакетов, которые разобрала по имени очередь
+    (quic: метка «пропустить» — дальше обычные правила; остальные решения цепочка c_prerouting
+    принимает раньше), и браузер переходит на обычный HTTPS. dom — только к адресам из набора
+    DOM_SET (режим «фильтр по DNS»): остальное идёт ядром, и HTTP/3 к ним работает.
+    outs — свои цепочки выходов (для q_* в hook output)."""
     oc = outs or out_chain
     lines = [f"\tchain {name} {{"]
     if sniff:
-        lines.append(f"\t\tudp dport 443 goto {oc('block')}")
-        lines.append(f"\t\ttcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
+        pre = f"ip daddr @{DOM_SET} " if dom else ""
+        skip = f"meta mark != {config.QUIC_PASS_MARK:#x} " if quic else ""
+        lines.append(f"\t\t{pre}udp dport 443 {skip}goto {oc('block')}")
+        lines.append(f"\t\t{pre}tcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
     for list_ids, out in policy["rules"]:
         for lid in list_ids:
             if lid in available:
@@ -203,11 +211,15 @@ def sniff_marks(policies: dict) -> dict[str, int]:
 
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
-             balance: set[int] | frozenset = frozenset()) -> str:
+             balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
+             quic: bool = False) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
-    остаётся на нём (цепочки ob_u*, выход Sticky в политике)."""
+    остаётся на нём (цепочки ob_u*, выход Sticky в политике).
+    dom_filter — перехватывать только адреса из набора DOM_SET (его наполняет dnsproxy.py).
+    quic — первые пакеты QUIC таких клиентов идут в очередь ядра (sniproxy.py разбирает имя), а не
+    блокируются: цепочка c_quic; без слушателя (bypass) пакет блокируется, как без очереди."""
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
@@ -217,8 +229,12 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     used_lists = sorted({lid for p in policies.values() for l, _ in p["rules"] for lid in l})
     available = {lid for lid in used_lists if lists.get(lid)}
 
+    dom_filter = bool(dom_filter and marks)
+    quic = bool(quic and marks)
     out = [f"table ip {T}", f"delete table ip {T}", f"table ip {T} {{"]
     out.append(_set_block("local4", LOCAL_NETS))
+    if dom_filter:
+        out.append(f"\tset {DOM_SET} {{\n\t\ttype ipv4_addr\n\t\tflags timeout\n\t}}")
     for lid in sorted(available):
         out.append(_set_block(f"l_{lid}", lists[lid]))
 
@@ -231,16 +247,20 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         out.append("\t\t}")
     out.append("\t}")
 
+    # QUIC, разобранный по имени (метка из очереди или из conntrack), — сразу на выбранный путь, и
+    # решение запоминается в conntrack для остальных пакетов соединения
+    quic_line = (f"\t\tudp dport 443 meta mark != 0x0 meta mark != {config.QUIC_PASS_MARK:#x} "
+                 f"ct mark set meta mark | {config.QUIC_CT_BIT:#x} accept\n") if quic else ""
     out.append(f"""\tchain c_prerouting {{
 \t\ttype filter hook prerouting priority mangle; policy accept;
 \t\tiifname != "{wg_iface}" return
 \t\tip daddr @local4 return
-\t\tip saddr vmap @clients
+{quic_line}\t\tip saddr vmap @clients
 \t\tgoto p_global
 \t}}""")
 
     for name in sorted(policies, key=lambda n: (n != "p_global", n)):
-        out.append(_policy_chain(name, policies[name], available, name in marks))
+        out.append(_policy_chain(name, policies[name], available, name in marks, dom=dom_filter, quic=quic))
 
     out.append("\tchain o_direct {\n\t\taccept\n\t}")
     out.append(f"\tchain o_block {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept\n\t}}")
@@ -263,6 +283,30 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                    f'tcp option maxseg size > {mss} tcp option maxseg size set {mss}')
     fwd.append("\t}")
     out.append("\n".join(fwd))
+
+    if quic:
+        # первые пакеты новых соединений QUIC клиентов с правилами по доменам — в очередь ядра
+        # (sniproxy.py); соединение с решением в conntrack берёт метку оттуда. Приоритет раньше
+        # c_prerouting: её строка выше видит метку вердикта
+        if "p_global" in marks:
+            elems = sorted(ip for ip, n in client_map.items() if n not in marks)
+            who, sname = "ip saddr != @q_skip ", "q_skip"
+        else:
+            elems = sorted(ip for ip, n in client_map.items() if n in marks)
+            who, sname = "ip saddr @q_take ", "q_take"
+        out.append(f"\tset {sname} {{\n\t\ttype ipv4_addr\n"
+                   + (f"\t\telements = {{ {', '.join(elems)} }}\n" if elems else "") + "\t}")
+        dom = f"ip daddr @{DOM_SET} " if dom_filter else ""
+        keep = 0xFFFFFFFF ^ config.QUIC_CT_BIT
+        out.append(f"""\tchain c_quic {{
+\t\ttype filter hook prerouting priority mangle - 5; policy accept;
+\t\tiifname != "{wg_iface}" return
+\t\tudp dport != 443 return
+\t\tip daddr @local4 return
+\t\tct mark & {config.QUIC_CT_BIT:#x} == {config.QUIC_CT_BIT:#x} meta mark set ct mark & {keep:#x} accept
+\t\tct state != new return
+\t\t{who}{dom}queue num {config.QUIC_QUEUE} bypass
+\t}}""")
 
     if marks:
         # TCP 80/443 клиентов с правилами по доменам — в sniproxy.py на адресе сервера в туннеле

@@ -308,6 +308,7 @@ class ServerManager:
             "addrs": self.host_addrs(sc.port),
             "client_dns": client_dns(s),
             "panel_dns": bool(s.get("panel_dns")),
+            "dom_filter": bool(s.get("dom_filter")),
             "panel_dns_addr": self._dns_live() or panel_dns_addr(sc),
             "panel_dns_state": self.e.dns_view(),
             "panel_dns_enc": dns_encrypt(s),
@@ -380,6 +381,8 @@ class ServerManager:
                 settings_patch["client_dns"] = dns[:4]
             if "panel_dns" in body:
                 settings_patch["panel_dns"] = bool(body["panel_dns"])
+            if "dom_filter" in body:
+                settings_patch["dom_filter"] = bool(body["dom_filter"])
             if "panel_dns_enc" in body:
                 if body["panel_dns_enc"] not in DNS_ENC:
                     raise UserError(Msg("srv.bad_dns_enc"))

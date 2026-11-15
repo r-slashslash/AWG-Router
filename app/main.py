@@ -867,6 +867,8 @@ def clean_backup_state(new: dict) -> dict:
         out["client_dns"] = [str(d) for d in dns if ":" not in str(d)]
     if isinstance(s.get("panel_dns"), bool):
         out["panel_dns"] = s["panel_dns"]
+    if isinstance(s.get("dom_filter"), bool):
+        out["dom_filter"] = s["dom_filter"]
     if s.get("panel_dns_enc") in users.DNS_ENC:
         out["panel_dns_enc"] = s["panel_dns_enc"]
     mtu = s.get("client_mtu")

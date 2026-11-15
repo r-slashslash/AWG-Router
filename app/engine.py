@@ -125,6 +125,8 @@ class Engine:
         self._masking_checked = None     # Target.key, на котором уже проверен старый I1
         self._srv_down: float | None = None   # с какого момента нет интерфейса сервера (_watch_server)
         self.server_restart_at: float | None = None   # перезапуск сервера (кнопка, автоперезапуск): до его интерфейса
+        self._quic_nft: bool | None = None       # ядро принимает очередь QUIC (None — ещё не пробовали)
+        self._quic_key = None                    # для какой цели это известно
         self.switching = False                         # идёт ручная смена движка (switch_engine)
         self._srv_tries = 0
         self._srv_next = 0.0
@@ -1013,11 +1015,58 @@ class Engine:
                 ups.append({"num": u["num"], "snat": pc.address, "mtu": pc.mtu})
         return ups
 
-    def build_ruleset(self, t: system.Target, st: dict, sniff_port: int | None = None) -> str:
+    def build_ruleset(self, t: system.Target, st: dict, sniff_port: int | None = None, quic: bool = False) -> str:
+        """quic — первые пакеты QUIC клиентов с правилами по доменам в очередь sniproxy.py (если
+        ядро это умеет — иначе QUIC у них блокируется, как раньше)."""
         gp, cps = self._policies(st)
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
-        return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port, self.bal_nums)
+        return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port, self.bal_nums,
+                               dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic)
+
+    def dom_filter(self, st: dict) -> bool:
+        """Режим «фильтр по DNS» выбран (settings.dom_filter) и DNS на сервере включён."""
+        s = st["settings"]
+        return bool(s.get("dom_filter")) and bool(s.get("panel_dns"))
+
+    def dom_filter_on(self, st: dict) -> bool:
+        """…и DNS на сервере работает: без него набор адресов пуст, и правила по доменам не
+        действовали бы совсем — тогда перехват, как без фильтра."""
+        return self.dom_filter(st) and (self.dns_state or {}).get("state") == "on"
+
+    def quic_wanted(self, sniff: int | None) -> bool:
+        """Очередь QUIC в наборе правил: посредник работает и поднял её, а ядро её принимает."""
+        if sniff is None or self._quic_nft is False:
+            return False
+        return config.DRY_RUN or (self.sni_stats().get("quic") == "on")
+
+    def sni_stats(self) -> dict:
+        """Счётчики sniproxy.py текущего процесса ({} — нет или чужие)."""
+        if not self.sni:
+            return {}
+        try:
+            with open(SNI_STATS) as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return s if s.get("pid") == self.sni.proc.pid else {}
+
+    def _quic_mark(self, st: dict, out: str) -> int:
+        """Метка вердикта для первого пакета QUIC к сайту из правила: выход AWG — его туннель;
+        «напрямую» — метка без ip rule (основная таблица); SOCKS5 и «блок» — отказ: браузер сразу
+        переходит на TCP, где прокси получит имя сайта (UDP через прокси часто не работает и шёл бы
+        к адресу из DNS клиента). Неработающий выход — его резерв, как у TCP."""
+        eff = self.resolve(out, st)
+        if eff == "direct":
+            return config.QUIC_DIRECT_MARK
+        if isinstance(eff, int):
+            u = next((x for x in st["upstreams"] if x.get("num") == int(eff)), None)
+            try:
+                if u and self.parsed(u).kind != "socks5":
+                    return nftgen.mark_for(int(eff))
+            except Exception:  # noqa: BLE001
+                pass
+        return config.MARK_BLOCK
 
     # ---------------------------------------------- правила по доменам (sniproxy.py)
     def tunnel_addr(self, t: system.Target) -> tuple[str, str] | None:
@@ -1192,7 +1241,9 @@ class Engine:
         cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS,
                "lists": files, "cidrs": cidrs, "rates": rates, "shared": shared,
                "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
-               "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o)}
+               "quic": {"queue": config.QUIC_QUEUE, "pass": config.QUIC_PASS_MARK, "block": config.MARK_BLOCK},
+               "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o),
+                                                      "qmark": self._quic_mark(st, o)}
                                                      for l, o in policies[n]["domain"]],
                                 "acct": acct(policies[n])}
                             for n, m in marks.items()}}
@@ -1244,6 +1295,18 @@ class Engine:
         которого сейчас нет среди запущенных, — тоже блок: метка без правила ip rule ушла бы
         напрямую."""
         gp, cps = self._policies(st)
+        route = self._dns_route_fn(st)
+        default = route(gp["default"])
+        routes = {}
+        for ip, pol in cps.items():
+            r = route(pol["default"])
+            if r != default:
+                routes[ip] = r
+        return default, routes
+
+    def _dns_route_fn(self, st: dict):
+        """Выход после resolve → путь запроса DNS: {"mark", "tcp"} или None (блок; выход не запущен —
+        тоже: метка без правила ip rule ушла бы напрямую)."""
         running = {r.num for r in self.rt.values()}
         kinds = {}
         for u in st["upstreams"]:
@@ -1258,13 +1321,32 @@ class Engine:
             if isinstance(eff, int) and (eff in running or config.DRY_RUN):
                 return {"mark": nftgen.mark_for(eff), "tcp": kinds.get(eff) == "socks5"}
             return None
-        default = route(gp["default"])
-        routes = {}
-        for ip, pol in cps.items():
-            r = route(pol["default"])
-            if r != default:
-                routes[ip] = r
-        return default, routes
+        return route
+
+    def dns_domains(self, st: dict, with_set: bool) -> dict:
+        """Правила по доменам для dnsproxy.py: имя из правила разбирается через выход правила.
+        → {"lists": {id: файл}, "policies": {имя: [[списки, путь|None]]}, "clients": {IP: имя},
+        "set": [таблица, набор] | None}. Путь None — обычным путём клиента (правило «блок», выход
+        не работает); такие правила нужны только для набора адресов (with_set — режим «фильтр по DNS»).
+        Имена политик — из nftgen.layout, как у nftables и sniproxy.py."""
+        gp, cps = self._policies(st)
+        up_nums = {u["num"] for u in self._up_list(st)}
+        policies, client_map = nftgen.layout(gp, cps, up_nums, self.bal_nums)
+        route = self._dns_route_fn(st)
+        pols = {}
+        for n, p in policies.items():
+            rules = []
+            for lids, o in p.get("domain") or ():
+                eff = self.resolve(o, st)
+                r = route(eff) if eff != "block" else None
+                if r is not None or with_set:
+                    rules.append([list(lids), r])
+            if rules:
+                pols[n] = rules
+        lids = sorted({lid for rules in pols.values() for ls, _ in rules for lid in ls})
+        return {"lists": {lid: domains.path_for(lid) for lid in lids}, "policies": pols,
+                "clients": {ip: n for ip, n in client_map.items() if n in pols},
+                "set": [config.NFT_TABLE, nftgen.DOM_SET] if with_set and pols else None}
 
     def _stop_dns(self) -> None:
         d, self.dns = self.dns, None
@@ -1305,10 +1387,12 @@ class Engine:
             self.dns_state = {"state": "on", "listen": listen, "encrypt": dns_encrypt(st["settings"])}
             return
         default, routes = self.dns_routes(st)
+        dom = self.dns_domains(st, self.dom_filter(st))
         cfg = {"listen": listen, "port": DNS_PORT, "clients": net, "stats": DNS_STATS,
                "upstreams": client_dns(st["settings"]), "encrypt": dns_encrypt(st["settings"]),
-               "default": default, "routes": routes}
-        h = _sha(json.dumps(cfg, sort_keys=True))
+               "default": default, "routes": routes, "dom": dom}
+        mt = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in dom["lists"].values()}
+        h = _sha(json.dumps([cfg, mt], sort_keys=True))
         key = f"{t.key}|{listen}"
         d = self.dns
         if d and (d.key != key or d.proc.poll() is not None or self._dns_hung()):
@@ -1370,13 +1454,12 @@ class Engine:
             return None
         v = dict(self.sni_state)
         if self.sni and not config.DRY_RUN:
-            try:
-                with open(SNI_STATS) as f:
-                    s = json.load(f)
-                if s.get("pid") == self.sni.proc.pid:
-                    v.update({k: s.get(k) for k in ("conns", "active", "matched", "errors", "by_list")})
-            except (OSError, ValueError):
-                pass
+            s = self.sni_stats()
+            v.update({k: s.get(k) for k in ("conns", "active", "matched", "errors", "by_list", "quic_matched")})
+            # QUIC по имени: on — работает; иначе QUIC у этих клиентов блокируется, как раньше
+            v["quic"] = "off" if self._quic_nft is False else ("on" if s.get("quic") == "on" else s.get("quic"))
+        elif config.DRY_RUN:
+            v["quic"] = "on"
         return v
 
     # -------------------------------------------------------- ip rule/route
@@ -1718,7 +1801,10 @@ class Engine:
                 log.exception("dnsproxy")
                 self.dns_state = {"state": "error", "error": msg_of(e)}
 
-            text = self.build_ruleset(t, st, sniff)
+            if self._quic_key != t.key:              # другое ядро (новая цель) — проверить заново
+                self._quic_key, self._quic_nft = t.key, None
+            quic = self.quic_wanted(sniff)
+            text = self.build_ruleset(t, st, sniff, quic)
             h = _sha(text)
             present = t.ns(["nft", "list", "chain", "ip", config.NFT_TABLE, "c_prerouting"],
                            check=False).returncode == 0
@@ -1726,12 +1812,32 @@ class Engine:
                 path = os.path.join(RUN_DIR, "ruleset.nft")
                 with open(path, "w") as f:
                     f.write(text)
-                t.ns(["nft", "-f", path], timeout=60)
+                try:
+                    t.ns(["nft", "-f", path], timeout=60)
+                except system.SysError as e:
+                    if not quic or "queue" not in str(e):
+                        raise
+                    # ядро без nft_queue (OpenVZ/LXC, урезанные сборки): QUIC у этих клиентов — блок, как раньше
+                    self._quic_nft = False
+                    self.event("warn", Msg("ev.quic_no_queue"))
+                    text = self.build_ruleset(t, st, sniff, False)
+                    h = _sha(text)
+                    with open(path, "w") as f:
+                        f.write(text)
+                    t.ns(["nft", "-f", path], timeout=60)
+                if quic and self._quic_nft is None:
+                    self._quic_nft = True
                 if self.applied_hash and present:
                     self.event("info", Msg("ev.rules_applied"))
                 self.applied_hash = h
                 self.ruleset = text
                 self.last_apply = time.time()
+                # таблица пересоздана — набор адресов фильтра по DNS пуст: пусть DNS вернёт живые
+                if self.dom_filter_on(st) and self.dns and self.dns.proc.poll() is None:
+                    try:
+                        self.dns.proc.send_signal(signal.SIGUSR1)
+                    except OSError:
+                        pass
             self._sync_rules(t)
             try:
                 self._sync_shaping(t, st)

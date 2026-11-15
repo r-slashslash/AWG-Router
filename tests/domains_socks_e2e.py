@@ -86,6 +86,28 @@ try:
 except OSError as e: print("FAIL", type(e).__name__)
 """
 
+# QUIC: настоящие первые датаграммы Chromium 153 (ClientHello в двух пакетах, имя quic.test) с одного
+# сокета, затем ответ эхо-сервера; extra — ещё датаграмма с короткого заголовка того же «соединения»
+CLIENT_QUIC = r"""
+import socket,sys
+ip,path,count,extra=sys.argv[1],sys.argv[2],int(sys.argv[3]),sys.argv[4]=="1"
+ds=[bytes.fromhex(l) for l in open(path).read().split()][:count]
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(2); s.connect((ip,443))
+out=[]
+try:
+    for d in ds: s.send(d)
+    out.append(s.recv(100).decode())
+    while True:
+        try: s.recv(100)
+        except socket.timeout: break
+    if extra:
+        s.send(bytes([0x41])+bytes(40)); out.append(s.recv(100).decode())
+except OSError as e: out.append("FAIL "+type(e).__name__)
+print(" ".join(out))
+"""
+QUIC_V1 = os.path.join(HERE, "data", "quic-chromium153-v1.hex")
+QUIC_V2 = os.path.join(HERE, "data", "quic-chromium153-v2.hex")
+
 
 def sh(ns, *cmd, **kw):
     return subprocess.run(["nsenter", f"--net=/var/run/netns/{ns}", "--", *cmd],
@@ -186,22 +208,43 @@ UPS = [{"num": 1, "snat": "", "mtu": 8500}]
 IP_LISTS = {"via": ["8.8.4.4/32"]}
 
 
-def rules(policy, sniff=True):
-    nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None))
+def rules(policy, sniff=True, quic=False):
+    nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None,
+                               quic=quic))
 
 
-def sni_conf(policy, to, extra=None):
+def quic_ok() -> bool:
+    """Ядро принимает очередь в nftables (nft_queue): иначе QUIC по имени не проверить."""
+    path = os.path.join(TMP, "q.nft")
+    with open(path, "w") as f:
+        f.write("table ip qprobe {\n chain c {\n  type filter hook prerouting priority 0;\n"
+                "  udp dport 9 queue num 9 bypass\n }\n}\ndelete table ip qprobe\n")
+    return sh("amz", "nft", "-f", path).returncode == 0
+
+
+def quic(ip, path=QUIC_V1, count=2, extra=False):
+    return sh("cli", sys.executable, "-c", CLIENT_QUIC, ip, path, str(count), "1" if extra else "0",
+              timeout=20).stdout.strip()
+
+
+def sni_conf(policy, to, extra=None, qmark=None):
     """Конфиг sniproxy.py — как его собирает engine._sync_sni."""
     lists = {}
     with open(os.path.join(TMP, "dvid.domains"), "w") as f:
         f.write("foreign.test\ncdnfoo.test\nbig.test\n")
     lists["dvid"] = os.path.join(TMP, "dvid.domains")
+    with open(os.path.join(TMP, "dq.domains"), "w") as f:
+        f.write("quic.test\n")
+    lists["dq"] = os.path.join(TMP, "dq.domains")
     policies, cmap = nftgen.layout(policy, {}, {1})
     marks = nftgen.sniff_marks(policies)
     cfg = {"listen": "10.8.1.0", "port": config.SNI_PROXY_PORT, "clients": "10.8.1.0/24",
            "stats": os.path.join(TMP, "sni-stats.json"), "lists": lists, "client_policy": cmap,
-           "policies": {n: {"mark": m, "rules": [{"lists": l, "to": to} for l, _ in policies[n]["domain"]]}
-                        for n, m in marks.items()}, **(extra or {})}
+           "policies": {n: {"mark": m, "rules": [{"lists": l, "to": to, "qmark": qmark or config.MARK_BLOCK}
+                                                  for l, _ in policies[n]["domain"]]}
+                        for n, m in marks.items()},
+           "quic": {"queue": config.QUIC_QUEUE, "pass": config.QUIC_PASS_MARK, "block": config.MARK_BLOCK},
+           **(extra or {})}
     p = os.path.join(TMP, "sni.json")
     with open(p, "w") as f:
         json.dump(cfg, f)
@@ -343,6 +386,49 @@ def main():
         procs["sni"].wait(5)
         procs["sni"] = start_sni(sni_conf(pol, {"block": True}))
         check("резерв «блок» → соединение закрыто", hello("8.8.8.8", "foreign.test"), lambda g: g in ("EMPTY",) or g.startswith("FAIL"))
+
+        # 1.21.0: QUIC по имени — первые пакеты из очереди ядра, решение в conntrack
+        if not quic_ok():
+            print("SKIP QUIC по имени: ядро не принимает очередь в nftables (nft_queue)")
+        else:
+            procs["sni"].terminate()
+            procs["sni"].wait(5)
+            qpol = {"rules": [], "default": 1, "domain": [(["dq"], "direct")]}
+            rules(qpol, quic=True)
+            procs["sni"] = start_sni(sni_conf(qpol, {"mark": 0}, qmark=config.QUIC_DIRECT_MARK))
+            check("QUIC: сайт из правила «напрямую» (основной выход — SOCKS5)", quic("8.8.8.8"), "DIRECT-UDP")
+            check("QUIC v2: то же", quic("8.8.8.8", QUIC_V2), "DIRECT-UDP")
+            check("QUIC: дальше пакеты соединения — тем же путём (conntrack)",
+                  quic("8.8.8.8", extra=True), lambda g: g == "DIRECT-UDP DIRECT-UDP")
+            check("QUIC: ClientHello не собрался (один пакет из двух) → отказ, браузер уйдёт на TCP",
+                  quic("8.8.8.8", count=1), "FAIL")
+            # первый байт 0x16 (как у DTLS): без бита «фиксированный» — не QUIC
+            check("не QUIC на UDP 443 → обычные правила (основной выход SOCKS5)", sh("cli", sys.executable, "-c",
+                  CLIENT_UDP.replace('b"x"', 'b"\\x16dtls"'), "8.8.8.8", "443", timeout=10).stdout.strip(), "PROXY-UDP")
+            check("короткий заголовок QUIC без решения → отказ", sh("cli", sys.executable, "-c", CLIENT_UDP.replace(
+                'b"x"', 'bytes([0x41])+bytes(40)'), "8.8.8.8", "443", timeout=10).stdout.strip(), "FAIL")
+            procs["sni"].terminate()
+            procs["sni"].wait(5)
+            qpol = {"rules": [], "default": "direct", "domain": [(["dq"], "up:u1")]}
+            rules(qpol, quic=True)
+            procs["sni"] = start_sni(sni_conf(qpol, {"mark": nftgen.mark_for(1)}, qmark=nftgen.mark_for(1)))
+            check("QUIC: сайт из правила → выход-туннель по метке (как AWG)", quic("8.8.8.8"), "PROXY-UDP")
+            procs["sni"].terminate()
+            procs["sni"].wait(5)
+            procs["sni"] = start_sni(sni_conf(qpol, {"socks": SOCKS}, qmark=config.MARK_BLOCK))
+            check("QUIC: сайт из правила на SOCKS5 → отказ (HTTPS через прокси по имени)", quic("8.8.8.8"), "FAIL")
+            procs["sni"].terminate()
+            procs["sni"].wait(5)
+            procs["sni"] = start_sni(sni_conf({"rules": [], "default": "direct", "domain": [(["dvid"], "up:u1")]},
+                                              {"mark": nftgen.mark_for(1)}, qmark=nftgen.mark_for(1)))
+            rules({"rules": [], "default": "direct", "domain": [(["dvid"], "up:u1")]}, quic=True)
+            check("QUIC: сайт не из правила → обычные правила, HTTP/3 работает", quic("8.8.8.8"), "DIRECT-UDP")
+            procs["sni"].terminate()
+            procs["sni"].wait(5)
+            check("QUIC: обработчик не работает (очередь без слушателя) → отказ, как без очереди",
+                  quic("8.8.8.8"), "FAIL")
+            procs["sni"] = start_sni(sni_conf(pol, {"block": True}))
+            rules(pol)
 
         # 1.21.0: домен на выход-туннель (так идёт выход AWG): к исходному адресу с меткой выхода,
         # через его таблицу маршрутизации и интерфейс awgr1, а не командой CONNECT по имени

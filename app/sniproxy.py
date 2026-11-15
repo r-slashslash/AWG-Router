@@ -13,6 +13,12 @@ ClientHello (SNI) или заголовок Host у HTTP — и решает:
     type route (hook output) проверяет обычные правила по адресам и ставит метку нужного выхода
     (AWG, SOCKS5 через hev-socks5-tunnel, напрямую или блок).
 Если выход правила не работает, панель передаёт его резервный путь (метку, напрямую или блок).
+QUIC (UDP 443, с 1.21.0): первые пакеты новых соединений QUIC таких клиентов приходят из очереди
+ядра (NFQUEUE, nfqueue.py); имя сайта достаётся из Initial (quic.py), и пакет получает метку:
+выход AWG — его туннель, «напрямую» — основная таблица, SOCKS5 и «блок» — отказ (браузер сразу
+переходит на TCP, а там прокси получит имя), не из списка — «пропустить» к обычным правилам.
+ClientHello, которое не собралось за QUIC_HOLD, и QUIC без Initial — отказ: иначе сайт из списка
+ушёл бы мимо своего выхода. Остальные пакеты соединения берут метку из conntrack (цепочка c_quic).
 Данные соединений пересылаются внутри ядра (splice), без копирования в Python: через посредника
 идёт весь TCP 80/443 таких клиентов, а не только сайты из списков.
 Ограничение скорости выхода SOCKS5 (rates в настройках): соединения через CONNECT идут к прокси
@@ -46,8 +52,19 @@ import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 
+try:                                    # в панели и тестах — пакет app, у запущенного файла — файлы рядом
+    from . import nfqueue, quic
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import nfqueue  # type: ignore[no-redef]  # noqa: E402
+    import quic  # type: ignore[no-redef]  # noqa: E402
+
 SO_MARK = 36
 SO_ORIGINAL_DST = 80
+QUIC_HOLD = 0.1             # с: первый пакет QUIC ждёт продолжения ClientHello (Chrome режет его на 2–3)
+QUIC_FLOWS_MAX = 4096       # соединений QUIC, у которых ClientHello ещё собирается
+QUIC_DONE_TTL = 60.0        # с: решение по соединению (адреса и порты) помнится для его повторных первых пакетов
+QUIC_DONE_MAX = 16384
 PEEK_TIMEOUT = 3.0          # сколько ждём первых данных клиента (ClientHello / запрос HTTP)
 PEEK_MAX = 64 * 1024
 CONNECT_TIMEOUT = 10.0
@@ -557,6 +574,12 @@ class Sniffer:
         self.hup_pending = False            # пришёл SIGHUP, который ещё не перечитан
         self.reload_task: asyncio.Task | None = None
         self.files: dict = {}               # разобранные списки прошлого перечитывания (Conf.files)
+        self.queue: nfqueue.Queue | None = None
+        self.qflows: dict[tuple, dict] = {}  # соединения QUIC, чей ClientHello ещё не собран
+        # принятые решения: пока сервер не ответил, пакеты соединения остаются «новыми» для conntrack и
+        # снова идут в очередь (повтор Initial — бывает и половиной ClientHello); «пропустить» не
+        # записывается в conntrack, поэтому повтор получает то же решение отсюда
+        self.qdone: dict[tuple, tuple[int, float]] = {}
         self.reload()
 
     def reload(self) -> None:
@@ -597,6 +620,126 @@ class Sniffer:
                     if match(name, self.lists.get(lid, set())):
                         return rule.get("to") or {"mark": 0}, lid
         return {"mark": int(pol.get("mark") or 0)}, None
+
+    # ------------------------------------------------------------ QUIC (UDP 443) по имени
+    def open_queue(self) -> None:
+        """Очередь ядра для первых пакетов QUIC клиентов с правилами по доменам (правило nftables
+        `queue … bypass` в цепочке c_quic). Нет модуля nfnetlink_queue (OpenVZ/LXC) — QUIC у них
+        блокируется, как раньше: панель видит это по счётчикам (quic)."""
+        q = self.cfg.get("quic") or {}
+        if not q.get("queue"):
+            self.stats["quic"] = "off"
+            return
+        try:
+            self.queue = nfqueue.Queue(int(q["queue"]))
+        except OSError as e:
+            self.stats["quic"] = f"error: {e}"
+            log(f"quic queue: {e}")
+            return
+        asyncio.get_running_loop().add_reader(self.queue.fileno(), self.on_queue)
+        self.stats["quic"] = "on"
+
+    def quic_mark(self, client: str, name: str | None) -> int:
+        """Метка первого пакета QUIC: правило по доменам совпало — метка его выхода (qmark: выход
+        AWG — туннель, «напрямую» — без туннеля, SOCKS5 и «блок» — отказ, браузер перейдёт на TCP);
+        нет — «пропустить», дальше обычные правила политики."""
+        q = self.cfg.get("quic") or {}
+        if name:
+            for rule in self.policy(client).get("rules") or []:
+                for lid in rule.get("lists") or []:
+                    if match(name, self.lists.get(lid, set())):
+                        self.stats["quic_matched"] = self.stats.get("quic_matched", 0) + 1
+                        return int(rule.get("qmark") or q.get("block") or 0)
+        return int(q.get("pass") or 0)
+
+    def on_queue(self) -> None:
+        q = self.cfg.get("quic") or {}
+        block, passm = int(q.get("block") or 0), int(q.get("pass") or 0)
+        try:
+            packets = self.queue.read()
+        except OSError as e:
+            log(f"quic queue read: {e}")
+            return
+        for pid, pkt in packets:
+            try:
+                self.on_packet(pid, pkt, block, passm)
+            except Exception as e:  # noqa: BLE001 — пакет не должен остаться в очереди навсегда
+                log(f"quic: {e!r}")
+                self.queue.verdict(pid, True, block)
+
+    def on_packet(self, pid: int, pkt: bytes, block: int, passm: int) -> None:
+        u = nfqueue.udp_of(pkt)
+        if not u:
+            self.queue.verdict(pid, True, passm)
+            return
+        src, sport, dst, dport, data = u
+        five = (src, sport, dst, dport)
+        done = self.qdone.get(five)
+        if done and done[1] > time.monotonic():
+            self.queue.verdict(pid, True, done[0])
+            return
+        k = quic.kind(data)
+        if k == "other":                          # не QUIC (DTLS, другой VPN) — обычные правила
+            self.remember(five, passm)
+            self.queue.verdict(pid, True, passm)
+            return
+        if k == "quic":                           # QUIC, но не Initial: имени не узнать — на TCP
+            self._quic_count("quic_unknown")
+            self.queue.verdict(pid, True, block)
+            return
+        try:
+            dcid, crypto = quic.initial_frames(data)
+        except quic.NotInitial:
+            self._quic_count("quic_bad")
+            self.queue.verdict(pid, True, block)
+            return
+        key = (src, sport, dst, dport, dcid)
+        f = self.qflows.get(key)
+        if f is None:
+            if len(self.qflows) >= QUIC_FLOWS_MAX:
+                self._quic_count("quic_busy")
+                self.queue.verdict(pid, True, block)
+                return
+            f = self.qflows[key] = {"asm": quic.Assembler(), "ids": [], "timer": None}
+            f["timer"] = asyncio.get_running_loop().call_later(QUIC_HOLD, self.quic_timeout, key, block)
+        f["ids"].append(pid)
+        f["asm"].add(crypto)
+        try:
+            hello = f["asm"].hello()
+        except quic.NotInitial:
+            self._quic_count("quic_bad")
+            self.quic_finish(key, block)
+            return
+        if hello is not None:
+            self.quic_finish(key, self.quic_mark(src, _client_hello_sni(hello)))
+
+    def quic_timeout(self, key: tuple, block: int) -> None:
+        """ClientHello не собрался за QUIC_HOLD — отказ: браузер перейдёт на TCP, где имя видно. Пустить
+        «как обычно» нельзя: сайт из списка ушёл бы мимо своего выхода."""
+        if key in self.qflows:
+            self._quic_count("quic_timeout")
+            self.quic_finish(key, block)
+
+    def remember(self, five: tuple, mark: int) -> None:
+        if len(self.qdone) >= QUIC_DONE_MAX:
+            now = time.monotonic()
+            self.qdone = {k: v for k, v in self.qdone.items() if v[1] > now}
+            while len(self.qdone) >= QUIC_DONE_MAX:
+                self.qdone.pop(next(iter(self.qdone)))
+        self.qdone[five] = (mark, time.monotonic() + QUIC_DONE_TTL)
+
+    def quic_finish(self, key: tuple, mark: int) -> None:
+        f = self.qflows.pop(key, None)
+        if not f:
+            return
+        self.remember(key[:4], mark)
+        if f["timer"]:
+            f["timer"].cancel()
+        for pid in f["ids"]:
+            self.queue.verdict(pid, True, mark)
+
+    def _quic_count(self, k: str) -> None:
+        self.stats[k] = self.stats.get(k, 0) + 1
 
     def miss_out(self, client: str, ip: str) -> str | None:
         """Выход соединения без совпадения по домену (для учёта): правила политики по адресам,
@@ -793,6 +936,7 @@ class Sniffer:
         loop.add_signal_handler(signal.SIGHUP, self.on_hup)
         loop.add_signal_handler(signal.SIGTERM, loop.stop)
         log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
+        self.open_queue()
         asyncio.ensure_future(self.share_loop())
         while True:
             self.write_stats()

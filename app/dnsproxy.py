@@ -20,6 +20,14 @@ TLS-соединения держатся открытыми (пул на пар
 каждый запрос. Без шифрования через выходы SOCKS5 запросы идут по TCP (UDP через прокси часто не
 работает), иначе — UDP, а при обрезанном ответе — TCP.
 
+Правила по доменам (с 1.21.0, настройка dom). Имя из правила по доменам политики клиента
+разбирается через выход этого правила, а не через основной: соединение с сайтом уйдёт в этот
+выход (sniproxy.py), и адрес нужен оттуда — не подменённый по дороге и рядом с выходом (CDN).
+Правило «блок» и выход, который сейчас не работает, — обычным путём клиента. Если задан набор
+nftables (dom.set), адреса A из ответа на такое имя добавляются в него на срок TTL, но не меньше
+SET_MIN: с ним панель перехватывает только соединения к этим адресам (режим «фильтр по DNS»).
+Набор пересоздаётся вместе с таблицей панели — по SIGUSR1 все живые адреса добавляются заново.
+
 SIGHUP — перечитать настройки. Счётчики — в файл stats раз в 15 секунд (по свежести файла
 панель видит, что процесс не завис).
 """
@@ -34,6 +42,7 @@ import signal
 import socket
 import ssl
 import struct
+import subprocess
 import sys
 import time
 
@@ -59,7 +68,12 @@ KNOWN_NAMES = {"1.1.1.1": "cloudflare-dns.com", "1.0.0.1": "cloudflare-dns.com",
                "8.8.8.8": "dns.google", "8.8.4.4": "dns.google",
                "9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net"}
 
-T_OPT, T_SOA = 41, 6
+SET_MIN = 1800              # с: адрес сайта из правила держится в наборе не меньше (устройства кэшируют дольше TTL)
+SET_MAX = 86400
+SET_FLUSH = 0.3             # с: адреса копятся и уходят в nftables одной командой
+SET_LIVE_MAX = 200000       # живых адресов в памяти для повторного добавления; больше — старые забываются
+
+T_OPT, T_SOA, T_A = 41, 6, 1
 RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
 
 
@@ -154,6 +168,29 @@ def cache_ttl(msg: bytes) -> tuple[int, list[int]]:
         return 0, offs                               # SERVFAIL и прочее не храним
     ttls = [struct.unpack("!I", msg[o:o + 4])[0] for o in offs[:an]] or [0]
     return min(min(ttls), TTL_MAX), offs
+
+
+def answer_v4(msg: bytes) -> list[tuple[str, int]]:
+    """Адреса IPv4 из раздела ответов (вместе с теми, что после CNAME): [(адрес, TTL)]."""
+    _id, _flags, qd, an, _ns, _ar = struct.unpack("!6H", msg[:12])
+    off = 12
+    for _ in range(qd):
+        off = skip_name(msg, off) + 4
+    out = []
+    for _ in range(an):
+        off = skip_name(msg, off)
+        rtype, rclass, ttl, rdlen = struct.unpack("!HHIH", msg[off:off + 10])
+        off += 10
+        if rtype == T_A and rclass == 1 and rdlen == 4 and off + 4 <= len(msg):
+            out.append((socket.inet_ntoa(msg[off:off + 4]), ttl))
+        off += rdlen
+    return out
+
+
+def match(name: str, doms: set[str]) -> bool:
+    """Имя (с точкой в конце или без) есть в списке — само или как поддомен (как в sniproxy.py)."""
+    labels = name.rstrip(".").split(".")
+    return any(".".join(labels[i:]) in doms for i in range(len(labels)))
 
 
 def with_ttl(msg: bytes, offs: list[int], minus: int) -> bytes:
@@ -296,6 +333,11 @@ class Proxy:
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
         self.pools: dict[tuple, Pool] = {}
+        self.dom_lists: dict[str, set[str]] = {}
+        self._dom_files: dict[str, tuple] = {}       # путь → (признаки файла, разобранное): SIGHUP не разбирает заново
+        self.live: dict[str, float] = {}             # адрес → до какого времени (time.time) он в наборе
+        self.pending: dict[str, int] = {}            # адрес → секунд, ещё не отправленные в nftables
+        self._flush_at = 0.0
         self.load()
 
     def load(self) -> None:
@@ -312,6 +354,81 @@ class Proxy:
         self.pools.clear()
         self.ctx = ssl.create_default_context(cafile=cfg.get("ca_file") or None)   # ca_file — только в тестах
         self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        self.dom = cfg.get("dom") or {}
+        lists, files = {}, {}
+        for lid, path in (self.dom.get("lists") or {}).items():
+            try:
+                with open(path) as f:
+                    st = os.fstat(f.fileno())
+                    sig = (st.st_ino, st.st_size, st.st_mtime_ns)
+                    hit = self._dom_files.get(path)
+                    lists[lid] = hit[1] if hit and hit[0] == sig else {x.strip() for x in f if x.strip()}
+                files[path] = (sig, lists[lid])
+            except OSError as e:
+                print(f"dnsproxy: list {lid}: {e}", flush=True)
+        self.dom_lists, self._dom_files = lists, files
+        if old and old.get("dom", {}).get("set") != self.dom.get("set"):
+            self.live.clear()
+
+    def domain_route(self, ip: str, name: str):
+        """Правило по доменам политики клиента, в чей список входит имя: (путь, True) — разбирать
+        через выход правила (путь None — обычным путём клиента: «блок» или выход сейчас не работает);
+        None — имя ни в одном правиле."""
+        pol = (self.dom.get("clients") or {}).get(ip, "p_global")
+        for lids, route in (self.dom.get("policies") or {}).get(pol) or ():
+            if any(match(name, self.dom_lists.get(lid) or ()) for lid in lids):
+                return route, True
+        return None
+
+    def remember(self, reply: bytes) -> None:
+        """Адреса из ответа на имя из правила — в набор nftables (режим «фильтр по DNS»)."""
+        if not self.dom.get("set"):
+            return
+        try:
+            ips = answer_v4(reply)
+        except (ValueError, struct.error, IndexError):
+            return
+        now = time.time()
+        for addr, ttl in ips:
+            secs = max(SET_MIN, min(int(ttl), SET_MAX))
+            if self.live.get(addr, 0) - now > secs - 60:
+                continue                             # уже в наборе почти на тот же срок
+            self.pending[addr] = secs
+            if len(self.live) >= SET_LIVE_MAX:
+                self.live.pop(next(iter(self.live)))
+            self.live[addr] = now + secs
+        if self.pending and not self._flush_at:
+            self._flush_at = now
+            asyncio.get_running_loop().call_later(SET_FLUSH, self.flush)
+
+    def resync(self) -> None:
+        """SIGUSR1: панель пересоздала свою таблицу (а с ней пустой набор) — добавить все живые адреса."""
+        now = time.time()
+        self.live = {a: t for a, t in self.live.items() if t > now + 5}
+        for a, t in self.live.items():
+            self.pending[a] = int(t - now)
+        if self.pending and not self._flush_at:
+            self._flush_at = now
+            asyncio.get_running_loop().call_later(SET_FLUSH, self.flush)
+
+    def flush(self) -> None:
+        self._flush_at = 0.0
+        batch, self.pending = self.pending, {}
+        target = self.dom.get("set")
+        if not batch or not target:
+            return
+        table, name = target
+        items = list(batch.items())
+        for i in range(0, len(items), 2000):             # одна команда — не больше 2000 адресов
+            elems = ", ".join(f"{a} timeout {t}s" for a, t in items[i:i + 2000])
+            try:
+                r = subprocess.run(["nft", "add", "element", "ip", table, name, "{ " + elems + " }"],
+                                   capture_output=True, text=True, timeout=10)
+                if r.returncode:
+                    print(f"dnsproxy: nft: {r.stderr.strip()[:200]}", flush=True)
+            except (OSError, subprocess.SubprocessError) as e:
+                print(f"dnsproxy: nft: {e}", flush=True)
+        self.stats["set_added"] = self.stats.get("set_added", 0) + len(items)
 
     def route(self, ip: str) -> dict | None:
         """Путь запросов клиента: {"mark", "tcp"}; None — блок."""
@@ -326,10 +443,19 @@ class Proxy:
 
     async def resolve(self, query: bytes, q: dict, ip: str) -> bytes:
         self.stats["queries"] += 1
-        route = self.route(ip)
+        dom = self.domain_route(ip, q["name"]) if self.dom else None
+        route = dom[0] if dom and dom[0] is not None else self.route(ip)
+        if dom:
+            self.stats["by_rule"] = self.stats.get("by_rule", 0) + 1
         if route is None:
             self.stats["refused"] += 1
             return error_reply(query, q, RC_REFUSED)
+        reply = await self._resolve(query, q, route)
+        if dom and q["qtype"] == T_A:
+            self.remember(reply)
+        return reply
+
+    async def _resolve(self, query: bytes, q: dict, route: dict) -> bytes:
         mark, tcp = int(route.get("mark") or 0), bool(route.get("tcp"))
         key = (mark, q["name"], q["qtype"], q["qclass"])
         hit = self.cache.get(key)
@@ -523,6 +649,7 @@ async def main(conf_path: str) -> None:
     server = await asyncio.start_server(proxy.handle_tcp, listen, port, reuse_address=True)
     stop = asyncio.Event()
     loop.add_signal_handler(signal.SIGHUP, proxy.load)
+    loop.add_signal_handler(signal.SIGUSR1, proxy.resync)
     loop.add_signal_handler(signal.SIGTERM, stop.set)
     loop.add_signal_handler(signal.SIGINT, stop.set)
     print(f"dnsproxy: {listen}:{port}", flush=True)

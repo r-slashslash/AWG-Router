@@ -2231,7 +2231,7 @@ Object.assign(I18N.ru, {
   "ls.add_domains": "Домены", "ls.kind.domains": "Домены", "ls.new.domains": "Список доменов",
   "ls.domains": "Домены и ссылки на списки",
   "ls.domains_hint": "По одному в строке. example.com подходит и для всех поддоменов (www.example.com, m.example.com). Можно вставить ссылку на готовый список: понимаются простые списки доменов и форматы dnsmasq, hosts, Adblock (||example.com^) и v2ray (domain:example.com).",
-  "ls.domains_how": "Правило со списком доменов узнаёт сайт по имени в начале HTTPS- и HTTP-соединения (порты 443 и 80) и проверяется раньше правил по адресам. Выход может быть любым. Через SOCKS5 имя сайта передаётся прокси, и адрес находит сам прокси. Через AWG и «напрямую» соединение идёт к адресу, который устройство получило из своего DNS: чтобы адрес не был подменён, включите «DNS на сервере» (вкладка «Сервер»). «Блокировать» закрывает соединение. HTTP/3 (QUIC) у клиентов с такими правилами отключается для всех сайтов, не только из списка: браузеры сами переходят на обычный HTTPS, первое соединение может открываться чуть дольше. Сайты с Encrypted Client Hello (ECH, например часть сайтов за Cloudflare) показывают в соединении не своё имя, а общее — их по списку доменов не узнать; для них добавьте список адресов.",
+  "ls.domains_how": "Правило со списком доменов узнаёт сайт по имени в начале соединения — HTTPS и HTTP (TCP 443 и 80) и HTTP/3 (QUIC, UDP 443) — и проверяется раньше правил по адресам. Выход может быть любым. Через SOCKS5 имя сайта передаётся прокси, и адрес находит сам прокси (HTTP/3 к таким сайтам отключается — браузер сразу берёт HTTPS). Через AWG и «напрямую» соединение идёт к адресу, который устройство получило из DNS; с включённым «DNS на сервере» такие имена разбираются через выход правила — адрес не подменён и рядом с выходом. «Блокировать» закрывает соединение. Если ядро сервера не умеет очередь пакетов (nfnetlink_queue, бывает в OpenVZ/LXC), HTTP/3 у клиентов с такими правилами отключается для всех сайтов: браузеры сами переходят на HTTPS. Сайты с Encrypted Client Hello (ECH, например часть сайтов за Cloudflare) показывают в соединении не своё имя, а общее — их по списку доменов не узнать; для них добавьте список адресов.",
   "n.domains": { one: "{n} домен", few: "{n} домена", many: "{n} доменов", other: "{n} домена" },
 
 
@@ -2291,7 +2291,7 @@ Object.assign(I18N.en, {
   "ls.add_domains": "Domains", "ls.kind.domains": "Domains", "ls.new.domains": "Domain list",
   "ls.domains": "Domains and links to lists",
   "ls.domains_hint": "One per line. example.com also covers all its subdomains (www.example.com, m.example.com). You can paste a link to a ready-made list: plain domain lists and the dnsmasq, hosts, Adblock (||example.com^) and v2ray (domain:example.com) formats are understood.",
-  "ls.domains_how": "A rule with a domain list recognizes the site by its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and is checked before address rules. Any exit works. Through SOCKS5 the site name is passed to the proxy, which finds the address itself. Through AWG and “Direct” the connection goes to the address the device got from its own DNS: so that it isn't spoofed, turn on “DNS on the server” (Server tab). “Block” closes the connection. HTTP/3 (QUIC) is turned off for all sites for clients with such rules, not only the listed ones: browsers switch to regular HTTPS by themselves, and the first connection may open a little slower. Sites with Encrypted Client Hello (ECH, e.g. some sites behind Cloudflare) show a shared name instead of their own, so a domain list can't recognize them; add an address list for them.",
+  "ls.domains_how": "A rule with a domain list recognizes the site by its name at the start of a connection — HTTPS and HTTP (TCP 443 and 80) and HTTP/3 (QUIC, UDP 443) — and is checked before address rules. Any exit works. Through SOCKS5 the site name is passed to the proxy, which finds the address itself (HTTP/3 to such sites is turned off, so the browser takes HTTPS right away). Through AWG and “Direct” the connection goes to the address the device got from DNS; with “DNS on the server” turned on, such names are resolved through the rule's exit, so the address isn't spoofed and is near the exit. “Block” closes the connection. If the server's kernel can't queue packets (nfnetlink_queue; happens on OpenVZ/LXC), HTTP/3 is turned off for all sites for clients with such rules: browsers switch to HTTPS by themselves. Sites with Encrypted Client Hello (ECH, e.g. some sites behind Cloudflare) show a shared name instead of their own, so a domain list can't recognize them; add an address list for them.",
   "n.domains": { one: "{n} domain", other: "{n} domains" },
 
 
@@ -2351,7 +2351,7 @@ Object.assign(I18N.zh, {
   "ls.add_domains": "域名", "ls.kind.domains": "域名", "ls.new.domains": "域名列表",
   "ls.domains": "域名和列表链接",
   "ls.domains_hint": "每行一个。example.com 同时匹配它的所有子域名（www.example.com、m.example.com）。也可以粘贴现成列表的链接：支持普通域名列表以及 dnsmasq、hosts、Adblock（||example.com^）和 v2ray（domain:example.com）格式。",
-  "ls.domains_how": "带域名列表的规则根据 HTTPS 和 HTTP 连接开头的网站名称（443 和 80 端口）识别网站，并先于地址规则检查。出口可以是任意一种。经 SOCKS5 时网站名称交给代理，由代理自己解析地址。经 AWG 和「直连」时，连接发往设备从自己的 DNS 得到的地址：为防止地址被篡改，请开启「服务器上的 DNS」（「服务器」标签页）。「阻止」会关闭连接。对有此类规则的客户端，所有网站（不仅是列表中的）都会关闭 HTTP/3（QUIC）：浏览器会自动改用普通 HTTPS，首次连接可能稍慢。使用 Encrypted Client Hello（ECH，例如部分 Cloudflare 后的网站）的网站在连接中显示的是共用名称而不是自己的名称，域名列表无法识别它们；请为它们添加地址列表。",
+  "ls.domains_how": "带域名列表的规则根据连接开头的网站名称识别网站——HTTPS 和 HTTP（TCP 443 和 80）以及 HTTP/3（QUIC，UDP 443）——并先于地址规则检查。出口可以是任意一种。经 SOCKS5 时网站名称交给代理，由代理自己解析地址（发往这些网站的 HTTP/3 会被关闭，浏览器直接使用 HTTPS）。经 AWG 和「直连」时，连接发往设备从 DNS 得到的地址；开启「服务器上的 DNS」后，这些名称会经规则的出口解析——地址不会被篡改，并且靠近出口。「阻止」会关闭连接。如果服务器内核不支持数据包队列（nfnetlink_queue，OpenVZ/LXC 上常见），有此类规则的客户端对所有网站都会关闭 HTTP/3：浏览器会自动改用 HTTPS。使用 Encrypted Client Hello（ECH，例如部分 Cloudflare 后的网站）的网站在连接中显示的是共用名称而不是自己的名称，域名列表无法识别它们；请为它们添加地址列表。",
   "n.domains": { other: "{n} 个域名" },
 
 
@@ -2411,7 +2411,7 @@ Object.assign(I18N.fa, {
   "ls.add_domains": "دامنه‌ها", "ls.kind.domains": "دامنه‌ها", "ls.new.domains": "فهرست دامنه‌ها",
   "ls.domains": "دامنه‌ها و پیوند فهرست‌ها",
   "ls.domains_hint": "هر کدام در یک خط. example.com همهٔ زیردامنه‌هایش را هم در بر می‌گیرد (www.example.com، m.example.com). می‌توانید پیوند یک فهرست آماده را هم بگذارید: فهرست ساده دامنه‌ها و قالب‌های dnsmasq، hosts، Adblock (‎||example.com^‎) و v2ray (‎domain:example.com‎) پشتیبانی می‌شوند.",
-  "ls.domains_how": "قانونی که فهرست دامنه دارد سایت را از نام آن در آغاز اتصال HTTPS و HTTP (درگاه‌های 443 و 80) تشخیص می‌دهد و پیش از قانون‌های نشانی بررسی می‌شود. خروجی می‌تواند هر نوعی باشد. از طریق SOCKS5 نام سایت به پراکسی داده می‌شود و خود پراکسی نشانی را پیدا می‌کند. از طریق AWG و «مستقیم» اتصال به نشانی‌ای می‌رود که دستگاه از DNS خودش گرفته است: برای اینکه این نشانی جعلی نباشد، «DNS روی سرور» را روشن کنید (برگهٔ «سرور»). «مسدود» اتصال را می‌بندد. برای کلاینت‌هایی که چنین قانونی دارند HTTP/3 (QUIC) برای همهٔ سایت‌ها خاموش می‌شود، نه فقط سایت‌های فهرست: مرورگرها خودشان به HTTPS معمولی می‌روند و نخستین اتصال ممکن است کمی کندتر باز شود. سایت‌هایی که Encrypted Client Hello دارند (ECH، مثلاً بخشی از سایت‌های پشت Cloudflare) در اتصال نامی مشترک نشان می‌دهند نه نام خودشان، و فهرست دامنه آن‌ها را تشخیص نمی‌دهد؛ برای آن‌ها فهرست نشانی اضافه کنید.",
+  "ls.domains_how": "قانونی که فهرست دامنه دارد سایت را از نام آن در آغاز اتصال تشخیص می‌دهد — HTTPS و HTTP (درگاه‌های TCP 443 و 80) و HTTP/3 (QUIC، درگاه UDP 443) — و پیش از قانون‌های نشانی بررسی می‌شود. خروجی می‌تواند هر نوعی باشد. از طریق SOCKS5 نام سایت به پراکسی داده می‌شود و خود پراکسی نشانی را پیدا می‌کند (HTTP/3 به این سایت‌ها خاموش می‌شود تا مرورگر فوراً HTTPS را بگیرد). از طریق AWG و «مستقیم» اتصال به نشانی‌ای می‌رود که دستگاه از DNS گرفته است؛ با روشن بودن «DNS روی سرور» این نام‌ها از راه خروجی قانون پیدا می‌شوند — نشانی جعلی نیست و نزدیک خروجی است. «مسدود» اتصال را می‌بندد. اگر هستهٔ سرور صف بسته‌ها (nfnetlink_queue) را پشتیبانی نکند (در OpenVZ/LXC پیش می‌آید)، HTTP/3 برای کلاینت‌هایی که چنین قانونی دارند برای همهٔ سایت‌ها خاموش می‌شود: مرورگرها خودشان به HTTPS می‌روند. سایت‌هایی که Encrypted Client Hello دارند (ECH، مثلاً بخشی از سایت‌های پشت Cloudflare) در اتصال نامی مشترک نشان می‌دهند نه نام خودشان، و فهرست دامنه آن‌ها را تشخیص نمی‌دهد؛ برای آن‌ها فهرست نشانی اضافه کنید.",
   "n.domains": { one: "{n} دامنه", other: "{n} دامنه" },
 
 
@@ -3051,6 +3051,11 @@ Object.assign(I18N.fa, {
 
 /* 1.21.0: правила по доменам на любой выход, строка правила, статус в шапке, порты */
 Object.assign(I18N.ru, {
+  "srv.dom_filter": "Правила по доменам — только для адресов из ответов этого DNS",
+  "srv.dom_filter_hint": "Обработчик доменов получает только соединения к адресам, которые DNS на сервере вернул для имён из правил по доменам; остальной трафик идёт ядром, без посредника, и HTTP/3 к нему работает. Устройство со своим DNS (свой DoH в браузере, ручной DNS, старый конфиг без DNS сервера) этот фильтр обходит: сайты из правил у него пойдут по правилам по адресам.",
+  "srv.dom_filter_needs_dns": "Работает только с включённым DNS на сервере — пока перехватывается всё, как без фильтра.",
+  "ls.quic_off": "HTTP/3 (QUIC) у клиентов с правилами по доменам сейчас отключён для всех сайтов: ядро сервера не умеет очередь пакетов (nfnetlink_queue).",
+  "ev.quic_no_queue": "Ядро сервера не принимает очередь пакетов (nft queue): HTTP/3 у клиентов с правилами по доменам отключён, как до 1.21.0",
   "status.updating_s": "Обновление…",
   "status.offline": "Нет связи с панелью",
   "status.offline_hint": "Панель не отвечает. Страница сама проверяет снова.",
@@ -3066,6 +3071,11 @@ Object.assign(I18N.ru, {
   "srv.port_dns": "Порт {port} занят DNS на сервере, выберите другой",
 });
 Object.assign(I18N.en, {
+  "srv.dom_filter": "Domain rules only for addresses from this DNS's answers",
+  "srv.dom_filter_hint": "The domain handler gets only connections to addresses that DNS on the server returned for names in domain rules; other traffic goes through the kernel, without the handler, and HTTP/3 to it works. A device with its own DNS (the browser's own DoH, DNS set by hand, an old config without the server's DNS) bypasses this filter: sites from the rules go by address rules for it.",
+  "srv.dom_filter_needs_dns": "Works only with DNS on the server turned on — until then everything is intercepted, as without the filter.",
+  "ls.quic_off": "HTTP/3 (QUIC) is now off for all sites for clients with domain rules: the server's kernel can't queue packets (nfnetlink_queue).",
+  "ev.quic_no_queue": "The server's kernel doesn't accept a packet queue (nft queue): HTTP/3 is off for clients with domain rules, as before 1.21.0",
   "status.updating_s": "Updating…",
   "status.offline": "No connection to the panel",
   "status.offline_hint": "The panel is not answering. The page keeps checking.",
@@ -3081,6 +3091,11 @@ Object.assign(I18N.en, {
   "srv.port_dns": "Port {port} is used by DNS on the server, pick another",
 });
 Object.assign(I18N.zh, {
+  "srv.dom_filter": "域名规则只针对此 DNS 应答中的地址",
+  "srv.dom_filter_hint": "域名处理程序只接收发往服务器上的 DNS 为域名规则中的名称返回的地址的连接；其他流量走内核，不经处理程序，访问它们的 HTTP/3 正常工作。使用自己 DNS 的设备（浏览器自带 DoH、手动设置的 DNS、不含服务器 DNS 的旧配置）会绕过此过滤：对它来说，规则中的网站按地址规则走。",
+  "srv.dom_filter_needs_dns": "仅在开启服务器上的 DNS 时有效——在此之前全部拦截，与不使用过滤时相同。",
+  "ls.quic_off": "有域名规则的客户端目前对所有网站关闭了 HTTP/3（QUIC）：服务器内核不支持数据包队列（nfnetlink_queue）。",
+  "ev.quic_no_queue": "服务器内核不接受数据包队列（nft queue）：有域名规则的客户端关闭 HTTP/3，与 1.21.0 之前相同",
   "status.updating_s": "正在更新…",
   "status.offline": "无法连接面板",
   "status.offline_hint": "面板没有响应。页面会继续自动检查。",
@@ -3096,6 +3111,11 @@ Object.assign(I18N.zh, {
   "srv.port_dns": "端口 {port} 已被服务器上的 DNS 使用，请选择其他端口",
 });
 Object.assign(I18N.fa, {
+  "srv.dom_filter": "قانون‌های دامنه فقط برای نشانی‌هایی که این DNS برگردانده",
+  "srv.dom_filter_hint": "پردازشگر دامنه فقط اتصال‌هایی را می‌گیرد که به نشانی‌هایی می‌روند که DNS روی سرور برای نام‌های قانون‌های دامنه برگردانده است؛ بقیهٔ ترافیک از هسته می‌گذرد، بدون پردازشگر، و HTTP/3 به آن کار می‌کند. دستگاهی که DNS خودش را دارد (DoH خود مرورگر، DNS دستی، پیکربندی قدیمی بدون DNS سرور) این فیلتر را دور می‌زند: برای آن، سایت‌های قانون‌ها طبق قانون‌های نشانی می‌روند.",
+  "srv.dom_filter_needs_dns": "فقط با روشن بودن DNS روی سرور کار می‌کند — تا آن زمان همه‌چیز رهگیری می‌شود، مثل بدون فیلتر.",
+  "ls.quic_off": "HTTP/3 (QUIC) برای کلاینت‌هایی که قانون دامنه دارند اکنون برای همهٔ سایت‌ها خاموش است: هستهٔ سرور صف بسته‌ها (nfnetlink_queue) را پشتیبانی نمی‌کند.",
+  "ev.quic_no_queue": "هستهٔ سرور صف بسته‌ها (nft queue) را نمی‌پذیرد: HTTP/3 برای کلاینت‌های دارای قانون دامنه خاموش است، مثل پیش از 1.21.0",
   "status.updating_s": "در حال به‌روزرسانی…",
   "status.offline": "اتصال به پنل برقرار نیست",
   "status.offline_hint": "پنل پاسخ نمی‌دهد. صفحه خودش دوباره بررسی می‌کند.",

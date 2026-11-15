@@ -70,3 +70,8 @@ MAX_UPSTREAMS = 200
 SNI_PROXY_PORT = int(os.environ.get("SNI_PROXY_PORT", "10443"))
 SNIFF_MARK = 0xD000            # пакет клиента → в sniproxy.py
 SNIFF_OUT_BASE = 0xD100        # соединения sniproxy.py: метка = база + номер политики клиента
+# QUIC по имени (sniproxy.py, очередь ядра): номер очереди и метки вердикта
+QUIC_QUEUE = 2310
+QUIC_PASS_MARK = 0xE100        # сайт не из правил: дальше обычные правила политики
+QUIC_DIRECT_MARK = 0xE101      # сайт из правила «напрямую»: метка без ip rule — основная таблица
+QUIC_CT_BIT = 0x40000000       # в ct mark: решение по имени уже принято, остальные пакеты берут его

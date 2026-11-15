@@ -3,6 +3,7 @@
 
 python3 -m unittest discover tests
 """
+import asyncio
 import os
 import sys
 import tempfile
@@ -143,6 +144,7 @@ import subprocess  # noqa: E402
 import textwrap  # noqa: E402
 
 from app import system  # noqa: E402
+from app import nftgen as _nftgen  # noqa: E402,F401
 from tests.test_v118 import func, install_sh, unsafe_block  # noqa: E402
 
 
@@ -347,6 +349,375 @@ class CliUpdateTest(unittest.TestCase):
                     "status.engine", "status.server_down", "sy.updating_cli"):
             self.assertIn(f'"{key}"', js)
         self.assertIn("OFFLINE_AFTER = 2", js)
+
+
+# ------------------------------------------------------------------ QUIC по имени
+import json as _json  # noqa: E402
+import socket as _socket  # noqa: E402
+import struct as _struct  # noqa: E402
+
+from app import config as _config, dnsproxy, nfqueue, quic, sniproxy  # noqa: E402
+
+DATA = os.path.join(os.path.dirname(__file__), "data")
+
+
+def chromium(v="v1"):
+    """Настоящие первые датаграммы Chromium 153 к quic.test (ClientHello с ML-KEM — в двух пакетах)."""
+    with open(os.path.join(DATA, f"quic-chromium153-{v}.hex")) as f:
+        return [bytes.fromhex(x) for x in f.read().split()]
+
+
+def ipv4_udp(src, sport, dst, dport, payload):
+    """Пакет IPv4 + UDP, как его отдаёт очередь ядра."""
+    udp = _struct.pack("!HHHH", sport, dport, 8 + len(payload), 0) + payload
+    hdr = _struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), 1, 0, 64, 17, 0,
+                       _socket.inet_aton(src), _socket.inet_aton(dst))
+    return hdr + udp
+
+
+class QuicParseTest(unittest.TestCase):
+    def sni(self, datagrams):
+        a = quic.Assembler()
+        for d in datagrams:
+            a.add(quic.initial_frames(d)[1])
+        h = a.hello()
+        return sniproxy._client_hello_sni(h) if h is not None else None
+
+    def test_chromium_v1_and_v2(self):
+        for v in ("v1", "v2"):
+            with self.subTest(v=v):
+                ds = chromium(v)
+                self.assertEqual([quic.kind(d) for d in ds], ["initial", "initial"])
+                self.assertEqual(self.sni(ds), "quic.test")
+                self.assertEqual(self.sni(ds[::-1]), "quic.test")         # пришли в другом порядке
+                self.assertIsNone(self.sni(ds[:1]))                       # половины ClientHello мало
+
+    def test_keys_verified_by_gcm_tag(self):
+        """Ключи Initial выведены верно: тег GCM первого пакета сходится (libcrypto)."""
+        lib = quic._LIB
+        if lib is None or not hasattr(lib, "EVP_aes_128_gcm"):
+            self.skipTest("нет libcrypto")
+        import ctypes
+        d = chromium()[0]
+        dl = d[5]
+        dcid = d[6:6 + dl]
+        q = 6 + dl
+        q += 1 + d[q]
+        tl, q = quic.varint(d, q)
+        q += tl
+        ln, q = quic.varint(d, q)
+        pkt = d[:q + ln]
+        key, iv, hp = quic.client_keys(quic.V1, dcid)
+        mask = quic.aes_ecb(hp, pkt[q + 4:q + 20])
+        first = pkt[0] ^ (mask[0] & 0x0F)
+        pnl = (first & 3) + 1
+        pnb = bytes(x ^ y for x, y in zip(pkt[q:q + pnl], mask[1:1 + pnl]))
+        aad = bytes([first]) + pkt[1:q] + pnb
+        nonce = (int.from_bytes(iv, "big") ^ int.from_bytes(pnb, "big")).to_bytes(12, "big")
+        ct, tag = pkt[q + pnl:-16], pkt[-16:]
+        lib.EVP_aes_128_gcm.restype = ctypes.c_void_p
+        lib.EVP_DecryptInit_ex.argtypes = [ctypes.c_void_p] * 3 + [ctypes.c_char_p] * 2
+        lib.EVP_DecryptUpdate.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int),
+                                          ctypes.c_char_p, ctypes.c_int]
+        lib.EVP_CIPHER_CTX_ctrl.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p]
+        lib.EVP_DecryptFinal_ex.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
+        ctx = lib.EVP_CIPHER_CTX_new()
+        self.addCleanup(lib.EVP_CIPHER_CTX_free, ctx)
+        n, out = ctypes.c_int(0), ctypes.create_string_buffer(len(ct) + 16)
+        lib.EVP_DecryptInit_ex(ctx, lib.EVP_aes_128_gcm(), None, key, nonce)
+        lib.EVP_DecryptUpdate(ctx, None, ctypes.byref(n), aad, len(aad))
+        lib.EVP_DecryptUpdate(ctx, out, ctypes.byref(n), ct, len(ct))
+        lib.EVP_CIPHER_CTX_ctrl(ctx, 0x11, 16, tag)                      # EVP_CTRL_GCM_SET_TAG
+        self.assertEqual(lib.EVP_DecryptFinal_ex(ctx, out, ctypes.byref(n)), 1)
+
+    def test_pure_python_aes_matches(self):
+        k = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
+        with mock.patch.object(quic, "_LIB", None):
+            # FIPS-197, приложение C.1
+            self.assertEqual(quic.aes_ecb(k, bytes.fromhex("00112233445566778899aabbccddeeff")).hex(),
+                             "69c4e0d86a7b0430d8cdb78070b4c55a")
+            quic._keys.clear()
+            self.assertEqual(self.sni(chromium("v2")), "quic.test")
+            py = quic.aes_ctr(k, bytes(12) + b"\0\0\0\2", bytes(range(100)))
+        quic._keys.clear()
+        if quic._LIB is not None:
+            self.assertEqual(py, quic.aes_ctr(k, bytes(12) + b"\0\0\0\2", bytes(range(100))))
+
+    def test_kinds(self):
+        self.assertEqual(quic.kind(b"\x16\xfe\xfd" + bytes(40)), "other")      # DTLS
+        self.assertEqual(quic.kind(b"\x01\x00\x00\x00" + bytes(40)), "other")  # WireGuard
+        self.assertEqual(quic.kind(bytes([0x41]) + bytes(40)), "quic")         # короткий заголовок
+        self.assertEqual(quic.kind(bytes([0xC0, 0xFF, 0, 0, 0x1D]) + bytes(40)), "quic")   # черновик 29
+        with self.assertRaises(quic.NotInitial):
+            quic.initial_frames(chromium()[0][:60])                              # обрезан
+        bad = bytearray(chromium()[0])
+        bad[60:200] = bytes(140)                                                 # испорчено содержимое
+        try:
+            a = quic.Assembler()
+            a.add(quic.initial_frames(bytes(bad))[1])
+            self.assertIsNone(a.hello())                                         # имени нет — ждать, потом отказ
+        except quic.NotInitial:
+            pass
+
+
+class FakeQueue:
+    def __init__(self):
+        self.verdicts = []
+
+    def verdict(self, pid, accept=True, mark=None):
+        self.verdicts.append((pid, accept, mark))
+
+
+class SnifferQuicTest(unittest.TestCase):
+    def sniffer(self, qmark):
+        s = sniproxy.Sniffer.__new__(sniproxy.Sniffer)
+        s.stats, s.qflows, s.qdone, s.queue = {}, {}, {}, FakeQueue()
+        s.lists = {"dq": {"quic.test"}}
+        s.cfg = {"client_policy": {"10.8.1.9": "p_1"},
+                 "quic": {"queue": 1, "pass": _config.QUIC_PASS_MARK, "block": _config.MARK_BLOCK},
+                 "policies": {"p_global": {"rules": [{"lists": ["dq"], "to": {"mark": 0}, "qmark": qmark}]},
+                              "p_1": {"rules": []}}}
+        return s
+
+    def run_packets(self, s, packets, client="10.8.1.2"):
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+
+        async def go():
+            for i, d in enumerate(packets):
+                s.on_packet(i + 1, ipv4_udp(client, 50000, "8.8.8.8", 443, d),
+                            _config.MARK_BLOCK, _config.QUIC_PASS_MARK)
+            await asyncio.sleep(sniproxy.QUIC_HOLD + 0.05)
+        loop.run_until_complete(go())
+        return s.queue.verdicts
+
+    def test_match_gets_rule_mark_for_all_held_packets(self):
+        s = self.sniffer(0x2005)
+        self.assertEqual(self.run_packets(s, chromium()), [(1, True, 0x2005), (2, True, 0x2005)])
+        self.assertEqual(s.qflows, {})
+
+    def test_repeat_of_first_packets_gets_same_decision(self):
+        """Пока сервер не ответил, повтор Initial (бывает половиной ClientHello) снова идёт в очередь: решение
+        по тем же адресам и портам уже есть — без ожидания и без отказа по таймауту."""
+        s = self.sniffer(0x2005)
+        ds = chromium()
+        self.assertEqual(self.run_packets(s, ds + ds[1:]), [(1, True, 0x2005), (2, True, 0x2005), (3, True, 0x2005)])
+        s2 = self.sniffer(0x2005)
+        self.assertEqual(self.run_packets(s2, ds + ds[:1], client="10.8.1.9")[-1], (3, True, _config.QUIC_PASS_MARK))
+
+    def test_other_policy_passes(self):
+        s = self.sniffer(0x2005)
+        self.assertEqual(self.run_packets(s, chromium(), client="10.8.1.9"),
+                         [(1, True, _config.QUIC_PASS_MARK), (2, True, _config.QUIC_PASS_MARK)])
+
+    def test_incomplete_hello_blocked_after_hold(self):
+        s = self.sniffer(0x2005)
+        self.assertEqual(self.run_packets(s, chromium()[:1]), [(1, True, _config.MARK_BLOCK)])
+        self.assertEqual(s.stats.get("quic_timeout"), 1)
+
+    def test_not_quic_passes_short_header_blocked(self):
+        v = self.run_packets(self.sniffer(0x2005), [b"\x16\xfe\xfd" + bytes(60)])
+        self.assertEqual(v, [(1, True, _config.QUIC_PASS_MARK)])
+        v = self.run_packets(self.sniffer(0x2005), [bytes([0x41]) + bytes(60)])
+        self.assertEqual(v, [(1, True, _config.MARK_BLOCK)])
+
+    def test_udp_of(self):
+        self.assertEqual(nfqueue.udp_of(ipv4_udp("10.8.1.2", 1, "8.8.8.8", 443, b"ab")),
+                         ("10.8.1.2", 1, "8.8.8.8", 443, b"ab"))
+        tcp = bytearray(ipv4_udp("10.8.1.2", 1, "8.8.8.8", 443, b"ab"))
+        tcp[9] = 6
+        self.assertIsNone(nfqueue.udp_of(bytes(tcp)))
+
+
+@unittest.skipUnless(os.geteuid() == 0 and shutil.which("unshare") and shutil.which("iptables"),
+                     "нужны root, unshare и iptables")
+class NfqueueKernelTest(unittest.TestCase):
+    def test_verdict_with_mark_in_own_netns(self):
+        """Настоящая очередь ядра в своей сети: iptables NFQUEUE в OUTPUT, вердикт с меткой доходит."""
+        script = textwrap.dedent(f"""\
+            import fcntl, socket, struct, subprocess, sys, time
+            sys.path.insert(0, {ROOT!r})
+            from app import nfqueue
+            s = socket.socket(); fcntl.ioctl(s, 0x8914, struct.pack("16sH14s", b"lo", 0x9, b""))
+            run = lambda c: subprocess.run(c, shell=True, capture_output=True, text=True)
+            if run("iptables -t mangle -A OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 77").returncode:
+                print("skip"); sys.exit()
+            run("iptables -t mangle -A POSTROUTING -p udp --dport 443 -m mark --mark 0xe101 -j ACCEPT")
+            q = nfqueue.Queue(77)
+            srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); srv.bind(("127.0.0.1", 443)); srv.settimeout(1)
+            c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); c.sendto(b"hello", ("127.0.0.1", 443))
+            time.sleep(0.2)
+            pk = q.read()
+            for pid, p in pk:
+                q.verdict(pid, True, 0xe101)
+            got = srv.recvfrom(100)[0]
+            marked = run("iptables -t mangle -L POSTROUTING -v -x -n").stdout.split()
+            print(len(pk), nfqueue.udp_of(pk[0][1])[4].decode(), got.decode(), "0xe101" in marked)
+            """)
+        r = subprocess.run(["unshare", "-n", sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+        if r.stdout.strip() == "skip":
+            self.skipTest("iptables NFQUEUE недоступен")
+        self.assertEqual(r.stdout.strip(), "1 hello hello True", r.stderr)
+
+
+class NftQuicTest(unittest.TestCase):
+    GP = {"rules": [(["ru"], "direct")], "default": 1, "domain": [(["yt"], "up:x")]}
+    CPS = {"10.8.1.5": {"rules": [], "default": 1, "domain": []}}
+    UPS = [{"num": 1, "mtu": 1280}]
+
+    def gen(self, **kw):
+        return nftgen.generate("awg0", {"ru": ["5.0.0.0/8"]}, self.UPS, self.GP, self.CPS, 10443, **kw)
+
+    def test_without_flags_as_before(self):
+        t = self.gen()
+        self.assertIn("\t\tudp dport 443 goto o_block", t)
+        self.assertNotIn("queue", t)
+        self.assertNotIn("dom4", t)
+
+    def test_quic_and_filter(self):
+        t = self.gen(quic=True, dom_filter=True)
+        self.assertIn(f"queue num {_config.QUIC_QUEUE} bypass", t)
+        self.assertIn("ip saddr != @q_skip ip daddr @dom4 queue", t)
+        self.assertIn("elements = { 10.8.1.5 }", t)                    # у клиента своя политика без доменов
+        self.assertIn(f"ip daddr @dom4 udp dport 443 meta mark != {_config.QUIC_PASS_MARK:#x} goto o_block", t)
+        self.assertIn("ip daddr @dom4 tcp dport { 80, 443 } meta mark set", t)
+        self.assertIn(f"ct mark set meta mark | {_config.QUIC_CT_BIT:#x} accept", t)
+        self.assertLess(t.index("ip daddr @local4 return\n\t\tudp dport 443 meta mark"), t.index("ip saddr vmap @clients"))
+
+    @unittest.skipUnless(os.geteuid() == 0 and shutil.which("nft") and shutil.which("unshare"), "нужны root и nft")
+    def test_nft_accepts(self):
+        for kw in ({}, {"dom_filter": True}, {"quic": True, "dom_filter": True}, {"quic": True}):
+            text = self.gen(**kw).replace(f"queue num {_config.QUIC_QUEUE} bypass", "accept")  # nft_queue есть не везде
+            r = subprocess.run(["unshare", "-n", "nft", "-c", "-f", "-"], input=text, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, (kw, r.stderr))
+
+
+# ------------------------------------------------------------------ DNS через выход правила, фильтр по DNS
+def dns_answer(name, ips, ttl=60, cname=None):
+    q = b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) + b"\0"
+    msg = _struct.pack("!6H", 7, 0x8180, 1, len(ips) + (1 if cname else 0), 0, 0) + q + _struct.pack("!HH", 1, 1)
+    if cname:
+        c = b"".join(bytes([len(x)]) + x.encode() for x in cname.split(".")) + b"\0"
+        msg += b"\xc0\x0c" + _struct.pack("!HHIH", 5, 1, ttl, len(c)) + c
+    for ip in ips:
+        msg += b"\xc0\x0c" + _struct.pack("!HHIH", 1, 1, ttl, 4) + _socket.inet_aton(ip)
+    return msg
+
+
+class DnsDomainTest(unittest.TestCase):
+    def proxy(self, with_set=False):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        lp = os.path.join(d, "yt.domains")
+        with open(lp, "w") as f:
+            f.write("youtube.com\ngooglevideo.com\n")
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            _json.dump({"listen": "127.0.0.1", "default": {"mark": 0, "tcp": False}, "routes": {},
+                        "dom": {"lists": {"yt": lp}, "clients": {"10.8.1.9": "p_1"},
+                                "policies": {"p_global": [[["yt"], {"mark": 0x2003, "tcp": False}]],
+                                             "p_1": [[["yt"], None]]},
+                                "set": ["awgr", "dom4"] if with_set else None}}, f)
+        return dnsproxy.Proxy(conf)
+
+    def test_rule_route(self):
+        p = self.proxy()
+        self.assertEqual(p.domain_route("10.8.1.2", "rr3---sn-x.googlevideo.com."), ({"mark": 0x2003, "tcp": False}, True))
+        self.assertIsNone(p.domain_route("10.8.1.2", "example.com."))
+        self.assertEqual(p.domain_route("10.8.1.9", "youtube.com."), (None, True))   # блок / выход не работает
+
+    def test_resolve_goes_through_rule_exit(self):
+        p = self.proxy()
+        seen = []
+
+        async def fake(query, q, route):
+            seen.append(route)
+            return b"\0\0" + query[2:]
+        p._resolve = fake
+        from tests.test_v115 import q_msg
+        for name in ("www.youtube.com", "example.com"):
+            m = q_msg(name)
+            asyncio.run(p.resolve(m, dnsproxy.parse_query(m), "10.8.1.2"))
+        self.assertEqual(seen, [{"mark": 0x2003, "tcp": False}, {"mark": 0, "tcp": False}])
+
+    def test_answer_v4_through_cname(self):
+        a = dns_answer("youtube.com", ["142.250.1.1", "142.250.1.2"], ttl=20, cname="y.googlevideo.com")
+        self.assertEqual(dnsproxy.answer_v4(a), [("142.250.1.1", 20), ("142.250.1.2", 20)])
+
+    def test_remember_and_resync(self):
+        p = self.proxy(with_set=True)
+        calls = []
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+
+        async def go():
+            with mock.patch.object(dnsproxy.subprocess, "run", side_effect=lambda c, **k: calls.append(c) or
+                                   subprocess.CompletedProcess(c, 0, "", "")):
+                p.remember(dns_answer("youtube.com", ["142.250.1.1"], ttl=20))
+                p.remember(dns_answer("youtube.com", ["142.250.1.1"], ttl=20))   # уже в наборе — не повторяем
+                await asyncio.sleep(dnsproxy.SET_FLUSH + 0.1)
+                p.resync()                                                        # таблица пересоздана
+                await asyncio.sleep(dnsproxy.SET_FLUSH + 0.1)
+        loop.run_until_complete(go())
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][:6], ["nft", "add", "element", "ip", "awgr", "dom4"])
+        self.assertIn(f"142.250.1.1 timeout {dnsproxy.SET_MIN}s", calls[0][6])
+        self.assertIn("142.250.1.1 timeout", calls[1][6])
+
+
+class EngineDomainDnsTest(DomainsAnyExitTest):
+    def test_dns_domains_and_quic_marks(self):
+        uid = self.awg()
+        self.rules("direct", ([self.lid], "up:" + uid), ([self.lid], "block"))
+        st = main.store.snapshot()
+        num = Store.upstream(st, uid)["num"]
+        with mock.patch.object(main.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
+            d = main.engine.dns_domains(st, with_set=False)
+            self.assertEqual(d["policies"]["p_global"], [[[self.lid], {"mark": nftgen.mark_for(num), "tcp": False}]])
+            self.assertIsNone(d["set"])
+            d = main.engine.dns_domains(st, with_set=True)
+            self.assertEqual(d["policies"]["p_global"][1], [[self.lid], None])     # блок — только для набора
+            self.assertEqual(d["set"], [_config.NFT_TABLE, nftgen.DOM_SET])
+            self.assertEqual(main.engine._quic_mark(st, "up:" + uid), nftgen.mark_for(num))
+        self.assertEqual(main.engine._quic_mark(st, "direct"), _config.QUIC_DIRECT_MARK)
+        self.assertEqual(main.engine._quic_mark(st, "block"), _config.MARK_BLOCK)
+
+    def test_dom_filter_setting(self):
+        main.put_server(Req({"dom_filter": True}))
+        self.addCleanup(main.store.mutate, lambda st: st["settings"].pop("dom_filter", None))
+        st = main.store.snapshot()
+        self.assertTrue(st["settings"]["dom_filter"])
+        self.assertTrue(main.get_server(None)["dom_filter"])
+        self.assertFalse(main.engine.dom_filter(st))                  # без DNS на сервере фильтра нет
+        self.assertTrue(main.clean_backup_state(st)["settings"]["dom_filter"])
+
+    def test_apply_falls_back_without_queue(self):
+        """Ядро без nft_queue: набор правил с очередью не применился — применяется без неё, и QUIC у этих
+        клиентов блокируется, как раньше."""
+        e = main.engine
+        tried = []
+
+        def ns(cmd, **kw):
+            if cmd[:2] == ["nft", "-f"]:
+                with open(cmd[2]) as f:
+                    text = f.read()
+                tried.append("queue" in text)
+                if "queue" in text:
+                    raise system.SysError("nft -f: Error: Could not process rule: No such file or directory queue num")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        uid = self.awg()
+        self.rules("direct", ([self.lid], "up:" + uid))
+        st = main.store.snapshot()
+        num = Store.upstream(st, uid)["num"]
+        with mock.patch.object(e._fake, "ns", side_effect=ns), \
+                mock.patch.object(e, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o), \
+                mock.patch.object(e, "_sync_sni", return_value=_config.SNI_PROXY_PORT), \
+                mock.patch.object(e, "_watch_server", return_value=False):
+            e._quic_nft, e.applied_hash = None, None
+            e.reconcile()
+        self.assertEqual(tried[-2:], [True, False])      # сначала с очередью, затем без неё
+        self.assertIs(e._quic_nft, False)
+        self.assertNotIn("queue", e.ruleset)
 
 
 if __name__ == "__main__":
