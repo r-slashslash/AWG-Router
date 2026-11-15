@@ -32,6 +32,41 @@ class CPSError(MsgError, ValueError):
     pass
 
 
+KERNEL_TAGS = ("b", "c", "t", "r", "rc", "rd")
+KERNEL_MAX = 65535
+_KTAG_RE = re.compile(r"<([^<>]*)>")
+_KHEX_RE = re.compile(r"^0x((?:[0-9a-fA-F]{2})+)$")      # «0X» модуль не принимает
+
+
+def kernel_problem(params: dict) -> Msg | None:
+    """Что в I1–I5 конфига выхода не примет модуль ядра (его разбор в junk.c строже amneziawg-go), или None.
+    Нужен, чтобы вместо «Invalid argument» сказать, какое поле и что в нём не так (#24: человек угадывал)."""
+    low = {str(k).lower(): v for k, v in (params or {}).items()}
+    for key in KEYS:
+        value = str(low.get(key.lower()) or "")
+        total = 0
+        for body in _KTAG_RE.findall(value):
+            name, sp, arg = body.partition(" ")
+            if name not in KERNEL_TAGS:
+                return Msg("srv.cps_tag", key=key, tag=f"<{name}>")
+            if name == "b":
+                m = _KHEX_RE.match(arg)
+                if not sp or not m:
+                    return Msg("srv.cps_hex", key=key)
+                total += len(m.group(1)) // 2
+            elif name in ("c", "t"):
+                if sp:
+                    return Msg("srv.cps_num", key=key, tag=f"<{name}>")
+                total += 4
+            else:
+                if not sp or not re.fullmatch(r"\+?\d{1,9}", arg):
+                    return Msg("srv.cps_num", key=key, tag=f"<{name}>")
+                total += int(arg)
+        if total > KERNEL_MAX:
+            return Msg("srv.cps_size", key=key, size=total, max=KERNEL_MAX)
+    return None
+
+
 def size(value: str, key: str = "I1") -> int:
     """Длина пакета в байтах; CPSError, если значение нельзя отдать клиенту."""
     total = 0

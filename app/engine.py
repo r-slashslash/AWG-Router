@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 
-from . import awgconf, balance, config, domains, hostnet, kernelmod, limits, lists, nftgen, shaping, socks, system
+from . import awgconf, balance, config, cps, domains, hostnet, kernelmod, limits, lists, nftgen, shaping, socks, system
 from .i18n import Msg, msg_of
 from .store import Store
 from .traffic import Traffic, month_key
@@ -407,7 +407,7 @@ class Engine:
             self.rt[uid] = r
             self._setconf(t, ifn, setconf)       # не прошёл и здесь — конфиг плох, модуль ни при чём
             if kernel_err is not None:                  # amneziawg-go принял то, что не принял модуль
-                self._kernel_failed(ifn, kernel_err, conf=True)
+                self._kernel_failed(ifn, kernel_err, conf=True, cause=cps.kernel_problem(pc.params))
         else:
             self.rt[uid] = r
         # Служебный link-local адрес: без IPv4-адреса ядро при включённом rp_filter
@@ -520,13 +520,17 @@ class Engine:
             self._pre = awgconf.resolve_many(sorted(hosts), awgconf.RESOLVE_TIMEOUT)
             self._pre_failed = hosts - set(self._pre)
 
-    def _kernel_failed(self, ifn: str, err, conf: bool = False) -> None:
+    def _kernel_failed(self, ifn: str, err, conf: bool = False, cause: Msg | None = None) -> None:
         """conf — модуль создал интерфейс, но не принял конфиг выхода (amneziawg-go его принял): в тексте
-        только причина («Invalid argument»), без команды — иначе человек ищет файл конфига, которого нет."""
+        только причина («Invalid argument»), без команды — иначе человек ищет файл конфига, которого нет.
+        cause — что именно в I1–I5 модуль не примет (cps.kernel_problem): тогда оно и показывается."""
         if conf and isinstance(err, str):
             err = err.split(": ", 1)[-1]
-        self.kernel_fallback = {"error": err, "at": time.time(), "iface": ifn, "conf": conf}
-        self.event("warn", Msg("ev.kernel_conf" if conf else "ev.kernel_fallback", iface=ifn, error=err))
+        self.kernel_fallback = {"error": cause or err, "at": time.time(), "iface": ifn, "conf": conf}
+        if cause is not None:
+            self.event("warn", Msg("ev.kernel_conf_i", iface=ifn, error=err, cause=cause))
+        else:
+            self.event("warn", Msg("ev.kernel_conf" if conf else "ev.kernel_fallback", iface=ifn, error=err))
 
     def _setconf(self, t: system.Target, ifn: str, setconf: str) -> None:
         path = os.path.join(RUN_DIR, f"{ifn}.conf")

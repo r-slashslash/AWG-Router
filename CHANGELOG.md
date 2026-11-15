@@ -87,7 +87,9 @@ it grows, so every user-visible change gets a new version.
   file that isn't on the host): "The kernel module didn't accept the config of exit awgr3 (Invalid argument),
   amneziawg-go did — exits run on amneziawg-go until the AWG server restarts" (`ev.kernel_conf`, also in Telegram
   and in the engine block). Errors of commands in the AWG server's network show the command without `nsenter` and
-  without file paths (`system.cmd_label`).
+  without file paths (`system.cmd_label`). When the reason is in I1–I5 (the module parses tags more strictly than
+  amneziawg-go: `<b>` without `0x`, an odd number of hex digits, `<d>`/`<ds>`/`<dz>`, a number in `<t>`), the
+  message names the field and what's wrong in it (`cps.kernel_problem`, `ev.kernel_conf_i`).
 - **The exit window shows the exit's interface** (`awgrN`) next to its name.
 - **DNS on the server: the description says how it works** — which way a query takes (a domain rule's exit, else
   the main exit, its fallback, direct, refusal for a block), why, encryption and cache, how to set it up — without

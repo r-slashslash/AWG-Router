@@ -14,7 +14,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import engine, main, system, users  # noqa: E402
+from app import cps, engine, main, system, users  # noqa: E402
 from app.web import HTTPError  # noqa: E402
 
 
@@ -69,6 +69,36 @@ class KernelConfMessageTest(unittest.TestCase):
         e._kernel_failed("awgr3", "RTNETLINK answers: Operation not supported")
         self.assertEqual(events, ["ev.kernel_fallback"])
         self.assertFalse(e.kernel_fallback["conf"])
+
+
+class KernelI1Test(unittest.TestCase):
+    """#24: модуль не принял I1 выхода, amneziawg-go принял. Разбор тегов у модуля строже: теперь панель
+    говорит, какое поле и что в нём не так, вместо «Invalid argument»."""
+
+    def test_rules_of_the_module(self):
+        bad = {"<b abcd>": "srv.cps_hex", "<b 0Xab>": "srv.cps_hex", "<b 0xabc>": "srv.cps_hex",
+               "<r>": "srv.cps_num", "<r 10 >": "srv.cps_num", "<t 5>": "srv.cps_num",
+               "<d>": "srv.cps_tag", "<ds 3>": "srv.cps_tag", "<r 70000>": "srv.cps_size"}
+        for v, key in bad.items():
+            m = cps.kernel_problem({"I1": v})
+            self.assertEqual((m.key, m.p["key"]), (key, "I1"), v)
+        for v in ("<b 0xabcd><r 10>", "<c>", "<rc 5><rd 3><t><c>", "текст <b 0x00>", ""):
+            self.assertIsNone(cps.kernel_problem({"I1": v}), v)
+        self.assertEqual(cps.kernel_problem({"i3": "<b 0x1>"}).p["key"], "I3")    # имя поля в любом регистре
+        self.assertIsNone(cps.kernel_problem({}))
+        for v in cps.catalog():                                  # готовые шаблоны панели модуль принимает
+            self.assertIsNone(cps.kernel_problem(v.get("values") or {}), v.get("id"))
+
+    def test_message_names_the_field(self):
+        e = engine.Engine.__new__(engine.Engine)
+        events = []
+        e.event = lambda lvl, m: events.append(m)
+        e._kernel_failed("awgr3", "awg setconf awgr3: Unable to modify interface: Invalid argument", conf=True,
+                         cause=cps.kernel_problem({"I1": "<b abcd>"}))
+        self.assertEqual(events[0].key, "ev.kernel_conf_i")
+        self.assertEqual(events[0].p["cause"].key, "srv.cps_hex")
+        self.assertEqual(events[0].p["error"], "Unable to modify interface: Invalid argument")   # для Telegram
+        self.assertEqual(e.kernel_fallback["error"].key, "srv.cps_hex")                          # блок «Движок»
 
 
 # ------------------------------------------------------------------ дополнительные адреса (#37)
