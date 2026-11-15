@@ -62,6 +62,14 @@ it grows, so every user-visible change gets a new version.
   (`nftgen.generate(strict=True)`), instead of sending listed sites by the address rules and the main route. The
   header shows it as an error; the event log and Telegram say when it starts and ends (`ev.dom_strict_on` /
   `ev.dom_strict_off`). Not covered: after a reboot until the panel starts, and a stop with "Send everything direct".
+- **SOCKS5 exits start on Intel Xeon with AMX again** (broken since 1.20.0). musl 1.2.6 (Alpine 3.24, the build
+  stage of hev-socks5-tunnel since the Dependabot bump) checks `sigaltstack` against `sysconf(_SC_MINSIGSTKSZ)`,
+  which is about 13 KB on CPUs with AMX (Xeon 4th generation and newer), while hev-task-system's stack-overflow
+  detector passes `SIGSTKSZ` (8 KB): hev exited with code 254 before printing anything, and the exit showed
+  "tunnel to the proxy did not start" with an empty reason. The Dockerfile gives that stack 64 KB (the build fails
+  if the replacement doesn't find both places), and an empty reason now shows hev's exit code. Seen in the network
+  tests on Intel Xeon 6973P-C runners (AMD runners were fine); the test prints the CPU and an strace when hev
+  doesn't start.
 - **Config file names the apps accept.** The AmneziaWG and WireGuard apps take the tunnel name from the file name
   and accept only Latin letters, digits and `_=+.-`, up to 15 characters: a client named in Russian (or any
   non-Latin script, or a long name) got a file the app refused. Latin names stay (other characters → `_`, cut to

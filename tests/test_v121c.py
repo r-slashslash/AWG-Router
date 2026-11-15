@@ -1,6 +1,6 @@
 """1.21.0, проверка ветки: QUIC «пропустить» живёт и после ответа сервера, DNS клиента со своей политикой без
 правил по доменам, команда nft набора адресов не держит цикл событий DNS и после пересборки таблицы идёт сразу, пульс прошлого sniproxy.py не
-убивает новый, предел кусков CRYPTO, неверные типы фильтра по DNS и периода копий.
+убивает новый, предел кусков CRYPTO, стек сигналов hev под musl 1.2.6, неверные типы фильтра по DNS и периода копий.
 
 python3 -m unittest discover tests
 """
@@ -246,6 +246,20 @@ class AssemblerPartsTest(unittest.TestCase):
         self.assertLessEqual(len(a.parts), quic.PARTS_MAX)
         a.add([(0, b"\x01\x00\x00\x02ab")])                  # уже известное смещение — заменяется длинным
         self.assertEqual(a.parts[0], b"\x01\x00\x00\x02ab")
+
+
+# ------------------------------------------------------------------ hev и стек сигналов musl 1.2.6
+class HevSigstackTest(unittest.TestCase):
+    def test_dockerfile_enlarges_signal_stack(self):
+        """musl 1.2.6 (alpine 3.24) отказывает в sigaltstack меньше sysconf(_SC_MINSIGSTKSZ) — на Intel с AMX
+        это ~13 КБ, а hev-task-system берёт SIGSTKSZ (8 КБ) и молча завершается (код 254). Сборка меняет
+        размер и падает, если замена не нашла обоих мест."""
+        with open(os.path.join(os.path.dirname(__file__), "..", "Dockerfile"), encoding="utf-8") as f:
+            stage = f.read().split(" AS hev\n")[1].split("\nFROM ")[0]
+        self.assertIn("hev-task-stack-detector.c", stage)
+        self.assertIn("sed -i 's/SIGSTKSZ/(64 * 1024)/g'", stage)
+        self.assertIn("-eq 2", stage)
+        self.assertLess(stage.index("sed -i"), stage.index("make -C /src"))
 
 
 # ------------------------------------------------------------------ неверные типы

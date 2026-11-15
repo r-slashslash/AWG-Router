@@ -187,7 +187,7 @@ def setup():
 
 def hev_diag(cfg):
     """hev завершился молча (код 254 — любая ошибка запуска): процессор, ядро и системные вызовы.
-    На машинах CI с ядром *-aws так бывает каждый раз, на *-azure — нет."""
+    Так было на Intel с AMX, пока сборка не увеличила стек сигналов (musl 1.2.6, см. Dockerfile)."""
     try:
         with open("/proc/cpuinfo") as f:
             model = next((ln.split(":", 1)[1].strip() for ln in f if ln.startswith("model name")), "?")

@@ -25,12 +25,18 @@ RUN git clone --depth 1 --branch "${AWG_TOOLS_REF}" https://github.com/amnezia-v
  && install -D -m 0755 /src/src/wg /out/awg \
  && install -D -m 0755 /src/src/wg-quick/linux.bash /out/awg-quick
 
-# hev-socks5-tunnel (MIT): TUN → SOCKS5 для выходов через прокси
+# hev-socks5-tunnel (MIT): TUN → SOCKS5 для выходов через прокси.
+# Стек сигналов детектора переполнения — 64 КБ вместо SIGSTKSZ (8 КБ): musl с 1.2.6 (alpine 3.24) сверяет размер
+# с sysconf(_SC_MINSIGSTKSZ), а на процессорах Intel с AMX (Xeon 4-го поколения и новее) это ~13 КБ — sigaltstack
+# отказывал, и hev молча завершался с кодом 254: выходы SOCKS5 не запускались вовсе
 FROM alpine:3.24 AS hev
 ARG HEV_REF
+ARG HEV_SIGSTACK=third-part/hev-task-system/src/lib/misc/hev-task-stack-detector.c
 RUN apk add --no-cache git make gcc musl-dev linux-headers
 RUN git clone --depth 1 --branch "${HEV_REF}" --recurse-submodules --shallow-submodules \
       https://github.com/heiher/hev-socks5-tunnel /src \
+ && sed -i 's/SIGSTKSZ/(64 * 1024)/g' "/src/${HEV_SIGSTACK}" \
+ && test "$(grep -c '(64 \* 1024)' "/src/${HEV_SIGSTACK}")" -eq 2 \
  && make -C /src -j"$(nproc)" ENABLE_STATIC=1 \
  && install -D -m 0755 /src/bin/hev-socks5-tunnel /out/hev-socks5-tunnel
 
