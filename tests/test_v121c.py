@@ -1,5 +1,5 @@
 """1.21.0, проверка ветки: QUIC «пропустить» живёт и после ответа сервера, DNS клиента со своей политикой без
-правил по доменам, команда nft набора адресов не держит цикл событий DNS, пульс прошлого sniproxy.py не
+правил по доменам, команда nft набора адресов не держит цикл событий DNS и после пересборки таблицы идёт сразу, пульс прошлого sniproxy.py не
 убивает новый, предел кусков CRYPTO, неверные типы фильтра по DNS и периода копий.
 
 python3 -m unittest discover tests
@@ -180,6 +180,29 @@ class DnsFlushThreadTest(unittest.TestCase):
         self.assertLess(lag, 0.3)
         self.assertEqual(calls[0][:6], ["nft", "add", "element", "ip", "awgr", "dom4"])
         self.assertIn("142.250.1.1 timeout 1800s", calls[0][6])
+
+
+    def test_resync_without_delay(self):
+        """Таблица пересоздана — набор пуст, и соединения к сайтам из правил идут мимо обработчика: живые
+        адреса возвращаются сразу, а не через SET_FLUSH."""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        conf = os.path.join(tmp, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "127.0.0.1", "default": {"mark": 0, "tcp": False}, "routes": {},
+                       "dom": {"lists": {}, "policies": {}, "clients": {}, "set": ["awgr", "dom4"]}}, f)
+        p = dnsproxy.Proxy(conf)
+        calls = []
+
+        async def go():
+            p.live = {"142.250.1.1": time.time() + 1000}
+            with mock.patch.object(dnsproxy.subprocess, "run",
+                                   side_effect=lambda c, **k: calls.append(c) or subprocess.CompletedProcess(c, 0, "", "")):
+                p.resync()
+                await asyncio.sleep(min(0.1, dnsproxy.SET_FLUSH / 3))
+        asyncio.run(go())
+        self.assertEqual(len(calls), 1)
+        self.assertIn("142.250.1.1 timeout", calls[0][6])
 
 
 # ------------------------------------------------------------------ пульс прошлого sniproxy.py

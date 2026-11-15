@@ -98,6 +98,8 @@ it grows, so every user-visible change gets a new version.
 - **Installer: the ssh command names the right user.** With access through an ssh tunnel the final command used
   `root@`; now it is the user behind sudo, else the one who opened the terminal (`su -`), else the one saved at
   install (`SSH_USER` in `.env`, for `awg-router info` later), else root; and `-p` when ssh is not on 22.
+- **Smaller fixes.** Restoring a backup whose Telegram backup period isn't a string answers 400 instead of 500;
+  `dom_filter` in the Server settings must be `true` or `false` (the string `"false"` turned the filter on).
 
 ## 1.20.0 — 2026-11-14
 

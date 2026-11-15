@@ -407,9 +407,9 @@ class Proxy:
         self.live = {a: t for a, t in self.live.items() if t > now + 5}
         for a, t in self.live.items():
             self.pending[a] = int(t - now)
-        if self.pending and not self._flush_at:
-            self._flush_at = now
-            asyncio.get_running_loop().call_later(SET_FLUSH, self.flush)
+        # сразу, без SET_FLUSH: пока набор пуст, соединения к сайтам из правил идут мимо обработчика
+        if self.pending:
+            self.flush()
 
     def flush(self):
         """Накопленные адреса — в набор nftables. Команда идёт в отдельном потоке: nft ждёт блокировку

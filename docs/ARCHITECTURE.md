@@ -82,7 +82,9 @@ Domain rules can lead to any exit. nftables redirects TCP 80/443 of such clients
 `sniproxy.py`, which reads the site name (SNI or Host header): a match goes through a SOCKS5 proxy by name,
 or to its original address with the mark of an AmneziaWG exit or Direct, or is closed for Block;
 anything else goes to its original address with the client's policy mark. A domain rule that leads where
-everything else goes, with no address rules, changes nothing and turns no redirect on.
+everything else goes, with no address rules, changes nothing and turns no redirect on. A connection whose
+original address is the handler itself was opened to its port directly, not redirected, and is closed. Once
+the path is chosen, data is relayed inside the kernel (`splice`), so Python only reads the name and counts bytes.
 
 QUIC (UDP 443) of these clients is read by name too: the first packets of a new connection go to a kernel
 queue (`nfqueue.py`, netlink without libraries), `quic.py` decrypts the Initial packets (their keys come from
@@ -90,16 +92,14 @@ the connection ID in the header, RFC 9001 / 9369), puts the ClientHello together
 `sniproxy.py` answers with a mark: the exit's tunnel (an AmneziaWG exit, or a SOCKS5 exit with "Let QUIC
 through the proxy", where it goes over UDP ASSOCIATE), the main table (Direct), a reject (Block and other SOCKS5
 exits: the browser falls back to TCP, where the proxy gets the name) or "pass" to the address rules. A SOCKS5
-exit without that box rejects UDP 443 for everyone routed to it, not only for domain rules. The decision
-goes into the conntrack mark for the rest of the connection. A ClientHello that doesn't come together in time
+exit without that box rejects UDP 443 for everyone routed to it, not only for domain rules. The decision,
+"pass" included, goes into the conntrack mark for the rest of the connection. A ClientHello that doesn't come together in time
 and QUIC that isn't Initial are rejected; no listener (`bypass`) or no `nft_queue` in the kernel means QUIC is
 blocked for these clients, as before.
 
 DNS on the server (`dnsproxy.py`) resolves names from domain rules through the rule's exit. With the DNS
 filter setting, only addresses that it returned for those names (the `dom4` set with timeouts, refilled after
-every rebuild of the table) are redirected to the handler. A connection whose original address is the handler itself was opened to its port
-directly, not redirected, and is closed. Once the path is chosen, data is relayed inside the kernel (`splice`), so Python
-only reads the name and counts bytes.
+every rebuild of the table) are redirected to the handler.
 
 The panel looks at the handler every second: it touches a heartbeat file every second, and a handler that
 exited or stopped touching it for `SNI_HANG` seconds is restarted. While it is down, redirected connections are

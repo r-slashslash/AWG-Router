@@ -594,6 +594,9 @@ class Engine:
                     tail = f.read()[-300:].strip()
             except OSError:
                 tail = ""
+            # hev молчит о части ошибок запуска (все — код 254): хотя бы код, чтобы было с чем разбираться
+            if not tail and r.proc.returncode is not None:
+                tail = f"exit code {r.proc.returncode}"
             raise system.SysError(Msg("sys.socks_start_failed", iface=r.iface, detail=tail))
 
     def _links(self, t: system.Target) -> set[str] | None:
