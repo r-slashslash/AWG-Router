@@ -399,7 +399,9 @@ class ServerManager:
             if "panel_dns" in body:
                 settings_patch["panel_dns"] = bool(body["panel_dns"])
             if "dom_filter" in body:
-                settings_patch["dom_filter"] = bool(body["dom_filter"])
+                if not isinstance(body["dom_filter"], bool):      # "false" строкой включила бы фильтр
+                    raise UserError(Msg("err.bad_value"))
+                settings_patch["dom_filter"] = body["dom_filter"]
             if "panel_dns_enc" in body:
                 if body["panel_dns_enc"] not in DNS_ENC:
                     raise UserError(Msg("srv.bad_dns_enc"))

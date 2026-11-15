@@ -119,12 +119,16 @@ def _no_quic(block: bool) -> str:
     return f"\t\tudp dport 443 meta mark set {config.MARK_BLOCK:#x} accept\n" if block else ""
 
 
-def _sticky_chain(name: str, num: int, alive: list[int], no_quic: bool = False) -> str:
+def _sticky_chain(name: str, num: int, alive: list[int], no_quic: bool = False, quic: bool = False) -> str:
     marks = ", ".join(f"{mark_for(n):#x}" for n in alive)
     m = mark_for(num)
+    # QUIC «пропустить» (очередь, сайт не из правил): решение — этот выход, и оно остаётся в conntrack
+    # с QUIC_CT_BIT, иначе после ответа сервера строка блока QUIC в политике оборвала бы соединение
+    qpass = (f"\t\tudp dport 443 meta mark {config.QUIC_PASS_MARK:#x} meta mark set {m:#x} "
+             f"ct mark set {m | config.QUIC_CT_BIT:#x} accept\n") if quic else ""
     # соединение, уже записанное на рабочий выход, доживает на нём; новое QUIC к выходу без QUIC — отказ
     return (f"\tchain {name} {{\n\t\tct mark {{ {marks} }} meta mark set ct mark accept\n{_no_quic(no_quic)}"
-            f"\t\tmeta mark set {m:#x} ct mark set {m:#x} accept\n\t}}")
+            f"{qpass}\t\tmeta mark set {m:#x} ct mark set {m:#x} accept\n\t}}")
 
 
 def mark_for(num: int) -> int:
@@ -256,8 +260,12 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     out.append("\t}")
 
     # QUIC, разобранный по имени (метка из очереди или из conntrack), — сразу на выбранный путь, и
-    # решение запоминается в conntrack для остальных пакетов соединения
-    quic_line = (f"\t\tudp dport 443 meta mark != 0x0 meta mark != {config.QUIC_PASS_MARK:#x} "
+    # решение запоминается в conntrack для остальных пакетов соединения. «Пропустить» тоже
+    # запоминается (и идёт дальше, к обычным правилам политики): иначе пакеты после ответа сервера —
+    # уже не «новые», в очередь не идут и без метки попали бы в строку блока QUIC политики
+    quic_line = (f"\t\tudp dport 443 meta mark {config.QUIC_PASS_MARK:#x} "
+                 f"ct mark set {config.QUIC_PASS_MARK | config.QUIC_CT_BIT:#x}\n"
+                 f"\t\tudp dport 443 meta mark != 0x0 meta mark != {config.QUIC_PASS_MARK:#x} "
                  f"ct mark set meta mark | {config.QUIC_CT_BIT:#x} accept\n") if quic else ""
     out.append(f"""\tchain c_prerouting {{
 \t\ttype filter hook prerouting priority mangle; policy accept;
@@ -280,7 +288,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         out.append(f"\tchain o_u{u['num']} {{\n{_no_quic(u['num'] in no_quic)}"
                    f"\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
     for n in alive:
-        out.append(_sticky_chain(f"ob_u{n}", n, alive, n in no_quic))
+        out.append(_sticky_chain(f"ob_u{n}", n, alive, n in no_quic, quic))
 
     fwd = [
         "\tchain c_forward {",

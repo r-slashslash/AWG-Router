@@ -185,6 +185,25 @@ def setup():
     return procs
 
 
+def hev_diag(cfg):
+    """hev завершился молча (код 254 — любая ошибка запуска): процессор, ядро и системные вызовы.
+    На машинах CI с ядром *-aws так бывает каждый раз, на *-azure — нет."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            model = next((ln.split(":", 1)[1].strip() for ln in f if ln.startswith("model name")), "?")
+        print(f"  процессор: {model}; ядро: {os.uname().release}")
+    except OSError:
+        pass
+    if shutil.which("strace"):
+        out = os.path.join(TMP, "hev.strace")
+        sh("amz", "timeout", "5", "strace", "-f", "-o", out, socks.HEV, cfg, timeout=15)
+        with open(out) as f:
+            lines = f.read().splitlines()
+        print("  strace (конец):\n    " + "\n    ".join(lines[-40:]))
+    else:
+        print("  strace нет")
+
+
 def start_hev():
     cfg = os.path.join(TMP, "awgr1.yml")
     with open(cfg, "w") as f:
@@ -203,6 +222,8 @@ def start_hev():
                 break
         with open(os.path.join(TMP, f"hev{attempt}.log")) as f:
             print(f"hev-socks5-tunnel не поднял awgr1 (попытка {attempt + 1}, код {p.poll()}): {f.read()[-400:]!r}")
+        if attempt == 0:
+            hev_diag(cfg)
         p.kill()
         time.sleep(1)
     sysctl("amz", "net.ipv4.conf.awgr1.rp_filter", 2)
@@ -218,9 +239,9 @@ UPS = [{"num": 1, "snat": "", "mtu": 8500}]
 IP_LISTS = {"via": ["8.8.4.4/32"]}
 
 
-def rules(policy, sniff=True, quic=False, strict=False):
+def rules(policy, sniff=True, quic=False, strict=False, balance=frozenset()):
     nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None,
-                               quic=quic, strict=strict))
+                               balance, quic=quic, strict=strict))
 
 
 def quic_ok() -> bool:
@@ -448,6 +469,14 @@ def main():
                                               {"mark": nftgen.mark_for(1)}, qmark=nftgen.mark_for(1)))
             rules({"rules": [], "default": "direct", "domain": [(["dvid"], "up:u1")]}, quic=True)
             check("QUIC: сайт не из правила → обычные правила, HTTP/3 работает", quic("8.8.8.8"), "DIRECT-UDP")
+            check("QUIC: сайт не из правила — и после ответа сервера (conntrack)",
+                  quic("8.8.8.8", extra=True), lambda g: g == "DIRECT-UDP DIRECT-UDP")
+            # балансировка: «пропустить» ведёт в выход Sticky, и решение остаётся в conntrack
+            rules({"rules": [], "default": nftgen.Sticky(1), "domain": [(["dvid"], "direct")]}, quic=True,
+                  balance={1})
+            check("QUIC: сайт не из правила, основной выход с балансировкой — и после ответа сервера",
+                  quic("8.8.8.8", extra=True), lambda g: g == "PROXY-UDP PROXY-UDP")
+            rules({"rules": [], "default": "direct", "domain": [(["dvid"], "up:u1")]}, quic=True)
             procs["sni"].terminate()
             procs["sni"].wait(5)
             check("QUIC: обработчик не работает (очередь без слушателя) → отказ, как без очереди",

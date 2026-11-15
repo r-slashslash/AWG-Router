@@ -907,7 +907,7 @@ def clean_backup_state(new: dict) -> dict:
         ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
         c["events"] = {k: bool(ev.get(k, True)) for k in notify.KINDS}
         c["control"] = bool(tg.get("control")) and bool(tok and chat)
-        if tg.get("backup") in notify.BACKUP_PERIODS:
+        if isinstance(tg.get("backup"), str) and tg["backup"] in notify.BACKUP_PERIODS:   # список в dict — TypeError
             c["backup"] = tg["backup"]
         if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:
             c["backup_pw"] = tg["backup_pw"]

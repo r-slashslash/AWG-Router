@@ -411,14 +411,20 @@ class Proxy:
             self._flush_at = now
             asyncio.get_running_loop().call_later(SET_FLUSH, self.flush)
 
-    def flush(self) -> None:
+    def flush(self):
+        """Накопленные адреса — в набор nftables. Команда идёт в отдельном потоке: nft ждёт блокировку
+        таблицы, пока панель её пересобирает (с большими списками — секунды), а цикл событий в это
+        время должен отвечать на запросы DNS. → future команды (тестам) или None."""
         self._flush_at = 0.0
         batch, self.pending = self.pending, {}
         target = self.dom.get("set")
         if not batch or not target:
-            return
-        table, name = target
-        items = list(batch.items())
+            return None
+        self.stats["set_added"] = self.stats.get("set_added", 0) + len(batch)
+        return asyncio.get_running_loop().run_in_executor(None, self._nft_add, *target, list(batch.items()))
+
+    @staticmethod
+    def _nft_add(table: str, name: str, items: list) -> None:
         for i in range(0, len(items), 2000):             # одна команда — не больше 2000 адресов
             elems = ", ".join(f"{a} timeout {t}s" for a, t in items[i:i + 2000])
             try:
@@ -428,7 +434,6 @@ class Proxy:
                     print(f"dnsproxy: nft: {r.stderr.strip()[:200]}", flush=True)
             except (OSError, subprocess.SubprocessError) as e:
                 print(f"dnsproxy: nft: {e}", flush=True)
-        self.stats["set_added"] = self.stats.get("set_added", 0) + len(items)
 
     def route(self, ip: str) -> dict | None:
         """Путь запросов клиента: {"mark", "tcp"}; None — блок."""

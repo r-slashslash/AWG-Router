@@ -29,6 +29,7 @@ SALT = {V1: bytes.fromhex("38762cf7f55934b34d179ae6a4c80cadccbb7f0a"),
 LABELS = {V1: ("quic key", "quic iv", "quic hp"), V2: ("quicv2 key", "quicv2 iv", "quicv2 hp")}
 INITIAL_TYPE = {V1: 0, V2: 1}                # тип длинного заголовка Initial: в v2 значения сдвинуты
 HELLO_MAX = 64 * 1024                        # длиннее ClientHello не собираем
+PARTS_MAX = 64                               # кусков CRYPTO на соединение (у Chrome — с десяток)
 KEYS_MAX = 4096                              # ключей Initial в памяти (на DCID)
 
 
@@ -303,6 +304,8 @@ class Assembler:
         for off, data in pieces:
             if off + len(data) > HELLO_MAX or not data:
                 continue
+            if off not in self.parts and len(self.parts) >= PARTS_MAX:
+                continue                     # поток пакетов с новыми смещениями не растит память и разбор
             if len(data) > len(self.parts.get(off, b"")):
                 self.parts[off] = data
                 self.size += len(data)

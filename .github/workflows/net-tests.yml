@@ -34,7 +34,7 @@ jobs:
       - name: Tools (nftables, pyroute2)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq nftables >/dev/null
+          sudo apt-get install -y -qq nftables strace >/dev/null   # strace — разбор, если hev не запустится
           python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2
           nft --version
           PYTHONPATH="$RUNNER_TEMP/py" python -c "import pyroute2; print('pyroute2', pyroute2.__version__)"

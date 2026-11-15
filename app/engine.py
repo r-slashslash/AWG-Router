@@ -1310,6 +1310,12 @@ class Engine:
                                       "error": Msg("sni.restart_wait", s=max(1, round(wait)))}
                 return None
             self._sni_retry = time.time()
+            # пульс прошлого процесса устарел: с ним присмотр убил бы новый посредник через SNI_HANG,
+            # если разбор больших списков при запуске дольше (без файла — только через SNI_HANG × 4)
+            try:
+                os.unlink(SNI_BEAT)
+            except OSError:
+                pass
             logp = os.path.join(LOG_DIR, "sniproxy.log")
             with open(logp, "a") as logf:
                 proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", "python3", SNIPROXY, SNI_CONF],
@@ -1389,8 +1395,10 @@ class Engine:
             if rules:
                 pols[n] = rules
         lids = sorted({lid for rules in pols.values() for ls, _ in rules for lid in ls})
+        # все клиенты со своей политикой, а не только с правилами по доменам: клиента, которого здесь
+        # нет, dnsproxy.py считает клиентом общей политики и разбирал бы имена через её выходы
         return {"lists": {lid: domains.path_for(lid) for lid in lids}, "policies": pols,
-                "clients": {ip: n for ip, n in client_map.items() if n in pols},
+                "clients": dict(client_map),
                 "set": [config.NFT_TABLE, nftgen.DOM_SET] if with_set and pols else None}
 
     def _stop_dns(self) -> None:
