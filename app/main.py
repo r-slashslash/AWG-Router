@@ -1244,6 +1244,7 @@ def get_state(req):
         "target_error": engine.target_error,
         "engine": {"last_apply": engine.last_apply, "last_reconcile": engine.last_reconcile,
                    "last_error": engine.last_error, "ruleset_size": len(engine.ruleset)},
+        "phase": engine.phase(),
         "routing": st["routing"],
         "global_effective": engine.resolve(engine.default_out(st, None), st),
         "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},

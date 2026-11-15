@@ -522,6 +522,8 @@ if [ "$UNINSTALL" = 1 ]; then uninstall; exit $?; fi
 # ------------------------------------------------------------------ system
 step "Checking the system"
 mkdir -p "$DIR/data"; chmod 700 "$DIR/data"
+# While this runs, an open panel page says "Updating…" instead of "No connection" when the panel is replaced
+date +%s > "$DIR/data/installing"; trap 'rm -f "$DIR/data/installing"' EXIT
 APT_LOG="$DIR/data/apt.log"
 APT_UPDATED=0
 apt_update() {

@@ -25,6 +25,9 @@ CONTAINER = "awg-router"
 LOG = os.path.join(config.DATA_DIR, "update.log")
 STATE = os.path.join(config.DATA_DIR, "update.json")
 STALE = 45 * 60                 # дольше этого обновление не идёт — считаем, что оно оборвалось
+# install.sh пишет этот файл, пока работает (и из консоли: `awg-router update`, повторная установка): открытая
+# страница панели показывает «Обновление…», а не «Нет связи», когда панель заменяют
+INSTALLING = os.path.join(config.DATA_DIR, "installing")
 DIR_RE = re.compile(r"^/[A-Za-z0-9._/-]{1,200}$")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 CMD = "awg-router update"
@@ -90,8 +93,23 @@ def log_lines(n: int = 30, path: str | None = None) -> list[str]:
     return out[-n:]
 
 
+def installer_running() -> bool:
+    try:
+        return time.time() - os.path.getmtime(INSTALLING) < STALE
+    except OSError:
+        return False
+
+
 def status() -> dict:
-    """{state: idle|running|failed|done, to, started, exit}. Без журнала — он большой."""
+    """{state: idle|running|failed|done, to, started, exit}. Без журнала — он большой. Установщик запущен не из
+    панели (консоль) — {"state": "running", "cli": True}."""
+    st = _status()
+    if st["state"] != "running" and installer_running():
+        return {"state": "running", "cli": True}
+    return st
+
+
+def _status() -> dict:
     s = _read_state()
     if not s.get("started"):
         return {"state": "idle"}

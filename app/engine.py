@@ -55,6 +55,7 @@ UP_PAUSES = (10, 30, 60, 120, 300)      # пауза перед новой по�
 SERVER_GRACE = 30        # с: столько интерфейса сервера в контейнере может не быть, прежде чем панель его поднимет
 SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытками поднять сервер, если не помогает, с
 KERNEL_GIVE_UP = 2       # столько перезапусков сервер не поднялся на модуле ядра — панель переводит его на amneziawg-go
+SERVER_DOWN_AFTER = 600  # с: дольше сервер AWG не поднимается — в шапке уже не «Перезапуск…», а ошибка
 MEM_ALERT, MEM_OK = 90, 85   # % занятой памяти: выше — тревога, ниже — снова норма
 CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
@@ -123,6 +124,8 @@ class Engine:
         self._runtime_checked = False
         self._masking_checked = None     # Target.key, на котором уже проверен старый I1
         self._srv_down: float | None = None   # с какого момента нет интерфейса сервера (_watch_server)
+        self.server_restart_at: float | None = None   # перезапуск сервера (кнопка, автоперезапуск): до его интерфейса
+        self.switching = False                         # идёт ручная смена движка (switch_engine)
         self._srv_tries = 0
         self._srv_next = 0.0
         self._res: dict[str, dict] = {}       # тревоги по памяти и процессору (_watch_resources)
@@ -1422,10 +1425,12 @@ class Engine:
         Поднимаем перезапуском (контейнер — docker restart, хост — служба awg-quick). Контейнер — не сразу
         (SERVER_GRACE: при смене порта и S1–S4 интерфейс пропадает ненадолго), дальше с растущими паузами."""
         if config.DRY_RUN:
+            self.server_restart_at = None
             return False
         now = time.time()
         if t.is_up():
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
+            self.server_restart_at = None
             return False
         if self._srv_down is None:
             self._srv_down = now
@@ -1437,6 +1442,7 @@ class Engine:
         self.event("warn", Msg("ev.server_iface_gone", iface=t.iface))
         if self._srv_tries > KERNEL_GIVE_UP and self.module_info()["loaded"] and not kernelmod.load().get("disabled"):
             self._drop_module()
+        self.server_restart_at = now
         try:
             if t.kind == "host":
                 t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
@@ -1473,6 +1479,13 @@ class Engine:
         awg-quick снова взял бы его), сервер запускается на amneziawg-go. Модуль остаётся установленным.
         kernel: модуль уже загружен — перезапуск сервера (он сам возьмёт модуль); нет — установка
         (`install.sh --install-kernel`: снимает запрет и, если пакет уже стоит, просто загружает модуль)."""
+        self.switching = True
+        try:
+            return self._switch_engine(choice)
+        finally:
+            self.switching = False
+
+    def _switch_engine(self, choice: str) -> dict:
         if choice == "go":
             with self.lock:
                 t = self.target
@@ -1554,10 +1567,26 @@ class Engine:
                 raise system.SysError(Msg("srv.no_server"))
             if t.kind == "host" and not config.DRY_RUN:
                 t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
+            self.server_restart_at = time.time()
             t.restart()
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
             self.kernel_fallback = None     # на хосте Target.key не меняется: модуль пробуем снова здесь
         self.reconcile_soon()
+
+    def phase(self) -> str | None:
+        """Что панель сейчас делает — для шапки (в браузере): engine — ручная смена движка; server_restart —
+        сервер AWG перезапускается (кнопка, автоперезапуск, интерфейс пропал и панель его ждёт); server_down —
+        не поднимается дольше SERVER_DOWN_AFTER; starting — панель запущена, а первый проход ещё не применил
+        правила, туннели и sniproxy (если проход упал — это уже ошибка, last_error); None — ничего."""
+        now = time.time()
+        if self.switching:
+            return "engine"
+        since = self._srv_down if self._srv_down is not None else self.server_restart_at
+        if since is not None:
+            return "server_restart" if now - since < SERVER_DOWN_AFTER else "server_down"
+        if self.last_reconcile is None and self.last_error is None:
+            return "starting"
+        return None
 
     def _watch_resources(self) -> None:
         """Память или процессор сервера держатся выше порога RES_ALERT_SECS — одно событие (и уведомление

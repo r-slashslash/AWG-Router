@@ -70,8 +70,10 @@ function toast(msg, bad = false) {
 }
 
 class AuthError extends Error {}
-async function api(method, path, body) {
+async function api(method, path, body, timeoutMs = 0) {
   const opt = { method, headers: {}, credentials: "same-origin" };
+  // опрос состояния не ждёт вечно: зависшая панель — это «Нет связи», а не застывшая страница
+  if (timeoutMs && typeof AbortSignal !== "undefined" && AbortSignal.timeout) opt.signal = AbortSignal.timeout(timeoutMs);
   if (body !== undefined) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
@@ -288,13 +290,20 @@ $("#login-form").addEventListener("submit", async (e) => {
 let lastTyping = 0;
 document.addEventListener("input", () => { lastTyping = Date.now(); }, true);
 document.addEventListener("focusin", (e) => { if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) lastTyping = Date.now(); }, true);
+// «Нет связи с панелью» — только после OFFLINE_AFTER неудачных опросов подряд: один пропуск на мобильной сети
+// не должен красить шапку в красный
+const OFFLINE_AFTER = 2, STATE_TIMEOUT_MS = 15000;
+let pollFails = 0;
 async function refresh(auto = false) {
   try {
-    S = await api("GET", "state");
+    S = await api("GET", "state", undefined, STATE_TIMEOUT_MS);
+    pollFails = 0;
   } catch (e) {
     if (e instanceof AuthError) return;
+    pollFails++;
+    if (S) renderStatus();
     if (updatingTo) { setUpdLine(t("sy.updating_restart")); return; }   // панель перезапускается
-    toast(t("panel.offline", { e: e.message }), true);
+    if (!auto) toast(t("panel.offline", { e: e.message }), true);      // при опросе об этом говорит шапка
     return;
   }
   if (followUpdate()) return;
@@ -367,15 +376,16 @@ function renderStatus() {
   const tg = S.target;
   const online = S.clients.filter((c) => c.live && c.live.handshake && S.now - c.live.handshake < 180).length;
   renderBrandTraffic();
-  // «Работает» или «Ошибка»: причина — во всплывающей подсказке, подробности — в полосах под шапкой (по нажатию)
-  const problem = statusProblem();
-  $("#status").innerHTML = `<span class="state${problem ? " state-bad" : ""}" id="state" title="${esc(problem || "")}"><span class="dot ${problem ? "bad" : "ok"}"></span><b>${esc(t(problem ? "status.err" : "status.ok"))}</b></span>`
+  // состояние: причина ошибки — во всплывающей подсказке, подробности — в полосах под шапкой (по нажатию)
+  const [kind, label, hint] = headerState();
+  const problem = kind === "bad";
+  $("#status").innerHTML = `<span class="state${problem ? " state-bad" : ""}" id="state" title="${esc(hint || "")}"><span class="dot ${kind === "busy" ? "warn" : kind}"></span><b>${esc(label)}</b></span>`
     + sysmonHtml()   // порядок: статус → ресурсы сервера → клиенты
     + (tg ? `<span>${esc(t("n.clients", { n: S.clients.length }) + sep("phrase") + t("status.online", { n: online }))}</span>` : "");
   if (problem) $("#state").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
   // новая версия: метка в строке состояния (видна и на телефоне) и точка на вкладке «Система»
   const v = S.version || {};
-  const chip = updatingTo ? t("status.updating") : v.available ? t("status.update", { version: v.latest }) : "";
+  const chip = !updatingTo && v.available ? t("status.update", { version: v.latest }) : "";   // во время обновления говорит сам статус
   if (chip) $("#status").insertAdjacentHTML("beforeend", `<button type="button" class="upd-chip" id="upd-chip">${esc(chip)}</button>`);
   const uc = $("#upd-chip");
   if (uc) uc.onclick = () => goTab("system");
@@ -383,8 +393,27 @@ function renderStatus() {
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
 }
 
+/** Шапка: [вид, надпись, подсказка]; вид ok — зелёный, busy — жёлтый (переходное), bad — красный.
+ *  Переходное состояние важнее ошибки, которую оно и вызывает (сервер перезапускается — интерфейса нет),
+ *  ошибка важнее «Запуска…» (первый проход упал — это уже ошибка). */
+function headerState() {
+  if (pollFails >= OFFLINE_AFTER) {
+    return updatingTo ? ["busy", t("status.updating_s")] : ["bad", t("status.offline"), t("status.offline_hint")];
+  }
+  const u = updState(), ae = S.awg_engine || {};
+  if (updatingTo || u.state === "running") return ["busy", t("status.updating_s")];
+  if (S.phase === "engine" || (ae.install || {}).state === "running") return ["busy", t("status.engine")];
+  if (S.phase === "server_restart") return ["busy", t("status.server_restart")];
+  const problem = statusProblem();
+  if (problem) return ["bad", t("status.err"), problem];
+  if (S.phase === "starting") return ["busy", t("status.starting"), t("status.starting_hint")];
+  return ["ok", t("status.ok")];
+}
+
 /** Почему в шапке «Ошибка» (null — всё работает): нет сервера, его не создали, не применились правила. */
 function statusProblem() {
+  if (S.phase === "server_down") return t("status.server_down");
+  if (S.phase === "starting" && !S.target_error && !(S.engine && S.engine.last_error)) return null;  // ещё ищет сервер
   const tg = S.target;
   if (!tg) return tm(S.target_error) || t("status.no_target");
   if (tg.exists === false) return t("srv.missing");
@@ -418,7 +447,7 @@ function render(force = false) {
 function banners() {
   let h = "";
   const code = (s) => `<span class="mono">${esc(s)}</span>`;
-  if (updatingTo) h += `<div class="banner info"><b>${esc(t("sy.updating", { version: updatingTo }))}</b> <span id="upd-line" class="small">${esc(updLine || t("sy.updating_wait"))}</span></div>`;
+  if (updatingTo) h += `<div class="banner info"><b>${esc(updatingTo === CLI_UPDATE ? t("sy.updating_cli") : t("sy.updating", { version: updatingTo }))}</b> <span id="upd-line" class="small">${esc(updLine || t("sy.updating_wait"))}</span></div>`;
   if (S.demo) h += `<div class="banner info"><b>${esc(t("banner.demo_title"))}</b> ${th("banner.demo", { flag: code("DRY_RUN=1") })}</div>`;
   if (!S.target) h += `<div class="banner bad"><b>${esc(t("banner.no_target_title"))}</b> ${esc(tm(S.target_error))}<br><span class="small">${th("banner.no_target_hint", { a: code("pid: host"), b: code("privileged: true") })}</span></div>`;
   else if (serverMissing() && tab !== "server") h += `<div class="banner info"><b>${esc(t("srv.missing"))}</b> <button class="btn sm" data-goto="server">${esc(t("srv.create_title"))}</button></div>`;
@@ -2295,17 +2324,22 @@ function setUpdating(v) {
 function setUpdLine(text) { updLine = text; const el = $("#upd-line"); if (el) el.textContent = text; }
 function updState() { return (S && S.version && S.version.update) || { state: "idle" }; }
 /** после ответа /api/state: обновление закончилось — перезагрузить страницу (новые скрипты) */
+// обновление запущено не из панели (`awg-router update` в консоли): версии, до которой идёт, страница не знает
+const CLI_UPDATE = "-";
 function followUpdate() {
   const u = updState(), v = S.version || {};
-  if (!updatingTo && u.state === "running") setUpdating(u.to || v.latest || "…");   // начато в другом окне
+  if (!updatingTo && u.state === "running") setUpdating(u.cli ? CLI_UPDATE : (u.to || v.latest || "…"));   // начато в другом окне или в консоли
   if (!updatingTo) return false;
-  if (u.state === "done" || (v.current && v.current === updatingTo)) {
+  const cli = updatingTo === CLI_UPDATE;
+  if (cli ? u.state !== "running" : (u.state === "done" || (v.current && v.current === updatingTo))) {
+    if (cli) { setUpdating(""); location.reload(); return true; }
     try { sessionStorage.setItem("awgr.updated", v.current || updatingTo); } catch { /* нет хранилища */ }
     setUpdating("");
     location.reload();
     return true;
   }
   if (u.state === "failed") { setUpdating(""); loadUpdateLog(); return false; }
+  if (cli) return false;
   api("GET", "update/status").then((r) => {
     const last = (r.log || []).filter((l) => !/^(exit=|Update from the panel)/.test(l)).slice(-1)[0];
     if (last) setUpdLine(last.trim());

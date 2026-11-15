@@ -278,5 +278,76 @@ class RuleLineTest(unittest.TestCase):
         self.assertNotRegex(css, r"\.state \{[^}]*inline-flex")         # базовая линия — от текста, не от точки
 
 
+# ------------------------------------------------------------------ статус в шапке
+import time  # noqa: E402
+
+from app import engine as engine_mod, selfupdate  # noqa: E402
+
+
+class HeaderPhaseTest(unittest.TestCase):
+    def setUp(self):
+        self.e = engine_mod.Engine.__new__(engine_mod.Engine)
+        self.e._srv_down, self.e.server_restart_at, self.e.switching = None, None, False
+        self.e.last_reconcile, self.e.last_error = time.time(), None
+
+    def test_phases(self):
+        e = self.e
+        self.assertIsNone(e.phase())
+        e.last_reconcile = None
+        self.assertEqual(e.phase(), "starting")
+        e.last_error = "boom"                               # первый проход упал — это ошибка, не «Запуск…»
+        self.assertIsNone(e.phase())
+        e.last_error, e.last_reconcile = None, time.time()
+        e.server_restart_at = time.time()
+        self.assertEqual(e.phase(), "server_restart")
+        e.server_restart_at = None
+        e._srv_down = time.time() - 5                       # интерфейс пропал, панель ждёт и поднимет
+        self.assertEqual(e.phase(), "server_restart")
+        e._srv_down = time.time() - engine_mod.SERVER_DOWN_AFTER - 1
+        self.assertEqual(e.phase(), "server_down")
+        e.switching = True
+        self.assertEqual(e.phase(), "engine")
+
+    def test_switch_flag_is_cleared(self):
+        e = self.e
+        with mock.patch.object(engine_mod.Engine, "_switch_engine", side_effect=RuntimeError("x")):
+            with self.assertRaises(RuntimeError):
+                e.switch_engine("go")
+        self.assertFalse(e.switching)
+
+    def test_state_has_phase(self):
+        self.assertIn("phase", main.get_state(None))
+
+
+class CliUpdateTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        p = mock.patch.multiple(selfupdate, INSTALLING=os.path.join(self.d, "installing"),
+                                STATE=os.path.join(self.d, "update.json"), LOG=os.path.join(self.d, "update.log"))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_console_install_shows_as_running(self):
+        self.assertEqual(selfupdate.status(), {"state": "idle"})
+        with open(selfupdate.INSTALLING, "w") as f:
+            f.write("1")
+        self.assertEqual(selfupdate.status(), {"state": "running", "cli": True})
+        old = time.time() - selfupdate.STALE - 10            # оборванный установщик не держит «Обновление…»
+        os.utime(selfupdate.INSTALLING, (old, old))
+        self.assertEqual(selfupdate.status(), {"state": "idle"})
+
+    def test_installer_writes_and_removes_marker(self):
+        sh = install_sh()
+        self.assertIn('date +%s > "$DIR/data/installing"; trap \'rm -f "$DIR/data/installing"\' EXIT', sh)
+        self.assertLess(sh.index("data/installing"), sh.index('step "Starting"'))
+
+    def test_ui(self):
+        js = read("app", "static", "app.js")
+        for key in ("status.offline", "status.updating_s", "status.starting", "status.server_restart",
+                    "status.engine", "status.server_down", "sy.updating_cli"):
+            self.assertIn(f'"{key}"', js)
+        self.assertIn("OFFLINE_AFTER = 2", js)
+
+
 if __name__ == "__main__":
     unittest.main()
