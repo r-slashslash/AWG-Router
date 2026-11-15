@@ -185,15 +185,22 @@ def setup():
     return procs
 
 
+def cpu() -> str:
+    """Процессор и ядро машины: от процессора зависит стек сигналов (AMX), см. hev_diag."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            text = f.read()
+    except OSError:
+        return f"ядро: {os.uname().release}"
+    model = next((ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("model name")), "?")
+    amx = " amx_tile" in text
+    return f"процессор: {model}{' (AMX)' if amx else ''}; ядро: {os.uname().release}"
+
+
 def hev_diag(cfg):
     """hev завершился молча (код 254 — любая ошибка запуска): процессор, ядро и системные вызовы.
     Так было на Intel с AMX, пока сборка не увеличила стек сигналов (musl 1.2.6, см. Dockerfile)."""
-    try:
-        with open("/proc/cpuinfo") as f:
-            model = next((ln.split(":", 1)[1].strip() for ln in f if ln.startswith("model name")), "?")
-        print(f"  процессор: {model}; ядро: {os.uname().release}")
-    except OSError:
-        pass
+    print(f"  {cpu()}")
     if shutil.which("strace"):
         out = os.path.join(TMP, "hev.strace")
         sh("amz", "timeout", "5", "strace", "-f", "-o", out, socks.HEV, cfg, timeout=15)
@@ -372,6 +379,7 @@ def main():
     if not shutil.which(socks.HEV):
         print("hev-socks5-tunnel не найден в PATH")
         return 1
+    print(cpu())
     procs = setup()
     procs["hev"] = start_hev()
     try:
