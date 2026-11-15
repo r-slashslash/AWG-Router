@@ -123,7 +123,9 @@ it grows, so every user-visible change gets a new version.
   `root@`; now it is the user behind sudo, else the one who opened the terminal (`su -`), else the one saved at
   install (`SSH_USER` in `.env`, for `awg-router info` later), else root; and `-p` when ssh is not on 22.
 - **Smaller fixes.** Restoring a backup whose Telegram backup period isn't a string answers 400 instead of 500;
-  `dom_filter` in the Server settings must be `true` or `false` (the string `"false"` turned the filter on).
+  switches in the API — `dom_filter` and `panel_dns` in the Server settings, Telegram on/off, control and event kinds,
+  turning a client or an exit on and off, balancing — must be `true` or `false` (a string such as `"false"` or `"no"`
+  turned the setting on; the panel itself always sends `true`/`false`).
 
 ## 1.20.0 — 2026-11-14
 

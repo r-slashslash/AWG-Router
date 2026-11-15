@@ -444,7 +444,9 @@ class ServerManager:
                         raise UserError(Msg("srv.dns_v6", value=d))
                 settings_patch["client_dns"] = dns[:4]
             if "panel_dns" in body:
-                settings_patch["panel_dns"] = bool(body["panel_dns"])
+                if not isinstance(body["panel_dns"], bool):       # "no" строкой включила бы DNS
+                    raise UserError(Msg("err.bad_value"))
+                settings_patch["panel_dns"] = body["panel_dns"]
             if "dom_filter" in body:
                 if not isinstance(body["dom_filter"], bool):      # "false" строкой включила бы фильтр
                     raise UserError(Msg("err.bad_value"))

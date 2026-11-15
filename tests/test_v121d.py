@@ -222,5 +222,46 @@ class ClientHostTest(unittest.TestCase):
             main.store.mutate(lambda st: (st.clear(), st.update(st0)))
 
 
+class FlagsTest(unittest.TestCase):
+    """Галочки в API — только true/false: через bool() строка "no" или "false" включала настройку
+    (DNS на сервере, Telegram, включение клиента и выхода, балансировка)."""
+    BAD = ("false", "no", 0, 1, [], {})
+
+    @classmethod
+    def setUpClass(cls):
+        main.engine.reconcile()
+
+    def code(self, fn):
+        with self.assertRaises(HTTPError) as cm:
+            fn()
+        return cm.exception.code, getattr(cm.exception.detail, "key", None)
+
+    def test_flag(self):
+        self.assertIs(main.v_flag(True), True)
+        self.assertIs(main.v_flag(None, False), False)
+        for v in self.BAD + (None,):
+            self.assertEqual(self.code(lambda: main.v_flag(v)), (400, "err.bad_value"), v)
+
+    def test_panel_dns(self):
+        before = main.store.snapshot()["settings"].get("panel_dns")
+        for v in self.BAD:
+            self.assertEqual(self.code(lambda: main.put_server(Req({"panel_dns": v}))), (400, "err.bad_value"), v)
+        self.assertEqual(main.store.snapshot()["settings"].get("panel_dns"), before)
+
+    def test_other_flags(self):
+        st = main.store.snapshot()
+        pk = main.add_user(Req({"name": "Flag test"}))["public_key"]
+        try:
+            for v in self.BAD:
+                self.assertEqual(self.code(lambda: main.put_telegram(Req({"enabled": v}))), (400, "err.bad_value"))
+                self.assertEqual(self.code(lambda: main.put_telegram(Req({"events": {"exit": v}}))),
+                                 (400, "err.bad_value"))
+                self.assertEqual(self.code(lambda: main.edit_user(Req({"enabled": v}), pk)), (400, "err.bad_value"))
+                self.assertEqual(self.code(lambda: main.v_balance(st, {"on": v})), (400, "err.bad_value"))
+            self.assertEqual(main.v_balance(st, {}), {"on": False, "skip": []})     # не прислано — выключено
+        finally:
+            main.del_user(None, pk)
+
+
 if __name__ == "__main__":
     unittest.main()

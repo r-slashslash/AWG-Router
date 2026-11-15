@@ -299,12 +299,22 @@ def v_quic(body: dict) -> bool | None:
     return body["quic"]
 
 
+def v_flag(v, default=None) -> bool:
+    """Галочка: только true/false. Через bool() строка "false" или "no" включила бы настройку (интерфейс шлёт
+    bool, так ломался только запрос, собранный вручную). default — значение, когда поле не прислано (None)."""
+    if v is None and default is not None:
+        return default
+    if not isinstance(v, bool):
+        bad("err.bad_value")
+    return v
+
+
 def v_balance(st: dict, b) -> dict:
     """Балансировка: {"on": bool, "skip": [id выходов, которые в ней не участвуют]}."""
     if not isinstance(b, dict) or not isinstance(b.get("skip", []), list):
         bad("err.bad_value")
     skip = [x for x in dict.fromkeys(b.get("skip") or []) if isinstance(x, str) and Store.upstream(st, x)]
-    return {"on": bool(b.get("on")), "skip": skip}
+    return {"on": v_flag(b.get("on"), False), "skip": skip}
 
 
 def v_name(v, maxlen: int = 40) -> str:
@@ -434,11 +444,12 @@ def _tg_draft(body: dict) -> dict:
             bad("err.bad_value")
         c["via"] = via
     if isinstance(body.get("events"), dict):
-        c["events"] = {k: bool(body["events"].get(k, c["events"].get(k, True))) for k in notify.KINDS}
+        c["events"] = {k: v_flag(body["events"][k]) if k in body["events"] else c["events"].get(k, True)
+                       for k in notify.KINDS}
     if "enabled" in body:
-        c["enabled"] = bool(body["enabled"])
+        c["enabled"] = v_flag(body["enabled"])
     if "control" in body:
-        c["control"] = bool(body["control"])
+        c["control"] = v_flag(body["control"])
     if "backup" in body:
         if not isinstance(body["backup"], str) or body["backup"] not in notify.BACKUP_PERIODS:
             bad("err.bad_value")
@@ -926,7 +937,7 @@ def clean_backup_state(new: dict) -> dict:
         c.update(token=tok, chat_id=chat, lang=tg.get("lang") if tg.get("lang") in notify.LANGS else "en",
                  enabled=bool(tg.get("enabled")) and bool(tok and chat))
         ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
-        c["events"] = {k: bool(ev.get(k, True)) for k in notify.KINDS}
+        c["events"] = {k: ev[k] if isinstance(ev.get(k), bool) else True for k in notify.KINDS}
         c["control"] = bool(tg.get("control")) and bool(tok and chat)
         if isinstance(tg.get("backup"), str) and tg["backup"] in notify.BACKUP_PERIODS:   # список в dict — TypeError
             c["backup"] = tg["backup"]
@@ -1476,7 +1487,7 @@ def edit_upstream(req, uid):
             if own:
                 own["name"] = u["name"]          # свой список сайтов выхода называется как выход
         if "enabled" in body:
-            u["enabled"] = bool(body["enabled"])
+            u["enabled"] = v_flag(body["enabled"])
         if "fallback" in body:
             fb = v_outbound(st, body["fallback"])
             if fb == "up:" + uid:
@@ -1978,7 +1989,7 @@ def edit_user(req, pk):
         name = _client_name(body["name"])
         _user_errors(lambda: engine.srv.update_client(pk, name=name))
     if body.get("enabled") is not None:
-        set_client_enabled(pk, bool(body["enabled"]))
+        set_client_enabled(pk, v_flag(body["enabled"]))
     engine.reconcile_soon()
     return {"ok": True}
 
