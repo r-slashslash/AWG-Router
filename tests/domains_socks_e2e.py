@@ -189,12 +189,22 @@ def start_hev():
     cfg = os.path.join(TMP, "awgr1.yml")
     with open(cfg, "w") as f:
         f.write(socks.hev_config("awgr1", 1, "172.21.0.2", {"port": 1080, "user": USER, "password": PW}))
-    p = bg("amz", socks.HEV, cfg, log="hev")
-    for _ in range(50):
+    for attempt in range(3):
+        p = bg("amz", socks.HEV, cfg, log=f"hev{attempt}")
+        for _ in range(150):                      # до 15 с: на занятой машине CI интерфейс бывает не сразу
+            with NetNS("amz") as ip:
+                if ip.link_lookup(ifname="awgr1"):
+                    break
+            if p.poll() is not None:
+                break
+            time.sleep(0.1)
         with NetNS("amz") as ip:
             if ip.link_lookup(ifname="awgr1"):
                 break
-        time.sleep(0.1)
+        with open(os.path.join(TMP, f"hev{attempt}.log")) as f:
+            print(f"hev-socks5-tunnel не поднял awgr1 (попытка {attempt + 1}, код {p.poll()}): {f.read()[-400:]!r}")
+        p.kill()
+        time.sleep(1)
     sysctl("amz", "net.ipv4.conf.awgr1.rp_filter", 2)
     with NetNS("amz") as ip:
         table = config.TABLE_BASE + 1
