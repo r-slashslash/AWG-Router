@@ -415,6 +415,8 @@ class ServerManager:
                     raise UserError(Msg("srv.port_container"))
                 if not 1 <= port <= 65535:
                     raise UserError(Msg("srv.bad_port"))
+                if port in system.AWG_RESERVED:
+                    raise UserError(Msg("srv.port_dns", port=port))
                 sc.set("ListenPort", str(port))
                 restart = True
                 if isinstance(t, system.HostTarget):
@@ -477,6 +479,10 @@ class ServerManager:
             t = self.e.target
             if not isinstance(t, system.HostTarget):
                 raise UserError(Msg("srv.init_only_host"))
+            if not 1 <= port <= 65535:
+                raise UserError(Msg("srv.bad_port"))
+            if port in system.AWG_RESERVED:
+                raise UserError(Msg("srv.port_dns", port=port))
             system.init_host_server(t, port, subnet, awgserver.generate_params(True))
             self.e.event("info", Msg("ev.server_created", port=port))
             self.e.trigger()

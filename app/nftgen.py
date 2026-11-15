@@ -204,7 +204,7 @@ def sniff_marks(policies: dict) -> dict[str, int]:
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset()) -> str:
-    """sniff_port — где слушает sniproxy.py (правила по доменам для выходов SOCKS5);
+    """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
     остаётся на нём (цепочки ob_u*, выход Sticky в политике)."""

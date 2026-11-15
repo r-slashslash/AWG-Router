@@ -72,14 +72,21 @@ class PanelPortTest(unittest.TestCase):
         return r.stdout.strip()
 
     def test_good_ports(self):
-        for p in ("1024", "5000", "9999", "65535"):
+        # с 1.21.0 — любой порт 1–65535, в том числе ниже 1024
+        for p in ("2", "1000", "1023", "1024", "5000", "9999", "65535"):
             with self.subTest(p=p):
                 self.assertEqual(self.problem(p), "")
 
     def test_not_a_port(self):
-        for p in ("", "abc", "80", "443", "1023", "65536", "50 00", "5000;id"):
+        for p in ("", "abc", "0", "65536", "50 00", "5000;id"):
             with self.subTest(p=p):
-                self.assertIn("from 1024 to 65535", self.problem(p))
+                self.assertIn("from 1 to 65535", self.problem(p))
+
+    def test_80_and_443_are_not_the_panels(self):
+        for p in ("80", "443"):
+            with self.subTest(p=p):
+                self.assertIn("can't be the panel's", self.problem(p))
+                self.assertEqual(self.problem(p, current=p), "")      # у кого уже там — остаётся
 
     def test_browsers_refuse(self):
         self.assertIn("Browsers refuse", self.problem("6697"))
@@ -136,7 +143,7 @@ class PanelPortTest(unittest.TestCase):
     def test_new_install_own_port_after_mistakes(self):
         r, port = self.choose(["abc", "4821", "6697", "5000"])
         self.assertEqual(port, "5000")
-        for why in ("from 1024 to 65535", "Port 4821 is in use", "Browsers refuse"):
+        for why in ("from 1 to 65535", "Port 4821 is in use", "Browsers refuse"):
             self.assertIn(why, r.stdout)
 
     def test_new_install_without_a_terminal(self):

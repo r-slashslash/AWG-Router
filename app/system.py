@@ -425,8 +425,18 @@ def open_firewall_udp(t: HostTarget, port: int) -> None:
         t.native(["ufw", "allow", f"{port}/udp"], check=False)
 
 
+# Порты, на которые не попадает случайный порт AmneziaWG: другие VPN, VoIP, STUN, обнаружение в
+# локальной сети — их часто режут операторы и DPI. Тот же список — AWG_AVOID в install.sh (тест
+# PortsTest); вручную такой порт выбрать можно.
+AWG_AVOID = frozenset({1080, 1194, 1701, 1723, 1812, 1813, 1900, 3478, 3479, 4500, 5060, 5061, 5353, 5355})
+# UDP 53 в сети сервера AWG занимает DNS на сервере (dnsproxy.py на адресе сервера в туннеле)
+AWG_RESERVED = frozenset({53})
+
+
 def random_udp_port() -> int:
-    return random.randint(20000, 59999)
+    """Случайный четырёхзначный порт для нового сервера AWG: высокие порты некоторые мобильные
+    операторы режут."""
+    return random.choice([p for p in range(1000, 10000) if p not in AWG_AVOID and p not in AWG_RESERVED])
 
 
 # ======================================================================= демо

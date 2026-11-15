@@ -344,6 +344,16 @@ def main():
         procs["sni"] = start_sni(sni_conf(pol, {"block": True}))
         check("резерв «блок» → соединение закрыто", hello("8.8.8.8", "foreign.test"), lambda g: g in ("EMPTY",) or g.startswith("FAIL"))
 
+        # 1.21.0: домен на выход-туннель (так идёт выход AWG): к исходному адресу с меткой выхода,
+        # через его таблицу маршрутизации и интерфейс awgr1, а не командой CONNECT по имени
+        procs["sni"].terminate()
+        procs["sni"].wait(5)
+        procs["sni"] = start_sni(sni_conf(pol, {"mark": nftgen.mark_for(1), "acct": "u1"}))
+        check("домен → выход по метке: соединение в туннеле выхода", hello("8.8.8.8", "foreign.test"), "PROXY")
+        check("…к адресу из DNS клиента: подменённый адрес не исправляется",
+              hello("192.0.2.1", "foreign.test"), lambda g: g != "PROXY")
+        check("…домен не из списка — по-прежнему напрямую", hello("77.88.55.242", "ru.test"), "DIRECT")
+
         # SIGHUP: новые списки без перезапуска
         procs["sni"].terminate()
         procs["sni"].wait(5)

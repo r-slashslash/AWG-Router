@@ -246,14 +246,6 @@ def v_outbound(st: dict, v, allow_inherit: bool = False) -> str:
     bad(Msg("err.unknown_outbound", value=v))
 
 
-def is_socks_out(st: dict, out: str) -> bool:
-    u = Store.upstream(st, out[3:]) if isinstance(out, str) and out.startswith("up:") else None
-    try:
-        return bool(u) and engine.parsed(u).kind == "socks5"
-    except awgconf.ConfigError:
-        return False
-
-
 def v_rules(st: dict, rules) -> list[dict]:
     if not isinstance(rules, list) or len(rules) > 50:
         bad("err.bad_rules")
@@ -268,13 +260,10 @@ def v_rules(st: dict, rules) -> list[dict]:
             if not Store.lst(st, lid):
                 bad(Msg("err.unknown_list", id=lid))
         outbound = v_outbound(st, r.get("outbound"))
-        kinds = {Store.lst(st, lid)["kind"] == "domains" for lid in ls}
-        if True in kinds:
-            # списки доменов — только на выход SOCKS5: имя сайта передаётся прокси (sniproxy.py)
-            if len(kinds) > 1:
-                bad("err.rule_mixed_domains")
-            if not is_socks_out(st, outbound):
-                bad("err.domains_need_socks")
+        # списки доменов и списки сетей в одном правиле не смешиваются: домены sniproxy.py
+        # проверяет раньше правил по адресам (по имени в начале соединения), выход — любой
+        if len({Store.lst(st, lid)["kind"] == "domains" for lid in ls}) > 1:
+            bad("err.rule_mixed_domains")
         rid = r.get("id") if isinstance(r.get("id"), str) and ID_RE.match(r.get("id", "")) else new_id("r_")
         out.append({"id": rid, "lists": list(dict.fromkeys(ls)),
                     "outbound": outbound,
@@ -1313,7 +1302,7 @@ def v_quota_action(st: dict, v, uid: str | None) -> str:
 
 
 def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | None, str | None]:
-    """Маршрутизация через выход из его окна (SOCKS5): общие правила «списки доменов → выход»
+    """Маршрутизация через выход из его окна: общие правила «списки доменов → выход»
     и «списки сетей → выход» заменяются выбранными; свои домены выхода — его собственный
     список доменов (u["own_list"]); «основной выход». → (список, который нужно обновить;
     список, который нужно удалить)."""
@@ -1467,7 +1456,7 @@ def edit_upstream(req, uid):
                 pc = awgconf.parse_upstream(str(body["config"]))
             except awgconf.ConfigError as e:
                 bad(e.msg)
-            # тип выхода не меняется: на SOCKS5 могут вести правила со списками доменов
+            # тип выхода не меняется: у AWG и SOCKS5 разные туннели, проверки и поля — это новый выход
             try:
                 old_kind = engine.parsed(u).kind
             except awgconf.ConfigError:
@@ -1516,14 +1505,23 @@ def del_upstream(req, uid):
         bal = st["routing"].get("balance")
         if bal and uid in (bal.get("skip") or []):
             bal["skip"] = [x for x in bal["skip"] if x != uid]
-        # правила со списками доменов могут вести только на SOCKS5: если замена не SOCKS5 — убираем их
-        dom = {l["id"] for l in st["lists"] if l["kind"] == "domains"}
-        keep = lambda r: not (set(r.get("lists") or []) & dom) or is_socks_out(st, r.get("outbound"))
-        st["routing"]["rules"] = [r for r in st["routing"]["rules"] if keep(r)]
-        for c in st["clients"].values():
-            if c.get("rules"):
-                c["rules"] = [r for r in c["rules"] if keep(r)]
         own = u.get("own_list")
+        if own:
+            # свои сайты выхода уходят вместе с ним, а не на замену: список назван по выходу и
+            # заполнялся в его окне. Правило, где остался только он, удаляется целиком
+            def strip(rules):
+                out = []
+                for r in rules or []:
+                    if own in (r.get("lists") or []):
+                        r = {**r, "lists": [x for x in r["lists"] if x != own]}
+                        if not r["lists"]:
+                            continue
+                    out.append(r)
+                return out
+            st["routing"]["rules"] = strip(st["routing"]["rules"])
+            for c in st["clients"].values():
+                if c.get("rules"):
+                    c["rules"] = strip(c["rules"])
         if own and Store.lst(st, own) and not Store.list_refs(st, own):
             st["lists"] = [x for x in st["lists"] if x["id"] != own]
             return own
@@ -1755,7 +1753,7 @@ def edit_list(req, lid):
         if not l:
             bad("err.not_found", 404)
         if body.get("kind", l["kind"]) != l["kind"]:
-            # вид списка не меняется: от него зависят правила (домены — только на SOCKS5),
+            # вид списка не меняется: от него зависят правила (домены не смешиваются с сетями),
             # а у стран id = код страны
             bad("err.list_kind_change")
         d = _list_body(st, body, l)

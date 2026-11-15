@@ -83,7 +83,6 @@ const I18N = {
     "ex.file": "Загрузить файл конфига",
     "ex.fallback": "Если сервер не отвечает",
     "ex.fallback_hint": "«Блокировать» — защита от утечки: клиенты останутся без интернета, но не выйдут в сеть с IP этого сервера.",
-    "ex.make_default": "Сделать выходом по умолчанию для всех клиентов",
     "toast.exit_saved": "Выход сохранён", "toast.exit_added": "Выход добавлен, туннель поднимается…",
     "ls.title": "Списки",
     "ls.subtitle": "Наборы IPv4-адресов и доменов, на которые ссылаются правила. Страны, ASN и ссылки обновляются автоматически каждые {hours} ч.",
@@ -247,7 +246,6 @@ const I18N = {
     "ex.file": "Upload config file",
     "ex.fallback": "If the server stops responding",
     "ex.fallback_hint": "“Block” prevents leaks: clients lose internet access but never go out with this server's IP.",
-    "ex.make_default": "Make it the default exit for all clients",
     "toast.exit_saved": "Exit saved", "toast.exit_added": "Exit added, bringing the tunnel up…",
     "ls.title": "Lists",
     "ls.subtitle": "Sets of IPv4 addresses and domains that rules refer to. Countries, ASNs and links refresh automatically every {hours} h.",
@@ -410,7 +408,6 @@ const I18N = {
     "ex.file": "上传配置文件",
     "ex.fallback": "服务器无响应时",
     "ex.fallback_hint": "「阻止」可防止泄漏：客户端会断网，但绝不会以本服务器的 IP 访问外网。",
-    "ex.make_default": "设为所有客户端的默认出口",
     "toast.exit_saved": "出口已保存", "toast.exit_added": "出口已添加，正在建立隧道…",
     "ls.title": "列表",
     "ls.subtitle": "规则所引用的 IPv4 地址和域名集合。国家、ASN 和链接列表每 {hours} 小时自动更新。",
@@ -573,7 +570,6 @@ const I18N = {
     "ex.file": "بارگذاری فایل پیکربندی",
     "ex.fallback": "اگر سرور پاسخ ندهد",
     "ex.fallback_hint": "«مسدود» از نشت جلوگیری می‌کند: کلاینت‌ها بدون اینترنت می‌مانند اما هرگز با IP این سرور به اینترنت نمی‌روند.",
-    "ex.make_default": "خروجی پیش‌فرض برای همه کلاینت‌ها شود",
     "toast.exit_saved": "خروجی ذخیره شد", "toast.exit_added": "خروجی اضافه شد، تونل در حال راه‌اندازی است…",
     "ls.title": "فهرست‌ها",
     "ls.subtitle": "مجموعه‌های آدرس IPv4 و دامنه‌ها که قوانین به آن‌ها ارجاع می‌دهند. کشورها، ASNها و لینک‌ها هر {hours} ساعت خودکار به‌روز می‌شوند.",
@@ -2235,7 +2231,7 @@ Object.assign(I18N.ru, {
   "ls.add_domains": "Домены", "ls.kind.domains": "Домены", "ls.new.domains": "Список доменов",
   "ls.domains": "Домены и ссылки на списки",
   "ls.domains_hint": "По одному в строке. example.com подходит и для всех поддоменов (www.example.com, m.example.com). Можно вставить ссылку на готовый список: понимаются простые списки доменов и форматы dnsmasq, hosts, Adblock (||example.com^) и v2ray (domain:example.com).",
-  "ls.domains_how": "Правило со списком доменов работает только на выход SOCKS5: сервер узнаёт сайт по имени в начале HTTPS- и HTTP-соединения (порты 443 и 80) и передаёт имя прокси — адрес находит сам прокси. Такие правила проверяются раньше правил по адресам. HTTP/3 (QUIC) у клиентов с такими правилами отключается для всех сайтов, не только из списка: браузеры сами переходят на обычный HTTPS, первое соединение может открываться чуть дольше. Сайты с Encrypted Client Hello (ECH, например часть сайтов за Cloudflare) показывают в соединении не своё имя, а общее — их по списку доменов не узнать; для них добавьте список адресов.",
+  "ls.domains_how": "Правило со списком доменов узнаёт сайт по имени в начале HTTPS- и HTTP-соединения (порты 443 и 80) и проверяется раньше правил по адресам. Выход может быть любым. Через SOCKS5 имя сайта передаётся прокси, и адрес находит сам прокси. Через AWG и «напрямую» соединение идёт к адресу, который устройство получило из своего DNS: чтобы адрес не был подменён, включите «DNS на сервере» (вкладка «Сервер»). «Блокировать» закрывает соединение. HTTP/3 (QUIC) у клиентов с такими правилами отключается для всех сайтов, не только из списка: браузеры сами переходят на обычный HTTPS, первое соединение может открываться чуть дольше. Сайты с Encrypted Client Hello (ECH, например часть сайтов за Cloudflare) показывают в соединении не своё имя, а общее — их по списку доменов не узнать; для них добавьте список адресов.",
   "n.domains": { one: "{n} домен", few: "{n} домена", many: "{n} доменов", other: "{n} домена" },
 
 
@@ -2269,11 +2265,8 @@ Object.assign(I18N.ru, {
   "ev.dns_failed": "DNS на сервере не запустился: {detail}",
   "ls.domains_hits": "{n} соединений по правилу",
   "ls.sni_error": "Не работает: обработчик правил по доменам не запустился (подробности в журнале)",
-  "re.need_socks": "— выберите выход SOCKS5 —",
-  "re.domain_hint": "По имени сайта (HTTPS/HTTP), раньше правил по адресам. Только на выход SOCKS5.",
-  "re.domain_no_socks": "Нужен выход SOCKS5: добавьте его на вкладке «Выходы».",
+  "re.domain_hint": "По имени сайта (HTTPS/HTTP), раньше правил по адресам.",
   "err.rule_mixed_domains": "Списки доменов и списки адресов нельзя смешивать в одном правиле",
-  "err.domains_need_socks": "Список доменов можно направить только на выход SOCKS5",
   "err.exit_kind_change": "Тип выхода не меняется: удалите выход и добавьте новый", "err.list_kind_change": "Вид списка не меняется: создайте новый список",
   "sni.no_addr": "у интерфейса {iface} нет IPv4-адреса",
   "sni.start_failed": "обработчик правил по доменам не запустился: {detail}",
@@ -2298,7 +2291,7 @@ Object.assign(I18N.en, {
   "ls.add_domains": "Domains", "ls.kind.domains": "Domains", "ls.new.domains": "Domain list",
   "ls.domains": "Domains and links to lists",
   "ls.domains_hint": "One per line. example.com also covers all its subdomains (www.example.com, m.example.com). You can paste a link to a ready-made list: plain domain lists and the dnsmasq, hosts, Adblock (||example.com^) and v2ray (domain:example.com) formats are understood.",
-  "ls.domains_how": "A rule with a domain list works only with a SOCKS5 exit: the server learns the site from its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and passes the name to the proxy, which finds the address itself. Such rules are checked before address rules. HTTP/3 (QUIC) is turned off for clients with such rules, for all sites, not only listed ones: browsers switch to regular HTTPS by themselves, and the first connection may open a little slower. Sites with Encrypted Client Hello (ECH, such as some sites behind Cloudflare) show a shared name instead of their own, so a domain list can't recognise them; add an address list for those.",
+  "ls.domains_how": "A rule with a domain list recognizes the site by its name at the start of an HTTPS or HTTP connection (ports 443 and 80) and is checked before address rules. Any exit works. Through SOCKS5 the site name is passed to the proxy, which finds the address itself. Through AWG and “Direct” the connection goes to the address the device got from its own DNS: so that it isn't spoofed, turn on “DNS on the server” (Server tab). “Block” closes the connection. HTTP/3 (QUIC) is turned off for all sites for clients with such rules, not only the listed ones: browsers switch to regular HTTPS by themselves, and the first connection may open a little slower. Sites with Encrypted Client Hello (ECH, e.g. some sites behind Cloudflare) show a shared name instead of their own, so a domain list can't recognize them; add an address list for them.",
   "n.domains": { one: "{n} domain", other: "{n} domains" },
 
 
@@ -2332,11 +2325,8 @@ Object.assign(I18N.en, {
   "ev.dns_failed": "DNS on the server did not start: {detail}",
   "ls.domains_hits": "{n} connections by the rule",
   "ls.sni_error": "Not working: the domain rule handler did not start (see the event log)",
-  "re.need_socks": "— choose a SOCKS5 exit —",
-  "re.domain_hint": "By site name (HTTPS/HTTP), before address rules. SOCKS5 exits only.",
-  "re.domain_no_socks": "Needs a SOCKS5 exit: add one on the Exits tab.",
+  "re.domain_hint": "By site name (HTTPS/HTTP), before address rules.",
   "err.rule_mixed_domains": "Domain lists and address lists can't be mixed in one rule",
-  "err.domains_need_socks": "A domain list can only go to a SOCKS5 exit",
   "err.exit_kind_change": "An exit's type can't change: delete the exit and add a new one", "err.list_kind_change": "A list's kind can't change: create a new list",
   "sni.no_addr": "interface {iface} has no IPv4 address",
   "sni.start_failed": "the domain rule handler did not start: {detail}",
@@ -2361,7 +2351,7 @@ Object.assign(I18N.zh, {
   "ls.add_domains": "域名", "ls.kind.domains": "域名", "ls.new.domains": "域名列表",
   "ls.domains": "域名和列表链接",
   "ls.domains_hint": "每行一个。example.com 同时匹配它的所有子域名（www.example.com、m.example.com）。也可以粘贴现成列表的链接：支持普通域名列表以及 dnsmasq、hosts、Adblock（||example.com^）和 v2ray（domain:example.com）格式。",
-  "ls.domains_how": "带域名列表的规则只能用于 SOCKS5 出口：服务器从 HTTPS 和 HTTP 连接开头的网站名称（443 和 80 端口）识别网站，并把名称交给代理，由代理自己解析地址。这类规则在地址规则之前检查。使用这类规则的客户端会对所有网站（不只是列表中的）关闭 HTTP/3（QUIC）：浏览器会自动改用普通 HTTPS，首次连接可能稍慢。启用 Encrypted Client Hello（ECH，例如部分 Cloudflare 后的网站）的网站在连接中显示的是公共名称而不是自己的名称，域名列表无法识别它们；请为这些网站添加地址列表。",
+  "ls.domains_how": "带域名列表的规则根据 HTTPS 和 HTTP 连接开头的网站名称（443 和 80 端口）识别网站，并先于地址规则检查。出口可以是任意一种。经 SOCKS5 时网站名称交给代理，由代理自己解析地址。经 AWG 和「直连」时，连接发往设备从自己的 DNS 得到的地址：为防止地址被篡改，请开启「服务器上的 DNS」（「服务器」标签页）。「阻止」会关闭连接。对有此类规则的客户端，所有网站（不仅是列表中的）都会关闭 HTTP/3（QUIC）：浏览器会自动改用普通 HTTPS，首次连接可能稍慢。使用 Encrypted Client Hello（ECH，例如部分 Cloudflare 后的网站）的网站在连接中显示的是共用名称而不是自己的名称，域名列表无法识别它们；请为它们添加地址列表。",
   "n.domains": { other: "{n} 个域名" },
 
 
@@ -2395,11 +2385,8 @@ Object.assign(I18N.zh, {
   "ev.dns_failed": "服务器上的 DNS 未能启动：{detail}",
   "ls.domains_hits": "按规则的连接 {n} 个",
   "ls.sni_error": "未生效：域名规则处理程序未能启动（详见事件日志）",
-  "re.need_socks": "— 选择 SOCKS5 出口 —",
-  "re.domain_hint": "按网站名称（HTTPS/HTTP），先于地址规则。仅限 SOCKS5 出口。",
-  "re.domain_no_socks": "需要 SOCKS5 出口：请在“出口”页添加。",
+  "re.domain_hint": "按网站名称（HTTPS/HTTP），先于地址规则。",
   "err.rule_mixed_domains": "同一条规则中不能混用域名列表和地址列表",
-  "err.domains_need_socks": "域名列表只能指向 SOCKS5 出口",
   "err.exit_kind_change": "出口类型不能更改：请删除该出口并添加新出口", "err.list_kind_change": "列表类型不能更改：请新建列表",
   "sni.no_addr": "接口 {iface} 没有 IPv4 地址",
   "sni.start_failed": "域名规则处理程序未能启动：{detail}",
@@ -2424,7 +2411,7 @@ Object.assign(I18N.fa, {
   "ls.add_domains": "دامنه‌ها", "ls.kind.domains": "دامنه‌ها", "ls.new.domains": "فهرست دامنه‌ها",
   "ls.domains": "دامنه‌ها و پیوند فهرست‌ها",
   "ls.domains_hint": "هر کدام در یک خط. example.com همهٔ زیردامنه‌هایش را هم در بر می‌گیرد (www.example.com، m.example.com). می‌توانید پیوند یک فهرست آماده را هم بگذارید: فهرست ساده دامنه‌ها و قالب‌های dnsmasq، hosts، Adblock (‎||example.com^‎) و v2ray (‎domain:example.com‎) پشتیبانی می‌شوند.",
-  "ls.domains_how": "قانونی که فهرست دامنه دارد فقط با خروجی SOCKS5 کار می‌کند: سرور سایت را از نام آن در آغاز اتصال HTTPS و HTTP (درگاه‌های 443 و 80) تشخیص می‌دهد و نام را به پراکسی می‌دهد تا خودش نشانی را پیدا کند. این قانون‌ها پیش از قانون‌های نشانی بررسی می‌شوند. برای کلاینت‌هایی که چنین قانونی دارند HTTP/3 (QUIC) برای همه سایت‌ها، نه فقط سایت‌های فهرست، خاموش می‌شود: مرورگرها خودشان به HTTPS معمولی می‌روند و نخستین اتصال ممکن است کمی کندتر باز شود. سایت‌هایی با Encrypted Client Hello (ECH، مانند برخی سایت‌های پشت Cloudflare) در اتصال به‌جای نام خود یک نام مشترک نشان می‌دهند، پس فهرست دامنه آن‌ها را نمی‌شناسد؛ برای آن‌ها فهرست نشانی بیفزایید.",
+  "ls.domains_how": "قانونی که فهرست دامنه دارد سایت را از نام آن در آغاز اتصال HTTPS و HTTP (درگاه‌های 443 و 80) تشخیص می‌دهد و پیش از قانون‌های نشانی بررسی می‌شود. خروجی می‌تواند هر نوعی باشد. از طریق SOCKS5 نام سایت به پراکسی داده می‌شود و خود پراکسی نشانی را پیدا می‌کند. از طریق AWG و «مستقیم» اتصال به نشانی‌ای می‌رود که دستگاه از DNS خودش گرفته است: برای اینکه این نشانی جعلی نباشد، «DNS روی سرور» را روشن کنید (برگهٔ «سرور»). «مسدود» اتصال را می‌بندد. برای کلاینت‌هایی که چنین قانونی دارند HTTP/3 (QUIC) برای همهٔ سایت‌ها خاموش می‌شود، نه فقط سایت‌های فهرست: مرورگرها خودشان به HTTPS معمولی می‌روند و نخستین اتصال ممکن است کمی کندتر باز شود. سایت‌هایی که Encrypted Client Hello دارند (ECH، مثلاً بخشی از سایت‌های پشت Cloudflare) در اتصال نامی مشترک نشان می‌دهند نه نام خودشان، و فهرست دامنه آن‌ها را تشخیص نمی‌دهد؛ برای آن‌ها فهرست نشانی اضافه کنید.",
   "n.domains": { one: "{n} دامنه", other: "{n} دامنه" },
 
 
@@ -2458,11 +2445,8 @@ Object.assign(I18N.fa, {
   "ev.dns_failed": "DNS روی سرور اجرا نشد: {detail}",
   "ls.domains_hits": "{n} اتصال طبق قانون",
   "ls.sni_error": "کار نمی‌کند: پردازشگر قانون‌های دامنه راه‌اندازی نشد (جزئیات در گزارش رویدادها)",
-  "re.need_socks": "— یک خروجی SOCKS5 انتخاب کنید —",
-  "re.domain_hint": "بر اساس نام سایت (HTTPS/HTTP)، پیش از قانون‌های نشانی. فقط خروجی SOCKS5.",
-  "re.domain_no_socks": "خروجی SOCKS5 لازم است: آن را در برگهٔ «خروجی‌ها» اضافه کنید.",
+  "re.domain_hint": "بر اساس نام سایت (HTTPS/HTTP)، پیش از قانون‌های نشانی.",
   "err.rule_mixed_domains": "فهرست دامنه و فهرست نشانی را نمی‌توان در یک قانون ترکیب کرد",
-  "err.domains_need_socks": "فهرست دامنه فقط می‌تواند به خروجی SOCKS5 برود",
   "err.exit_kind_change": "نوع خروجی تغییر نمی‌کند: خروجی را حذف کنید و یکی تازه بیفزایید", "err.list_kind_change": "نوع فهرست تغییر نمی‌کند: فهرست تازه‌ای بسازید",
   "sni.no_addr": "رابط {iface} نشانی IPv4 ندارد",
   "sni.start_failed": "پردازشگر قانون‌های دامنه راه‌اندازی نشد: {detail}",
@@ -3063,6 +3047,20 @@ Object.assign(I18N.fa, {
   "ev.kernel_on": "سرور روی ماژول هستهٔ {version} کار می‌کند",
   "ev.engine_go": "سرور به‌دست شما به amneziawg-go برده شد؛ ماژول هسته غیرفعال شد",
   "ev.engine_go_reboot": "سرور به‌دست شما به amneziawg-go برده شد؛ ماژول هسته پس از راه‌اندازی دوبارهٔ سرور بیرون کشیده می‌شود",
+});
+
+/* 1.21.0: правила по доменам на любой выход, строка правила, статус в шапке, порты */
+Object.assign(I18N.ru, {
+  "srv.port_dns": "Порт {port} занят DNS на сервере, выберите другой",
+});
+Object.assign(I18N.en, {
+  "srv.port_dns": "Port {port} is used by DNS on the server, pick another",
+});
+Object.assign(I18N.zh, {
+  "srv.port_dns": "端口 {port} 已被服务器上的 DNS 使用，请选择其他端口",
+});
+Object.assign(I18N.fa, {
+  "srv.port_dns": "پورت {port} را DNS روی سرور به کار می‌برد، پورت دیگری انتخاب کنید",
 });
 
 /* Разделители: перечисление, фразы, ссылки */

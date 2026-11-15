@@ -368,12 +368,11 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(main.get_list(None, self.lid)["name"], "youtube.com")
         self.assertIsNone(next(l for l in main.get_state(None)["lists"] if l["id"] == self.lid)["source"])
 
-    def test_domain_rules_only_to_socks(self):
-        self.rules(([self.lid], "up:" + self.socks))
-        for out in ["direct", "block"] + (["up:" + self.awg] if self.awg else []):
-            with self.assertRaises(web.HTTPError) as cm:
-                self.rules(([self.lid], out))
-            self.assertIn("err.domains_need_socks", str(cm.exception))
+    def test_domain_rules_to_any_exit(self):
+        # с 1.21.0 правило по доменам ведёт на любой выход: SOCKS5, AWG, напрямую, блок
+        for out in ["up:" + self.socks, "direct", "block"] + (["up:" + self.awg] if self.awg else []):
+            self.rules(([self.lid], out))
+            self.assertEqual(main.get_state(None)["routing"]["rules"][0]["outbound"], out)
         with self.assertRaises(web.HTTPError) as cm:
             self.rules(([self.lid, "ru"], "up:" + self.socks))
         self.assertIn("err.rule_mixed_domains", str(cm.exception))

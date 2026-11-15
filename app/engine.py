@@ -3,7 +3,7 @@
 Каждые RECONCILE_INTERVAL секунд (и сразу после изменений в панели):
   * находит контейнер Amnezia (если он перезапустился — всё создаётся заново);
   * поднимает/гасит туннели awgrN к выходным серверам (AWG или прокси SOCKS5);
-  * держит sniproxy.py для правил по доменам (выходы SOCKS5);
+  * держит sniproxy.py для правил по доменам;
   * проверяет «живость» туннелей по рукопожатиям и переключает на резерв;
   * генерирует и атомарно применяет nftables, синхронизирует ip rule / маршруты.
 """
@@ -979,6 +979,12 @@ class Engine:
                 else:
                     ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
             default = self.resolve(self.default_out(st, pk, pol), st)
+            # правила по доменам, которые ведут туда же, куда всё остальное, ничего не меняют —
+            # но включили бы перехват всего HTTPS/HTTP клиента посредником. Только без правил по
+            # адресам: домен проверяется раньше них и мог бы увести сайт мимо правила по адресу
+            plain = int(default) if isinstance(default, int) else default
+            if dom and not ip_rules and all(self.resolve(o, st) == plain for _, o in dom):
+                dom = []
             if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
                 default = nftgen.Sticky(default)     # открытые соединения не переезжают
             return {"rules": ip_rules, "default": default, "domain": dom}
@@ -1027,8 +1033,9 @@ class Engine:
         return None
 
     def _sni_target(self, st: dict, out: str) -> dict:
-        """Куда sniproxy.py ведёт соединение с совпавшим доменом: SOCKS5 выхода (если он
-        работает), иначе — его резервный путь."""
+        """Куда sniproxy.py ведёт соединение с совпавшим доменом: выход SOCKS5 — командой CONNECT
+        с именем сайта; выход AWG и «напрямую» — к исходному адресу с меткой выхода (адрес клиент
+        получил из своего DNS); «блок» — соединение закрывается. Неработающий выход — его резерв."""
         eff = self.resolve(out, st)
         if eff == "block":
             return {"block": True}

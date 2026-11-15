@@ -9,7 +9,7 @@
 #   bash install.sh --uninstall    — remove the panel; asks whether to remove the AWG server too (awg-router uninstall)
 # Non-interactive:
 #   AWGR_MODE=container|host  AWGR_ACCESS=public|ssh  bash install.sh
-#   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=47823
+#   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=4782 (empty — a random free 4-digit one)
 #   move the Amnezia container's server to the host (same keys, port, clients): AWGR_MODE=host AWGR_MOVE=yes
 #   replace the AmneziaWG server found on the host with a new one (new keys): AWGR_REPLACE=yes
 #   panel port:                AWGR_PORT=4821 (empty — a random free 4-digit one)
@@ -132,6 +132,7 @@ warn() { printf '  %s!%s %s\n' "$Y" "$N" "$1"; }
 die()  { printf '\n%s✗ %s%s\n' "$R" "$1" "$N"; exit 1; }
 
 envget() { [ -f "$ENV_FILE" ] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true; }
+SNI_PORT="$(envget SNI_PROXY_PORT)"   # where the panel's handler for domain rules listens (10443 unless set)
 
 # Reads an answer from the terminal; without a terminal returns the default.
 ask() { # $1 prompt, $2 default → REPLY
@@ -160,29 +161,54 @@ port_busy() { ss -Hltnu 2>/dev/null | awk '{print $5}' | grep -E "[:.]$1\$" >/de
 UNSAFE_PORTS=" 1 7 9 11 13 15 17 19 20 21 22 23 25 37 42 43 53 69 77 79 87 95 101 102 103 104 109 110 111 113 115 117 119 123 135 137 139 143 161 179 389 427 465 512 513 514 515 526 530 531 532 540 548 554 556 563 587 601 636 989 990 993 995 1719 1720 1723 2049 3659 4045 4190 5060 5061 6000 6566 6665 6666 6667 6668 6669 6679 6697 10080 "
 unsafe_port() { [[ "$UNSAFE_PORTS" == *" $1 "* ]]; }
 
+# Ports a random AmneziaWG port never lands on: other VPNs, VoIP, STUN and local discovery — operators and DPI
+# often throttle or drop them. A port typed in by hand is not checked against this list.
+AWG_AVOID=" 1080 1194 1701 1723 1812 1813 1900 3478 3479 4500 5060 5061 5353 5355 "
+
 # Why a port can't be the panel's (nothing — it can): $1 port, $2 the panel's current port, which is
-# "in use" by the panel itself and stays allowed on --reconfigure
+# "in use" by the panel itself and stays allowed on --reconfigure (80 and 443 too, if it already is there)
 panel_port_problem() {
   local p="$1"
-  if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1024 ] || [ "$p" -gt 65535 ]; then
-    echo "A number from 1024 to 65535 is required"
+  if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+    echo "A number from 1 to 65535 is required"
+  elif [ "$p" = "${2:-}" ]; then
+    :
+  elif [ "$p" = 80 ] || [ "$p" = 443 ]; then
+    echo "Port $p can't be the panel's: 80 is needed for Let's Encrypt, 443 is often taken by a web server"
   elif unsafe_port "$p"; then
     echo "Browsers refuse to open port $p, pick another"
-  elif [ "$p" = 10443 ]; then
-    echo "Port 10443 is used by the panel for domain rules, pick another"
-  elif [ "$p" != "${2:-}" ] && port_busy "$p"; then
+  elif [ "$p" = "${SNI_PORT:-10443}" ]; then
+    echo "Port $p is used by the panel for domain rules, pick another"
+  elif port_busy "$p"; then
     echo "Port $p is in use, pick another"
   fi
 }
 
-random_port() { # $1 min, $2 max
-  local p
+# Why a UDP port can't be the AmneziaWG server's: $1 port. 53 is where DNS on the server listens.
+awg_port_problem() {
+  local p="$1"
+  if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+    echo "A number from 1 to 65535 is required"
+  elif [ "$p" = 53 ]; then
+    echo "Port 53 is used by DNS on the server, pick another"
+  elif port_busy "$p"; then
+    echo "Port $p is in use, pick another"
+  fi
+}
+awg_random_problem() { [[ "$AWG_AVOID" == *" $1 "* ]] && echo avoided || awg_port_problem "$1"; }
+
+# A random port from $1 to $2 that the check $3 accepts (prints nothing); none — prints nothing
+random_port() { # $1 min, $2 max, $3 check
+  local p n=$(( $2 - $1 + 1 )) i
   for _ in $(seq 1 200); do
-    p=$(( $1 + RANDOM % ($2 - $1 + 1) ))
-    unsafe_port "$p" && continue
-    port_busy "$p" || { echo "$p"; return; }
+    p=$(( $1 + RANDOM % n ))
+    [ -z "$("$3" "$p")" ] && { echo "$p"; return; }
   done
-  echo "$1"
+  p=$(( $1 + RANDOM % n ))
+  for (( i = 0; i < n; i++ )); do          # almost everything is taken: go through the range in order
+    [ -z "$("$3" "$p")" ] && { echo "$p"; return; }
+    p=$(( p < $2 ? p + 1 : $1 ))
+  done
 }
 
 public_ip() {
@@ -193,8 +219,29 @@ public_ip() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'
 }
 
+# Who logs in over ssh for the tunnel command: the user behind sudo, else who opened the terminal (su -),
+# else the one saved at install (an update from the panel runs without either), else root
+ssh_user() {
+  local u="${SUDO_USER:-}"
+  [ -n "$u" ] && [ "$u" != root ] && { echo "$u"; return; }
+  u="$(logname 2>/dev/null || true)"
+  [ -n "$u" ] && [ "$u" != root ] && { echo "$u"; return; }
+  u="$(envget SSH_USER)"
+  echo "${u:-root}"
+}
+# The ssh server's port, if it is not 22 (empty for 22 or when it can't be told)
+ssh_port() {
+  local p
+  p="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
+  # the first address:port in the sshd line is the local one (with or without the Netid column)
+  [ -n "$p" ] || p="$(ss -Hltnp 2>/dev/null | awk '/"sshd"/ {for (i = 1; i <= NF; i++) if ($i ~ /:[0-9]+$/) {
+    n = split($i, a, ":"); print a[n]; exit}}')"
+  [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" != 22 ] && echo "$p"
+  return 0
+}
+
 print_info() {
-  local url pass access port tls_line
+  local url pass access port tls_line sport
   pass="$(envget PANEL_PASSWORD)"
   access="$(envget PANEL_ACCESS)"
   port="$(envget PANEL_PORT)"
@@ -207,7 +254,9 @@ print_info() {
   if [ "$access" = "ssh" ]; then
     echo "  The panel is reachable only through an SSH tunnel."
     echo "  1) On your phone (Termux) or computer run:"
-    printf '     %sssh -N -L %s:127.0.0.1:%s root@%s%s\n' "$C" "$port" "$port" "$(envget PUBLIC_HOST)" "$N"
+    sport="$(ssh_port)"
+    printf '     %sssh -N -L %s:127.0.0.1:%s%s %s@%s%s\n' "$C" "$port" "$port" "${sport:+ -p $sport}" \
+      "$(ssh_user)" "$(envget PUBLIC_HOST)" "$N"
     echo "  2) Keep it running and open in the browser:"
     printf '     %s%s%s\n' "$C$B" "$url" "$N"
   else
@@ -616,17 +665,19 @@ retire_broken() { # stop the empty container and keep it under another name: fre
 MOVE_FROM=""
 
 ask_port() { # UDP port for the AmneziaWG server → AWG_PORT
-  local def p
-  def="$(random_port 20000 59999)"
+  local def p why
+  def="$(random_port 1000 9999 awg_random_problem)"
+  [ -n "$def" ] || die "No free UDP port from 1000 to 9999 for AmneziaWG"
   p="${AWGR_AWG_PORT:-}"
+  if [ -n "$p" ]; then
+    why="$(awg_port_problem "$p")"
+    [ -z "$why" ] || die "AWGR_AWG_PORT=$p: $why"
+  fi
   while [ -z "$p" ]; do
     ask "UDP port for AmneziaWG [$def]: " "$def"
     p="$REPLY"
-    if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1024 ] || [ "$p" -gt 65535 ]; then
-      echo "  A number from 1024 to 65535 is required"; p=""
-    elif port_busy "$p"; then
-      echo "  Port $p is in use, pick another"; p=""
-    fi
+    why="$(awg_port_problem "$p")"
+    [ -z "$why" ] || { echo "  $why"; p=""; }
   done
   AWG_PORT="$p"
 }
@@ -754,7 +805,8 @@ CUR_PORT="$PANEL_PORT"
 # the first version listened on 8080 — move to a random 4-digit port
 # browsers block some ports (6697 etc.) — pick another one
 if [ -z "$PANEL_PORT" ] || [ -z "$(envget AWGR_VERSION)" ] || [ "$PANEL_PORT" = 8080 ] || unsafe_port "$PANEL_PORT"; then
-  PANEL_PORT="$(random_port 2000 9999)"
+  PANEL_PORT="$(random_port 1000 9999 panel_port_problem)"
+  [ -n "$PANEL_PORT" ] || die "No free port from 1000 to 9999 for the panel"
 fi
 # Asked on a new install and with --reconfigure (Enter — the random one above, or the current one);
 # an update keeps the port. Without a terminal: AWGR_PORT, or the default.
@@ -878,6 +930,7 @@ fi
 
 # ------------------------------------------------------------------ .env
 HAD_ENV=0
+SSH_USER="$(ssh_user 2>/dev/null)"   # for the ssh tunnel command in --info, which may run without sudo later
 [ -f "$ENV_FILE" ] && cp "$ENV_FILE" "$ENV_FILE.bak" && HAD_ENV=1
 umask 077
 cat > "$ENV_FILE" <<EOF
@@ -895,6 +948,7 @@ ACME_EMAIL=$ACME_EMAIL
 AWG_MODE=$AWG_MODE
 AWG_INIT_PORT=$AWG_INIT_PORT
 RECONCILE_INTERVAL=$RECONCILE_INTERVAL
+SSH_USER=$SSH_USER
 EOF
 umask 022
 # Everything else the previous .env had (EXIT_ENGINE, AWG_CONTAINER, SNI_PROXY_PORT, ACME_HTTP_PORT …) is

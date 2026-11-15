@@ -146,13 +146,12 @@ function effChip(eff, wanted) {
   }
   return outChip(val);
 }
-function outOptions(selected, { inherit = null, exclude = null, socksOnly = false } = {}) {
+function outOptions(selected, { inherit = null, exclude = null } = {}) {
   const opts = [];
   if (inherit !== null) opts.push(["inherit", inherit]);
-  if (!socksOnly) opts.push(["direct", t("out.direct")]);
-  for (const u of S.upstreams) if ("up:" + u.id !== exclude && (!socksOnly || u.kind === "socks5")) opts.push(["up:" + u.id, t("out.via", { name: u.name })]);
-  if (!socksOnly) opts.push(["block", t("out.block")]);
-  if (socksOnly && !opts.some(([v]) => v === selected)) opts.unshift([selected, t("re.need_socks")]);
+  opts.push(["direct", t("out.direct")]);
+  for (const u of S.upstreams) if ("up:" + u.id !== exclude) opts.push(["up:" + u.id, t("out.via", { name: u.name })]);
+  opts.push(["block", t("out.block")]);
   return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(l)}</option>`).join("");
 }
 /* балансировка и ограничение скорости */
@@ -987,18 +986,14 @@ function editClient(pk, section = null) {
 
 /* ================================================================ редактор правил */
 const LIST_KINDS = ["country", "asn", "url", "manual", "domains"];
-/** список в правило; первый список доменов — выход первый SOCKS5, если выбран не он */
 function addListTo(r, id) {
-  if (r.lists.includes(id)) return;
-  r.lists.push(id);
-  if (isDomainList(id) && !socksExits().some((u) => "up:" + u.id === r.outbound) && socksExits().length) r.outbound = "up:" + socksExits()[0].id;
+  if (!r.lists.includes(id)) r.lists.push(id);
 }
 const isDomainList = (id) => (listObj(id) || {}).kind === "domains";
-const socksExits = () => S.upstreams.filter((u) => u.kind === "socks5");
 function rulesEditor(box, rules, onChange, { create = null } = {}) {
   const draw = () => {
     const items = rules.map((r, i) => {
-      // списки доменов — отдельные правила и только на выход SOCKS5 (имя сайта передаётся прокси)
+      // списки доменов — отдельные правила (по имени сайта, раньше правил по адресам), выход любой
       const dom = r.lists.some(isDomainList);
       const addable = S.lists.filter((l) => !r.lists.includes(l.id) && (!r.lists.length || (l.kind === "domains") === dom));
       const kinds = LIST_KINDS.filter((k) => !r.lists.length || (k === "domains") === dom);
@@ -1011,9 +1006,9 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
             <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
           </div>
           <input type="text" class="rule-comment" data-comment value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}" maxlength="80">
-          ${dom ? `<div class="small muted" style="margin-top:4px">${esc(t(socksExits().length ? "re.domain_hint" : "re.domain_no_socks"))}</div>` : ""}
+          ${dom ? `<div class="small muted" style="margin-top:4px">${esc(t("re.domain_hint"))}</div>` : ""}
         </div>
-        <div class="rule-then"><label>${esc(t(dom ? "re.then_sites" : "re.then"))}</label><select data-out>${outOptions(r.outbound, { socksOnly: dom })}</select></div>
+        <div class="rule-then"><label>${esc(t(dom ? "re.then_sites" : "re.then"))}</label><select data-out>${outOptions(r.outbound)}</select></div>
         <div class="rule-ctl">
           <label class="switch" title="${esc(t("re.enabled"))}"><input type="checkbox" data-en ${r.enabled ? "checked" : ""} aria-label="${esc(t("re.enabled"))}"><span></span></label>
           <button class="icon-btn" type="button" data-up ${i === 0 ? "disabled" : ""} aria-label="${esc(t("re.up"))}">↑</button>
@@ -1348,7 +1343,6 @@ async function editUpstream(id) {
         <input type="number" id="u-ru" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_up ? u.rate_up : ""}"></label>
     </div>
     <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.rate_hint"))}</p>
-    ${u ? "" : `<label class="check" id="u-defl"><input type="checkbox" id="u-def" ${S.routing.default === "direct" ? "checked" : ""}><span>${esc(t("ex.make_default"))}</span></label>`}
   `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`);
   const F = { host: $("#u-sh"), port: $("#u-sp"), user: $("#u-su"), pass: $("#u-sw") };
   const ta = $("#u-conf");
@@ -1363,9 +1357,10 @@ async function editUpstream(id) {
       b.setAttribute("aria-pressed", b.dataset.v === kind);
       b.disabled = !!u && b.dataset.v !== kind;          // тип существующего выхода не меняется
     });
-    $("#u-sf").hidden = $("#u-route").hidden = !socks;
+    $("#u-sf").hidden = !socks;
     $("#u-filef").hidden = socks;
-    if ($("#u-defl")) $("#u-defl").hidden = socks;      // у SOCKS5 — в блоке маршрутизации
+    // новый выход AWG, пока ничего не выбрано, становится основным, если основного ещё нет (как раньше)
+    if (!u && !routeTouched) $("#u-rdef").checked = !socks && S.routing.default === "direct";
     $("#u-conf-l").textContent = t(socks ? "ex.socks_line" : "ex.config");
     $("#u-conf-h").textContent = socks ? t("ex.socks_line_hint") : t("ex.config_hint");
     ta.placeholder = socks ? "socks5://login:password@203.0.113.20:1080" : t("ex.config_ph");
@@ -1399,7 +1394,7 @@ async function editUpstream(id) {
       rate_down: $("#u-rd").value.trim() || null, rate_up: $("#u-ru").value.trim() || null };
     const c = ta.value.trim();
     if (!u || c !== conf.trim()) body.config = c;
-    if (kind === "socks5" && (routeTouched || !u)) {
+    if (routeTouched || !u) {
       const picked = $$("#u-route [data-rl]").filter((x) => x.checked).map((x) => x.dataset.rl);
       body.routing = { domains: $("#u-doms").value.trim(), default: $("#u-rdef").checked,
         domain_lists: picked.filter((x) => dlists.some((l) => l.id === x)),
@@ -1409,7 +1404,7 @@ async function editUpstream(id) {
     const btn = $("#u-save"); btn.disabled = true;
     try {
       if (u) await api("PUT", "upstreams/" + u.id, body);
-      else await api("POST", "upstreams", { ...body, make_default: kind === "awg" && $("#u-def").checked });
+      else await api("POST", "upstreams", body);
       closeModal(); toast(t(u ? "toast.exit_saved" : "toast.exit_added"));
       refresh();
     } catch (e) { toast(e.message, true); }
