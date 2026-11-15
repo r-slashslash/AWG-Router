@@ -99,11 +99,19 @@ def docker_containers() -> list[str]:
     return [n.lstrip("/") for c in cs for n in c.get("Names", [])]
 
 
+def cmd_label(cmd: list[str]) -> str:
+    """Команда для текста ошибки, как её понял бы человек: без обёртки `nsenter … --` и без путей
+    (это временные файлы панели в её контейнере — на хосте их нет, искать там нечего)."""
+    if cmd and cmd[0] == "nsenter" and "--" in cmd:
+        cmd = cmd[cmd.index("--") + 1:]
+    return " ".join(a for a in cmd[:6] if not a.startswith("/"))
+
+
 def run(cmd: list[str], *, input: str | None = None, timeout: int = 30,
         check: bool = True) -> subprocess.CompletedProcess:
     p = subprocess.run(cmd, input=input, capture_output=True, text=True, timeout=timeout)
     if check and p.returncode != 0:
-        raise SysError(f"{' '.join(cmd[-6:])}: {(p.stderr or p.stdout).strip()[:400]}")
+        raise SysError(f"{cmd_label(cmd)}: {(p.stderr or p.stdout).strip()[:400]}")
     return p
 
 

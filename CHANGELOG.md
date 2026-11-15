@@ -74,6 +74,20 @@ it grows, so every user-visible change gets a new version.
   and accept only Latin letters, digits and `_=+.-`, up to 15 characters: a client named in Russian (or any
   non-Latin script, or a long name) got a file the app refused. Latin names stay (other characters → `_`, cut to
   15); the rest get 8 digits derived from the client's key — the same on every download (`users.conf_filename`).
+- **Additional server addresses (#37).** Server → "Additional server addresses": other public IPs or domains of
+  this server (`settings.extra_hosts`, at most `users.EXTRA_HOSTS_MAX`, IPv4, IPv6 or a domain). "Address in
+  configs" offers them for everyone, and a client gets its own in its window (the Connect pane) or when it is
+  created (`state.chost`: pk → address, `PUT /api/hosts/<pk>`, `host` in `POST /api/users`). Only the address the
+  client connects to changes; what websites see stays the server's main address or the exit's. An address removed
+  from the list is taken off its clients (they are back to the common one). Backups don't carry this server's
+  additional addresses, and a client keeps its address after a restore only if this server has it too
+  (`main.restore_state`). Thanks to @MacSergey.
+- **Clear error when the kernel module refuses an exit's config (#24).** The message no longer shows a piece of
+  the `nsenter` command and the temporary config file inside the panel's container (people went looking for a
+  file that isn't on the host): "The kernel module didn't accept the config of exit awgr3 (Invalid argument),
+  amneziawg-go did — exits run on amneziawg-go until the AWG server restarts" (`ev.kernel_conf`, also in Telegram
+  and in the engine block). Errors of commands in the AWG server's network show the command without `nsenter` and
+  without file paths (`system.cmd_label`).
 - **The exit window shows the exit's interface** (`awgrN`) next to its name.
 - **DNS on the server: the description says how it works** — which way a query takes (a domain rule's exit, else
   the main exit, its fallback, direct, refusal for a block), why, encryption and cache, how to set it up — without

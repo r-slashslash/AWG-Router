@@ -745,7 +745,7 @@ class ReviewFixesTest(unittest.TestCase):
         e, events, err = self.start_up(setconf_fails=1)
         self.assertIsNone(err)
         self.assertEqual(e.rt["u1"].engine, "go")
-        self.assertIn("ev.kernel_fallback", events)
+        self.assertIn("ev.kernel_conf", events)                 # с 1.21.0 — своё сообщение: модуль не принял конфиг
 
     def test_pass_stops_after_server_restart(self):
         e = main.engine

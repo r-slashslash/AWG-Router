@@ -332,6 +332,9 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # дем
 <td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, движок на модуле ядра <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>, перенос сервера и удаление <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a>, поле подсети <a href="https://github.com/r-slashslash/AWG-Router/issues/26">#26</a>, переустановка поверх сервера на хосте <a href="https://github.com/r-slashslash/AWG-Router/issues/27">#27</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>проверка Let's Encrypt через веб-сервер на порту 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
+<tr>
+<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>несколько адресов сервера в конфигах клиентов <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a></sub></td>
+</tr>
 </table>
 
 🐛 находили и разбирали проблемы · 💡 идеи · 💻 код · 🔍 проверка на настоящих серверах

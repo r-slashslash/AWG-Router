@@ -332,6 +332,9 @@ They found problems, traced them down to the line of code and suggested solution
 <td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>IPv6 exits and the panel address in the container mode <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, the kernel module engine <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>, moving the server and uninstall <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a>, the subnet field <a href="https://github.com/r-slashslash/AWG-Router/issues/26">#26</a>, reinstalling over a host server <a href="https://github.com/r-slashslash/AWG-Router/issues/27">#27</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>Let's Encrypt validation through a web server on port 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
+<tr>
+<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>several server addresses in client configs <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a></sub></td>
+</tr>
 </table>
 
 🐛 found and explained problems · 💡 ideas · 💻 code · 🔍 testing on real servers

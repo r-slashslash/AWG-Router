@@ -406,8 +406,8 @@ class Engine:
                     raise system.SysError(Msg("sys.awg_start_failed", iface=ifn))
             self.rt[uid] = r
             self._setconf(t, ifn, setconf)       # не прошёл и здесь — конфиг плох, модуль ни при чём
-            if kernel_err is not None:
-                self._kernel_failed(ifn, kernel_err)    # amneziawg-go принял то, что не принял модуль
+            if kernel_err is not None:                  # amneziawg-go принял то, что не принял модуль
+                self._kernel_failed(ifn, kernel_err, conf=True)
         else:
             self.rt[uid] = r
         # Служебный link-local адрес: без IPv4-адреса ядро при включённом rp_filter
@@ -520,9 +520,13 @@ class Engine:
             self._pre = awgconf.resolve_many(sorted(hosts), awgconf.RESOLVE_TIMEOUT)
             self._pre_failed = hosts - set(self._pre)
 
-    def _kernel_failed(self, ifn: str, err) -> None:
-        self.kernel_fallback = {"error": err, "at": time.time()}
-        self.event("warn", Msg("ev.kernel_fallback", iface=ifn, error=err))
+    def _kernel_failed(self, ifn: str, err, conf: bool = False) -> None:
+        """conf — модуль создал интерфейс, но не принял конфиг выхода (amneziawg-go его принял): в тексте
+        только причина («Invalid argument»), без команды — иначе человек ищет файл конфига, которого нет."""
+        if conf and isinstance(err, str):
+            err = err.split(": ", 1)[-1]
+        self.kernel_fallback = {"error": err, "at": time.time(), "iface": ifn, "conf": conf}
+        self.event("warn", Msg("ev.kernel_conf" if conf else "ev.kernel_fallback", iface=ifn, error=err))
 
     def _setconf(self, t: system.Target, ifn: str, setconf: str) -> None:
         path = os.path.join(RUN_DIR, f"{ifn}.conf")

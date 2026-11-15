@@ -115,6 +115,7 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
     DROPPED = {"lists[].addresses", "lists[].checked", "lists[].count", "lists[].error", "lists[].skipped_v6",
                "lists[].updated", "lists[].first",      # пересчитываются при обновлении списков
                "settings.client_host",                  # адрес этого сервера, а не из копии
+               "settings.extra_hosts",                  # тоже: дополнительные адреса этого сервера (#37)
                "settings.telegram.backup_last", "settings.telegram.backup_error",
                "await_first"}                           # ждать первого подключения — только на этом сервере
 
@@ -135,14 +136,17 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                 main.ensure_share(pk)
                 main.put_client_cps(R({"preset": "stun"}), pk)
                 main.store.mutate(lambda s: s["settings"].update(panel_dns=True, panel_dns_enc="dot",
-                                                                 shaping={"down": 100, "up": 50}))
+                                                                 shaping={"down": 100, "up": 50},
+                                                                 extra_hosts=["198.51.100.20"]))
+                main.put_client_host(R({"host": "198.51.100.20"}), pk)
                 main.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}, strict=True))
                 st = main.store.snapshot()
                 new = main.clean_backup_state(st)
             finally:
                 main.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],
-                                                     shares=st0["shares"], cps=st0["cps"]))
-                main.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping")])
+                                                     shares=st0["shares"], cps=st0["cps"], chost=st0.get("chost", {})))
+                main.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping",
+                                                                                   "extra_hosts")])
                 main.store.mutate(lambda s: [s["routing"].pop(k, None) for k in ("balance", "strict")])
                 main.del_upstream(R({"replace": "direct"}), x)
 

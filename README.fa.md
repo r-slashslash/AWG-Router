@@ -365,6 +365,9 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 <td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a>، موتور ماژول هسته <a href="https://github.com/r-slashslash/AWG-Router/issues/24">&lrm;#24&lrm;</a>، انتقال سرور و حذف <a href="https://github.com/r-slashslash/AWG-Router/issues/25">&lrm;#25&lrm;</a>، فیلد زیرشبکه <a href="https://github.com/r-slashslash/AWG-Router/issues/26">&lrm;#26&lrm;</a>، نصب دوباره روی سرور میزبان <a href="https://github.com/r-slashslash/AWG-Router/issues/27">&lrm;#27&lrm;</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>اعتبارسنجی Let's Encrypt از راه وب‌سرور روی درگاه 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">&lrm;#21&lrm;</a></sub></td>
 </tr>
+<tr>
+<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>چند آدرس سرور در پیکربندی کلاینت‌ها <a href="https://github.com/r-slashslash/AWG-Router/issues/37">&lrm;#37&lrm;</a></sub></td>
+</tr>
 </table>
 
 🐛 یافتن و بررسی مشکلات · 💡 ایده · 💻 کد · 🔍 آزمایش روی سرورهای واقعی

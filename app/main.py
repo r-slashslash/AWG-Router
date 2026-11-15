@@ -684,6 +684,21 @@ QUOTA_KEY_RE = re.compile(r"^(\d{4}-\d{2}|total)$")
 MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
+def restore_state(st: dict, new: dict) -> None:
+    """Состояние из копии вместо текущего. Адреса этого сервера важнее адресов из копии (переезд): и свои из
+    панели, и отсутствие своих — тогда остаётся PUBLIC_HOST из .env, а не IP старого сервера в конфигах, ссылке
+    и сертификате. Адрес клиента из копии (#37) остаётся, только если он есть и у этого сервера."""
+    own = {k: st["settings"].get(k) for k in ("public_host", "client_host", "extra_hosts")}
+    st.clear()
+    st.update(new)
+    for k, v in own.items():
+        st["settings"].pop(k, None)
+        if v:
+            st["settings"][k] = v
+    ok = set(engine.srv.host_choices(st))
+    st["chost"] = {k: v for k, v in (st.get("chost") or {}).items() if v in ok}
+
+
 def clean_backup_state(new: dict) -> dict:
     """Состояние из резервной копии → проверенное состояние.
 
@@ -827,6 +842,12 @@ def clean_backup_state(new: dict) -> dict:
             v = check(f"limits.{pk[:12]}.{k}", lambda: v_rate(L.get(k)))
             if v:
                 st["limits"][pk][k] = v
+
+    # свой адрес сервера в конфиге клиента (#37); чужие адреса снимает restore_backup
+    for pk, h in obj("chost").items():
+        if not awgconf.KEY_RE.match(pk) or not isinstance(h, str) or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", h):
+            fail(f"chost.{pk[:12]}")
+        st["chost"][pk] = h
 
     # свои I1–I5 клиентов
     for pk, e in obj("cps").items():
@@ -986,20 +1007,7 @@ def restore_backup(req):
             bad("err.backup_kind")
         sc, srv_files = clean_server_files(srv, t.kind)
 
-    def fn(st):
-        keep_host = st["settings"].get("public_host")
-        keep_client_host = st["settings"].get("client_host")
-        st.clear()
-        st.update(new)
-        # адреса этого сервера важнее адресов из копии (переезд): и свои из панели, и отсутствие своих —
-        # тогда остаётся PUBLIC_HOST из .env, а не IP старого сервера в конфигах, ссылке и сертификате
-        st["settings"].pop("public_host", None)
-        st["settings"].pop("client_host", None)
-        if keep_host:
-            st["settings"]["public_host"] = keep_host
-        if keep_client_host:
-            st["settings"]["client_host"] = keep_client_host
-    store.mutate(fn)
+    store.mutate(lambda st: restore_state(st, new))
     engine.traffic.replace(b.get("traffic") or {})
     restarted = False
     if sc is not None:
@@ -1242,6 +1250,7 @@ def get_state(req):
             "limits": limits.view(st.get("limits", {}).get(c["public_key"])),
             "share_url": f"{origin}/s/{share_of[c['public_key']]}" if c["public_key"] in share_of else None,
             "cps": cps_view(st.get("cps", {}).get(c["public_key"])),
+            "host": (st.get("chost") or {}).get(c["public_key"]),
             "policy": {"outbound": cp.get("outbound", "inherit"),
                        "rules_mode": cp.get("rules_mode", "inherit"),
                        "rules": cp.get("rules") or [], "note": cp.get("note", "")},
@@ -1262,6 +1271,7 @@ def get_state(req):
                    "last_error": engine.last_error, "ruleset_size": len(engine.ruleset)},
         "phase": engine.phase(),
         "routing": st["routing"],
+        "hosts": {"default": engine.srv.client_host(st), "choices": engine.srv.host_choices(st)},
         "global_effective": engine.resolve(engine.default_out(st, None), st),
         "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},
         "security": {"totp": bool(totp.load()), "session_hours": SESSION_TTL // 3600,
@@ -1925,9 +1935,39 @@ def _user_errors(fn):
 @app.post("/api/users")
 def add_user(req):
     body = req.json()
+    host = _client_host_value(body.get("host"))           # проверка до создания: отказ — без клиента
     pk = _user_errors(lambda: engine.srv.add_client(_client_name(body.get("name"))))
+    if host:
+        store.mutate(lambda st: st.setdefault("chost", {}).__setitem__(pk, host))
     engine.reconcile_soon()
     return {"public_key": pk}
+
+
+def _client_host_value(value) -> str:
+    """Свой адрес сервера в конфиге клиента: пусто — как у всех, иначе один из host_choices (#37)."""
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value not in engine.srv.host_choices(store.snapshot()):
+        bad("err.bad_value")
+    return value
+
+
+@app.put("/api/hosts/{pk:path}")
+def put_client_host(req, pk):
+    """host: "" — как у всех, иначе адрес из «Сервер → Дополнительные адреса» (или основной)."""
+    _pk(pk)
+    if not any(c["public_key"] == pk for c in engine.clients):
+        bad("err.not_found", 404)
+    host = _client_host_value(req.json().get("host"))
+
+    def fn(st):
+        m = st.setdefault("chost", {})
+        if host:
+            m[pk] = host
+        else:
+            m.pop(pk, None)
+    store.mutate(fn)
+    return {"ok": True, "host": host or None}
 
 
 @app.put("/api/users/{pk:path}")

@@ -743,19 +743,33 @@ function goTab(name) {
   tab = name; history.replaceState(null, "", "#" + tab); render(); window.scrollTo(0, 0);
 }
 
+/** Свой адрес сервера в конфиге клиента (#37): «как у всех» и адреса с вкладки «Сервер».
+ *  Выбора нет, пока у сервера один адрес. */
+function hostSelect(id, cur, hint = "cl.host_hint") {
+  const H = S.hosts || {}, choices = (H.choices || []).filter((h) => h !== H.default);
+  if (!choices.length && !cur) return "";
+  const opts = [["", t("cl.host_default", { v: H.default || "—" })], ...choices.map((h) => [h, h])];
+  if (cur && !opts.some(([v]) => v === cur)) opts.push([cur, cur]);
+  return `<label class="field"><span>${esc(t("cl.host"))}</span>
+    <select id="${id}" dir="auto">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+    <span class="hint">${esc(t(hint))}</span></label>`;
+}
+
 function addClient() {
   openModal(t("cl.add_title"), `
     <label class="field"><span>${esc(t("cl.name"))}</span>
       <input type="text" id="n-name" maxlength="60" placeholder="${esc(t("cl.name_ph"))}" autofocus>
       <span class="hint">${esc(t("cl.add_hint"))}</span>
-    </label>`,
+    </label>${hostSelect("n-host", "", "cl.host_new_hint")}`,
   `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="n-save">${esc(t("cl.create"))}</button>`);
   const go = async () => {
     const name = $("#n-name").value.trim();
     if (!name) { $("#n-name").focus(); return; }
     $("#n-save").disabled = true;
     try {
-      const r = await api("POST", "users", { name });
+      const body = { name };
+      if ($("#n-host") && $("#n-host").value) body.host = $("#n-host").value;
+      const r = await api("POST", "users", body);
       await refresh();
       toast(t("toast.client_added", { name }));
       editClient(r.public_key, "connect");
@@ -858,7 +872,7 @@ function editClient(pk, section = null) {
       <button type="button" data-v="route">${esc(t("cl.v_route"))}</button>
       <button type="button" data-v="manage">${esc(t("cl.v_manage"))}</button>
     </div>
-    <div id="c-pane-connect" class="c-pane"><div id="c-cps-box"></div><div id="c-conn"></div></div>
+    <div id="c-pane-connect" class="c-pane">${hostSelect("c-host", c.host || "")}<div id="c-cps-box"></div><div id="c-conn"></div></div>
     <div id="c-pane-route" class="c-pane">
       <label class="field"><span>${esc(t("cl.default_exit"))}</span>
         <select id="c-out">${outOptions(draft.outbound, { inherit: t("out.inherit_now", { exit: exitName(S.routing.default) }) })}</select>
@@ -911,6 +925,15 @@ function editClient(pk, section = null) {
     </div>
   `, `<button class="btn" data-close>${esc(t("btn.close"))}</button><button class="btn primary" id="c-save">${esc(t("btn.save"))}</button>`);
 
+  const hostSel = $("#c-host");
+  if (hostSel) hostSel.onchange = async () => {
+    hostSel.disabled = true;
+    try {
+      const r = await api("PUT", "hosts/" + encodeURIComponent(pk), { host: hostSel.value });
+      c.host = r.host; toast(t("cl.host_saved")); loadConnect(); refresh();
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); hostSel.value = c.host || ""; }
+    hostSel.disabled = false;
+  };
   const loadCps = async () => {
     const box = $("#c-cps-box");
     let info;
@@ -1721,6 +1744,7 @@ function viewServer() {
       <div class="section-head"><h2>${esc(t("srv.clients_title"))}</h2></div>
       <div class="panel panel-pad">
         <label class="field"><span>${esc(t("srv.client_host"))}</span><select id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
+        <label class="field"><span>${esc(t("srv.extra_hosts"))}</span><input type="text" id="s-extra" dir="ltr" placeholder="203.0.113.20, vpn2.example.com" value="${esc((SRV.extra_hosts || []).join(", "))}"><span class="hint">${esc(t("srv.extra_hosts_hint"))}</span></label>
         <label class="field"><span>DNS</span><input type="text" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
         <div class="field">
           <label class="check"><input type="checkbox" id="s-pdns" ${SRV.panel_dns ? "checked" : ""}><span>${esc(t("srv.panel_dns"))}</span></label>
@@ -1774,7 +1798,9 @@ function engineSection() {
     <div class="section-head"><div><h2>${esc(t("eng.title"))}</h2><p class="muted small">${esc(t("eng.sub"))}</p></div></div>
     <div class="panel panel-pad">
       ${E.old ? `<div class="banner bad">${esc(t("eng.old_warn", { version: E.old, min: E.min }))}</div>` : ""}
-      ${E.fallback ? `<div class="banner bad">${esc(t("eng.fallback", { error: tm(E.fallback.error) }))}</div>` : ""}
+      ${E.fallback ? `<div class="banner bad">${esc(E.fallback.conf
+        ? t("eng.fallback_conf", { iface: E.fallback.iface || "", error: tm(E.fallback.error) })
+        : t("eng.fallback", { error: tm(E.fallback.error) }))}</div>` : ""}
       <div class="kv" style="margin-bottom:14px">
         <div><span>${esc(t("eng.server"))}</span><b><bdi>${esc(srv)}</bdi></b></div>
         <div><span>${esc(t("eng.module"))}</span><b>${mod}</b></div>
@@ -1963,6 +1989,7 @@ function clientHostOptions() {
   const opts = [["", t("srv.ch_main", { v: SRV.public_host || "—" })]];
   if (A.v4 && A.v4 !== SRV.public_host) opts.push([A.v4, "IPv4 · " + A.v4]);
   (A.v6 || []).forEach((ip) => { if (ip !== SRV.public_host) opts.push([ip, "IPv6 · " + ip]); });
+  (SRV.extra_hosts || []).forEach((h) => { if (h !== SRV.public_host && !opts.some(([v]) => v === h)) opts.push([h, t("srv.ch_extra", { v: h })]); });
   if (cur && !opts.some(([v]) => v === cur)) opts.push([cur, (cur.includes(":") ? "IPv6 · " : "IPv4 · ") + cur]);
   return opts.map(([v, label]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(label)}</option>`).join("");
 }
@@ -1981,7 +2008,7 @@ function srvDirty() {
   return Object.keys(SRV.params).some((k) => (srvDraft[k] || "") !== (SRV.params[k] || "")) ||
     (pdns && pdns.checked !== !!SRV.panel_dns) ||
     ($("#s-domf") && $("#s-domf").checked !== !!SRV.dom_filter) ||
-    ["#s-host", "#s-ch", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
+    ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
 }
@@ -2015,7 +2042,7 @@ bind.server = () => {
     b.disabled = false;
   };
   const showBar = () => { $("#s-bar").hidden = !srvDirty(); };
-  ["#s-host", "#s-ch", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
+  ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar; el.onchange = showBar;
   });
@@ -2061,7 +2088,7 @@ bind.server = () => {
     const port = +$("#s-port").value, addr = $("#s-addr").value.trim();
     const restart = serverSide || (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
     if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
-    const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, client_dns: $("#s-dns").value,
+    const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, extra_hosts: $("#s-extra").value, client_dns: $("#s-dns").value,
       panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
     if (!SRV.port_locked) body.port = port;

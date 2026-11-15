@@ -396,7 +396,7 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 .row-off td { opacity: .55; }
 .row-off td:first-child { opacity: 1; }
 .seg-wide { display: flex; width: 100%; margin-bottom: 16px; }
-.seg-wide button { flex: 1; }
+.seg-wide button { flex: 1; min-width: 0; padding-inline: 6px; }   /* «Управление» на 375 px вылезал за окно */
 .notice { padding: 12px 14px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--rule); font-size: .92rem; margin-bottom: 12px; }
 .notice.warn { background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .connect { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }

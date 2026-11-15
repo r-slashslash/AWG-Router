@@ -28,8 +28,8 @@ class ConnectionNameTest(unittest.TestCase):
         m.e.store.snapshot.return_value = {"keys": {peer.public_key: PRIV}, "cps": {}}
         m._target = lambda: object()
         m.load = lambda t: (sc, rows)
-        m.profile = lambda st, sc_: awgserver.ClientProfile("203.0.113.5", 47823, PUB, ["1.1.1.1"], 1376, "25-35")
-        m.client_host = lambda st: "203.0.113.5"
+        m.profile = lambda st, sc_, pk=None: awgserver.ClientProfile("203.0.113.5", 47823, PUB, ["1.1.1.1"], 1376, "25-35")
+        m.client_host = lambda st, pk=None: "203.0.113.5"
         return m.client_config(peer.public_key)
 
     def test_only_the_client_name(self):

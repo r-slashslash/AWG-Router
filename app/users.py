@@ -82,6 +82,37 @@ def conf_filename(name: str, pk: str) -> str:
     return f"{num:08d}.conf"
 
 
+EXTRA_HOSTS_MAX = 16
+_HOSTNAME = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
+
+
+def parse_extra_hosts(value) -> list[str]:
+    """Дополнительные внешние адреса сервера (#37): IPv4, IPv6 или домен; строкой (через запятую, пробел,
+    перевод строки) или списком строк. Не больше EXTRA_HOSTS_MAX, повторы убираются."""
+    if isinstance(value, str):
+        items = re.split(r"[,\s]+", value)
+    elif isinstance(value, list) and all(isinstance(x, str) for x in value):
+        items = value
+    else:
+        raise UserError(Msg("err.bad_value"))
+    out = []
+    for raw in items:
+        h = raw.strip().strip("[]")
+        if not h:
+            continue
+        try:
+            h = str(ipaddress.ip_address(h))
+        except ValueError:
+            if not _HOSTNAME.fullmatch(h):
+                raise UserError(Msg("srv.bad_extra_host", value=raw.strip()[:60]))
+            h = h.lower()
+        if h not in out:
+            out.append(h)
+    if len(out) > EXTRA_HOSTS_MAX:
+        raise UserError(Msg("srv.extra_hosts_max", n=EXTRA_HOSTS_MAX))
+    return out
+
+
 class ServerManager:
     def __init__(self, engine):
         self.e = engine
@@ -110,10 +141,21 @@ class ServerManager:
     def public_host(self, st: dict) -> str:
         return st["settings"].get("public_host") or config.PUBLIC_HOST or ""
 
-    def client_host(self, st: dict) -> str:
-        """Адрес сервера в конфигах клиентов: выбранный IPv4/IPv6 или внешний адрес.
+    def client_host(self, st: dict, pk: str | None = None) -> str:
+        """Адрес сервера в конфигах клиентов: свой у клиента (pk), иначе выбранный IPv4/IPv6 или внешний адрес.
         Отдельно от public_host — тот же адрес у панели и её сертификата."""
-        return st["settings"].get("client_host") or self.public_host(st)
+        own = (st.get("chost") or {}).get(pk) if pk else None
+        return own or st["settings"].get("client_host") or self.public_host(st)
+
+    def host_choices(self, st: dict) -> list[str]:
+        """Адреса, из которых клиенту выбирают свой (#37): основной, выбранный для всех и дополнительные с
+        вкладки «Сервер». Меняется только адрес, к которому подключается клиент, — не адрес выхода в интернет."""
+        s = st["settings"]
+        out = []
+        for h in (self.public_host(st), s.get("client_host"), *(s.get("extra_hosts") or [])):
+            if h and h not in out:
+                out.append(h)
+        return out
 
     def host_addrs(self, port: int) -> dict:
         """Найденные адреса сервера для выбора на вкладке «Сервер»."""
@@ -127,11 +169,11 @@ class ServerManager:
         d = getattr(self.e, "dns_state", None) or {}
         return d.get("listen") if d.get("state") == "on" else None
 
-    def profile(self, st: dict, sc: ServerConf) -> awgserver.ClientProfile:
+    def profile(self, st: dict, sc: ServerConf, pk: str | None = None) -> awgserver.ClientProfile:
         s = st["settings"]
         params = sc.params()
         return awgserver.ClientProfile(
-            host=self.client_host(st) or "SERVER_IP",
+            host=self.client_host(st, pk) or "SERVER_IP",
             port=sc.port,
             server_pub=self.server_pub(sc),
             dns=profile_dns(s, sc, self._dns_live()),
@@ -262,6 +304,7 @@ class ServerManager:
                 st["clients"].pop(pk, None)
                 st.get("limits", {}).pop(pk, None)
                 st.get("cps", {}).pop(pk, None)
+                st.get("chost", {}).pop(pk, None)
                 st.get("await_first", {}).pop(pk, None)
                 st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
             self.e.store.mutate(forget)
@@ -278,7 +321,7 @@ class ServerManager:
             raise UserError(Msg("err.not_found"))
         if not priv:
             raise UserError(Msg("usr.no_key"))
-        prof = self.profile(st, sc)
+        prof = self.profile(st, sc, pk)
         override = cps.for_client(st.get("cps", {}).get(pk))      # свои I1–I5 клиента
         conf = awgserver.client_conf(sc, prof, p, priv, override)
         name = self._name(rows, pk) or p.ip
@@ -288,7 +331,7 @@ class ServerManager:
         # В .conf и QR названия нет вовсе: приложения AmneziaWG берут его из имени файла или спрашивают.
         return {"name": name, "conf": conf, "filename": safe,
                 "link": awgserver.vpn_link(sc, prof, p, priv, conf, name, override),
-                "warn_host": not self.client_host(st)}
+                "warn_host": not self.client_host(st, pk)}
 
     @staticmethod
     def _name(rows: list[dict], pk: str) -> str:
@@ -322,6 +365,7 @@ class ServerManager:
             "version": awgserver.protocol_version(params),
             "public_host": self.public_host(st),
             "client_host": s.get("client_host") or "",
+            "extra_hosts": s.get("extra_hosts") or [],
             "addrs": self.host_addrs(sc.port),
             "client_dns": client_dns(s),
             "panel_dns": bool(s.get("panel_dns")),
@@ -378,9 +422,12 @@ class ServerManager:
                 h = h.strip("[]")
                 # пусто или то же, что PUBLIC_HOST в .env, — своей настройки нет: адрес берётся из .env
                 settings_patch["public_host"] = None if not h or h.lower() == config.PUBLIC_HOST.lower() else h
+            if "extra_hosts" in body:
+                settings_patch["extra_hosts"] = parse_extra_hosts(body["extra_hosts"])
             if "client_host" in body:
                 ch = str(body["client_host"] or "").strip().strip("[]")
-                if ch:
+                extra = settings_patch.get("extra_hosts", self.e.store.snapshot()["settings"].get("extra_hosts") or [])
+                if ch and ch not in extra:               # домен — только из дополнительных адресов
                     try:
                         ch = str(ipaddress.ip_address(ch))
                     except ValueError:
@@ -470,6 +517,11 @@ class ServerManager:
                     st["settings"].update(settings_patch)
                     if st["settings"].get("public_host") is None:
                         st["settings"].pop("public_host", None)
+                    if not st["settings"].get("extra_hosts"):
+                        st["settings"].pop("extra_hosts", None)
+                    # адрес, которого больше нет среди выбора, у клиента снимается: он снова «как у всех»
+                    keep = set(self.host_choices(st))
+                    st["chost"] = {k: v for k, v in (st.get("chost") or {}).items() if v in keep}
                 self.e.store.mutate(apply)
             host_changed = self.client_host(self.e.store.snapshot()) != host_before
             dns_changed = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live()) != dns_before

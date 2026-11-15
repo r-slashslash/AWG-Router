@@ -332,6 +332,9 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 <td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>、内核模块引擎 <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>、服务器迁移和卸载 <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a>、子网字段 <a href="https://github.com/r-slashslash/AWG-Router/issues/26">#26</a>、在主机服务器上重新安装 <a href="https://github.com/r-slashslash/AWG-Router/issues/27">#27</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>通过 80 端口上的 Web 服务器进行 Let's Encrypt 验证 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
+<tr>
+<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>客户端配置中的多个服务器地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a></sub></td>
+</tr>
 </table>
 
 🐛 发现并分析问题 · 💡 想法 · 💻 代码 · 🔍 在真实服务器上测试
