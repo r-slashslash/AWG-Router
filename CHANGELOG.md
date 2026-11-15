@@ -3,6 +3,46 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.21.0 — 2026-11-15
+
+- **Domain rules to any exit.** A domain list can now lead to an AmneziaWG exit, Direct or Block, not only to a
+  SOCKS5 exit (`err.domains_need_socks` is gone). `sniproxy.py` already sent a matched site to its original address
+  with an exit's mark when a SOCKS5 exit fell back (`Engine._sni_target`): for an AmneziaWG exit and Direct that is
+  now the normal path, so the site goes to the address the device got from its own DNS (the hint suggests DNS on the
+  server against spoofing); through SOCKS5 the proxy still gets the name. The exit window sets sites, domain and
+  network lists and "everything else" for AmneziaWG exits too. Deleting an exit takes its own sites list with it,
+  while shared lists go to the replacement. A domain rule that leads where everything else goes, with no address
+  rules, no longer turns on the redirect of all HTTPS/HTTP into the handler (`Engine._policies`). The network
+  tests check a matched site going through a tunnel exit by its mark.
+- **A rule line says what it catches.** In the global policy and on a client's page a rule reads as its lists on
+  the left — `Domains work (20)`, an exit's own sites by their first domain `Domains youtube.com +19` (lists keep
+  their `first` domain), `Office (12 networks)`, countries and ASNs by name; more than two lists collapse to `+N`,
+  opened by a tap — and the exit on the right. A rule's own name shows small and grey above it only when it is not
+  the exit's or the list's name: the exit window no longer signs the rules it creates, and the names it wrote
+  before are removed (`Store.drop_auto_comments`, also on restore). A rule that is off stays numbered, grey and
+  struck through. The rule editor shows the same list labels.
+- **Exact AWG version on exit cards.** `AWG 3.1`, `2.0`, `1.5` or `1.0` from the config's keys
+  (`awgconf.protocol_version`: H1–H4 as ranges or S3/S4 mean 2.0, I1–I5 1.5); the card no longer shows `awgrN`.
+- **The header says what the panel is doing.** Besides **Running** and **Error**: **Starting…** until the first
+  pass applies rules, tunnels and the domain handler; **Restarting the AWG server…** after the button or an
+  auto-restart and while the panel waits for a lost interface (after 10 minutes it is an error,
+  `SERVER_DOWN_AFTER`); **Switching the engine…** during a manual switch or the module install; **Updating…**,
+  also for an update started in the console (`install.sh` keeps `data/installing` while it runs and the page
+  reloads when it is gone); **No connection to the panel** after two failed polls in a row (a poll now gives up
+  after 15 s). Yellow for the transitional states, red for errors and no connection (`Engine.phase`, `phase` in
+  `/api/state`).
+- **Status dot on the text line.** The dot next to "working", "online" and in the header sits at the middle of
+  the text everywhere: the flex box around it took its baseline from the empty dot and pushed the text down.
+- **Installer: ports.** AmneziaWG and panel ports may be anything from 1 to 65535; the random ones are four-digit
+  (1000–9999: some mobile operators cut high ports). A random AmneziaWG port skips the ports of other VPNs, VoIP,
+  STUN and local discovery (`AWG_AVOID`, the same list in the panel's own server creation); UDP 53 is refused —
+  DNS on the server listens there (also in the panel). The panel can't take 80 (Let's Encrypt) or 443 (often a web
+  server) unless it already is there, nor the domain handler's port from `SNI_PROXY_PORT`. `AWGR_AWG_PORT` is
+  checked like a typed answer.
+- **Installer: the ssh command names the right user.** With access through an ssh tunnel the final command used
+  `root@`; now it is the user behind sudo, else the one who opened the terminal (`su -`), else the one saved at
+  install (`SSH_USER` in `.env`, for `awg-router info` later), else root; and `-p` when ssh is not on 22.
+
 ## 1.20.0 — 2026-11-14
 
 - **AmneziaWG engine: amneziawg-go or the kernel module.** A new block on the Server tab shows what the server

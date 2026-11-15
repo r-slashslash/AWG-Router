@@ -14,7 +14,7 @@ browser / Telegram bot
    engine (app/engine.py)  ──►  AWG server  (container, host or demo "Target")
         │                         exits: AmneziaWG tunnels awgrN, SOCKS5 proxies
         ├─ nftables / ip rule / tc      (routing, accounting, speed limits)
-        ├─ sniproxy.py                  (domain rules for SOCKS5 exits)
+        ├─ sniproxy.py                  (domain rules)
         └─ dnsproxy.py                  (optional DNS on the server)
 ```
 
@@ -78,9 +78,11 @@ fallback; an exit over its monthly quota follows `quota_action`. With load balan
 
 ## Domain rules
 
-Domain rules apply to SOCKS5 exits only. nftables redirects TCP 80/443 of such clients to
-`sniproxy.py`, which reads the site name (SNI or Host header): a match goes through the proxy by name,
-anything else goes to its original address. QUIC is blocked for these clients because the name
+Domain rules can lead to any exit. nftables redirects TCP 80/443 of such clients to
+`sniproxy.py`, which reads the site name (SNI or Host header): a match goes through a SOCKS5 proxy by name,
+or to its original address with the mark of an AmneziaWG exit or Direct, or is closed for Block;
+anything else goes to its original address with the client's policy mark. A domain rule that leads where
+everything else goes, with no address rules, changes nothing and turns no redirect on. QUIC is blocked for these clients because the name
 cannot be read from it. A connection whose original address is the handler itself was opened to its port
 directly, not redirected, and is closed. Once the path is chosen, data is relayed inside the kernel (`splice`), so Python
 only reads the name and counts bytes.
