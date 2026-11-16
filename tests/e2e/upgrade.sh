@@ -21,6 +21,9 @@ DIR=/opt/awg-router
 LOGS="${E2E_LOGS:-/tmp/e2e-logs}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$LOGS"
+# shellcheck source=tests/e2e/secrets.sh
+. "$HERE/secrets.sh"
+trap 'scrub_logs "$LOGS"' EXIT
 
 step() { printf '\n\033[1m=== %s\033[0m\n' "$1"; }
 fail() {
@@ -34,7 +37,7 @@ ok() { printf '  \033[32mok\033[0m %s\n' "$1"; }
 [ "$(id -u)" = 0 ] || { echo "Run as root"; exit 2; }
 if [ "${E2E_CLEANUP:-0}" = 1 ]; then
   bash "$HERE/cleanup.sh" >"$LOGS/cleanup-before.log" 2>&1
-  trap 'bash "$HERE/cleanup.sh" >"$LOGS/cleanup-after.log" 2>&1' EXIT
+  trap 'bash "$HERE/cleanup.sh" >"$LOGS/cleanup-after.log" 2>&1; scrub_logs "$LOGS"' EXIT
 fi
 
 # ---------------------------------------------------------------- какие версии
@@ -63,6 +66,7 @@ mkdir -p "$DIR" && tar -xzf "$tmp/a.tgz" --strip-components=1 -C "$DIR"
 if [ -f "$DIR/IMAGES" ]; then ok "the archive has IMAGES"; else echo "  (the archive has no IMAGES: $FROM is built here)"; fi
 AWGR_INSTALL="$MODE" AWGR_ACCESS=ssh AWGR_ENGINE=go bash "$DIR/install.sh" </dev/null >"$LOGS/install.log" 2>&1
 rc=$?
+hide_secrets "$DIR"
 tail -n 25 "$LOGS/install.log"
 [ "$rc" = 0 ] || fail "install.sh exit $rc"
 ok "installed"

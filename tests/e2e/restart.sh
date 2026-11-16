@@ -20,6 +20,9 @@ DIR=/opt/awg-router
 LOGS="${E2E_LOGS:-/tmp/e2e-logs}"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$LOGS"
+# shellcheck source=tests/e2e/secrets.sh
+. "$(dirname "${BASH_SOURCE[0]}")/secrets.sh"
+trap 'scrub_logs "$LOGS"' EXIT
 FAILS=0
 
 step() { printf '\n\033[1m=== %s\033[0m\n' "$1"; }
@@ -47,6 +50,7 @@ mkdir -p "$DIR"
 tar -C "$SRC" --exclude=.git -cf - . | tar -C "$DIR" -xf -
 AWGR_INSTALL="$MODE" AWGR_ACCESS=ssh AWGR_ENGINE=go bash "$DIR/install.sh" </dev/null >"$LOGS/install.log" 2>&1
 rc=$?
+hide_secrets "$DIR"
 tail -n 15 "$LOGS/install.log"
 [ "$rc" = 0 ] || die "install.sh exit $rc"
 ok "installed"
