@@ -1067,6 +1067,48 @@ class RuleNameKeptTest(unittest.TestCase):
         self.assertIn("drop_auto_comments_once(st, new)", read_src("app", "api", "backup.py"))
 
 
+import test_v120  # noqa: E402
+
+
+class PpaRetryTest(unittest.TestCase):
+    """Launchpad иногда обрывает ответ (IncompleteRead в add-apt-repository): установщик пробует трижды,
+    а не сразу оставляет сервер на amneziawg-go."""
+
+    def stub(self, name, body):
+        path = os.path.join(self.k.bin, name)
+        with open(path, "w") as f:
+            f.write("#!/bin/bash\n" + body + "\n")
+        os.chmod(path, 0o755)
+
+    def setUp(self):
+        self.k = test_v120.KernelInstallTest("test_already_new_enough")     # его настоящий кусок install.sh
+        self.k.setUp()
+        self.addCleanup(shutil.rmtree, self.k.tmp, ignore_errors=True)
+        self.stub("sleep", 'echo "sleep $*" >> "$LOG"')
+        n = os.path.join(self.k.tmp, "tries")
+        self.stub("add-apt-repository", f'echo "add-apt-repository $*" >> "$LOG"; echo x >> {n}; '
+                                        f'[ "$(wc -l < {n})" -ge "$OK_ON" ]')
+        self.run_sh = self.k.run_sh
+
+    def test_third_try(self):
+        rc, out, calls = self.run_sh(OK_ON="3")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(calls.count("add-apt-repository -y ppa:amnezia/ppa"), 3)
+        self.assertIn("sleep 10", calls)
+        self.assertIn("OK Kernel module loaded", out)
+
+    def test_gives_up(self):
+        rc, out, calls = self.run_sh(OK_ON="9")
+        self.assertEqual(rc, 1)
+        self.assertEqual(calls.count("add-apt-repository -y ppa:amnezia/ppa"), 3)
+        self.assertIn("Could not add ppa:amnezia/ppa", out)
+
+    def test_first_try_no_wait(self):
+        rc, out, calls = self.run_sh(OK_ON="1")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("sleep", calls)
+
+
 def read_src(*parts):
     with open(os.path.join(ROOT, *parts), encoding="utf-8") as f:
         return f.read()

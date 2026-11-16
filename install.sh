@@ -400,8 +400,10 @@ install_kernel() {
   apt-get install -y -qq "linux-headers-$(uname -r)" dkms gnupg curl -o DPkg::Lock::Timeout=300 >/dev/null \
     || { kfail "Could not install the kernel headers for $(uname -r) (a custom kernel?). The AWG server keeps using amneziawg-go."; return 1; }
   if [ "$id" = ubuntu ]; then
+    # Launchpad's API now and then cuts an answer short (IncompleteRead): three tries before giving up
     apt-get install -y -qq software-properties-common python3-launchpadlib -o DPkg::Lock::Timeout=300 >/dev/null \
-      && add-apt-repository -y ppa:amnezia/ppa >/dev/null \
+      && { add-apt-repository -y ppa:amnezia/ppa >/dev/null || { sleep 10; add-apt-repository -y ppa:amnezia/ppa >/dev/null; } \
+           || { sleep 30; add-apt-repository -y ppa:amnezia/ppa >/dev/null; }; } \
       || { kfail "Could not add ppa:amnezia/ppa (Launchpad unreachable?). The AWG server keeps using amneziawg-go."; return 1; }
   else
     amnezia_ppa_debian \
