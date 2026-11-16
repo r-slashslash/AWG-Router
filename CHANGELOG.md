@@ -246,6 +246,31 @@ it grows, so every user-visible change gets a new version.
   the files of 1.0.0–1.20.0). Backups still carry the texts in `source` (`Store.snapshot(texts=True)`), so earlier
   releases restore them. 1.20.0 started on these files (checked with its real code) shows such lists empty until a
   backup is restored, and comes back to 1.21.0 with the texts in place (it keeps the `text` tags).
+- **Fewer moments past the exits** (found by an independent check of 1.21.0). On a new target the exits' `ip rule`s
+  now go in right after the tunnels start, before DNS on the server and the nftables rules that set their marks
+  (`_sync_rules(add_only=True)`; a mark without its rule took the main table, that is direct); rules of stopped exits
+  are removed only at the end of the pass. A guard in nftables refuses a packet with an exit's mark that leaves by
+  anything but a tunnel: `c_forward` for clients' packets, `c_guard_post` (postrouting: in output the interface is
+  the one before `c_output` rerouted) for the server's own connections, and there also a `sniproxy.py` policy mark
+  that `c_output` doesn't know. `sniproxy.py` blocks a client it has no settings for, and the policies' mark numbers
+  no longer shift when a client is added (`nftgen.sniff_marks(slots)`: for a moment the handler's new numbers met the
+  old nftables rules, and a client went by another client's rules). The rules "before the panel" on a new target go
+  in right after the client list, before traffic and limits, even when the list can't be read — the AmneziaVPN app's
+  container doesn't apply them itself, and README now says that such a container sends traffic direct for a few
+  seconds after a reboot and how to avoid it. Moving the server to the host copies that ruleset, and
+  `routing.strict` is part of its key.
+- **Security fixes.** A backup's server config is refused when awg-quick would read it differently from the panel
+  (`awgserver.foreign_ok`): bash drops NUL, so `Post\0Up` is `PostUp` to it, and a client line `[Interface] = x`
+  reopens the server section — either way a command from the backup ran as root. No control or invisible characters
+  outside comments, key names only Latin letters and digits, clients keep only `Endpoint` and `PersistentKeepalive`;
+  backups of 1.3.0–1.20.0 load as before. An unread request body is skipped in 64 KB pieces (`web._skip_body`)
+  instead of being read whole into memory (up to 4 MB from anyone without a password); a sign-in body is at most
+  64 KB. Cookies are parsed by hand (`web.parse_cookies`): `SimpleCookie` gave up on another site's cookie with a
+  space and dropped the panel's session with it. An address gets the reserve connection slots only after a
+  successful sign-in or with a valid session, not on any sign-in attempt. A lone UTF-16 surrogate in JSON answers
+  400 instead of 500. The panel's own password and 2FA files are fsynced with their folder. The Telegram control
+  hint no longer says nothing can be deleted from the bot (it deletes a client after a confirmation). Release images
+  are built without the GitHub Actions cache, and the network tests pin pyroute2.
 
 ## 1.20.0 — 2026-11-14
 
