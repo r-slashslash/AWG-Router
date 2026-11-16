@@ -124,6 +124,8 @@ def _client_hello_sni(b: bytes) -> str | None:
                     ntype, nlen = b[q], struct.unpack("!H", b[q + 1:q + 3])[0]
                     q += 3
                     if ntype == 0:
+                        if nlen > 253:
+                            return None
                         return b[q:q + nlen].decode("ascii", "replace").lower().rstrip(".")
                     q += nlen
                 return None
@@ -145,9 +147,9 @@ def http_host(data: bytes) -> str | None | bool:
         k, _, v = line.partition(":")
         if k.strip().lower() == "host":
             v = v.strip().lower()
-            if v.startswith("["):
+            if v.startswith("[") or len(v) > 260:
                 return None
-            return v.rsplit(":", 1)[0] if ":" in v else v
+            return (v.rsplit(":", 1)[0] if ":" in v else v).rstrip(".")
     return None
 
 
@@ -160,13 +162,16 @@ def name_of(data: bytes, port: int) -> str | None | bool:
 
 
 def match(name: str, doms: set[str]) -> bool:
+    if len(name) > 253:                 # не имя сайта; на нём перебор суффиксов занял бы секунды, а с ним — весь обработчик
+        return False
     labels = name.split(".")
     return any(".".join(labels[i:]) in doms for i in range(len(labels)))
 
 
 async def peek_name(sock: socket.socket, dport: int) -> tuple[bytes, str | None]:
     """Начало соединения клиента, пока из него не прочитается имя сайта (или PEEK_TIMEOUT, или
-    PEEK_MAX байт). -> (прочитанное: его надо отправить сайту, имя или None)."""
+    PEEK_MAX байт). -> (прочитанное: его надо отправить сайту, имя; None — имени нет: клиент молчит, это не TLS и
+    не HTTP или в ClientHello нет SNI; False — ClientHello или запрос начался, но не дошёл целиком)."""
     loop = asyncio.get_running_loop()
     data = b""
     name = False
@@ -183,6 +188,8 @@ async def peek_name(sock: socket.socket, dport: int) -> tuple[bytes, str | None]
             break
         data += chunk
         name = name_of(data, dport)
+    if name is False and data:
+        return data, False      # начало ClientHello или запроса HTTP есть, а имени так и нет (связь оборвалась)
     return data, name or None
 
 
@@ -808,6 +815,11 @@ class Sniffer:
             self.stats["active"] += 1
             counted = True
             data, name = await peek_name(sock, dport)
+            if name is False:
+                # не дошёл за PEEK_TIMEOUT: имя могло быть из списка, а без него соединение пошло бы по правилам
+                # по адресам, мимо выхода этого сайта. Закрыть, как QUIC без имени: браузер откроет заново
+                self.stats["partial"] = self.stats.get("partial", 0) + 1
+                return
             if name is None:
                 self.stats["no_name"] += 1
             to, lid = self.decide(peer, name)

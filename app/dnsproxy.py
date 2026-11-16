@@ -52,6 +52,7 @@ UDP_TIMEOUT = 2.0           # ждём ответа сервера по UDP, п�
 TCP_TIMEOUT = 5.0
 CLIENT_TCP_IDLE = 10.0      # соединение клиента по TCP без новых запросов дольше — закрываем
 CACHE_MAX = 20000           # записей в кэше; старые вытесняются
+CACHE_BYTES = 16 * 1024 * 1024   # и не больше 16 МБ ответов: по TCP ответ до 64 КБ, 20 000 таких — больше гигабайта
 TTL_MAX = 3600              # дольше часа не храним, даже если TTL больше
 NEG_TTL_MAX = 300           # «нет такого имени» / «нет записей» — не дольше 5 минут
 NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
@@ -96,14 +97,22 @@ def skip_name(msg: bytes, off: int) -> int:
 def read_name(msg: bytes, off: int) -> str:
     """Имя из вопроса (без сжатия — в вопросе его не бывает), строчными буквами."""
     labels = []
+    start = off
     while True:
         n = msg[off]
         if n == 0:
             return ".".join(labels).lower() + "."
         if n & 0xC0:
             raise ValueError("label")
-        labels.append(msg[off + 1:off + 1 + n].decode("ascii", "replace"))
+        label = msg[off + 1:off + 1 + n]
+        if b"." in label:
+            # метка «victim.site» + «test» дала бы то же имя «victim.site.test.», что у обычного вопроса, и
+            # ответ «нет такого имени» на неё из кэша получили бы другие клиенты
+            raise ValueError("label")
+        labels.append(label.decode("ascii", "replace"))
         off += 1 + n
+        if off - start > 255:           # имя в DNS — не длиннее 255 байт (RFC 1035 §3.1)
+            raise ValueError("name")
 
 
 def parse_query(msg: bytes) -> dict | None:
@@ -189,6 +198,8 @@ def answer_v4(msg: bytes) -> list[tuple[str, int]]:
 
 def match(name: str, doms: set[str]) -> bool:
     """Имя (с точкой в конце или без) есть в списке — само или как поддомен (как в sniproxy.py)."""
+    if len(name) > 254:                 # не имя DNS; на нём перебор суффиксов занял бы секунды
+        return False
     labels = name.rstrip(".").split(".")
     return any(".".join(labels[i:]) in doms for i in range(len(labels)))
 
@@ -328,6 +339,7 @@ class Proxy:
         self.cfg: dict = {}
         self.net = None
         self.cache: dict[tuple, tuple[float, int, bytes, list[int]]] = {}
+        self.cache_bytes = 0
         self.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
         self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
         self.last_error, self.last_error_at = "", 0.0
@@ -349,6 +361,7 @@ class Proxy:
         self.cfg = cfg
         if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")):
             self.cache.clear()                       # другие серверы — старые ответы не нужны
+            self.cache_bytes = 0
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -474,6 +487,9 @@ class Proxy:
         if hit and hit[0] > now:
             self.stats["cached"] += 1
             reply = with_ttl(hit[2], hit[3], int(now - hit[1]))
+            if reply[4:6] == b"\x00\x01":
+                # вопрос — как задал этот клиент (регистр букв), а не первый, чей ответ лёг в кэш
+                reply = reply[:12] + query[12:q["qend"]] + reply[q["qend"]:]
             return struct.pack("!H", q["id"]) + reply[2:]
         if self.inflight >= MAX_INFLIGHT:
             self.stats["errors"] += 1
@@ -491,9 +507,13 @@ class Proxy:
         except (ValueError, struct.error):
             ttl, offs = 0, []
         if ttl > 0:
-            if len(self.cache) >= CACHE_MAX:
-                self.cache.pop(next(iter(self.cache)))
+            old = self.cache.pop(key, None)
+            if old:
+                self.cache_bytes -= len(old[2])
+            while self.cache and (len(self.cache) >= CACHE_MAX or self.cache_bytes + len(reply) > CACHE_BYTES):
+                self.cache_bytes -= len(self.cache.pop(next(iter(self.cache)))[2])
             self.cache[key] = (now + ttl, int(now), reply, offs)
+            self.cache_bytes += len(reply)
         return struct.pack("!H", q["id"]) + reply[2:]
 
     async def forward(self, query: bytes, q: dict, mark: int, tcp: bool) -> bytes | None:

@@ -3,6 +3,7 @@
 
 python3 -m unittest discover tests
 """
+import io
 import json
 import os
 import sys
@@ -566,7 +567,8 @@ class ListFetchTest(unittest.TestCase):
     def _resp(self, data, headers):
         r = mock.MagicMock()
         r.status = 200
-        r.read = lambda n=-1: data[:n] if n >= 0 else data
+        body = io.BytesIO(data)
+        r.read, r.read1 = body.read, body.read1       # read1 — по одному чтению (lists._read_limited)
         r.headers = headers
         r.__enter__ = lambda s: r
         r.__exit__ = lambda s, *a: False

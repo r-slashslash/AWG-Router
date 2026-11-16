@@ -417,8 +417,8 @@ def shaping_limits(sh) -> dict:
 
 
 # ------------------------------------------------------------------ Telegram
-TG_TOKEN_RE = re.compile(r"^\d{5,15}:[A-Za-z0-9_-]{30,60}$")
-TG_CHAT_RE = re.compile(r"^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
+TG_TOKEN_RE = re.compile(r"^[0-9]{5,15}:[A-Za-z0-9_-]{30,60}$")
+TG_CHAT_RE = re.compile(r"^(-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
 
 
 def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:

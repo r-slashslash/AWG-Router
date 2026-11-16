@@ -59,7 +59,7 @@ def kernel_problem(params: dict) -> Msg | None:
                     return Msg("srv.cps_num", key=key, tag=f"<{name}>")
                 total += 4
             else:
-                if not sp or not re.fullmatch(r"\+?\d{1,9}", arg):
+                if not sp or not re.fullmatch(r"\+?[0-9]{1,9}", arg):
                     return Msg("srv.cps_num", key=key, tag=f"<{name}>")
                 total += int(arg)
         if total > KERNEL_MAX:
@@ -89,7 +89,7 @@ def size(value: str, key: str = "I1") -> int:
                 raise CPSError(Msg("srv.cps_num", key=key, tag="<t>"))
             total += 4
         else:
-            if not arg.isdigit() or not 1 <= int(arg) <= MAX_TAG:
+            if not (arg.isascii() and arg.isdigit()) or not 1 <= int(arg) <= MAX_TAG:
                 raise CPSError(Msg("srv.cps_num", key=key, tag=f"<{name}>"))
             total += int(arg)
     if total > MAX_PACKET:

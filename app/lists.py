@@ -106,8 +106,9 @@ def delete_cidrs(list_id: str) -> None:
     domains.delete(list_id)
 
 
-def fetch_domains(lst: dict) -> list[str]:
-    """Список доменов: строки текста + содержимое ссылок из него. Бросает ListError."""
+def fetch_domains(lst: dict) -> tuple[list[str], list[str]]:
+    """Список доменов: строки текста + содержимое ссылок из него → (домены, ошибки ссылок, что не скачались).
+    Бросает ListError, когда доменов нет совсем."""
     urls, text = domains.split_source(lst.get("source", ""))
     found = domains.parse(text)
     errors = []
@@ -123,10 +124,12 @@ def fetch_domains(lst: dict) -> list[str]:
         raise ListError(Msg("list.no_domains"))
     if len(names) > domains.MAX_DOMAINS:
         raise ListError(Msg("list.too_many_domains", n=domains.MAX_DOMAINS))
-    return names
+    return names, errors
 
 
 FETCH_MAX = 64 * 1024 * 1024
+FETCH_DEADLINE = 300        # секунд на всё скачивание: timeout у urlopen — на одно чтение, и сервер, что шлёт по
+                            # байту раз в 29 секунд, держал бы обновление всех списков до перезапуска панели
 # Скачать через рабочий выход (url → (текст, framed)), если напрямую не вышло: задаёт main.py. Нужно серверам в КНР и
 # Иране, где raw.githubusercontent.com часто закрыт, — иначе списки стран пусты и их правила не действуют.
 alt_fetch = None
@@ -147,11 +150,28 @@ def _fetch_direct(url: str, timeout: int = 30) -> tuple[str, bool]:
     with urllib.request.urlopen(req, timeout=timeout) as r:
         if r.status != 200:
             raise RuntimeError(f"HTTP {r.status}")
-        data = r.read(FETCH_MAX + 1)
+        data = _read_limited(r, FETCH_MAX + 1, time.monotonic() + FETCH_DEADLINE)
         if len(data) > FETCH_MAX:                  # раньше молча обрезалось на середине строки
             raise RuntimeError("larger than 64 MB")
-        framed = bool(r.headers.get("Content-Length") or r.headers.get("Transfer-Encoding"))
+        cl = (r.headers.get("Content-Length") or "").strip()
+        if cl.isascii() and cl.isdigit() and len(data) < int(cl):
+            # read(n) при обрыве отдаёт, что успело прийти, без ошибки: обрезанный список заменил бы целый
+            raise RuntimeError(f"cut short: {len(data)} of {cl} bytes")
+        framed = bool(cl or r.headers.get("Transfer-Encoding"))
         return data.decode("utf-8", errors="replace"), framed
+
+
+def _read_limited(r, limit: int, deadline: float) -> bytes:
+    """Тело ответа: не больше limit байт и не дольше deadline (time.monotonic) — по одному чтению из сети."""
+    buf = bytearray()
+    while len(buf) < limit:
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"too slow: {len(buf)} bytes in {FETCH_DEADLINE} s")
+        chunk = r.read1(min(65536, limit - len(buf)))
+        if not chunk:
+            break
+        buf += chunk
+    return bytes(buf)
 
 
 def _fetch(url: str, timeout: int = 30, lines: bool = True) -> str:
@@ -272,15 +292,20 @@ def refresh(lst: dict) -> dict:
 def _refresh(lst: dict) -> dict:
     if lst["kind"] == "domains":
         try:
-            names = fetch_domains(lst)
+            names, errors = fetch_domains(lst)
         except ListError as e:
             return {"error": e.msg.to_json(), "checked": time.time()}
         except Exception as e:  # noqa: BLE001
             return {"error": Msg("list.fetch_failed", detail=str(e)[:300]).to_json(),
                     "checked": time.time()}
+        err = Msg("list.fetch_failed", detail="; ".join(errors)[:300]).to_json() if errors else None
+        if err and os.path.exists(domains.path_for(lst["id"])):
+            # одна из ссылок не скачалась: без неё её домены пропали бы до следующего обновления (сутки), и
+            # их сайты пошли бы мимо выхода — прежний список остаётся целиком, ошибка видна, попытка через 15 минут
+            return {"error": err, "checked": time.time()}
         domains.save(lst["id"], names)
         # first — первый домен списка: им подписано правило со своим списком выхода («youtube.com +19»)
-        return {"error": None, "count": len(names), "first": names[0][:80], "addresses": None, "skipped_v6": 0,
+        return {"error": err, "count": len(names), "first": names[0][:80], "addresses": None, "skipped_v6": 0,
                 "updated": time.time(), "checked": time.time()}
     stats: dict = {}
     try:

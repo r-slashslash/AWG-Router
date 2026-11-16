@@ -199,14 +199,17 @@ def kind(datagram: bytes) -> str:
     """Что за датаграмма UDP: initial — длинный заголовок QUIC с Initial поддерживаемой версии;
     quic — похожа на QUIC, но не она (другой тип или версия, короткий заголовок); other — не QUIC
     (DTLS, WireGuard, OpenVPN и т. п. на порту 443)."""
-    if len(datagram) < 7 or not datagram[0] & 0x40:
+    if len(datagram) < 7:
+        return "other"
+    if datagram[0] & 0x80:
+        version = struct.unpack("!I", datagram[1:5])[0]
+        if version in INITIAL_TYPE and (datagram[0] >> 4) & 3 == INITIAL_TYPE[version]:
+            # и со сброшенным битом «фиксированный»: клиент вправе его сбросить (RFC 9287), а DTLS, WireGuard и
+            # OpenVPN с длинным заголовком и версией QUIC не спутать
+            return "initial"
+    if not datagram[0] & 0x40:
         return "other"                       # без бита «фиксированный» — не QUIC (RFC 9000 §17.2)
-    if not datagram[0] & 0x80:
-        return "quic"                        # короткий заголовок: соединение уже идёт
-    version = struct.unpack("!I", datagram[1:5])[0]
-    if version in INITIAL_TYPE and (datagram[0] >> 4) & 3 == INITIAL_TYPE[version]:
-        return "initial"
-    return "quic"
+    return "quic"                            # короткий заголовок (соединение уже идёт), другой тип или версия
 
 
 def initial_frames(datagram: bytes) -> tuple[bytes, list[tuple[int, bytes]]]:

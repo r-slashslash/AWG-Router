@@ -225,7 +225,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     continue
                 age = time.time() - (l.get("updated") or 0)
                 since_check = time.time() - (l.get("checked") or 0)
-                if age < period and os.path.exists(lists.path_for(l["id"])):
+                # файл списка доменов — свой (domains.path_for): с файлом списка сетей его не было никогда, и
+                # списки доменов по ссылкам скачивались заново на каждом круге (раз в 5 минут), а не раз в сутки
+                path = domains.path_for(l["id"]) if l["kind"] == "domains" else lists.path_for(l["id"])
+                if age < period and os.path.exists(path):
                     continue
                 if l.get("error") and since_check < 900:
                     continue
@@ -235,7 +238,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             if res.get("error"):
                 self.event("warn", Msg("ev.list_failed", list=l["id"],
                                        error=Msg(res["error"]["$t"], **res["error"]["p"])))
-            else:
+            if res.get("updated"):          # файл записан (и тогда, когда одна из ссылок не скачалась)
                 changed = True
 
             def upd(s, lid=l["id"], res=res):

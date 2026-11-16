@@ -146,7 +146,7 @@ def check_mtu(v) -> int:
 def check_keepalive(v) -> str:
     """PersistentKeepalive клиентов: секунды или диапазон «15-25» (панель выбирает число в нём); "" — сама."""
     ka = str(v if v is not None else "").strip()
-    if ka and not re.fullmatch(r"\d{1,5}(-\d{1,5})?", ka):
+    if ka and not re.fullmatch(r"[0-9]{1,5}(-[0-9]{1,5})?", ka):
         raise UserError(Msg("srv.bad_keepalive"))
     return ka
 

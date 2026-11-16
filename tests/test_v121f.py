@@ -1,9 +1,14 @@
-"""1.21.0, исправления по второй проверке (2026-11-16): утечки мимо выходов (этап 1), безопасность (этап 2).
+"""1.21.0, исправления по второй проверке (2026-11-16): утечки мимо выходов (этап 1), безопасность (этап 2),
+правила по доменам, QUIC, DNS и списки (этап 3).
 
 python3 -m unittest discover tests
 """
+import asyncio
 import http.client
+import io
 import json
+import socket
+import struct
 import os
 import shutil
 import subprocess
@@ -20,7 +25,8 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from app import awgserver, config, engine, movehost, nftgen, panel, sniproxy, store, system, totp, web  # noqa: E402
+from app import (awgserver, checks, config, cps, dnsproxy, domains, engine, lists, movehost, nftgen,  # noqa: E402
+                 panel, quic, sniproxy, store, system, totp, users, web)
 from app import api  # noqa: E402,F401  — импорт app.api регистрирует все адреса
 from app.api import auth, backup  # noqa: E402
 from app.engine.common import UpRT  # noqa: E402
@@ -474,6 +480,213 @@ class SecretFilesFsyncTest(unittest.TestCase):
             self.assertGreaterEqual(fs.call_count, 2)
         auth._pw_cache = (None, None)
         totp._cache = (None, None)
+
+
+# ============================================================ этап 3: правила по доменам, QUIC, DNS и списки
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_v112 import client_hello  # noqa: E402
+from test_v121 import chromium  # noqa: E402
+
+
+class LongNameTest(unittest.TestCase):
+    def test_long_names_never_match_and_are_quick(self):
+        """Н11. Вход: имя из 32 000 меток «a.» (так клиент VPN останавливал обработчик доменов и DNS на секунды).
+        Ожидание: не совпадает и проверяется мгновенно."""
+        name = "a." * 32000 + "listed.test"
+        t = time.monotonic()
+        self.assertFalse(sniproxy.match(name, {"listed.test"}))
+        self.assertFalse(dnsproxy.match(name + ".", {"listed.test"}))
+        self.assertIsNone(domains.matches(name, {"listed.test"}))
+        self.assertLess(time.monotonic() - t, 0.1)
+        self.assertTrue(sniproxy.match("www.listed.test", {"listed.test"}))
+
+    def test_long_sni_and_dns_name_refused(self):
+        ch = client_hello("a" * 60 + "." + "b" * 60 + ".test")
+        self.assertTrue(sniproxy.tls_sni(ch))
+        long = b"\x01a" * 200 + b"\x00\x00\x01\x00\x01"
+        with self.assertRaises(ValueError):
+            dnsproxy.read_name(struct.pack("!6H", 1, 0x100, 1, 0, 0, 0) + long, 12)
+
+
+class PartialHelloTest(unittest.TestCase):
+    def peek(self, data, close=True):
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        b.setblocking(False)
+        if data:
+            a.sendall(data)
+        if close:
+            a.shutdown(socket.SHUT_WR)
+        with mock.patch.object(sniproxy, "PEEK_TIMEOUT", 0.3):
+            return asyncio.run(sniproxy.peek_name(b, 443))
+
+    def test_partial_hello_is_false(self):
+        """Н12. Вход: половина ClientHello, дальше тишина или обрыв. Ожидание: False — соединение закроется,
+        как QUIC без имени (раньше — по правилам по адресам, мимо выхода сайта из списка)."""
+        ch = client_hello("www.listed.test")
+        self.assertEqual(self.peek(ch[:60])[1], False)
+        self.assertEqual(self.peek(ch[:60], close=False)[1], False)
+        self.assertEqual(self.peek(ch)[1], "www.listed.test")
+        self.assertIsNone(self.peek(b"", close=False)[1])          # клиент молчит: сервер говорит первым
+        self.assertIsNone(self.peek(b"SSH-2.0-x\r\n")[1])            # не TLS и не HTTP
+
+    def test_partial_hello_closed(self):
+        s = sniproxy.Sniffer.__new__(sniproxy.Sniffer)
+        s.stats = {"conns": 0, "active": 0, "matched": 0, "errors": 0, "no_name": 0, "by_list": {}}
+        s.net = __import__("ipaddress").ip_network("127.0.0.0/8")
+        s.cfg = {"policies": {"p_global": {"mark": 0, "rules": []}}}
+        s.lists = {}
+        sock = mock.Mock()
+        sock.getpeername.return_value = ("127.0.0.5", 5)
+        sock.getsockname.return_value = ("127.0.0.1", 4433)
+        sock.getsockopt.return_value = b"\x02\x00\x01\xbb" + socket.inet_aton("192.0.2.1") + bytes(8)
+
+        async def peek(sk, port):
+            return b"\x16\x03\x01\x02\x00", False
+        with mock.patch.object(sniproxy, "peek_name", peek), mock.patch.object(s, "open_upstream") as up:
+            asyncio.run(s.client(sock))
+        up.assert_not_called()
+        self.assertEqual(s.stats["partial"], 1)
+
+
+class QuicFixedBitTest(unittest.TestCase):
+    def test_initial_without_fixed_bit(self):
+        """Н13. Initial со сброшенным битом «фиксированный» (RFC 9287) — тоже Initial, а не «не QUIC»."""
+        d = chromium()[0]
+        self.assertEqual(quic.kind(d), "initial")
+        self.assertEqual(quic.kind(bytes([d[0] & ~0x40]) + d[1:]), "initial")
+        self.assertEqual(quic.kind(b"\x01\x00\x00\x00" + bytes(40)), "other")      # WireGuard
+        self.assertEqual(quic.kind(b"\x16\xfe\xfd" + bytes(40)), "other")          # DTLS
+        self.assertEqual(quic.kind(b"\x40" + bytes(40)), "quic")                   # короткий заголовок
+
+
+class HttpHostDotTest(unittest.TestCase):
+    def test_trailing_dot(self):
+        """Н14. «Host: site.test.» в HTTP — то же, что site.test (в HTTPS так и было)."""
+        self.assertEqual(sniproxy.http_host(b"GET / HTTP/1.1\r\nHost: Site.Test.:80\r\n\r\n"), "site.test")
+        self.assertEqual(sniproxy.http_host(b"GET / HTTP/1.1\r\nHost: site.test.\r\n\r\n"), "site.test")
+
+
+class ListFetchTest(unittest.TestCase):
+    def resp(self, data, headers):
+        r = mock.MagicMock()
+        r.status = 200
+        body = io.BytesIO(data)
+        r.read, r.read1 = body.read, body.read1
+        r.headers = headers
+        r.__enter__ = lambda s: r
+        r.__exit__ = lambda s, *a: False
+        return r
+
+    def test_cut_short_refused(self):
+        """Н16. Вход: Content-Length 1000, пришло 110 байт. Ожидание: ошибка, а не обрезанный список."""
+        with mock.patch("urllib.request.urlopen", return_value=self.resp(b"9.9.9.0/24\n" * 10, {"Content-Length": "1000"})):
+            with self.assertRaisesRegex(RuntimeError, "cut short"):
+                lists._fetch_direct("https://x.example/l")
+        with mock.patch("urllib.request.urlopen", return_value=self.resp(b"9.9.9.0/24\n", {"Content-Length": "11"})):
+            self.assertEqual(lists._fetch_direct("https://x.example/l"), ("9.9.9.0/24\n", True))
+
+    def test_overall_deadline(self):
+        """Н22. Вход: сервер шлёт по байту. Ожидание: скачивание обрывается по общему сроку, а не держит все
+        списки до перезапуска панели."""
+        r = self.resp(b"", {})
+        r.read1 = lambda n: (time.sleep(0.02), b"x")[1]
+        with mock.patch.object(lists, "FETCH_DEADLINE", 0.1), mock.patch("urllib.request.urlopen", return_value=r):
+            with self.assertRaisesRegex(RuntimeError, "too slow"):
+                lists._fetch_direct("https://x.example/l")
+
+    def test_domain_list_not_fetched_every_round(self):
+        """Н17. Вход: список доменов по ссылке, скачан минуту назад, файл на месте. Ожидание: круг обновления
+        (раз в 5 минут) его не скачивает — раньше скачивал каждый раз (искал файл списка сетей)."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        s = store.Store(os.path.join(d, "state.json"))
+        s.mutate(lambda st: st["lists"].append({"id": "dl1", "name": "d", "kind": "domains", "source": "https://x.example/d",
+                                                  "updated": time.time() - 60, "checked": time.time() - 60}))
+        e = engine.Engine(s)
+        with mock.patch.object(domains, "LISTS_DIR", d):
+            with open(domains.path_for("dl1"), "w") as f:
+                f.write("a.test\n")
+            with mock.patch.object(lists, "refresh") as rf:
+                e.refresh_lists(ids=["dl1"])
+            rf.assert_not_called()
+            os.unlink(domains.path_for("dl1"))
+            with mock.patch.object(lists, "refresh", return_value={"error": None, "updated": time.time()}) as rf:
+                e.refresh_lists(ids=["dl1"])
+            rf.assert_called_once()                                 # файла нет — скачать
+
+
+class DnsCacheTest(unittest.TestCase):
+    def proxy(self):
+        p = dnsproxy.Proxy.__new__(dnsproxy.Proxy)
+        p.cache, p.cache_bytes, p.inflight = {}, 0, 0
+        p.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
+        return p
+
+    @staticmethod
+    def q(name: bytes, qid=1):
+        wire = b"".join(bytes([len(x)]) + x for x in name.split(b".")) + b"\x00"
+        return struct.pack("!6H", qid, 0x0100, 1, 0, 0, 0) + wire + b"\x00\x01\x00\x01"
+
+    @staticmethod
+    def answer(query: bytes, size=0):
+        """Ответ «есть адрес» на вопрос query (TTL 300), с хвостом size байт в записи TXT-подобного вида."""
+        rr = b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x01\x2c\x00\x04\x01\x02\x03\x04"
+        return query[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + query[12:] + rr + bytes(size)
+
+    def test_dotted_label_refused(self):
+        """Н19. Метка «victim.site» + «test» — не то же имя, что victim.site.test: вопрос отклоняется, и ответ
+        «нет такого имени» на него не попадёт в кэш для других клиентов."""
+        raw = struct.pack("!6H", 1, 0x0100, 1, 0, 0, 0) + b"\x0bvictim.site\x04test\x00\x00\x01\x00\x01"
+        self.assertIsNone(dnsproxy.parse_query(raw))
+        self.assertEqual(dnsproxy.parse_query(self.q(b"victim.site.test"))["name"], "victim.site.test.")
+
+    def test_cache_bounded_by_bytes_and_question_echoed(self):
+        """Н19. Кэш — не больше CACHE_BYTES; из кэша вопрос — как задал этот клиент (регистр букв)."""
+        p = self.proxy()
+        sent = []
+
+        async def forward(query, q, mark, tcp):
+            sent.append(q["name"])
+            return self.answer(query, 4000)
+        p.forward = forward
+        with mock.patch.object(dnsproxy, "CACHE_BYTES", 20000):
+            for i in range(20):
+                q = self.q(b"n%d.test" % i)
+                asyncio.run(p._resolve(q, dnsproxy.parse_query(q), {"mark": 0}))
+        self.assertLessEqual(p.cache_bytes, 20000)
+        self.assertEqual(p.cache_bytes, sum(len(v[2]) for v in p.cache.values()))
+        a = self.q(b"CaSe.test", 1)
+        b = self.q(b"cAsE.test", 2)
+        asyncio.run(p._resolve(a, dnsproxy.parse_query(a), {"mark": 0}))
+        r = asyncio.run(p._resolve(b, dnsproxy.parse_query(b), {"mark": 0}))
+        self.assertEqual(sent.count("case.test."), 1)               # второй — из кэша
+        self.assertEqual(r[:2], b"\x00\x02")
+        self.assertIn(b"\x04cAsE\x04test", r)
+
+
+class SlowListTextTest(unittest.TestCase):
+    def test_spaces_do_not_freeze(self):
+        """Н20. Строка из 40 000 пробелов в списке доменов разбиралась 9 секунд (и стояла вся панель)."""
+        t = time.monotonic()
+        self.assertEqual(domains.parse("a.test" + " " * 40000 + "x\nb.test  # c\n"), ["b.test"])
+        self.assertLess(time.monotonic() - t, 0.5)
+
+
+class AsciiDigitsTest(unittest.TestCase):
+    def test_persian_digits_refused(self):
+        """Н21. Персидские цифры в I1–I5, PersistentKeepalive и номере чата не принимаются: приложения и
+        Telegram их не понимают."""
+        fa = "۱۰"
+        with self.assertRaises(cps.CPSError):
+            cps.size(f"<r {fa}>")
+        self.assertIsNotNone(cps.kernel_problem({"I1": f"<r {fa}>"}))
+        self.assertEqual(cps.size("<r 10>"), 10)
+        with self.assertRaises(users.UserError):
+            users.check_keepalive(fa)
+        self.assertIsNone(checks.TG_CHAT_RE.match(fa))
+        self.assertTrue(checks.TG_CHAT_RE.match("-100123"))
 
 
 if __name__ == "__main__":

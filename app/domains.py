@@ -46,7 +46,7 @@ def _candidates(line: str) -> list[str]:
     s = line.strip()
     if not s or s[0] in "#!;[" or s.startswith("//"):
         return []
-    s = re.split(r"\s+#|\s+//", s, maxsplit=1)[0].strip()
+    s = re.split(r"\s#|\s//", s, maxsplit=1)[0].strip()
     m = _DNSMASQ.match(s)
     if m:
         return [d for d in m.group(1).split("/") if d]
@@ -107,6 +107,8 @@ def split_source(text: str) -> tuple[list[str], str]:
 
 def matches(name: str, domains: set[str]) -> str | None:
     """Запись списка, которой соответствует имя (оно само или его родитель), или None."""
+    if len(name) > 254:
+        return None
     labels = name.strip(".").lower().split(".")
     for i in range(len(labels)):
         d = ".".join(labels[i:])

@@ -82,9 +82,17 @@ www.youtube.com
         lst = {"id": "ldtest1", "kind": "domains", "source": "a.com\nhttps://x.example/l.txt\nhttps://y.example/l.txt"}
         with mock.patch.object(lists, "_fetch", side_effect=["b.com\nsub.a.com\n", OSError("timeout")]):
             r = lists.refresh(lst)
-        self.assertIsNone(r["error"])               # одна ссылка не скачалась, но домены есть
-        self.assertEqual(r["count"], 2)
+        self.assertEqual(r["error"]["$t"], "list.fetch_failed")   # одна ссылка не скачалась: это видно,
+        self.assertEqual(r["count"], 2)                         # а первый раз список собран из того, что есть
         self.assertEqual(domains.load("ldtest1"), ["a.com", "b.com"])
+        with mock.patch.object(lists, "_fetch", side_effect=["c.com\n", OSError("timeout")]):
+            r = lists.refresh(lst)
+        self.assertNotIn("count", r)                            # 1.21.0: список уже есть — остаётся прежним
+        self.assertEqual(domains.load("ldtest1"), ["a.com", "b.com"])
+        with mock.patch.object(lists, "_fetch", side_effect=["c.com\n", "d.com\n"]):
+            r = lists.refresh(lst)
+        self.assertIsNone(r["error"])
+        self.assertEqual(domains.load("ldtest1"), ["a.com", "c.com", "d.com"])
         with mock.patch.object(lists, "_fetch", side_effect=OSError("down")):
             r = lists.refresh({"id": "ldtest2", "kind": "domains", "source": "https://x.example/l.txt"})
         self.assertEqual(r["error"]["$t"], "list.fetch_failed")

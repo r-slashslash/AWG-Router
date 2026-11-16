@@ -131,7 +131,10 @@ def request(mark, url, body, ctype, timeout, method="POST", limit=None):
         data = r.read(limit + 1) if limit else r.read()
         if limit and len(data) > limit:
             raise OSError(f"larger than {limit // 2**20} MB")
-        framed = bool(r.getheader("Content-Length") or r.getheader("Transfer-Encoding"))
+        cl = (r.getheader("Content-Length") or "").strip()
+        if cl.isascii() and cl.isdigit() and len(data) < int(cl):
+            raise OSError(f"cut short: {len(data)} of {cl} bytes")     # read(n) при обрыве — без ошибки
+        framed = bool(cl or r.getheader("Transfer-Encoding"))
         return r.status, data, r.getheader("Date") or "", framed
     finally:
         c.close()
