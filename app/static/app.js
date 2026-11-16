@@ -70,8 +70,8 @@ function toast(msg, bad = false) {
 }
 
 class AuthError extends Error {}
-async function api(method, path, body, timeoutMs = 0) {
-  const opt = { method, headers: {}, credentials: "same-origin" };
+async function api(method, path, body, timeoutMs = 0, headers = null) {
+  const opt = { method, headers: { ...(headers || {}) }, credentials: "same-origin" };
   // опрос состояния не ждёт вечно: зависшая панель — это «Нет связи», а не застывшая страница
   if (timeoutMs && typeof AbortSignal !== "undefined" && AbortSignal.timeout) opt.signal = AbortSignal.timeout(timeoutMs);
   if (body !== undefined) {
@@ -300,12 +300,23 @@ let stateSeq = 0, stateShown = 0;
 let listsBusy = false;
 async function refresh(auto = false) {
   const seq = ++stateSeq;
+  let same = false;
   try {
-    const data = await api("GET", "state", undefined, STATE_TIMEOUT_MS);
+    // фоновый опрос шлёт отпечаток прошлого ответа: ничего не изменилось — сервер отвечает коротко, и
+    // вкладка не перерисовывается (обновляются только время, процессор и память в шапке)
+    const tagged = auto && S && S.tag;
+    const data = await api("GET", "state", undefined, STATE_TIMEOUT_MS, tagged ? { "X-State-Tag": S.tag } : null);
     if (seq < stateShown) return;
     stateShown = seq;
-    S = data;
     pollFails = 0;
+    if (data.same && S && data.tag === S.tag) {
+      same = true;
+      S.now = data.now; S.system = data.system; S.engine.last_reconcile = data.last_reconcile;
+    } else if (data.same) {
+      return;                                   // отпечаток уже не тот (другой ответ успел раньше) — ждём следующий
+    } else {
+      S = data;
+    }
   } catch (e) {
     if (e instanceof AuthError) return;
     pollFails++;
@@ -316,6 +327,7 @@ async function refresh(auto = false) {
   }
   if (followUpdate()) return;
   renderStatus();
+  if (same) return;
   // список скачивается в фоне: на вкладке «Маршрутизация» обновляется только таблица списков
   const busy = S.lists.some((l) => l.busy);
   if (auto && tab === "routing" && (busy || listsBusy) && $("#lists-sec") && !$("#modal").open) {
@@ -451,7 +463,11 @@ function render(force = false) {
   }
   if (!views.has(tab)) tab = "overview";
   const keepSearch = $("#client-search") ? $("#client-search").value : null;
-  $("#main").innerHTML = banners() + views.get(tab)();
+  const html = banners() + views.get(tab)();
+  if (!force && tab === "clients" && patchClients(html)) return;
+  if (tab === "clients" && clientParts) clientParts.banner = html.slice(0, html.length - clientParts.html.length);
+  clientsShown = tab === "clients" ? clientParts : null;
+  $("#main").innerHTML = html;
   const bindTab = new Map(Object.entries(bind)).get(tab);
   if (bindTab) bindTab();
   $$(".banner [data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
@@ -607,7 +623,35 @@ bind.overview = () => {
 function serverMissing() {
   return S.target && S.target.exists === false;
 }
+/* Вкладка «Клиенты» при опросе: если вокруг таблицы ничего не изменилось и порядок строк тот же, меняются
+   только изменившиеся строки, а не вся таблица (тысяча строк — четверть секунды на компьютере и секунды
+   на телефоне). clientParts — что нарисовал viewClients(): обвязка без строк и строки по ключам. */
+let clientParts = null, clientsShown = null;
+const ROWS_MARK = "\u0000rows\u0000";
+function patchClients(html) {
+  const now = clientParts, was = clientsShown;
+  const body = $("#cl-rows");
+  if (!now || !was || !body || now.order !== was.order) return false;
+  const banner = html.slice(0, html.length - now.html.length);
+  if (banner + now.shell !== was.banner + was.shell) return false;
+  const rows = body.querySelectorAll("tr[data-pk]");
+  if (rows.length !== now.rows.length) return false;
+  const tpl = document.createElement("tbody");
+  now.rows.forEach(([pk, h], i) => {
+    if (was.rows[i][1] === h) return;
+    tpl.innerHTML = h;
+    const tr = tpl.firstElementChild;
+    tr.onclick = () => editClient(tr.dataset.pk);
+    rows[i].replaceWith(tr);
+  });
+  now.banner = banner;
+  clientsShown = now;
+  if ($("#client-search")) filterClients();
+  return true;
+}
+
 function viewClients() {
+  clientParts = null;
   const head = `
     <div class="section-head">
       <div><h2>${esc(t("cl.title"))}</h2><p class="muted small">${esc(t("cl.subtitle"))}</p></div>
@@ -620,7 +664,7 @@ function viewClients() {
     </div>`;
   if (serverMissing()) return `<section class="section">${head}<div class="panel empty"><p>${esc(t("srv.missing"))}</p><button class="btn primary" data-goto="server">${esc(t("srv.create_title"))}</button></div></section>`;
   if (!S.clients.length) return `<section class="section">${head}<div class="panel empty"><p>${esc(t("cl.empty"))}</p><p class="small">${esc(t("cl.empty_hint2"))}</p></div></section>`;
-  const rows = sortedClients().map((c) => {
+  const rowList = sortedClients().map((c) => {
     const live = c.live || {};
     const age = live.handshake ? S.now - live.handshake : null;
     const online = c.enabled && age != null && age < 180;
@@ -632,25 +676,29 @@ function viewClients() {
     const wanted = p.outbound !== "inherit" ? p.outbound : c.default;
     const activity = !c.enabled ? `<span class="muted">—</span>`
       : `<span class="state"><span class="dot ${online ? "ok" : ""}"></span>${esc(online ? t("cl.online") : fmtAge(age))}</span>`;
-    return `<tr class="click ${c.enabled ? "" : "row-off"}" ${endingSoon(c) ? 'data-soon="1"' : ""} data-pk="${esc(c.public_key)}" data-q="${esc((c.name + " " + c.ip + " " + p.note).toLowerCase())}">
+    return [c.public_key, `<tr class="click ${c.enabled ? "" : "row-off"}" ${endingSoon(c) ? 'data-soon="1"' : ""} data-pk="${esc(c.public_key)}" data-q="${esc((c.name + " " + c.ip + " " + p.note).toLowerCase())}">
       <td><span class="client-name"><bdi>${esc(c.name || t("cl.unnamed"))}</bdi></span>${tags}</td>
       <td data-m="sub" class="nowrap"><bdi>${esc(c.ip || "—")}</bdi></td>
       <td data-m="sub">${activity}</td>
       <td data-m="month" class="nowrap muted"><span class="m-label">${esc(t("ex.month"))}: </span>${trafficCell(c)}</td>
       <td data-m="right">${effChip(c.effective, wanted)}${p.outbound !== "inherit" ? `<div class="small muted" style="margin-top:3px">${esc(t("cl.manual"))}</div>`
         : c.balanced ? `<div class="small muted" style="margin-top:3px">⚖️ ${esc(t("cl.balanced"))}</div>` : ""}</td>
-    </tr>`;
-  }).join("");
+    </tr>`];
+  });
+  const rows = rowList.map((r) => r[1]).join("");
   const nSoon = S.clients.filter(endingSoon).length;
   if (!nSoon) clientSoon = false;
   const soon = nSoon ? `<div class="soon-bar"><button type="button" class="btn sm" id="client-soon" aria-pressed="${clientSoon}">⏳ ${esc(t("cl.soon", { n: nSoon }))}</button></div>` : "";
-  return `
+  const shell = `
   <section class="section">${head}${soon}
     <div class="panel"><table class="table responsive">
       <thead><tr><th>${esc(t("cl.col_name"))}</th><th>${esc(t("cl.col_ip"))}</th><th>${esc(t("cl.col_activity"))}</th><th>${esc(t("cl.col_month"))}</th><th>${esc(t("cl.col_exit"))}</th></tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody id="cl-rows">${ROWS_MARK}</tbody>
     </table></div>
   </section>`;
+  const html = shell.replace(ROWS_MARK, () => rows);
+  clientParts = { shell, rows: rowList, order: rowList.map((r) => r[0]).join(","), html, banner: "" };
+  return html;
 }
 const CLIENT_SORTS = ["ip", "name", "traffic", "activity"];
 let clientSort = (() => { try { return localStorage.getItem("awgr.sort") || "ip"; } catch { return "ip"; } })();

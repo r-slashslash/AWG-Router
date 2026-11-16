@@ -1030,5 +1030,39 @@ class PassProcessesTest(unittest.TestCase):
         self.assertEqual(lines, [f"rule del priority {base + 3}", f"route flush table {engine.config.TABLE_BASE + 3}"])
 
 
+# ============================================================ оптимизация: интерфейс на тысяче клиентов
+class StateTagTest(unittest.TestCase):
+    def test_same_state_short_answer(self):
+        full = main.get_state(None)
+        self.assertIn("tag", full)
+        self.assertIn("now", full)
+        self.assertIn("system", full)
+        r = Req({})
+        r.headers = {"X-State-Tag": full["tag"]}
+        short = main.get_state(r)
+        self.assertEqual(sorted(short), ["last_reconcile", "now", "same", "system", "tag"])
+        r.headers = {"X-State-Tag": "other"}
+        self.assertIn("clients", main.get_state(r))
+
+    def test_tag_ignores_time(self):
+        a = main.get_state(None)
+        with mock.patch.object(main.time, "time", return_value=time.time() + 100):
+            b = main.get_state(None)
+        self.assertEqual(a["tag"], b["tag"])
+        self.assertNotEqual(a["now"], b["now"])
+
+    def test_tag_follows_changes(self):
+        a = main.get_state(None)["tag"]
+        with mock.patch.object(main.engine, "last_error", "something broke"):
+            self.assertNotEqual(main.get_state(None)["tag"], a)
+
+    def test_browser_patches_rows(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn('"X-State-Tag": S.tag', js)
+        self.assertIn("patchClients(html)", js)
+        self.assertIn('id="cl-rows"', js)
+
+
 if __name__ == "__main__":
     unittest.main()

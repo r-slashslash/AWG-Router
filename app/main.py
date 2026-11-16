@@ -1320,8 +1320,34 @@ def _upstream_view(st: dict, u: dict, bal_members: set | None = None, bal_counts
             "balance": u["id"] in bal_members, "bal_clients": bal_counts.get(u["id"], 0)}
 
 
+def _state_tag(out: dict) -> str:
+    """Отпечаток состояния для опроса браузера: тот же отпечаток — вкладку перерисовывать незачем (тысяча
+    клиентов — четверть секунды на компьютере и секунды на телефоне). Время, процессор и память меняются на
+    каждом запросе и в отпечаток не входят — их браузер получает всегда."""
+    def plain(v):
+        return v.to_json() if isinstance(v, Msg) else str(v)
+    return hashlib.sha1(json.dumps(out, default=plain).encode()).hexdigest()[:20]
+
+
 @app.get("/api/state")
 def get_state(req):
+    """Состояние для браузера. Заголовок X-State-Tag с отпечатком прошлого ответа: ничего не изменилось —
+    короткий ответ {"same": true} со временем, процессором и памятью (без сжатия и разбора всего состояния)."""
+    out = _state_view()
+    last = out["engine"].pop("last_reconcile")
+    out["tag"] = _state_tag(out)
+    out["engine"]["last_reconcile"] = last
+    vol = {"now": time.time(),
+           # демо: постоянные числа — снимки README не меняются от загрузки машины, где их снимали
+           "system": {"cpu": 7.0, "cores": 2, "load": [0.14, 0.11, 0.09], "mem": [770 * 2**20, 2 * 2**30]}
+           if config.DRY_RUN else hostnet.system_view()}
+    seen = req.headers.get("X-State-Tag") if req is not None and getattr(req, "headers", None) else None
+    if seen and seen == out["tag"]:
+        return {"same": True, "tag": out["tag"], "last_reconcile": last, **vol}
+    return {**out, **vol}
+
+
+def _state_view() -> dict:
     st = store.snapshot()
     t = engine.target
     bal_members = {m["id"] for m in engine.balance_members(st)}
@@ -1356,7 +1382,6 @@ def get_state(req):
     clients.sort(key=lambda c: tuple(int(x) for x in (c.get("ip") or "255.255.255.255").split(".")))
     return {
         "demo": config.DRY_RUN,
-        "now": time.time(),
         "target": {"container": t.container, "kind": t.kind, "pid": t.pid, "iface": t.iface,
                    "conf": t.conf_path, "exists": t.exists} if t else None,
         "panel": {"url": panel_url(), "access": "ssh" if config.PANEL_HOST.startswith("127.") else "public",
@@ -1381,9 +1406,6 @@ def get_state(req):
         "shaping": engine.shape_state and {k: v for k, v in engine.shape_state.items() if k != "sig"},
         "direct_traffic": engine.traffic.out_view("direct"),
         "server_traffic": engine.traffic.server_view(),
-        # демо: постоянные числа — снимки README не меняются от загрузки машины, где их снимали
-        "system": {"cpu": 7.0, "cores": 2, "load": [0.14, 0.11, 0.09], "mem": [770 * 2**20, 2 * 2**30]}
-        if config.DRY_RUN else hostnet.system_view(),
         "awg_engine": {"module": engine.module_info(), "server": engine.server_engine,
                        "exits_now": engine.exit_engine(st), "fallback": engine.kernel_fallback,
                        "forced": None if config.EXIT_ENGINE == "auto" else config.EXIT_ENGINE,
