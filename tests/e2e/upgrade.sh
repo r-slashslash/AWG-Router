@@ -39,7 +39,9 @@ fi
 
 # ---------------------------------------------------------------- какие версии
 step "Releases"
-rels=$(curl -fsSL --retry 3 "https://api.github.com/repos/$REPO/releases?per_page=20") || fail "GitHub API is not reachable"
+# без ключа API GitHub отвечает 403, когда с адреса машины CI спросили слишком много (адреса общие)
+auth=(); [ -n "${E2E_GH_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $E2E_GH_TOKEN")
+rels=$(curl -fsSL --retry 3 "${auth[@]}" "https://api.github.com/repos/$REPO/releases?per_page=20") || fail "GitHub API is not reachable"
 mapfile -t TAGS < <(python3 -c 'import json,sys; [print(r["tag_name"]) for r in json.load(sys.stdin) if not r["draft"] and not r["prerelease"]]' <<<"$rels")
 LATEST="${TAGS[0]:-}"
 [ -n "$LATEST" ] || fail "no published release"

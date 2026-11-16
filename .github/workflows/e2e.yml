@@ -53,7 +53,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Upgrade ${{ inputs.from || 'previous' }} → latest (AmneziaWG ${{ matrix.mode }})
-        run: sudo E2E_MODE=${{ matrix.mode }} E2E_FROM="${{ inputs.from || 'previous' }}" E2E_LOGS="$RUNNER_TEMP/e2e" bash tests/e2e/upgrade.sh
+        env:
+          E2E_GH_TOKEN: ${{ github.token }}
+        run: sudo E2E_MODE=${{ matrix.mode }} E2E_FROM="${{ inputs.from || 'previous' }}" E2E_LOGS="$RUNNER_TEMP/e2e" E2E_GH_TOKEN="$E2E_GH_TOKEN" bash tests/e2e/upgrade.sh
 
       - name: Logs
         if: failure()
