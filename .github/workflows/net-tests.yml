@@ -4,7 +4,9 @@
 #                                клиент — нет;
 #   tests/domains_socks_e2e.py — выход SOCKS5 (hev-socks5-tunnel) и правила по доменам (sniproxy);
 #   tests/shaping_e2e.py       — ограничение скорости (tc: клиенты, все вместе, выходы) и балансировка
-#                                (открытое соединение остаётся на прежнем выходе).
+#                                (открытое соединение остаётся на прежнем выходе);
+#   tests/container_e2e.py     — свой контейнер сервера AWG ставит правила панели до подъёма сервера, события Docker;
+#   tests/movehost_e2e.py      — перенос сервера на хост; служба awg-quick ставит правила «до панели».
 # Задание kernel: модуль ядра AmneziaWG ставится той же командой, что у пользователей
 # (install.sh --install-kernel), и настоящий туннель идёт на нём и вперемешку с amneziawg-go.
 # awg, amneziawg-go и hev-socks5-tunnel собираются из стадий текущего Dockerfile — те же версии и флаги,
@@ -105,6 +107,11 @@ jobs:
       - name: Speed limits and load balancing (shaping_e2e.py)
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/shaping_e2e.py
+
+      - name: AWG server container restart (container_e2e.py)
+        # свой образ сервера AWG: правила панели до подъёма сервера, события Docker
+        if: always()
+        run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/container_e2e.py
 
       - name: Moving the AWG server to the host (movehost_e2e.py)
         # последним: ставит awg-quick@awg0 на саму машину (одноразовую)

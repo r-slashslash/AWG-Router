@@ -15,7 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from app import awgconf, awgserver, config  # noqa: E402
+from app import awgconf, awgserver, config, nftgen, system  # noqa: E402
 
 NS = "awgm_cli"
 PORT = 47123
@@ -35,6 +35,55 @@ def awg(*args, inp=None):
 
 def movehost(*args):
     return sh(sys.executable, "-m", "app.movehost", *args, check=False, cwd=os.path.join(os.path.dirname(__file__), ".."))
+
+
+def client_ping(tries=30) -> tuple[bool, str]:
+    out = ""
+    for _ in range(tries):
+        p = sh("ip", "netns", "exec", NS, "ping", "-c1", "-W2", "10.8.1.0", check=False)
+        out = p.stdout[-200:]
+        if p.returncode == 0:
+            return True, out
+        time.sleep(1)
+    return False, out
+
+
+def hold_checks():
+    """Служба awg-quick@ (system.UNIT_TEXT) ставит правила панели «до панели» перед подъёмом сервера, если таблицы
+    панели ещё нет (перезагрузка хоста), и не трогает действующие правила при перезапуске службы."""
+    out = []
+    with open(system.HOST_UNIT) as f:
+        unit = f.read()
+    out.append(("в службе есть ExecStartPre с правилами «до панели»", "ExecStartPre=-" in unit and "awgr-hold" in unit, ""))
+    hold = os.path.join(config.HOST_AWG_DIR, system.HOLD_NAME.format(iface="awg0"))
+    with open(hold, "w") as f:
+        f.write(nftgen.generate("awg0", {}, [], {"rules": [], "default": 1, "domain": []}, {}, None))
+    try:
+        sh("nft", "delete", "table", "ip", config.NFT_TABLE, check=False)       # как после перезагрузки
+        sh("systemctl", "restart", "awg-quick@awg0", check=False)
+        active = sh("systemctl", "is-active", "awg-quick@awg0", check=False).stdout.strip()
+        t = sh("nft", "list", "table", "ip", config.NFT_TABLE, check=False)
+        out.append(("таблицы нет — служба поставила правила, сервер работает",
+                    t.returncode == 0 and "o_block" in t.stdout and active == "active", (active, t.stderr[-200:])))
+        ok, txt = client_ping()
+        out.append(("с правилами «до панели» клиент подключается к серверу", ok, txt))
+        sh("nft", "add", "chain", "ip", config.NFT_TABLE, "e2e_marker")
+        sh("systemctl", "restart", "awg-quick@awg0", check=False)
+        active = sh("systemctl", "is-active", "awg-quick@awg0", check=False).stdout.strip()
+        t = sh("nft", "list", "table", "ip", config.NFT_TABLE, check=False)
+        out.append(("таблица есть — перезапуск службы её не заменяет", "e2e_marker" in t.stdout and active == "active",
+                    (active, t.stdout[-200:])))
+        os.unlink(hold)
+        sh("nft", "delete", "table", "ip", config.NFT_TABLE, check=False)
+        sh("systemctl", "restart", "awg-quick@awg0", check=False)
+        active = sh("systemctl", "is-active", "awg-quick@awg0", check=False).stdout.strip()
+        t = sh("nft", "list", "table", "ip", config.NFT_TABLE, check=False)
+        out.append(("без файла правил служба просто поднимает сервер", active == "active" and t.returncode != 0, active))
+    finally:
+        if os.path.exists(hold):
+            os.unlink(hold)
+        sh("nft", "delete", "table", "ip", config.NFT_TABLE, check=False)
+    return out
 
 
 def main():
@@ -101,6 +150,7 @@ def main():
                 break
             time.sleep(1)
         results.append(("старый конфиг клиента подключается к серверу на хосте", ok, out))
+        results += hold_checks()
 
         r = movehost("undo")
         active = sh("systemctl", "is-active", "awg-quick@awg0", check=False).stdout.strip()
