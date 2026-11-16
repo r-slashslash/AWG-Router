@@ -140,10 +140,11 @@ it grows, so every user-visible change gets a new version.
   `RESERVE` (16) places above `MAX_CONNECTIONS`, so the owner gets in during a flood.
 - **Content-Security-Policy** on the panel's pages and the client's page: scripts, styles and fonts only from the
   panel itself, no frames, no plugins.
-- **The external IP is checked.** When `PUBLIC_HOST` is empty the panel takes its address from 1.1.1.1, ip-api.com or
-  ifconfig.me; an answer that isn't an IP address is now ignored (`probe.ip_of`), ifconfig.me is asked over HTTPS, and
-  a host or parameter with a line break never gets into a client config or `vpn://` link (`awgserver._one_line`).
-  Before, a spoofed plain-HTTP answer could add lines such as `PostUp` to every client's config.
+- **The external IP is checked.** When `PUBLIC_HOST` is empty the panel takes its address from 1.1.1.1, ipinfo.io or
+  ifconfig.me — all over HTTPS now (ip-api.com, plain HTTP only, is gone; ipinfo.io also gives the country and the
+  provider in the exit check); an answer that isn't an IP address is ignored (`probe.ip_of`), and a host or parameter
+  with a line break never gets into a client config or `vpn://` link (`awgserver._one_line`). Before, a spoofed
+  plain-HTTP answer could add lines such as `PostUp` to every client's config, or put a wrong address into them.
 - **Telegram control needs a numeric Chat ID.** A `@name` can be freed and taken by someone else, and everyone in a
   public group with that name can write to the bot: commands are now accepted only from the chat with the numeric
   ID set in the panel (`Bot.allowed`), and saving control with a `@name` is refused (`err.tg_control_id`). A bot set
@@ -155,8 +156,9 @@ it grows, so every user-visible change gets a new version.
   in China and Iran) is fetched through working exits (`tgreq.py` learned GET with a size limit, `notify.get_via`,
   at most two exits); a site that answers with an HTTP error isn't retried. A download over 64 MB is an error
   instead of being cut mid-line, an answer without a length drops its unfinished last line, and downloaded lists
-  ignore networks wider than /8. Saving or refreshing a list that needs the network answers at once; the table
-  shows "Downloading…" until it is done. One list is refreshed by one thread at a time, and its file is written
+  ignore networks wider than /8. A rule whose list has no entries (it didn't download, or it is empty) says so in its
+  own line — such a list drops out of the rules silently (`rl.lists_failed`, `rl.lists_empty`). Saving or refreshing
+  a list that needs the network answers at once; the table shows "Downloading…" until it is done. One list is refreshed by one thread at a time, and its file is written
   through a temporary file.
 - **DNS on the server answers AAAA with "no records"**: the tunnel carries only IPv4, and apps no longer try IPv6
   first and wait.
@@ -213,7 +215,7 @@ it grows, so every user-visible change gets a new version.
   with a traceback in the log). A change in `state.json` takes effect only after it is written to disk
   (`Store.mutate`). DNS query IDs come from `secrets`. Texts of the bot fill in their parameters in one pass (a client
   named `{gb}` kept its name). `sniproxy.log` and `dnsproxy.log` are cut when they grow over 5 MB, and a QUIC queue
-  error is logged at most once per 10 s. The backup restore tests no longer go to the network.
+  error is logged at most once a minute (`sniproxy.QUIC_ERR_LOG_EVERY`). The backup restore tests no longer go to the network.
 
 ## 1.20.0 — 2026-11-14
 

@@ -91,9 +91,9 @@ def ip_of(text) -> str:
 
 
 def whoami():
-    """Внешний IP и страна. Сначала HTTPS к 1.1.1.1 (без DNS и по 443: многие прокси пускают
-    только 80/443), затем ip-api.com по HTTP (страна и провайдер) и ifconfig.me по HTTPS. Ответ,
-    в котором не IP-адрес, не принимается."""
+    """Внешний IP и страна — только по HTTPS (ответ по HTTP можно подменить по дороге, а адрес попадает в конфиги
+    клиентов). Сначала 1.1.1.1 (без DNS и по 443: многие прокси пускают только 80/443), затем ipinfo.io
+    (страна и провайдер) и ifconfig.me. Ответ, в котором не IP-адрес, не принимается."""
     errors = []
     try:
         kv = dict(ln.split("=", 1) for ln in http_get("1.1.1.1", "/cdn-cgi/trace", tls=True).splitlines() if "=" in ln)
@@ -102,13 +102,13 @@ def whoami():
     except Exception as e:  # noqa: BLE001
         errors.append(f"1.1.1.1: {e}")
     try:
-        d = json.loads(http_get("ip-api.com", "/json/?fields=status,query,countryCode,isp"))
-        if d.get("query"):
-            cc = d.get("countryCode")
-            return {"ip": ip_of(d["query"]), "cc": cc if isinstance(cc, str) and len(cc) == 2 else None,
-                    "isp": str(d.get("isp") or "")[:80] or None}
+        d = json.loads(http_get("ipinfo.io", "/json", tls=True))
+        if d.get("ip"):
+            cc = d.get("country")
+            return {"ip": ip_of(d["ip"]), "cc": cc if isinstance(cc, str) and len(cc) == 2 else None,
+                    "isp": str(d.get("org") or "")[:80] or None}
     except Exception as e:  # noqa: BLE001
-        errors.append(f"ip-api.com: {e}")
+        errors.append(f"ipinfo.io: {e}")
     try:
         return {"ip": ip_of(http_get("ifconfig.me", "/ip", tls=True))}
     except Exception as e:  # noqa: BLE001

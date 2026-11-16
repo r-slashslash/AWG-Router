@@ -97,6 +97,7 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 .rule-sum .rule-row { display: flex; align-items: center; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap; }
 .rule-sum .rule-what { min-width: 0; overflow-wrap: anywhere; }
 .rule-sum .rule-name { font-size: .78rem; color: var(--muted); line-height: 1.2; }
+.rule-sum .rule-warn { grid-column: 2; grid-row: 3; line-height: 1.3; margin-top: 2px; }
 .rule-sum li.off { color: var(--muted); }
 .rule-sum li.off .rule-what { text-decoration: line-through; }
 .rule-sum li.off .line { opacity: .55; }

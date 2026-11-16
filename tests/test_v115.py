@@ -179,7 +179,7 @@ class ProbeHostsTest(unittest.TestCase):
             res = eng.probe("up:x")
         cmd = eng.target.ns.call_args.args[0]
         self.assertEqual(cmd[0], "python3")
-        self.assertIn("ip-api.com=203.0.113.9", cmd)
+        self.assertIn("ipinfo.io=203.0.113.9", cmd)
         self.assertIn("ifconfig.me=203.0.113.9", cmd)
         self.assertTrue(res["ok"])
 

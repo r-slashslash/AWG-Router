@@ -61,12 +61,32 @@ class ProbeIpTest(unittest.TestCase):
         def get(host, path, tls=False):
             if host == "1.1.1.1":
                 raise OSError("timed out")
-            if host == "ip-api.com":
-                return json.dumps({"status": "success", "query": EVIL, "countryCode": "XXX"})
+            if host == "ipinfo.io":
+                return json.dumps({"ip": EVIL, "country": "XXX"})
             return EVIL
         with mock.patch.object(probe, "http_get", get):
             with self.assertRaises(OSError):
                 probe.whoami()
+
+    def test_only_https(self):
+        """Б1 до конца: все источники адреса — по HTTPS (подменить ответ по дороге нельзя)."""
+        seen = []
+
+        def get(host, path, tls=False):
+            seen.append((host, tls))
+            raise OSError("down")
+        with mock.patch.object(probe, "http_get", get), self.assertRaises(OSError):
+            probe.whoami()
+        self.assertEqual([h for h, _ in seen], ["1.1.1.1", "ipinfo.io", "ifconfig.me"])
+        self.assertTrue(all(tls for _, tls in seen))
+
+    def test_ipinfo_country(self):
+        def get(host, path, tls=False):
+            if host == "ipinfo.io":
+                return json.dumps({"ip": "203.0.113.7", "country": "DE", "org": "AS24940 Hetzner"})
+            raise OSError("down")
+        with mock.patch.object(probe, "http_get", get):
+            self.assertEqual(probe.whoami(), {"ip": "203.0.113.7", "cc": "DE", "isp": "AS24940 Hetzner"})
 
     def test_ifconfig_over_https(self):
         seen = []
@@ -1128,6 +1148,30 @@ class ErrorFieldTest(unittest.TestCase):
             self.assertIn(f'data-field="{fld}"', js)
         self.assertEqual(js.count("markField(e, "), 3)
         self.assertIn("pendingS = data", js)
+
+
+# ============================================================ решения владельца после проверки заметок
+class OwnerFollowupTest(unittest.TestCase):
+    def test_empty_list_warning_in_rule(self):
+        """Б7: список без записей (не скачался или пустой) — пометка прямо в строке правила, 4 языка."""
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn('"rl.lists_failed"', js)
+        self.assertIn('"rl.lists_empty"', js)
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "i18n.js"), encoding="utf-8") as f:
+            i18n = f.read()
+        self.assertEqual(i18n.count('"rl.lists_failed":'), 4)
+        self.assertEqual(i18n.count('"rl.lists_empty":'), 4)
+
+    def test_quic_errors_once_a_minute(self):
+        from app import sniproxy
+        self.assertEqual(sniproxy.QUIC_ERR_LOG_EVERY, 60)
+
+    def test_probe_hosts_https(self):
+        self.assertNotIn("ip-api.com", engine.PROBE_HOSTS)
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "probe.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertNotIn('http_get("ip-api.com"', src)
 
 
 if __name__ == "__main__":

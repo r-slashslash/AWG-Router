@@ -51,7 +51,7 @@ def run_panel() -> None:
     sys.path.insert(0, ROOT)
     from app import lists
 
-    def fake_fetch(url: str, timeout: int = 30) -> str:
+    def fake_fetch(url: str, timeout: int = 30, **kw) -> str:
         cc = next((c for c in COUNTRIES if f"/{c}/" in url or f"/{c}-" in url or f"/{c}." in url), None)
         if not cc:
             raise OSError("offline (screenshots)")

@@ -239,9 +239,15 @@ function rulesSummary(rules) {
     const rest = n > 0 ? `<span class="rule-rest"${open ? "" : " hidden"}>${esc(sep("list"))}${labels.slice(2).join(esc(sep("list")))}</span>`
       + ` <button type="button" class="more-chip" dir="ltr" data-rule-more="${esc(r.id)}" data-n="${esc(fmtNum(n))}" aria-expanded="${open}" title="${esc(r.lists.map(listLabelText).join(sep("list")))}" aria-label="${esc(t("rl.show_all"))}">${open ? "−" : "+" + esc(fmtNum(n))}</button>` : "";
     const name = ruleOwnName(r);
+    // список без записей (не скачался, пустой) правило тихо выключает — говорим об этом в самой строке
+    const empty = r.enabled === false ? [] : r.lists.map(listObj).filter((l) => l && !l.busy && !l.count);
+    const names = (ls) => ls.map((l) => `<bdi>${esc(listName(l.id))}</bdi>`).join(esc(sep("list")));
+    const warn = [["rl.lists_failed", empty.filter((l) => l.error)], ["rl.lists_empty", empty.filter((l) => !l.error)]]
+      .filter(([, ls]) => ls.length)
+      .map(([k, ls]) => `<div class="small warn-text rule-warn">⚠ ${th(k, { lists: names(ls) })}</div>`).join("");
     return `<li class="${r.enabled === false ? "off" : ""}"${r.enabled === false ? ` title="${esc(t("rl.off"))}"` : ""}>
       <span class="rule-n">${esc(fmtNum(i + 1))}.</span>${name ? `<div class="rule-name"><bdi>${esc(name)}</bdi></div>` : ""}
-      <div class="rule-row"><span class="rule-what">${labels.slice(0, 2).join(esc(sep("list")))}${rest}</span>${outChip(r.outbound)}</div></li>`;
+      <div class="rule-row"><span class="rule-what">${labels.slice(0, 2).join(esc(sep("list")))}${rest}</span>${outChip(r.outbound)}</div>${warn}</li>`;
   }).join("")}</ol>`;
 }
 document.addEventListener("click", (e) => {

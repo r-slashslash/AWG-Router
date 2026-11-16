@@ -77,6 +77,7 @@ IDLE_TIMEOUT = 900          # соединение без данных в обе
 KEEPALIVE = (120, 30, 4)    # TCP keepalive: пропавший без FIN собеседник виден через ~4 мин
 STATS_EVERY = 15
 ACCEPT_LOG_EVERY = 10.0     # повторяющуюся ошибку приёма пишем в журнал не чаще, с
+QUIC_ERR_LOG_EVERY = 60     # ошибка разбора QUIC в журнал — не чаще раза в столько секунд
 
 
 # --------------------------------------------------------------- разбор имени
@@ -667,7 +668,7 @@ class Sniffer:
             except Exception as e:  # noqa: BLE001 — пакет не должен остаться в очереди навсегда
                 self._quic_count("quic_errors")
                 now = time.monotonic()
-                if now - self._quic_logged >= ACCEPT_LOG_EVERY:     # ошибка на каждый пакет залила бы журнал
+                if now - self._quic_logged >= QUIC_ERR_LOG_EVERY:   # ошибка на каждый пакет залила бы журнал
                     self._quic_logged = now
                     log(f"quic: {e!r}")
                 self.queue.verdict(pid, True, block)
