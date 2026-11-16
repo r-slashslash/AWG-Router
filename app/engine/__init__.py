@@ -141,6 +141,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         threading.Thread(target=self._lists_loop, name="lists", daemon=True).start()
         threading.Thread(target=self._detect_host, name="public-ip", daemon=True).start()
         threading.Thread(target=self._watch_sni, name="sni-watch", daemon=True).start()
+        if not config.DRY_RUN:
+            threading.Thread(target=self._watch_connecting, name="exit-connecting", daemon=True).start()
         if not config.DRY_RUN and os.path.exists(config.DOCKER_SOCK):
             threading.Thread(target=self._docker_events, name="docker-events", daemon=True).start()
 

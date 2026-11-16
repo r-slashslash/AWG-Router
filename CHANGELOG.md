@@ -337,6 +337,18 @@ it grows, so every user-visible change gets a new version.
   95%, as the code has it (memory stays 90%). `.env.example` lists the settings the panel reads (without
   `UPSTREAM_BACKEND`), the bug report form says where to find the version, CONTRIBUTING says that a pull request
   gets only CodeQL, and two section references in the fa README are links.
+- **A newly started exit blocks its clients instead of sending them to the fallback.** After a panel start or update,
+  an AWG server restart or an exit edit, the first pass saw the exit's new tunnel without a handshake and sent its
+  clients to the fallback: with the default "Direct" that was 9–12 s past the exit on every panel start (measured on
+  the test server in Russia, exit 120 ms away). `resolve` now gives a block while the exit is `connecting` (no answer
+  yet, at most `CONNECTING_SECS` = 30 s), and a thread (`Engine._watch_connecting`) looks at the handshakes of such
+  AWG exits every `HANDSHAKE_POLL` (0.5 s) and wakes the pass as soon as one answers; a SOCKS5 exit wakes it with its
+  first proxy check. An exit that doesn't answer in 30 s goes to its fallback as before. The exit window's hint says so.
+- **Clients can't reach link-local addresses.** `c_forward` rejects `169.254.0.0/16` from the clients' interface
+  (`nftgen.LINK_LOCAL`): the cloud's service address `169.254.169.254` (server data; on AWS, keys to the cloud
+  account) was reachable — link-local is one of the local networks (`local4`), so it went straight from the entry
+  server whatever the client's exit. The rules "before the panel" carry it too; `netns_e2e.py` checks it, with an
+  exit as the default and with everything direct.
 
 ## 1.20.0 — 2026-11-14
 

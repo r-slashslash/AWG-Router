@@ -21,6 +21,10 @@ LOCAL_NETS = [
 ]
 
 
+# Сеть link-local: в облаках там служебный адрес 169.254.169.254 (данные сервера, у AWS — и ключи доступа к
+# облаку). Клиентам VPN он не нужен, а маршрутизаторы такие адреса и так не пересылают (RFC 3927)
+LINK_LOCAL = "169.254.0.0/16"
+
 ACCT_TABLE = "awgr_acct"
 ACCT_VER = 1
 
@@ -312,6 +316,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     fwd = [
         "\tchain c_forward {",
         "\t\ttype filter hook forward priority filter; policy accept;",
+        # служебный адрес облака (169.254.169.254): link-local входит в local4 и шёл бы с самого сервера при любом выходе
+        f'\t\tiifname "{wg_iface}" ip daddr {LINK_LOCAL} reject with icmp type admin-prohibited',
         f"\t\tmeta mark {config.MARK_BLOCK:#x} reject with icmp type admin-prohibited",
         # страховка: пакет с меткой выхода уходит не в туннель (ip rule этой метки ещё нет или уже нет —
         # основная таблица) — отказ, а не путь мимо выхода

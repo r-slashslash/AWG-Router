@@ -283,6 +283,7 @@ The panel runs in its own container (`network_mode: host`, `pid: host`, `privile
 - Client packets are marked by nftables rules in the `ip awgr` table.
 - The tunnel address on the exit server is applied with SNAT, so it never clashes with your clients.
 - If a tunnel disappears, an `unreachable` route stays in its table, so traffic never leaks around the exit.
+- A newly started exit (panel start or update, AWG server restart, an edited exit) gets up to 30 seconds to answer, and until then its clients are blocked rather than sent to the fallback; usually it answers within a second. With the fallback "Direct" its clients used to go direct for about 10 seconds after every panel start.
 - Load balancing pins each client to one exit, and each connection remembers its exit in conntrack (`ct mark`), so moving a client sends only its new connections through the new exit. Speed limits are `tc` HTB queues: on the clients' interface (`awg0`) for clients and on `awgrN` for exits; incoming traffic is shaped through an `ifb` device.
 
 Everything that's applied is visible on the **System** tab under **What's applied right now**.
@@ -294,7 +295,8 @@ The panel effectively has root access to the server.
 - After 8 wrong passwords, logins from that IP are blocked for 10 minutes. Behind your own reverse proxy (nginx and the like in front of the panel) every visitor comes from the proxy's address, so 8 wrong passwords from anyone block everyone, you included; open the panel directly or through an SSH tunnel instead.
 - The most locked-down option is access through an SSH tunnel only.
 - Private keys of exits and of clients created in the panel are stored in `/opt/awg-router/data/state.json`, with permissions 600.
-- Telegram control obeys a chat, not a person: if that chat is a group, every member can control the panel. Use a private chat with the bot.
+- Telegram control obeys a chat, not a person: if that chat is a group, every member can control the panel, and in a channel every subscriber can press the buttons under notifications. Use a private chat with the bot.
+- Clients can't reach the cloud's service address `169.254.169.254` (server data, on AWS also keys to the cloud account) or any other link-local address.
 - A backup holds the private keys of the server and of all clients. Set a password for downloaded backups and for backups sent to Telegram.
 - Starting with 1.19.1, the images and the archive are built by GitHub Actions and carry a signed build attestation, and the images also have an SBOM (list of components). You can check a download with `gh attestation verify oci://ghcr.io/r-slashslash/awg-router:<version> -R r-slashslash/AWG-Router` (images) or `gh attestation verify awg-router.tar.gz -R r-slashslash/AWG-Router` (the archive).
 

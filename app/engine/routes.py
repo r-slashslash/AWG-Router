@@ -31,6 +31,11 @@ class RoutesMixin:
                 if not self.over_quota(u):
                     return u["num"]
                 return self.resolve(self.quota_target(u), st, depth + 1)
+            if u.get("enabled", True) and h.get("state") == "connecting":
+                # выход только что запущен и ещё не ответил (запуск и обновление панели, перезапуск сервера, правка
+                # выхода): обычно это доли секунды — блок, а не резерв, иначе с резервом «Напрямую» клиенты до
+                # следующего прохода шли бы мимо выхода. Не ответил за CONNECTING_SECS — резерв, как раньше
+                return "block"
             return self.resolve(u.get("fallback") or "direct", st, depth + 1)
         return "block"
 

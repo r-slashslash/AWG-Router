@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app import config, nftgen, web  # noqa: E402
 
 NS = ["cli", "amz", "inet", "up1"]
-TARGETS = {"foreign": "8.8.8.8", "russian": "77.88.55.242"}
+TARGETS = {"foreign": "8.8.8.8", "russian": "77.88.55.242", "metadata": "169.254.169.254"}
 SERVER = r"""
 import socket,sys
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("0.0.0.0",80)); s.listen(16)
@@ -201,7 +201,13 @@ def main():
         g = {"rules": [(["ru"], "direct")], "default": 1}
         panel_apply(g, {})
         results += [expect("глобально: всё через выход, RU напрямую", "foreign", "UP1 from 10.8.1.3"),
-                    expect("глобально: всё через выход, RU напрямую", "russian", "DIRECT from 172.20.0.2")]
+                    expect("глобально: всё через выход, RU напрямую", "russian", "DIRECT from 172.20.0.2"),
+                    # служебный адрес облака есть «в интернете» (inet), но клиенту закрыт
+                    expect("служебный адрес облака 169.254.169.254 закрыт", "metadata", "FAIL")]
+        panel_apply({"rules": [], "default": "direct"}, {})
+        results += [expect("всё напрямую: служебный адрес облака всё равно закрыт", "metadata", "FAIL"),
+                    expect("всё напрямую: остальное открыто", "foreign", "DIRECT")]
+        panel_apply(g, {})
         panel_apply(g, {"10.8.1.3": {"rules": [], "default": "direct"}})
         results += [expect("клиент .2 через выход (SNAT в 10.8.1.3)", "foreign", "UP1 from 10.8.1.3"),
                     expect("клиент .3 с тем же адресом — напрямую, без конфликта", "foreign",

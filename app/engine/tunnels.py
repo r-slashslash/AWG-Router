@@ -25,6 +25,8 @@ AWG31_KEYS = re.compile(r"^\s*(HeaderProtectionKey|ContentPaddingAddition|Random
                         re.M | re.I)
 SERVER_ENGINE_EVERY = 60     # с: как часто заново смотреть, чем работает интерфейс сервера
 FLAP_SECS = 60                          # туннель упал раньше — считаем неудачным запуском
+CONNECTING_SECS = 30     # с после запуска выхода без ответа: «подключается» — его клиенты в блоке, а не на резерве
+HANDSHAKE_POLL = 0.5     # с: как часто смотреть, ответил ли только что запущенный выход AWG
 
 
 class TunnelsMixin:
@@ -469,13 +471,43 @@ class TunnelsMixin:
                                name=u["name"], uid=uid))
             if not healthy and now - r.started >= RERESOLVE_AFTER and peer and not config.DRY_RUN:
                 self._reresolve(t, u, r, peer, now)
+            connecting = not healthy and not hs and now - r.started < CONNECTING_SECS
             self.health[uid] = {
-                "state": "up" if healthy else ("connecting" if now - r.started < 30 and not hs else "stale"),
+                "state": "up" if healthy else ("connecting" if connecting else "stale"),
                 "healthy": healthy, "handshake_age": age, "iface": r.iface,
                 "rx": peer["rx"] if peer else 0, "tx": peer["tx"] if peer else 0,
                 "endpoint": peer["endpoint"] if peer else None,
                 "since": r.started,
             }
+
+    def _watch_connecting(self) -> None:
+        """Поток: выходы AWG, которые только что запущены и ещё не ответили («подключается»). Их клиенты в блоке
+        (resolve), а следующий проход — через RECONCILE_INTERVAL: столько клиенты были бы без связи. Каждые
+        HANDSHAKE_POLL смотрим рукопожатие таких выходов и будим проход, как только выход ответил или кончились
+        CONNECTING_SECS (тогда его клиенты идут на резерв). Нет таких выходов — только просмотр словаря."""
+        while not self.stop_ev.wait(HANDSHAKE_POLL):
+            try:
+                if self._connecting_due(self.target, time.time()):
+                    self.trigger()
+            except Exception as e:  # noqa: BLE001
+                log.info("connecting exits: %s", e)
+
+    def _connecting_due(self, t: system.Target | None, now: float) -> bool:
+        """Есть ли «подключающийся» выход AWG, который уже ответил или чей срок вышел (нужен проход)."""
+        if t is None:
+            return False
+        for uid, r in list(self.rt.items()):
+            h = self.health.get(uid) or {}
+            if h.get("state") != "connecting" or h.get("kind") == "socks5" or h.get("since") != r.started:
+                continue                    # SOCKS5 будит проход сам (проверка прокси); since — тот же запуск
+            if now - r.started >= CONNECTING_SECS:
+                return True
+            p = t.ns(["awg", "show", r.iface, "latest-handshakes"], check=False, timeout=5)
+            for line in (p.stdout or "").splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) > 0:
+                    return True
+        return False
 
     def _reresolve(self, t: system.Target, u: dict, r: UpRT, peer: dict, now: float) -> None:
         """Туннель с именем в Endpoint не отвечает: разбираем имя заново и, если адрес сменился,
@@ -556,7 +588,7 @@ class TunnelsMixin:
                 rx, tx = st64.get("rx", {}).get("bytes", 0), st64.get("tx", {}).get("bytes", 0)
             except (ValueError, IndexError, AttributeError):
                 pass
-        state = "up" if healthy else ("connecting" if not res and now - r.started < 30 else "stale")
+        state = "up" if healthy else ("connecting" if not res and now - r.started < CONNECTING_SECS else "stale")
         self.health[uid] = {"state": state, "healthy": healthy, "iface": r.iface, "since": r.started,
                             "kind": "socks5", "check_age": now - res["at"] if res else None,
                             "latency_ms": res["ms"] if res else None,

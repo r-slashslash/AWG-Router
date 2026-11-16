@@ -1109,6 +1109,112 @@ class PpaRetryTest(unittest.TestCase):
         self.assertNotIn("sleep", calls)
 
 
+
+# ------------------------------------------------------------------ Н1: выход только что запущен — блок, а не резерв
+from app.engine import tunnels as tunnels_mod  # noqa: E402
+
+
+class StartingExitTest(unittest.TestCase):
+    """Н1 (решение владельца 2026-11-17): после запуска или обновления панели первый проход видел только что
+    поднятый выход без рукопожатия и пускал его клиентов по резерву — с «Напрямую» (по умолчанию) это 9–12 с мимо
+    выхода. Теперь такие клиенты в блоке, а отдельный поток будит проход, как только выход ответил."""
+
+    def eng(self, state, healthy=False, enabled=True, started=None):
+        e = engine.Engine.__new__(engine.Engine)
+        r = UpRT(1, "h", "k")
+        if started is not None:
+            r.started = started
+        e.rt = {"u1": r}
+        e.health = {"u1": {"state": state, "healthy": healthy, "since": r.started}}
+        e.over_quota = lambda u: False
+        st = {"upstreams": [{"id": "u1", "num": 1, "name": "x", "enabled": enabled, "fallback": "direct"}]}
+        return e, st, r
+
+    def test_resolve(self):
+        for state, healthy, enabled, want in (("connecting", False, True, "block"),
+                                               ("up", True, True, 1),
+                                               ("stale", False, True, "direct"),       # не ответил за 30 с
+                                               ("down", False, True, "direct"),        # не запустился
+                                               ("connecting", False, False, "direct")):  # выключен
+            e, st, _ = self.eng(state, healthy, enabled)
+            self.assertEqual(e.resolve("up:u1", st), want, (state, enabled))
+
+    def test_new_tunnel_is_connecting(self):
+        e, st, r = self.eng("down")
+        e._fake, e.event = None, lambda *a, **kw: None
+        e.parsed = lambda u: mock.Mock(kind="awg", rekey_after=120)
+        t = mock.Mock()
+        t.ns.return_value = mock.Mock(returncode=0, stdout="")          # рукопожатия ещё нет
+        with mock.patch.object(engine.config, "DRY_RUN", False):
+            e._update_health(t, st)
+        self.assertEqual(e.health["u1"]["state"], "connecting")
+        self.assertEqual(e.resolve("up:u1", st), "block")
+        r.started -= tunnels_mod.CONNECTING_SECS                         # 30 с без ответа — резерв
+        with mock.patch.object(engine.config, "DRY_RUN", False):
+            e._update_health(t, st)
+        self.assertEqual(e.health["u1"]["state"], "stale")
+        self.assertEqual(e.resolve("up:u1", st), "direct")
+
+    def test_watch_wakes_pass(self):
+        e, st, r = self.eng("connecting")
+        t = mock.Mock()
+        t.ns.return_value = mock.Mock(stdout="PUBKEY\t0\n")
+        self.assertFalse(e._connecting_due(t, time.time()))              # ещё не ответил — ждём
+        t.ns.return_value = mock.Mock(stdout="PUBKEY\t1794842579\n")
+        self.assertTrue(e._connecting_due(t, time.time()))               # ответил — проход сразу
+        self.assertEqual(t.ns.call_args.args[0], ["awg", "show", "awgr1", "latest-handshakes"])
+        t.ns.reset_mock()
+        t.ns.return_value = mock.Mock(stdout="PUBKEY\t0\n")
+        self.assertTrue(e._connecting_due(t, r.started + tunnels_mod.CONNECTING_SECS))   # срок вышел
+        self.assertFalse(e._connecting_due(None, time.time()))
+
+    def test_watch_skips(self):
+        t = mock.Mock()
+        t.ns.return_value = mock.Mock(stdout="PUBKEY\t1794842579\n")
+        for state, extra in (("up", {}), ("connecting", {"kind": "socks5"}), ("connecting", {"since": 1.0})):
+            e, st, r = self.eng(state)
+            e.health["u1"].update(extra)
+            self.assertFalse(e._connecting_due(t, time.time()), (state, extra))
+        t.ns.assert_not_called()                                        # смотреть нечего — без процессов
+
+    def test_thread_started(self):
+        src = read_src("app", "engine", "__init__.py")
+        self.assertIn('target=self._watch_connecting, name="exit-connecting"', src)
+        self.assertLess(tunnels_mod.HANDSHAKE_POLL, 1)
+
+
+
+# ------------------------------------------------------------------ служебный адрес облака (решение владельца 2026-11-17)
+class CloudMetadataTest(unittest.TestCase):
+    """Клиенты VPN доходили до 169.254.169.254 — служебного адреса облака (данные сервера, у AWS — ключи доступа к
+    облаку): link-local — «местная сеть» (local4) и шла с самого сервера при любом выходе. Теперь вся сеть
+    link-local клиентам закрыта, в обычных правилах и в правилах «до панели». Сам путь проверяет netns_e2e.py."""
+
+    def rules(self, **kw):
+        return nftgen.generate("awg0", {}, [{"num": 1, "snat": "10.9.0.2", "mtu": 1280}],
+                               {"rules": [], "default": kw.get("default", 1)}, {})
+
+    def test_forward_rejects(self):
+        for default in (1, "direct", "block"):
+            fwd = self.rules(default=default).split("chain c_forward {")[1].split("}")[0]
+            line = 'iifname "awg0" ip daddr 169.254.0.0/16 reject with icmp type admin-prohibited'
+            self.assertIn(line, fwd, default)
+            self.assertLess(fwd.index(line), fwd.index("meta mark"))         # раньше любых других решений
+
+    @unittest.skipUnless(shutil.which("nft") and os.geteuid() == 0, "nft -c — только от root")
+    def test_nft_accepts(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".nft", delete=False) as f:
+            f.write(self.rules())
+        self.addCleanup(os.unlink, f.name)
+        p = subprocess.run(["nft", "-c", "-f", f.name], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_network_test_checks_it(self):
+        src = read_src("tests", "netns_e2e.py")
+        self.assertIn('"metadata": "169.254.169.254"', src)
+        self.assertIn('"metadata", "FAIL"', src)
+
+
 def read_src(*parts):
     with open(os.path.join(ROOT, *parts), encoding="utf-8") as f:
         return f.read()
