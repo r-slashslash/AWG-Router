@@ -53,7 +53,9 @@ choosing the module again lifts the block and restarts it (or installs the modul
 
 On a new target (the container restarted, so its network is empty) a pass puts in the rule set before it
 starts any tunnel, with every exit that has no tunnel yet treated as down (`Engine._hold_rules`); the usual
-apply at the end of the pass replaces it. AWG exits wait while the 3.x module is loaded and the server's
+apply at the end of the pass replaces it. The panel hears about a container start from Docker's event stream at
+once, and the same "no tunnels yet" rule set is kept next to the server's config so that the panel's own AWG
+container and the host service apply it themselves before the server comes up (`Engine._save_hold`). AWG exits wait while the 3.x module is loaded and the server's
 interface is not up yet (`Engine.engine_pending`), so they don't start on `amneziawg-go` first. If
 `awg syncconf` fails, the server's files are put back (`users._put_back`), so the files always match the
 interface.

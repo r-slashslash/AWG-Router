@@ -178,6 +178,30 @@ it grows, so every user-visible change gets a new version.
 - **Login.** Password checks in progress count together with failed ones, so 24 parallel attempts no longer get
   around the limit; addresses of old failures are forgotten. The panel password goes to the log only when it is
   created.
+- **Fewer processes per pass.** The handshakes and traffic of all AmneziaWG exits come from one `awg show all dump`
+  (`system.parse_all_dump`) and the counters of SOCKS5 tunnels from one `ip -j -s link show`, instead of a call per
+  exit; an exit missing from the shared answer is asked alone, as before. `ip rule` and the exits' routes go in one
+  `ip -force -batch -` (`Engine._sync_rules`), and the routes only when the set of tunnels changed or every
+  `ROUTES_EVERY`; if the batch fails, a missing rule is added by its own command, whose error shows as before. With
+  20 exits a pass started about 66 processes, now about 8. `awg_real_e2e` checks both on the real tools (amneziawg-go,
+  the kernel module and mixed).
+- **The interface with a thousand clients.** `/api/state` carries a `tag` of the state without time, CPU and memory;
+  a background poll sends it back (`X-State-Tag`) and, when nothing changed, gets a short answer (0.2 KB instead of
+  109 KB for 1000 clients) and redraws only the header. When something changed, the clients table replaces only the
+  changed rows (`patchClients`); search, sorting and clicks keep working. 1000 clients in Chrome: a poll without
+  changes ~25 ms instead of ~130 ms (a phone with a 4× slower CPU: ~45 instead of ~420 ms), with changes 22 instead of
+  76 ms (116 instead of 310).
+- **The field with an error is outlined.** A validation error names its field (`HTTPError.field`, `main.field()`,
+  `SERVER_FIELDS`, `params.<key>` for AWG parameters); in the exit, Server and Telegram forms the field gets a red
+  frame, the cursor and a scroll to it (`markField`), and the frame goes away once the field is edited.
+- **A window keeps the state it was opened with.** While a window is open, a background poll no longer replaces the
+  state under it (its choice lists and its handlers see the same thing); the header still updates, and the new state
+  is applied when the window closes.
+- **Code checks on GitHub.** `net-tests.yml` has a `lint` job: ruff (`ruff.toml`: F, B, E9, PLE) over the repository and
+  eslint (`eslint.config.mjs`, `no-undef` and plain errors) over the interface scripts; nothing of it goes into the
+  panel. `tests/test_rules.py` also checks that files have no co-author lines, that every action is pinned by SHA and
+  that the panel's pages load nothing from other hosts. `docs/DEVELOPMENT.md` collects the rules, checklists, what
+  "done" means and the invariants of the subsystems; `CONTRIBUTING.md` points to it.
 - **The domain lists hint says** that a browser may send a request for another site over an open HTTP/2 or HTTP/3
   connection when the sites share an address and certificate, and suggests keeping all domains of one owner in one
   list plus an address list for what matters.

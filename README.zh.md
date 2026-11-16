@@ -315,6 +315,8 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 
 面板本身只依赖 Python 标准库。Docker 镜像额外包含 `amneziawg-go`、`amneziawg-tools`、`hev-socks5-tunnel` 和 `lego`。
 
+修改规则、检查清单以及「完成」的标准见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)（英文）。
+
 ## 致谢
 
 ### 帮助过项目的人

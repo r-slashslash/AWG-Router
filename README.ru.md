@@ -315,6 +315,8 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # дем
 
 Самой панели хватает стандартной библиотеки Python. В Docker-образ дополнительно входят `amneziawg-go`, `amneziawg-tools`, `hev-socks5-tunnel` и `lego`.
 
+Правила изменений, чек-листы и что значит «готово» — в [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (по-английски).
+
 ## Благодарности
 
 ### Люди, которые помогли
