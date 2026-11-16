@@ -541,6 +541,10 @@ def put_telegram(req):
     c = _tg_draft(req.json())
     if (c["enabled"] or c["control"]) and not (c["token"] and c["chat_id"]):
         bad("err.tg_incomplete")
+    if c["control"] and c["chat_id"].startswith("@"):
+        # @имя можно освободить и занять другому человеку, а в публичной группе с этим именем пишут
+        # все её участники: команды (выключить клиентов, прислать копию) — только из чата с числовым ID
+        bad("err.tg_control_id")
     store.mutate(lambda st: st["settings"].__setitem__("telegram", c))
     bot.wake.set()             # бот сразу видит новые настройки, не дожидаясь паузы
     return {"ok": True}
@@ -1018,7 +1022,7 @@ def clean_backup_state(new: dict) -> dict:
                  enabled=tg.get("enabled") is True and bool(tok and chat))
         ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
         c["events"] = {k: ev[k] if isinstance(ev.get(k), bool) else True for k in notify.KINDS}
-        c["control"] = tg.get("control") is True and bool(tok and chat)
+        c["control"] = tg.get("control") is True and bool(tok and chat) and not chat.startswith("@")
         if isinstance(tg.get("backup"), str) and tg["backup"] in notify.BACKUP_PERIODS:   # список в dict — TypeError
             c["backup"] = tg["backup"]
         if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:

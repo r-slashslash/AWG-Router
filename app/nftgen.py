@@ -319,12 +319,18 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                    + (f"\t\telements = {{ {', '.join(elems)} }}\n" if elems else "") + "\t}")
         dom = f"ip daddr @{DOM_SET} " if dom_filter else ""
         keep = 0xFFFFFFFF ^ config.QUIC_CT_BIT
+        # Решение из conntrack — только если его путь ещё есть: метка выхода, который остановили, без
+        # своего ip rule пошла бы по основной таблице, то есть мимо выхода напрямую. Такой поток QUIC
+        # дальше блокируется (строка блока QUIC в политике), и браузер переходит на TCP.
+        live = sorted({mark_for(n) for n in up_nums}
+                      | {config.QUIC_PASS_MARK, config.QUIC_DIRECT_MARK, config.MARK_BLOCK})
+        restore = ", ".join(f"{m | config.QUIC_CT_BIT:#x}" for m in live)
         out.append(f"""\tchain c_quic {{
 \t\ttype filter hook prerouting priority mangle - 5; policy accept;
 \t\tiifname != "{wg_iface}" return
 \t\tudp dport != 443 return
 \t\tip daddr @local4 return
-\t\tct mark & {config.QUIC_CT_BIT:#x} == {config.QUIC_CT_BIT:#x} meta mark set ct mark & {keep:#x} accept
+\t\tct mark {{ {restore} }} meta mark set ct mark & {keep:#x} accept
 \t\tct state != new return
 \t\t{who}{dom}queue num {config.QUIC_QUEUE} bypass
 \t}}""")

@@ -125,6 +125,8 @@ class Engine:
         self.health: dict[str, dict] = {}
         self.clients: list[dict] = []
         self.applied_hash: str | None = None
+        self._hold_key: tuple | None = None      # с чем записан файл правил «до панели» (_save_hold)
+        self._hold_ok: dict[str, bool] = {}      # контейнер сервера сам ставит эти правила при запуске
         self.ruleset: str = ""
         self.last_apply: float | None = None
         self.last_error: str | None = None
@@ -207,6 +209,26 @@ class Engine:
         threading.Thread(target=self._lists_loop, name="lists", daemon=True).start()
         threading.Thread(target=self._detect_host, name="public-ip", daemon=True).start()
         threading.Thread(target=self._watch_sni, name="sni-watch", daemon=True).start()
+        if not config.DRY_RUN and os.path.exists(config.DOCKER_SOCK):
+            threading.Thread(target=self._docker_events, name="docker-events", daemon=True).start()
+
+    def _docker_events(self) -> None:
+        """Контейнер сервера AWG запустился (перезапуск Docker, сбой, кто-то сделал docker restart) — проход
+        сразу, а не через RECONCILE_INTERVAL: в новой сети контейнера правил панели нет, и до прохода клиенты
+        шли бы мимо выходов напрямую. Первые правила этот проход ставит до запуска туннелей (_hold_rules)."""
+        def on_start(name: str) -> None:
+            t = self.target
+            if (t is not None and t.kind == "container" and name == t.name) or name.startswith("amnezia-awg"):
+                self.wake.set()
+        pause = 5
+        while not self.stop_ev.is_set():
+            t0 = time.time()
+            try:
+                system.docker_events(on_start)
+            except Exception as e:  # noqa: BLE001  — Docker перезапускается; без событий всё работает по-старому
+                log.debug("docker events: %s", e)
+            pause = 5 if time.time() - t0 > 60 else min(pause * 2, 300)
+            self.stop_ev.wait(pause)
 
     def _watch_sni(self) -> None:
         """Присмотр за sniproxy.py раз в секунду (а не раз в RECONCILE_INTERVAL): процесс завершился
@@ -1092,13 +1114,16 @@ class Engine:
                             "no_quic": pc.kind == "socks5" and not u.get("quic")})
         return ups
 
-    def build_ruleset(self, t: system.Target, st: dict, sniff_port: int | None = None, quic: bool = False) -> str:
+    def build_ruleset(self, t: system.Target, st: dict, sniff_port: int | None = None, quic: bool = False,
+                      hold: bool = False) -> str:
         """quic — первые пакеты QUIC клиентов с правилами по доменам в очередь sniproxy.py (если
-        ядро это умеет — иначе QUIC у них блокируется, как раньше)."""
+        ядро это умеет — иначе QUIC у них блокируется, как раньше). hold — как будто ни одного туннеля
+        ещё нет (правила «до панели», _save_hold): трафик на выходы — в блок, «напрямую» — напрямую."""
         gp, cps = self._policies(st)
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
-        return nftgen.generate(t.iface, lst, self._up_list(st), gp, cps, sniff_port, self.bal_nums,
+        return nftgen.generate(t.iface, lst, [] if hold else self._up_list(st), gp, cps, sniff_port,
+                               frozenset() if hold else self.bal_nums,
                                dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
                                strict=sniff_port is None and self.strict(st))
 
@@ -1606,8 +1631,15 @@ class Engine:
                   "table", table], check=False)
 
     def _sysctl(self, t: system.Target) -> None:
-        for kv in ("net.ipv4.ip_forward=1", "net.ipv4.conf.all.rp_filter=2",
-                   "net.ipv4.conf.default.rp_filter=2", "net.ipv4.conf.all.src_valid_mark=1"):
+        kvs = ["net.ipv4.ip_forward=1", "net.ipv4.conf.all.src_valid_mark=1"]
+        if t.kind == "host":
+            # На хосте all / default — это проверка обратного пути у всех его интерфейсов (её мог включить
+            # администратор): мягкая проверка нужна только интерфейсу сервера и туннелям выходов (им она
+            # ставится при запуске). Действует большее из all и своего значения, поэтому своего хватает.
+            kvs.append(f"net.ipv4.conf.{t.iface}.rp_filter=2")
+        else:
+            kvs += ["net.ipv4.conf.all.rp_filter=2", "net.ipv4.conf.default.rp_filter=2"]
+        for kv in kvs:
             t.ns(["sysctl", "-qw", kv], check=False)
 
     # ------------------------------------------------------------ reconcile
@@ -1751,6 +1783,55 @@ class Engine:
         except Exception as e:  # noqa: BLE001  — обычное применение в конце прохода скажет об ошибке само
             log.warning("rules before tunnels: %s", e)
 
+    def _hold_path(self, t: system.Target) -> str | None:
+        """Где лежит файл правил «до панели» (HOLD_FILE) — там, где его применит сам сервер при запуске:
+        на хосте — служба awg-quick (system.UNIT_TEXT), в контейнере — только в нашем (awg-server/start.sh);
+        в контейнере приложения AmneziaVPN его никто не применит, и писать туда незачем."""
+        path = os.path.join(os.path.dirname(t.conf_path), system.HOLD_NAME.format(iface=t.iface))
+        if t.kind == "host":
+            return path
+        if t.kind != "container":
+            return None
+        ok = self._hold_ok.get(t.key)
+        if ok is None:
+            ok = "awgr-hold" in (t.read_file("/opt/amnezia/start.sh") or "")
+            self._hold_ok = {t.key: ok}
+        return path if ok else None
+
+    def _save_hold(self, t: system.Target, st: dict) -> None:
+        """Файл правил «до панели»: сервер ставит их сам при запуске, до подъёма интерфейса — после
+        перезапуска контейнера или перезагрузки хоста клиенты не идут мимо выходов, пока панель не
+        применила свои. Это те же правила, что остаются при остановке панели. С «При остановке панели:
+        вернуть как было» (on_stop = restore) файла нет: тогда без панели всё должно идти напрямую."""
+        if config.DRY_RUN:
+            return
+        restore = st["settings"].get("on_stop") == "restore"
+        key = (self.applied_hash, restore, t.key)
+        if key == self._hold_key:
+            return
+        try:
+            path = self._hold_path(t)
+            if path:
+                if restore:
+                    try:
+                        os.unlink(t.host_path(path))
+                    except FileNotFoundError:
+                        pass
+                else:
+                    t.write_file(path, self.build_ruleset(t, st, None, hold=True), 0o600)
+            self._hold_key = key
+        except Exception as e:  # noqa: BLE001  — не мешает работе: сработает при следующем применении
+            log.warning("rules before the panel starts: %s", e)
+
+    def _drop_hold(self, t: system.Target) -> None:
+        """Убрать файл правил «до панели» (удаление панели): иначе сервер ставил бы их и без неё."""
+        try:
+            os.unlink(t.host_path(os.path.join(os.path.dirname(t.conf_path),
+                                               system.HOLD_NAME.format(iface=t.iface))))
+        except OSError:
+            pass
+        self._hold_key = None
+
     def restart_server(self) -> None:
         """Кнопка «Перезапустить сервер AWG». Дальше всё применит reconcile: у контейнера сменится Target.key."""
         with self.lock:
@@ -1862,6 +1943,9 @@ class Engine:
                 self.applied_hash = None
                 self._shape = {}
                 self._sysctl(t)
+            elif t.kind == "host" and not config.DRY_RUN:
+                # интерфейс сервера на хосте пересоздаётся при перезапуске службы — с настройкой по умолчанию
+                t.ns(["sysctl", "-qw", f"net.ipv4.conf.{t.iface}.rp_filter=2"], check=False)
 
             if self._masking_checked != t.key:
                 self._masking_checked = t.key
@@ -1951,6 +2035,7 @@ class Engine:
                         self.dns.proc.send_signal(signal.SIGUSR1)
                     except OSError:
                         pass
+            self._save_hold(t, st)
             self._sync_rules(t)
             try:
                 self._sync_shaping(t, st)
@@ -1969,6 +2054,7 @@ class Engine:
             self._stop_dns()
             if t:
                 self._clear_shaping(t)
+                self._drop_hold(t)
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
                 t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
                 self._input_rule(t, "del")

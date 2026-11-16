@@ -27,8 +27,15 @@ log = logging.getLogger("awgr.web")
 MAX_BODY = 4 * 1024 * 1024
 MAX_CONNECTIONS = 128      # одновременных соединений; лишние закрываются сразу
 MAX_PER_IP = 24            # с одного адреса: один источник не займёт все места
+MAX_PER_NET = 48           # с одной сети IPv6 /48 (столько обычно у одного абонента или сервера): смена /64 не поможет
+RESERVE = 16               # мест сверх MAX_CONNECTIONS — адресам, с которых недавно входили в панель
+TRUST_TTL = 24 * 3600      # сколько адрес после входа считается своим (RESERVE)
 IDLE_TIMEOUT = 60          # секунд на заголовки и тело запроса
 KEEP_IDLE = 15             # секунд ожидания следующего запроса в том же соединении (панель опрашивает раз в 5)
+# Предел времени на весь запрос, а не на одно чтение: клиент, присылающий по байту раз в 59 секунд,
+# иначе держал бы место бесконечно («медленные» соединения занимали бы все MAX_CONNECTIONS)
+HEAD_DEADLINE = 30         # секунд на рукопожатие TLS, строку запроса и заголовки
+BODY_DEADLINE = 120        # секунд на тело запроса (до MAX_BODY: копия настроек)
 GZIP_MIN = 1024            # байт: ответы короче не сжимаются
 GZIP_TYPES = ("text/", "application/json", "application/javascript", "application/manifest+json",
               "image/svg+xml")
@@ -84,6 +91,18 @@ def client_key(addr: str) -> str:
     return str(a)
 
 
+def net_key(addr: str) -> str | None:
+    """Сеть /48 адреса IPv6 (для MAX_PER_NET); IPv4 — None: за одним адресом IPv4 бывают тысячи абонентов,
+    а соседние адреса — разные люди."""
+    try:
+        a = ipaddress.ip_address(addr.split("%", 1)[0])
+    except ValueError:
+        return None
+    if a.version == 6 and not a.ipv4_mapped:
+        return str(ipaddress.ip_network(f"{a}/48", strict=False))
+    return None
+
+
 def content_length(headers) -> int:
     """Длина тела из заголовка; отрицательная, нечисловая или больше лимита — ошибка."""
     raw = (headers.get("Content-Length") or "0").strip()
@@ -132,7 +151,7 @@ class Request:
     def json(self) -> dict:
         if self._body is None:
             n = content_length(self.headers)
-            raw = self.h.rfile.read(n) if n else b"{}"
+            raw = _read_body(self.h, n) if n else b"{}"
             self.h.body_read = True
             try:
                 # Infinity и NaN — не JSON по стандарту, а int() на них падает; слишком глубокая
@@ -200,12 +219,16 @@ class App:
                 # Следующего запроса ждём меньше, чем читаем начатый: простаивающее соединение занимает
                 # место из MAX_CONNECTIONS и MAX_PER_IP.
                 self.connection.settimeout(KEEP_IDLE if self.served else IDLE_TIMEOUT)
+                if self.served:                 # первый запрос — в пределе, заданном при подключении
+                    _arm(self.server, self.connection, KEEP_IDLE + HEAD_DEADLINE)
                 super().handle_one_request()
                 self.served = True
 
             def parse_request(self):
                 self.connection.settimeout(IDLE_TIMEOUT)        # строка запроса пришла — читаем остальное
-                return super().parse_request()
+                ok = super().parse_request()
+                _disarm(self.server, self.connection)          # заголовки прочитаны: обработка — без предела
+                return ok
 
             def version_string(self):  # заголовок Server не выдаёт панель сканерам
                 return "httpd"
@@ -263,7 +286,7 @@ class App:
                     return
                 if 0 < n <= MAX_BODY:
                     try:
-                        self.rfile.read(n)
+                        _read_body(self, n)
                         return
                     except OSError:
                         pass
@@ -302,6 +325,9 @@ class App:
                         req = Request(self, path, m.groupdict())
                         if app.middleware and fn not in app.public:
                             app.middleware(req)
+                            trust = getattr(self.server, "trust", None)
+                            if trust:                   # вход проверен: адресу — запасные места (RESERVE)
+                                trust(self.client_address[0])
                         res = fn(req, **m.groupdict())
                         if isinstance(res, Page):
                             return self._send(200, res.body, res.ctype, [("Cache-Control", "no-store")])
@@ -371,6 +397,27 @@ class App:
         return srv
 
 
+def _arm(server, sock, seconds: float) -> None:
+    arm = getattr(server, "arm", None)
+    if arm:
+        arm(sock, seconds)
+
+
+def _disarm(server, sock) -> None:
+    disarm = getattr(server, "disarm", None)
+    if disarm:
+        disarm(sock)
+
+
+def _read_body(h, n: int) -> bytes:
+    """Тело запроса — в пределе BODY_DEADLINE на всё тело (а не на одно чтение)."""
+    _arm(h.server, h.connection, BODY_DEADLINE)
+    try:
+        return h.rfile.read(n)
+    finally:
+        _disarm(h.server, h.connection)
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -381,15 +428,60 @@ class Server(ThreadingHTTPServer):
         self._conn_lock = threading.Lock()
         self._conns = 0
         self._per_ip: dict[str, int] = {}
+        self._per_net: dict[str, int] = {}
+        self._trusted: dict[str, float] = {}        # адрес (client_key) → до какого времени свой
         self._warned = 0.0
+        self._deadlines: dict[int, tuple[socket.socket, float]] = {}
+        self._reaper: threading.Thread | None = None
         super().__init__(*a, **kw)
 
-    def _take(self, ip: str) -> bool:
+    # ------------------------------------------------ предел времени на запрос
+    def arm(self, sock, seconds: float) -> None:
+        """Соединение закрывается, если к сроку не дочитано то, что читается сейчас (заголовки, тело)."""
         with self._conn_lock:
-            if self._conns >= MAX_CONNECTIONS or self._per_ip.get(ip, 0) >= MAX_PER_IP:
+            self._deadlines[id(sock)] = (sock, time.monotonic() + seconds)
+            if self._reaper is None:
+                self._reaper = threading.Thread(target=self._reap, name="http-deadline", daemon=True)
+                self._reaper.start()
+
+    def disarm(self, sock) -> None:
+        with self._conn_lock:
+            self._deadlines.pop(id(sock), None)
+
+    def _reap(self) -> None:
+        while True:
+            time.sleep(1)
+            now = time.monotonic()
+            with self._conn_lock:
+                late = [k for k, (_, t) in self._deadlines.items() if t <= now]
+                for k in late:
+                    sock = self._deadlines.pop(k)[0]
+                    try:
+                        # чтение в потоке соединения сразу закончится; у сокета TLS — его дескриптор, а не
+                        # SSLSocket.shutdown (тот ещё и снимает TLS с объекта, которым пользуется поток)
+                        socket.socket.shutdown(sock, socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+    # ------------------------------------------------ места
+    def trust(self, addr: str) -> None:
+        now = time.time()
+        with self._conn_lock:
+            if len(self._trusted) > 1000:
+                self._trusted = {k: v for k, v in self._trusted.items() if v > now}
+            if len(self._trusted) <= 1000:
+                self._trusted[client_key(addr)] = now + TRUST_TTL
+
+    def _take(self, ip: str, net: str | None = None) -> bool:
+        with self._conn_lock:
+            cap = MAX_CONNECTIONS + (RESERVE if self._trusted.get(ip, 0) > time.time() else 0)
+            if self._conns >= cap or self._per_ip.get(ip, 0) >= MAX_PER_IP \
+                    or (net and self._per_net.get(net, 0) >= MAX_PER_NET):
                 return False
             self._conns += 1
             self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
+            if net:
+                self._per_net[net] = self._per_net.get(net, 0) + 1
             return True
 
     def crowded(self, ip: str) -> bool:
@@ -397,20 +489,23 @@ class Server(ThreadingHTTPServer):
         with self._conn_lock:
             return self._conns * 2 >= MAX_CONNECTIONS or self._per_ip.get(ip, 0) * 2 >= MAX_PER_IP
 
-    def _give(self, ip: str) -> None:
+    def _give(self, ip: str, net: str | None = None) -> None:
         with self._conn_lock:
             self._conns -= 1
-            n = self._per_ip.get(ip, 1) - 1
-            if n > 0:
-                self._per_ip[ip] = n
-            else:
-                self._per_ip.pop(ip, None)
+            for d, k in ((self._per_ip, ip), (self._per_net, net)):
+                if k is None:
+                    continue
+                n = d.get(k, 1) - 1
+                if n > 0:
+                    d[k] = n
+                else:
+                    d.pop(k, None)
 
     def process_request(self, request, client_address):
         # Поток на соединение, но с пределом: иначе тысячи «висящих» соединений
-        # без пароля съедят память, а один адрес (для IPv6 — сеть /64) не должен занять все места
-        ip = client_key(client_address[0])
-        if not self._take(ip):
+        # без пароля съедят память, а один адрес (для IPv6 — сеть /64, и /48 вместе) не должен занять все места
+        ip, net = client_key(client_address[0]), net_key(client_address[0])
+        if not self._take(ip, net):
             now = time.monotonic()
             if now - self._warned > 60:          # не засоряем журнал при наплыве
                 self._warned = now
@@ -420,36 +515,53 @@ class Server(ThreadingHTTPServer):
         try:
             super().process_request(request, client_address)
         except Exception:
-            self._give(ip)
+            self._give(ip, net)
             raise
 
     def process_request_thread(self, request, client_address):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._give(client_key(client_address[0]))
+            self._give(client_key(client_address[0]), net_key(client_address[0]))
 
     def finish_request(self, request, client_address):
         ctx = self.tls() if self.tls else None
         if not ctx:
-            return super().finish_request(request, client_address)
+            self.arm(request, HEAD_DEADLINE)
+            try:
+                return super().finish_request(request, client_address)
+            finally:
+                self.disarm(request)
         request.settimeout(15)
+        self.arm(request, HEAD_DEADLINE)
         try:
             first = request.recv(1, socket.MSG_PEEK)
         except OSError:
+            self.disarm(request)
             return
         if not first:
+            self.disarm(request)
             return
         if first[0] != 0x16:            # не TLS: кто-то открыл http:// — перенаправим на https://
-            return _redirect_plain(request)
+            try:
+                return _redirect_plain(request)
+            finally:
+                self.disarm(request)
+        self.disarm(request)
         try:
-            tls_sock = ctx.wrap_socket(request, server_side=True)
+            # рукопожатие — отдельно, когда сокет TLS уже есть: его и закроет предел времени
+            tls_sock = ctx.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
         except (ssl.SSLError, OSError):
             return
+        self.arm(tls_sock, HEAD_DEADLINE)
         try:
+            tls_sock.do_handshake()
             tls_sock.settimeout(120)
             self.RequestHandlerClass(tls_sock, client_address, self)
+        except (ssl.SSLError, OSError):
+            pass
         finally:
+            self.disarm(tls_sock)
             try:
                 tls_sock.close()
             except OSError:

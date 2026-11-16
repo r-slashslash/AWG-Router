@@ -496,6 +496,8 @@ uninstall() {
   cd "$DIR" || exit 1
   docker compose down >/dev/null 2>&1
   docker compose run --rm --no-deps awg-router python3 -m app.uninstall
+  # rules the AWG server applies at start until the panel takes over — without the panel they would stay
+  rm -f "$SRV_DATA"/awgr-hold-*.nft "$(dirname "$HOSTCONF")"/awgr-hold-*.nft 2>/dev/null
   if [ "$drop" = 1 ] && [ "$srv" = container ]; then
     local img; img="$(docker inspect -f '{{.Image}}' "$amn" 2>/dev/null)"
     docker rm -f "$amn" >/dev/null 2>&1 && ok "Container $amn removed"

@@ -5,7 +5,7 @@ FROM amneziavpn/amneziawg-go:latest
 
 LABEL maintainer="AWG Router" \
       org.opencontainers.image.source="https://github.com/r-slashslash/AWG-Router"
-RUN apk add --no-cache bash curl dumb-init iptables && apk --update upgrade --no-cache
+RUN apk add --no-cache bash curl dumb-init iptables nftables && apk --update upgrade --no-cache
 RUN mkdir -p /opt/amnezia/awg
 COPY start.sh /opt/amnezia/start.sh
 RUN chmod a+x /opt/amnezia/start.sh

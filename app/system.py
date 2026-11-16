@@ -30,7 +30,12 @@ log = logging.getLogger("awgr.system")
 
 HOST_BIN_DIR = "/usr/local/bin"
 HOST_UNIT = "/etc/systemd/system/awg-quick@.service"
-UNIT_TEXT = """[Unit]
+# Правила панели «до её запуска» (engine.HOLD_FILE): после перезагрузки хоста таблицы панели нет, и пока
+# панель не запустилась, клиенты шли бы мимо выходов напрямую. Служба ставит их перед подъёмом сервера —
+# только если таблицы ещё нет (при перезапуске службы действуют настоящие правила панели). Ошибка не
+# мешает запуску сервера: «-» и exit 0.
+HOLD_NAME = "awgr-hold-{iface}.nft"
+UNIT_TEXT = f"""[Unit]
 Description=AmneziaWG via awg-quick for %I (AWG Router)
 After=network-online.target nss-lookup.target
 Wants=network-online.target nss-lookup.target
@@ -38,6 +43,7 @@ Wants=network-online.target nss-lookup.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre=-/bin/sh -c 'f={config.HOST_AWG_DIR}/{HOLD_NAME.format(iface="%i")}; [ -f "$$f" ] && command -v nft >/dev/null && ! nft list table ip {config.NFT_TABLE} >/dev/null 2>&1 && nft -f "$$f"; exit 0'
 ExecStart=/usr/local/bin/awg-quick up %i
 ExecStop=/usr/local/bin/awg-quick down %i
 ExecReload=/bin/bash -c 'exec /usr/local/bin/awg syncconf %i <(exec /usr/local/bin/awg-quick strip %i)'
@@ -89,6 +95,31 @@ def docker_api(method: str, path: str, timeout: int = 10):
 
 def docker_get(path: str):
     return docker_api("GET", path)
+
+
+def docker_events(fn) -> None:
+    """Поток событий запуска контейнеров (GET /events): fn(имя контейнера) на каждое. Возвращается, когда
+    Docker закрыл соединение (перезапуск Docker); ждёт без предела времени — вызывать в своём потоке."""
+    flt = urllib.parse.quote(json.dumps({"type": ["container"], "event": ["start", "restart"]}))
+    conn = _UnixHTTP(config.DOCKER_SOCK, None)
+    try:
+        conn.request("GET", f"/events?filters={flt}")
+        r = conn.getresponse()
+        if r.status != 200:
+            raise SysError(f"Docker API /events: HTTP {r.status}")
+        while True:
+            line = r.readline(65536)
+            if not line:
+                return
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            name = ((ev.get("Actor") or {}).get("Attributes") or {}).get("name")
+            if isinstance(name, str):
+                fn(name)
+    finally:
+        conn.close()
 
 
 def docker_containers() -> list[str]:

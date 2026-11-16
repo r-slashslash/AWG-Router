@@ -4,6 +4,15 @@ CONF=/opt/amnezia/awg/awg0.conf
 echo "Container startup"
 
 awg-quick down "$CONF" 2>/dev/null
+
+# Правила AWG Router до подъёма сервера: панель узнаёт о перезапуске контейнера не сразу, а в новой сети
+# контейнера её правил нет — клиенты эти секунды шли бы мимо выходов напрямую. Файл пишет панель (те же
+# правила, что остаются при её остановке); через секунды она заменит их своими.
+HOLD=/opt/amnezia/awg/awgr-hold-awg0.nft
+if [ -f "$HOLD" ] && command -v nft >/dev/null 2>&1; then
+  nft -f "$HOLD" || echo "AWG Router rules were not applied"
+fi
+
 [ -f "$CONF" ] && awg-quick up "$CONF"
 
 # подсеть клиентов — из Address в конфиге (например 10.8.1.0/24)

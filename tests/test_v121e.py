@@ -17,7 +17,8 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import awgserver, balance, domains, engine, limits, lists, main, notify, probe, socks, store, tgbot, tgreq  # noqa: E402,E501
+from app import (awgserver, balance, dnsproxy, domains, engine, limits, lists, main, nftgen, notify,  # noqa: E402
+                 probe, socks, store, system, tgbot, tgreq, web)
 from app.web import HTTPError  # noqa: E402
 
 
@@ -649,6 +650,274 @@ class ClientConfigNoLockTest(unittest.TestCase):
         from app import users
         src = inspect.getsource(users.ServerManager.client_config)
         self.assertNotIn("self.e.lock", src)
+
+
+# ============================================================ этап 4: сеть и безопасность
+class SlowClientTest(unittest.TestCase):
+    """Б5: предел времени на весь запрос; IPv6 — и по сети /48; запасные места для своих адресов."""
+
+    @classmethod
+    def setUpClass(cls):
+        app = web.App()
+
+        @app.get("/small")
+        def small(req):
+            return {"ok": True}
+
+        @app.post("/echo")
+        def echo(req):
+            return req.json()
+
+        cls.srv = app.serve("127.0.0.1", 0)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.port = cls.srv.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def _dribble(self, first: bytes, more: bytes):
+        """Байт раз в 0,4 с (каждое чтение укладывается в IDLE_TIMEOUT) — соединение всё равно закрывается."""
+        import socket
+        s = socket.create_connection(("127.0.0.1", self.port), 5)
+        self.addCleanup(s.close)
+        s.sendall(first)
+        t0 = time.monotonic()
+        closed = False
+        for b in more:
+            try:
+                s.sendall(bytes([b]))
+            except OSError:
+                closed = True
+                break
+            s.settimeout(0.4)
+            try:
+                if s.recv(4096) == b"":
+                    closed = True
+                    break
+            except TimeoutError:
+                pass
+            except OSError:
+                closed = True
+                break
+            if time.monotonic() - t0 > 8:
+                break
+        return closed, time.monotonic() - t0
+
+    def test_headers_deadline(self):
+        with mock.patch.object(web, "HEAD_DEADLINE", 1.5):
+            closed, took = self._dribble(b"GET /small HTTP/1.1\r\n", b"X-Slow: " + b"a" * 100)
+        self.assertTrue(closed)
+        self.assertLess(took, 5)
+
+    def test_body_deadline(self):
+        with mock.patch.object(web, "BODY_DEADLINE", 1.5):
+            closed, took = self._dribble(b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 200\r\n\r\n",
+                                         b'{"a": "' + b"b" * 180)
+        self.assertTrue(closed)
+        self.assertLess(took, 5)
+
+    def test_normal_requests_still_work(self):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        self.addCleanup(c.close)
+        for _ in range(3):
+            c.request("POST", "/echo", body=b'{"x": 1}', headers={"Content-Type": "application/json"})
+            r = c.getresponse()
+            self.assertEqual(json.loads(r.read()), {"x": 1})
+        left = [t - time.monotonic() for _, t in self.srv._deadlines.values()]
+        self.assertTrue(left and min(left) > web.HEAD_DEADLINE)   # ждём следующего запроса, не обработки
+        c.close()
+        t0 = time.monotonic()
+        while self.srv._deadlines and time.monotonic() - t0 < 3:
+            time.sleep(0.05)
+        self.assertEqual(self.srv._deadlines, {})          # соединение закрыто — предела нет
+
+    def test_ipv6_48(self):
+        srv = web.Server.__new__(web.Server)
+        srv._conn_lock, srv._conns, srv._per_ip, srv._per_net, srv._trusted = threading.Lock(), 0, {}, {}, {}
+        got = 0
+        for i in range(200):
+            a = f"2001:db8:7:{i:x}::1"
+            if srv._take(web.client_key(a), web.net_key(a)):
+                got += 1
+        self.assertEqual(got, web.MAX_PER_NET)               # смена /64 внутри /48 не помогает
+        self.assertTrue(srv._take(web.client_key("2001:db8:8::1"), web.net_key("2001:db8:8::1")))
+        self.assertIsNone(web.net_key("203.0.113.5"))
+        self.assertIsNone(web.net_key("::ffff:203.0.113.5"))
+
+    def test_reserve_for_trusted(self):
+        srv = web.Server.__new__(web.Server)
+        srv._conn_lock, srv._conns, srv._per_ip, srv._per_net, srv._trusted = threading.Lock(), 0, {}, {}, {}
+        for i in range(web.MAX_CONNECTIONS):
+            self.assertTrue(srv._take(f"10.2.{i // 200}.{i % 200}"))
+        self.assertFalse(srv._take("198.51.100.1"))
+        srv.trust("198.51.100.1")
+        self.assertTrue(srv._take("198.51.100.1"))            # свой адрес — в запасные места
+
+    def test_login_marks_trusted(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "web.py"), encoding="utf-8") as f:
+            self.assertIn("trust(self.client_address[0])", f.read())
+
+
+class QuicStickyLiveTest(unittest.TestCase):
+    """Б21: решение QUIC из conntrack — только для живых путей."""
+
+    def test_restore_only_live_marks(self):
+        gp = {"rules": [], "default": 1, "domain": [(["d1"], 2)]}
+        text = nftgen.generate("awg0", {}, [{"num": 1, "mtu": 1280}, {"num": 2, "mtu": 1280}], gp, {}, 8443,
+                               quic=True)
+        line = next(ln for ln in text.splitlines() if "meta mark set ct mark &" in ln)
+        bit = 0x40000000
+        for m in (nftgen.mark_for(1), nftgen.mark_for(2), 0xE100, 0xE101, 0xB10C):
+            self.assertIn(f"{m | bit:#x}", line)
+        self.assertNotIn(f"{nftgen.mark_for(3) | bit:#x}", line)    # выхода 3 нет — его решение не берём
+        self.assertNotIn("== 0x40000000", text)
+
+
+class BotControlIdTest(unittest.TestCase):
+    """Б9: команды — только из чата с числовым ID."""
+
+    def test_allowed(self):
+        a = tgbot.Bot.allowed
+        self.assertTrue(a({"id": 123}, {"chat_id": "123"}))
+        self.assertFalse(a({"id": 5, "username": "owner"}, {"chat_id": "@owner"}))
+        self.assertFalse(a({"id": 5}, {"chat_id": "123"}))
+
+    def test_put_refuses_name_for_control(self):
+        with mock.patch.object(main.store, "mutate") as mu:
+            self.assertEqual(code(lambda: main.put_telegram(Req({
+                "token": "123456:" + "A" * 35, "chat_id": "@mychannel", "control": True}))),
+                (400, "err.tg_control_id"))
+        mu.assert_not_called()
+
+
+class DnsNoAaaaTest(unittest.TestCase):
+    """Б8: на AAAA — «записей нет», без запроса к серверам DNS."""
+
+    def test_aaaa_empty(self):
+        import asyncio
+        import struct
+        q = struct.pack("!6H", 0x1234, 0x0100, 1, 0, 0, 0) + b"\x07example\x03com\x00" + struct.pack("!HH", 28, 1)
+        pq = dnsproxy.parse_query(q)
+        px = dnsproxy.Proxy.__new__(dnsproxy.Proxy)
+        px.stats, px.dom, px.cfg = {"queries": 0, "refused": 0}, None, {"default": {"mark": 0}, "routes": {}}
+        px._resolve = mock.AsyncMock()
+        r = asyncio.run(px.resolve(q, pq, "10.8.1.2"))
+        px._resolve.assert_not_called()
+        rid, flags, qd, an = struct.unpack("!4H", r[:8])
+        self.assertEqual((rid, flags & 0x8000, flags & 0xF, qd, an), (0x1234, 0x8000, 0, 1, 0))
+        q_a = q[:-4] + struct.pack("!HH", 1, 1)
+        px._resolve = mock.AsyncMock(return_value=b"x")
+        asyncio.run(px.resolve(q_a, dnsproxy.parse_query(q_a), "10.8.1.2"))
+        px._resolve.assert_called_once()
+
+
+class HoldRulesTest(unittest.TestCase):
+    """Б2: правила «до панели» — без туннелей; служба на хосте ставит их, только если таблицы нет."""
+
+    def test_unit_text(self):
+        u = system.UNIT_TEXT
+        line = next(ln for ln in u.splitlines() if ln.startswith("ExecStartPre=-"))
+        self.assertIn("awgr-hold-%i.nft", line)
+        self.assertIn("! nft list table ip awgr", line)
+        self.assertIn('"$$f"', line)                        # $ для systemd — $$
+        self.assertTrue(line.rstrip().endswith("exit 0'"))
+
+    def test_start_sh(self):
+        d = os.path.join(os.path.dirname(__file__), "..", "awg-server")
+        with open(os.path.join(d, "start.sh"), encoding="utf-8") as f:
+            sh = f.read()
+        self.assertLess(sh.index("awgr-hold-awg0.nft"), sh.index('awg-quick up "$CONF"'))
+        with open(os.path.join(d, "Dockerfile"), encoding="utf-8") as f:
+            self.assertIn("nftables", f.read())
+
+    def _eng(self, kind="host", start_sh=""):
+        e = engine.Engine.__new__(engine.Engine)
+        e._hold_key, e._hold_ok, e.applied_hash = None, {}, "h1"
+        t = mock.Mock(kind=kind, iface="awg0", key=kind + ":1",
+                      conf_path="/etc/amnezia/amneziawg/awg0.conf" if kind == "host" else "/opt/amnezia/awg/awg0.conf")
+        t.read_file.return_value = start_sh
+        t.host_path.side_effect = lambda p: "/nonexistent" + p
+        e.build_ruleset = mock.Mock(return_value="table ip awgr\n")
+        return e, t
+
+    def test_written_without_tunnels(self):
+        e, t = self._eng()
+        with mock.patch.object(engine.config, "DRY_RUN", False):
+            e._save_hold(t, {"settings": {}})
+            e._save_hold(t, {"settings": {}})                 # то же — второй раз не пишется
+        t.write_file.assert_called_once_with("/etc/amnezia/amneziawg/awgr-hold-awg0.nft", "table ip awgr\n", 0o600)
+        self.assertEqual(e.build_ruleset.call_args.kwargs, {"hold": True})
+
+    def test_restore_mode_removes(self):
+        e, t = self._eng()
+        with mock.patch.object(engine.config, "DRY_RUN", False), mock.patch("os.unlink") as ul:
+            e._save_hold(t, {"settings": {"on_stop": "restore"}})
+        t.write_file.assert_not_called()
+        ul.assert_called_once_with("/nonexistent/etc/amnezia/amneziawg/awgr-hold-awg0.nft")
+
+    def test_container_only_ours(self):
+        e, t = self._eng("container", "#!/bin/bash\n# AmneziaVPN\n")
+        with mock.patch.object(engine.config, "DRY_RUN", False):
+            e._save_hold(t, {"settings": {}})
+        t.write_file.assert_not_called()
+        e, t = self._eng("container", "HOLD=/opt/amnezia/awg/awgr-hold-awg0.nft\n")
+        with mock.patch.object(engine.config, "DRY_RUN", False):
+            e._save_hold(t, {"settings": {}})
+        t.write_file.assert_called_once()
+
+    def test_hold_ruleset_blocks_exits(self):
+        gp = {"rules": [], "default": 1, "domain": []}
+        text = nftgen.generate("awg0", {}, [], gp, {}, None)
+        self.assertNotIn("o_u1", text)
+        self.assertIn("goto o_block", text.replace("jump", "goto"))
+
+    def test_docker_events(self):
+        lines = [b'{"Type":"container","Action":"start","Actor":{"Attributes":{"name":"amnezia-awg2"}}}\n',
+                 b"garbage\n", b'{"Actor":{}}\n', b""]
+        r = mock.Mock(status=200)
+        r.readline.side_effect = lines
+        conn = mock.Mock()
+        conn.getresponse.return_value = r
+        got = []
+        with mock.patch.object(system, "_UnixHTTP", return_value=conn):
+            system.docker_events(got.append)
+        self.assertEqual(got, ["amnezia-awg2"])
+        self.assertIn("filters=", conn.request.call_args[0][1])
+
+    def test_event_wakes_engine(self):
+        e = engine.Engine.__new__(engine.Engine)
+        e.wake, e.stop_ev, e.target = threading.Event(), threading.Event(), None
+
+        def ev(fn):
+            fn("other")
+            self.assertFalse(e.wake.is_set())
+            fn("amnezia-awg2")
+            e.stop_ev.set()
+        with mock.patch.object(system, "docker_events", ev):
+            e._docker_events()
+        self.assertTrue(e.wake.is_set())
+
+
+class HostRpFilterTest(unittest.TestCase):
+    """Б24: на хосте не трогаем all / default rp_filter."""
+
+    def test_host(self):
+        e = engine.Engine.__new__(engine.Engine)
+        t = mock.Mock(kind="host", iface="awg0")
+        e._sysctl(t)
+        kv = [c.args[0][2] for c in t.ns.call_args_list]
+        self.assertIn("net.ipv4.conf.awg0.rp_filter=2", kv)
+        self.assertFalse([k for k in kv if ".all.rp_filter" in k or ".default.rp_filter" in k])
+
+    def test_container(self):
+        e = engine.Engine.__new__(engine.Engine)
+        t = mock.Mock(kind="container", iface="awg0")
+        e._sysctl(t)
+        kv = [c.args[0][2] for c in t.ns.call_args_list]
+        self.assertIn("net.ipv4.conf.all.rp_filter=2", kv)
 
 
 if __name__ == "__main__":

@@ -619,7 +619,10 @@ class Bot:
                 continue
             try:
                 self.poll_once(c)
-                self.state, self.error = "ok", None
+                if c["chat_id"].startswith("@"):        # настройка до 1.21.0: команды не принимаются
+                    self.state, self.error = "error", Msg("err.tg_control_id")
+                else:
+                    self.state, self.error = "ok", None
             except notify.NotifyError as e:
                 if "webhook" in str(e).lower() and self._drop_webhook(c):
                     continue
@@ -793,13 +796,12 @@ class Bot:
     # ------------------------------------------------------------- разбор
     @staticmethod
     def allowed(chat: dict, c: dict) -> bool:
+        """Команды — только из чата с тем числовым ID, что указан в панели. По @имени — нет: имя можно
+        сменить, и освободившееся займёт другой человек; в группе с @именем пишут все её участники."""
         want = str(c.get("chat_id") or "")
-        if not want or not chat:
+        if not want or not chat or want.startswith("@"):
             return False
-        if str(chat.get("id")) == want:
-            return True
-        un = chat.get("username")
-        return bool(un) and want.startswith("@") and want[1:].lower() == un.lower()
+        return str(chat.get("id")) == want
 
     def handle(self, u: dict, c: dict) -> None:
         if "callback_query" in u:
