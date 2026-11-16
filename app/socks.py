@@ -14,12 +14,12 @@ hev-socks5-tunnel к прокси без метки и идут напрямую
 """
 from __future__ import annotations
 
-import ipaddress
 import os
 import socket
 import struct
 import time
 
+from .awgconf import ConfigError, resolve_host
 from .i18n import Msg
 
 HEV = "hev-socks5-tunnel"
@@ -32,22 +32,13 @@ REPLY = {1: "general failure", 2: "not allowed by ruleset", 3: "network unreacha
          7: "command not supported", 8: "address type not supported"}
 
 
-def resolve(host: str) -> str:
-    """Адрес прокси для hev-socks5-tunnel (имя он не разрешает): IPv4, если есть."""
+def resolve(host: str, timeout: float | None = None) -> str:
+    """Адрес прокси для hev-socks5-tunnel (имя он не разрешает): IPv4, если есть, иначе IPv6. С пределом
+    времени (awgconf.resolve_host): разбор идёт в проходе движка под его блокировкой, и молчащий DNS
+    держал бы десятки секунд и проход, и выдачу конфигов, и личные страницы клиентов."""
     try:
-        ipaddress.ip_address(host)
-        return host
-    except ValueError:
-        pass
-    try:
-        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
-        return infos[0][4][0]
-    except OSError:
-        pass
-    try:
-        infos = socket.getaddrinfo(host, None, socket.AF_INET6, socket.SOCK_STREAM)
-        return infos[0][4][0]
-    except OSError:
+        return resolve_host(host, timeout)
+    except ConfigError:
         raise SocksError(Msg("socks.resolve", host=host)) from None
 
 

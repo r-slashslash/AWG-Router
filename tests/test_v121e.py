@@ -1,4 +1,4 @@
-"""1.21.0, исправления по отчёту проверки (Opus, 2026-11-16): проверка входящих данных, мелкие ошибки
+"""1.21.0, исправления по отчёту проверки 2026-11-16: проверка входящих данных, мелкие ошибки
 (этап 1), интерфейс (этап 2), движок (этап 3), сеть и безопасность (этап 4).
 
 python3 -m unittest discover tests
@@ -17,7 +17,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import awgserver, domains, engine, lists, main, probe, store, tgbot  # noqa: E402
+from app import awgserver, balance, domains, engine, limits, lists, main, notify, probe, socks, store, tgbot, tgreq  # noqa: E402,E501
 from app.web import HTTPError  # noqa: E402
 
 
@@ -400,6 +400,255 @@ class UiGuardsTest(unittest.TestCase):
 
     def test_stale_state_dropped(self):
         self.assertIn("if (seq < stateShown) return;", self.js)
+
+
+# ============================================================ этап 3: движок
+class SocksResolveTimeoutTest(unittest.TestCase):
+    """Б4: молчащий DNS не держит проход движка десятки секунд."""
+
+    def test_timeout(self):
+        def slow(*a, **kw):
+            time.sleep(5)
+            raise OSError
+        with mock.patch("socket.getaddrinfo", slow):
+            t0 = time.time()
+            with self.assertRaises(socks.SocksError):
+                socks.resolve("proxy.example", timeout=0.3)
+            self.assertLess(time.time() - t0, 2)
+
+    def test_ip_and_name(self):
+        self.assertEqual(socks.resolve("203.0.113.9"), "203.0.113.9")
+        with mock.patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("198.51.100.4", 0))]):
+            self.assertEqual(socks.resolve("proxy.example", timeout=1), "198.51.100.4")
+
+    def test_prefetch_includes_socks(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "engine.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('pc.socks["host"] if pc.kind == "socks5"', src)
+
+
+class BalancerSpreadTest(unittest.TestCase):
+    """Б3: клиенты упавшего выхода расходятся по выходам, а не уходят все на один."""
+
+    def test_failed_exit_spread(self):
+        b = balance.Balancer()
+        A, B, C = ({"id": x, "up": None, "down": None} for x in "ABC")
+        clients = [f"pk{i:02d}" for i in range(60)]
+        b.plan([A, B, C], clients, 1000.0)
+        b.exit_rate = {"A": [0, 1_500_000], "B": [0, 1_500_000], "C": [0, 500_000]}
+        plan = b.plan([B, C], clients, 1010.0)
+        from collections import Counter
+        n = Counter(plan.values())
+        self.assertEqual(n["B"] + n["C"], 60)
+        self.assertGreater(n["B"], 20)          # раньше: все 20 клиентов A — на C (B = 20, C = 40)
+        self.assertGreater(n["C"], n["B"])      # C свободнее — ему больше
+
+    def test_known_client_rate(self):
+        """Скорость клиента известна — прибавляется она, а не средняя по выходу."""
+        b = balance.Balancer()
+        A, B, C = ({"id": x, "up": None, "down": None} for x in "ABC")
+        b.assign = {"heavy": "A", "x1": "B", "x2": "C"}
+        b.client_rate = {("heavy", "A"): [0, 5_000_000]}
+        b.exit_rate = {"A": [0, 5_000_000], "B": [0, 100_000], "C": [0, 100_000]}
+        b.plan([B, C], ["heavy", "x1", "x2", "new1"], 1000.0)
+        self.assertNotEqual(b.assign["new1"], b.assign["heavy"])   # новый — не к тяжёлому
+
+    def test_estimate(self):
+        b = balance.Balancer()
+        b.client_rate = {("p", "A"): [10, 30_000], ("q", "B"): [0, 50_000]}
+        b.exit_rate = {"A": [100, 400_000]}
+        self.assertEqual(b._estimate("p", "A", {"A": 4}, [0, 0]), [10, 30_000])
+        self.assertEqual(b._estimate("z", "A", {"A": 4}, [0, 0]), [25, 100_000])
+        self.assertEqual(b._estimate("z", None, {}, b._typical()), [5.0, 40_000.0])
+
+
+class LimitsRecheckTest(unittest.TestCase):
+    """Б26: срок или лимит изменили во время прохода — клиента не отключают по старым значениям."""
+
+    def _engine(self, L, used, changed):
+        class Store:
+            def __init__(s):
+                s.st = {"limits": {"K": dict(L)}}
+
+            def snapshot(s):
+                return json.loads(json.dumps(s.st))
+
+            def peek(s, fn):
+                s.st["limits"]["K"].update(changed)       # администратор успел изменить
+                return fn(s.st)
+
+            def mutate(s, fn):
+                fn(s.st)
+
+        class Eng:
+            pass
+        e = Eng()
+        e.store, e.events = Store(), []
+        e.traffic = mock.Mock(used=lambda pk, period: used)
+        e.clients = [{"public_key": "K", "name": "n", "enabled": True}]
+        e.srv = mock.Mock()
+        e.event = lambda lvl, m: e.events.append(m.key)
+        return e
+
+    def test_extended_expiry(self):
+        e = self._engine({"expires": 1000}, 0, {"expires": 10 ** 9})
+        limits.enforce(e, now=2000)
+        e.srv.update_client.assert_not_called()
+        self.assertNotIn("exp_done", e.store.st["limits"]["K"])
+
+    def test_raised_quota(self):
+        e = self._engine({"quota": 100, "period": "month"}, 150, {"quota": 10 ** 6})
+        limits.enforce(e, now=2000)
+        e.srv.update_client.assert_not_called()
+        self.assertNotIn("quota_done", e.store.st["limits"]["K"])
+
+    def test_extended_right_after_disable(self):
+        """Продлили сразу после отключения: пометка остаётся, следующий проход включает клиента."""
+        e = self._engine({"expires": 1000}, 0, {})
+        e.srv.update_client.side_effect = lambda pk, enabled=None: (
+            e.clients[0].update(enabled=enabled), e.store.st["limits"]["K"].update(expires=10 ** 9))
+        limits.enforce(e, now=2000)
+        self.assertFalse(e.clients[0]["enabled"])
+        self.assertEqual(e.store.st["limits"]["K"]["auto_off"], "exp")
+        self.assertNotIn("exp_done", e.store.st["limits"]["K"])
+        limits.enforce(e, now=2100)
+        self.assertTrue(e.clients[0]["enabled"])
+        self.assertIsNone(e.store.st["limits"]["K"]["auto_off"])
+
+    def test_unchanged_still_disables(self):
+        e = self._engine({"quota": 100, "period": "month"}, 150, {})
+        limits.enforce(e, now=2000)
+        e.srv.update_client.assert_called_once()
+        self.assertTrue(e.store.st["limits"]["K"]["quota_done"])
+
+
+class ListFetchTest(unittest.TestCase):
+    """Б20: обрыв и слишком большой ответ; Б7: скачивание через выход."""
+
+    def test_whole_lines(self):
+        self.assertEqual(lists.whole_lines("1.0.0.0/24\n185.10.0.0/1", False), "1.0.0.0/24\n")
+        self.assertEqual(lists.whole_lines("1.0.0.0/24\n185.10.0.0/16", True), "1.0.0.0/24\n185.10.0.0/16")
+        self.assertEqual(lists.whole_lines("1.0.0.0/24\n", False), "1.0.0.0/24\n")
+
+    def test_wide_prefix_dropped(self):
+        nets = lists.parse_cidrs("185.10.0.0/1\n5.0.0.0/8\n", lists.WIDE_MIN)
+        self.assertEqual([str(n) for n in nets], ["5.0.0.0/8"])
+        self.assertEqual(len(lists.parse_cidrs("128.0.0.0/1\n")), 1)    # ручной список — как есть
+
+    def _resp(self, data, headers):
+        r = mock.MagicMock()
+        r.status = 200
+        r.read = lambda n=-1: data[:n] if n >= 0 else data
+        r.headers = headers
+        r.__enter__ = lambda s: r
+        r.__exit__ = lambda s, *a: False
+        return r
+
+    def test_unframed_tail_dropped(self):
+        with mock.patch("urllib.request.urlopen", return_value=self._resp(b"1.0.0.0/24\n185.10.0.0/1", {})):
+            self.assertEqual(lists._fetch("https://x.example/l"), "1.0.0.0/24\n")
+
+    def test_too_large(self):
+        with mock.patch.object(lists, "FETCH_MAX", 10), \
+                mock.patch("urllib.request.urlopen", return_value=self._resp(b"x" * 20, {"Content-Length": "20"})):
+            with self.assertRaises(RuntimeError):
+                lists._fetch_direct("https://x.example/l")
+
+    def test_via_exit(self):
+        with mock.patch.object(lists, "_fetch_direct", side_effect=OSError("blocked")), \
+                mock.patch.object(lists, "alt_fetch", lambda url: ("2.0.0.0/16\n5.5.0.0/1", False)):
+            self.assertEqual(lists._fetch("https://raw.example/l"), "2.0.0.0/16\n")
+        with mock.patch.object(lists, "_fetch_direct", return_value=('{"data": 1}', False)):
+            self.assertEqual(lists._fetch("https://stat.example/j", lines=False), '{"data": 1}')
+        with mock.patch.object(lists, "_fetch_direct", side_effect=OSError("blocked")), \
+                mock.patch.object(lists, "alt_fetch", mock.Mock(side_effect=OSError("down"))):
+            with self.assertRaisesRegex(RuntimeError, "blocked; via exit: down"):
+                lists._fetch("https://raw.example/l")
+        with mock.patch.object(lists, "_fetch_direct", side_effect=OSError("blocked")), \
+                mock.patch.object(lists, "alt_fetch", None):
+            with self.assertRaises(OSError):
+                lists._fetch("https://raw.example/l")
+        import urllib.error
+        alt = mock.Mock()
+        with mock.patch.object(lists, "_fetch_direct",
+                               side_effect=urllib.error.HTTPError("u", 404, "nf", {}, None)), \
+                mock.patch.object(lists, "alt_fetch", alt):
+            with self.assertRaises(urllib.error.HTTPError):    # сайт ответил — через выход не пробуем
+                lists._fetch("https://raw.example/l")
+        alt.assert_not_called()
+
+    def test_main_fetch_via_exit(self):
+        with mock.patch.object(main.engine, "alt_routes", return_value=["up:a", "up:b"]), \
+                mock.patch.object(main.engine, "own_route", side_effect=[(10, 0x2001), (10, 0x2002)]), \
+                mock.patch.object(notify, "get_via", side_effect=[OSError("timed out"),
+                                                                  (200, "3.0.0.0/16\n4.0.0.0/1", False)]):
+            self.assertEqual(main._fetch_via_exit("https://raw.example/l"), ("3.0.0.0/16\n4.0.0.0/1", False))
+        with mock.patch.object(main.engine, "alt_routes", return_value=[]):
+            with self.assertRaises(OSError):
+                main._fetch_via_exit("https://raw.example/l")
+
+
+class TgreqGetTest(unittest.TestCase):
+    def _run(self, head, ret=None, side=None):
+        with mock.patch.object(tgreq, "request", return_value=ret, side_effect=side) as rq, \
+                mock.patch("sys.stdin", mock.Mock(buffer=mock.Mock(read=lambda: head + b"\n"))), \
+                mock.patch("sys.argv", ["tgreq.py", "8193"]), mock.patch("builtins.print") as pr:
+            tgreq.main()
+        return rq, json.loads(pr.call_args[0][0])
+
+    def test_get_with_limit(self):
+        rq, out = self._run(b'{"url":"https://x.example/l","method":"GET","limit":1000,"timeout":30}',
+                            ret=(200, b"1.0.0.0/8\n", "", False))
+        self.assertEqual(rq.call_args[0][5:], ("GET", 1000))
+        self.assertEqual(out, {"status": 200, "body": "1.0.0.0/8\n", "date": "", "framed": False})
+
+    def test_dns_only(self):
+        with mock.patch.object(tgreq, "resolve", return_value=["198.51.100.8"]) as rs:
+            _, out = self._run(b'{"dns":"blocked.example"}')
+        self.assertEqual(out, {"ips": ["198.51.100.8"]})
+        self.assertEqual(rs.call_args, mock.call("blocked.example", 8193, udp=True))
+
+    def test_get_via(self):
+        out = json.dumps({"status": 200, "body": "x\n", "framed": True}).encode()
+        with mock.patch("subprocess.run", return_value=mock.Mock(stdout=out, stderr=b"")) as run:
+            self.assertEqual(notify.get_via((5, 0x2003), "https://x.example/l", 30, 99), (200, "x\n", True))
+        head = json.loads(run.call_args.kwargs["input"].split(b"\n")[0])
+        self.assertEqual((head["method"], head["limit"]), ("GET", 99))
+        self.assertEqual(run.call_args[0][0][:4], ["nsenter", "-t", "5", "-n"])
+
+
+class TraceDnsViaExitTest(unittest.TestCase):
+    """Б15: имя в «Проверке маршрута» разбирается тем путём, которым пойдёт DNS клиента."""
+
+    def test_via_exit(self):
+        with mock.patch.object(main.engine, "resolve_name", return_value=("198.51.100.20", "direct")), \
+                mock.patch("socket.getaddrinfo") as gai:
+            res = main.trace_target(None, "blocked.example")
+        gai.assert_not_called()
+        self.assertEqual(res["ip"], "198.51.100.20")
+        self.assertEqual(res["steps"][0].key, "tr.resolved_via")
+
+    def test_fallback(self):
+        with mock.patch.object(main.engine, "resolve_name", side_effect=Exception("demo")), \
+                mock.patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("198.51.100.21", 0))]):
+            res = main.trace_target(None, "blocked.example")
+        self.assertEqual(res["steps"][0].key, "tr.resolved")
+        self.assertEqual(res["ip"], "198.51.100.21")
+
+    def test_dry_run_has_no_path(self):
+        from app import system
+        with self.assertRaises(system.SysError):
+            main.engine.resolve_name(None, "blocked.example")
+
+
+class ClientConfigNoLockTest(unittest.TestCase):
+    """Выдача конфига не ждёт проход движка (engine.lock)."""
+
+    def test_no_engine_lock(self):
+        import inspect
+        from app import users
+        src = inspect.getsource(users.ServerManager.client_config)
+        self.assertNotIn("self.e.lock", src)
 
 
 if __name__ == "__main__":

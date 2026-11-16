@@ -1,15 +1,17 @@
-"""Запрос к Telegram через выход. Запускается внутри сети сервера AWG:
+"""Запрос панели через выход (Telegram, списки сетей, адрес имени). Запускается внутри сети сервера AWG:
     nsenter -t PID -n -- python3 tgreq.py <fwmark>
 Сокеты помечены fwmark'ом выхода, поэтому идут через его туннель, как трафик клиентов.
 
-stdin: первая строка — JSON {"url", "ctype", "timeout"}, дальше — тело запроса.
-stdout: JSON {"status": код, "body": ответ, "date": заголовок Date} или {"err": причина}.
+stdin: первая строка — JSON {"url", "ctype", "timeout", "method": "POST" | "GET", "limit": байт},
+дальше — тело запроса (для POST). Или {"dns": имя} — только адрес имени через этот путь.
+stdout: JSON {"status": код, "body": ответ, "date": заголовок Date, "framed": есть ли длина ответа},
+{"ips": [...]} или {"err": причина}.
 
 Имя хоста тоже узнаём через туннель (DNS-запрос к 1.1.1.1 / 8.8.8.8 с той же меткой):
 там, где Telegram заблокирован, местный DNS часто отвечает подменённым адресом."""
 import http.client
 import json
-import random
+import secrets
 import socket
 import ssl
 import struct
@@ -69,16 +71,18 @@ def dns_answer(data, qid):
         return []
 
 
-def resolve(host, mark, timeout=4):
-    if not mark:
+def resolve(host, mark, timeout=4, udp=False):
+    """udp — спросить 1.1.1.1 / 8.8.8.8 и без метки (а не резолвер сервера, который может подменять ответы)."""
+    if not mark and not udp:
         return [a[4][0] for a in socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)]
     last = None
     for server in DNS_SERVERS:
-        qid = random.randrange(1, 65536)
+        qid = secrets.randbelow(65535) + 1
         s = _sock(mark, socket.SOCK_DGRAM)
         s.settimeout(timeout)
         try:
-            s.sendto(dns_query(host, qid), (server, 53))
+            s.connect((server, 53))             # ответы только от этого сервера
+            s.send(dns_query(host, qid))
             ips = dns_answer(s.recv(4096), qid)
             if ips:
                 return ips
@@ -111,16 +115,24 @@ class MarkedHTTPS(http.client.HTTPSConnection):
         raise last or OSError("connect failed")
 
 
-def request(mark, url, body, ctype, timeout):
+def request(mark, url, body, ctype, timeout, method="POST", limit=None):
+    """→ (код, тело, Date, framed). framed — у ответа есть Content-Length или chunked: его обрыв виден."""
     u = urllib.parse.urlsplit(url)
     if u.scheme != "https" or not u.hostname:
         raise OSError("https only")
     c = MarkedHTTPS(u.hostname, mark, timeout, ssl.create_default_context())
     try:
-        c.request("POST", u.path + ("?" + u.query if u.query else ""), body=body,
-                  headers={"Content-Type": ctype, "User-Agent": "awg-router"})
+        headers = {"User-Agent": "awg-router"}
+        if method == "POST":
+            headers["Content-Type"] = ctype
+        c.request(method, u.path + ("?" + u.query if u.query else ""), body=body if method == "POST" else None,
+                  headers=headers)
         r = c.getresponse()
-        return r.status, r.read(), r.getheader("Date") or ""
+        data = r.read(limit + 1) if limit else r.read()
+        if limit and len(data) > limit:
+            raise OSError(f"larger than {limit // 2**20} MB")
+        framed = bool(r.getheader("Content-Length") or r.getheader("Transfer-Encoding"))
+        return r.status, data, r.getheader("Date") or "", framed
     finally:
         c.close()
 
@@ -131,9 +143,15 @@ def main():
     head, _, body = raw.partition(b"\n")
     try:
         h = json.loads(head)
-        status, data, date = request(mark, h["url"], body, h.get("ctype", "application/json"),
-                                     float(h.get("timeout", 15)))
-        print(json.dumps({"status": status, "body": data.decode(errors="replace"), "date": date}))
+        if h.get("dns"):                    # только адрес имени через этот путь («Проверка маршрута»)
+            print(json.dumps({"ips": resolve(str(h["dns"]), mark, udp=True)}))
+            return
+        method = "GET" if h.get("method") == "GET" else "POST"
+        limit = int(h["limit"]) if isinstance(h.get("limit"), int) and h["limit"] > 0 else None
+        status, data, date, framed = request(mark, h["url"], body, h.get("ctype", "application/json"),
+                                             float(h.get("timeout", 15)), method, limit)
+        print(json.dumps({"status": status, "body": data.decode(errors="replace"), "date": date,
+                          "framed": framed}))
     except Exception as e:  # noqa: BLE001
         print(json.dumps({"err": str(e) or type(e).__name__}))
 

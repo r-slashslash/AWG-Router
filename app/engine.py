@@ -17,6 +17,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 
@@ -548,9 +549,8 @@ class Engine:
                 pc = self.parsed(u)
             except awgconf.ConfigError:
                 continue
-            if pc.kind != "awg":
-                continue
-            host = awgconf.split_endpoint(pc.endpoint)[0]
+            # имя прокси SOCKS5 тоже: socks.resolve в _start_socks иначе разбирал бы его отдельно
+            host = pc.socks["host"] if pc.kind == "socks5" else awgconf.split_endpoint(pc.endpoint)[0]
             try:
                 ipaddress.ip_address(host)
             except ValueError:
@@ -602,8 +602,11 @@ class Engine:
             # hev-socks5-tunnel открывает сокеты AF_INET6 (IPv4 внутри них): нужна поддержка
             # IPv6 в ядре; выключенный sysctl disable_ipv6 не мешает, мешает загрузка с ipv6.disable=1
             raise system.SysError(Msg("sys.socks_no_ipv6"))
+        host = pc.socks["host"]
+        if host in getattr(self, "_pre_failed", ()):   # уже ждали его в _prefetch_hosts
+            raise system.SysError(Msg("socks.resolve", host=host))
         try:
-            ip = socks.resolve(pc.socks["host"])
+            ip = getattr(self, "_pre", {}).get(host) or socks.resolve(host)
         except socks.SocksError as e:
             raise system.SysError(e.msg) from None
         self._v6_route(t, ip)
@@ -2168,6 +2171,34 @@ class Engine:
         if not t or eff not in {r.num for r in self.rt.values()}:
             raise system.SysError(Msg("tg.via_down", name=name))
         return t.pid, nftgen.mark_for(eff)
+
+    def resolve_name(self, pk: str | None, host: str) -> tuple[str, str]:
+        """Адрес имени для «Проверки маршрута» — тем путём, которым пойдёт DNS клиента: через его выход
+        по умолчанию (запрос к 1.1.1.1 / 8.8.8.8 с меткой выхода), а не резолвером хоста. Местный DNS в РФ,
+        КНР и Иране подменяет ответы для закрытых сайтов, и проверка показывала бы путь к чужому адресу.
+        → (IPv4, выход: "direct" | "up:<id>"). Блок или нет сервера — исключение (вызывающий берёт резолвер хоста)."""
+        st = self.store.snapshot()
+        out = self.default_out(st, pk)
+        eff = self.resolve(out, st)
+        t = self.target
+        if config.DRY_RUN or eff == "block" or not t or not t.exists:
+            raise system.SysError(Msg("tr.no_dns_path"))
+        mark, via = 0, "direct"
+        if isinstance(eff, int):
+            if eff not in {r.num for r in self.rt.values()}:
+                raise system.SysError(Msg("tr.no_dns_path"))
+            mark = nftgen.mark_for(eff)
+            u = next((x for x in st["upstreams"] if x["num"] == eff), None)
+            via = "up:" + u["id"] if u else "direct"
+        from .notify import TGREQ
+        p = subprocess.run(["nsenter", "-t", str(t.pid), "-n", "--", sys.executable, TGREQ, str(mark)],
+                           input=json.dumps({"dns": host}).encode() + b"\n", capture_output=True, timeout=20)
+        try:
+            ips = json.loads(p.stdout.decode(errors="replace")).get("ips") or []
+            ip = str(ipaddress.IPv4Address(ips[0]))
+        except (ValueError, IndexError, TypeError, AttributeError):
+            raise system.SysError(Msg("tr.no_dns_path")) from None
+        return ip, via
 
     def alt_routes(self, via: str) -> list[str]:
         """Другие пути к Telegram, когда выбранный не работает: выходы, которые сейчас работают

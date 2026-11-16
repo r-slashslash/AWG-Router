@@ -311,9 +311,11 @@ class ServerManager:
             self.e.event("info", Msg("ev.user_deleted", name=name))
 
     def client_config(self, pk: str) -> dict:
-        with self.e.lock:
-            t = self._target()
-            sc, rows = self.load(t)
+        # Без блокировки движка: файлы сервера только читаются, а пишутся целиком (os.replace), поэтому
+        # прочитать «половину» нельзя. С блокировкой выдача конфига — и личная страница клиента /s/ —
+        # ждала бы конца прохода движка, а он с запуском туннелей длится секунды.
+        t = self._target()
+        sc, rows = self.load(t)
         st = self.e.store.snapshot()
         p = sc.peer(pk)
         priv = st.get("keys", {}).get(pk)

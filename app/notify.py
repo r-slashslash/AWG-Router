@@ -325,6 +325,25 @@ def _post_direct(url: str, data: bytes, ctype: str, timeout: float) -> tuple[int
         return e.code, e.read()
 
 
+def get_via(route: tuple[int, int], url: str, timeout: float, limit: int) -> tuple[int, str, bool]:
+    """GET из сети сервера AWG через туннель выхода (tgreq.py): списки сетей и доменов, если напрямую их
+    не скачать. → (код, текст, framed — у ответа есть Content-Length или chunked)."""
+    pid, mark = route
+    head = json.dumps({"url": url, "method": "GET", "timeout": timeout, "limit": limit}).encode()
+    try:
+        p = subprocess.run(["nsenter", "-t", str(pid), "-n", "--", sys.executable, TGREQ, str(mark)],
+                           input=head + b"\n", capture_output=True, timeout=timeout * 3 + 15)
+    except subprocess.TimeoutExpired:
+        raise OSError("timed out") from None
+    try:
+        res = json.loads(p.stdout.decode(errors="replace"))
+    except ValueError:
+        raise OSError((p.stderr or p.stdout).decode(errors="replace").strip()[:200] or "no answer") from None
+    if res.get("err"):
+        raise OSError(res["err"])
+    return int(res.get("status") or 0), str(res.get("body") or ""), bool(res.get("framed"))
+
+
 def _post_via(route: tuple[int, int], url: str, data: bytes, ctype: str,
               timeout: float) -> tuple[int, bytes]:
     """Запрос из сети сервера AWG через туннель выхода (метка fwmark, как у probe.py)."""

@@ -45,6 +45,12 @@ def _set_enabled(engine, pk: str, on: bool) -> bool:
         return False
 
 
+def _current(engine, pk: str) -> dict:
+    """Срок и лимит клиента сейчас, а не в снимке начала прохода: администратор мог только что продлить
+    срок или поднять лимит, и отключать клиента по старым значениям нельзя."""
+    return engine.store.peek(lambda st: dict((st.get("limits") or {}).get(pk) or {}))
+
+
 def enforce(engine, now: float | None = None) -> None:
     """Вызывается движком после каждого опроса клиентов."""
     st = engine.store.snapshot()
@@ -72,6 +78,8 @@ def enforce(engine, now: float | None = None) -> None:
         if expired and L.get("exp_done") != exp:
             if not c["enabled"]:
                 p["exp_done"] = exp
+            elif _current(engine, pk).get("expires") != exp:
+                pass                            # срок только что изменили — решит следующий проход
             elif _set_enabled(engine, pk, False):
                 p["exp_done"] = exp
                 p["auto_off"] = "exp"
@@ -89,8 +97,11 @@ def enforce(engine, now: float | None = None) -> None:
             p["quota_warned"] = key
             engine.event("warn", Msg("ev.client_quota_warn", name=_name(c), pk=pk, gb=round(q / GB, 2)))
         if q and not expired and engine.traffic.used(pk, period) >= q and L.get("quota_done") != key:
+            cur = _current(engine, pk)
             if not c["enabled"]:
                 p["quota_done"] = key
+            elif cur.get("quota") != q or (cur.get("period") or "month") != period:
+                pass                            # лимит только что изменили — решит следующий проход
             elif _set_enabled(engine, pk, False):
                 p["quota_done"] = key
                 p["auto_off"] = "quota:" + key
@@ -100,13 +111,29 @@ def enforce(engine, now: float | None = None) -> None:
             if _set_enabled(engine, pk, True):
                 p["auto_off"] = None
                 engine.event("info", Msg("ev.client_quota_reset", name=_name(c), pk=pk))
+        # Срок продлили или лимит подняли в тот момент, когда проход отключал клиента: сохранение лимитов
+        # включает такого клиента само, но отметки «отключён по сроку» тогда ещё не было. Включаем здесь.
+        elif not c["enabled"] and not expired and (
+                ao == "exp" or (ao == "quota:" + key and (not q or engine.traffic.used(pk, period) < q))):
+            if _set_enabled(engine, pk, True):
+                p["auto_off"] = None
         if p:
             patches[pk] = p
     if patches:
         def fn(s):
             for pk, p in patches.items():
-                if pk in s.setdefault("limits", {}):
-                    s["limits"][pk].update(p)
+                cur = s.setdefault("limits", {}).get(pk)
+                old = lim.get(pk) or {}
+                if cur is None:
+                    continue
+                if (cur.get("expires"), cur.get("quota"), cur.get("period")) != \
+                        (old.get("expires"), old.get("quota"), old.get("period")):
+                    # запись поменяли во время прохода — отметки к ней не подходят; но если клиента мы уже
+                    # отключили, пометка нужна: по ней следующий проход включит его обратно
+                    if p.get("auto_off"):
+                        cur["auto_off"] = p["auto_off"]
+                    continue
+                cur.update(p)
         engine.store.mutate(fn)
 
 

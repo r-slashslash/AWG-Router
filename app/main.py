@@ -193,6 +193,32 @@ def _tg_route(via: str):
 
 notify.router = _tg_route
 notify.alt_routes = engine.alt_routes
+
+
+def _fetch_via_exit(url: str) -> tuple[str, bool]:
+    """Список, который не скачался напрямую, — через рабочие выходы по очереди (как Telegram): на серверах
+    в КНР и Иране raw.githubusercontent.com часто закрыт. Имя сайта разбирается через тот же выход."""
+    errors = []
+    for via in engine.alt_routes("direct")[:2]:        # не больше двух: каждая попытка — до полуминуты
+        try:
+            route = engine.own_route(via)
+        except Exception as e:  # noqa: BLE001  — выход только что перестал работать
+            errors.append(str(getattr(e, "msg", e))[:80])
+            continue
+        if route is None:
+            continue
+        try:
+            code, text, framed = notify.get_via(route, url, 30, lists.FETCH_MAX)
+        except OSError as e:
+            errors.append(str(e)[:120])
+            continue
+        if code == 200:
+            return text, framed
+        errors.append(f"HTTP {code}")
+    raise OSError("; ".join(errors) or "no working exit")
+
+
+lists.alt_fetch = None if config.DRY_RUN else _fetch_via_exit
 tls.on_fail = lambda exp: notifier.event(
     "tls", "tls_fail", cooldown=12 * 3600,
     date=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp or 0)))
@@ -1763,17 +1789,29 @@ def trace_target(client: str | None, ip: str) -> dict:
             bad("err.ip_or_domain")
         bad("tr.ipv6")           # в туннеле только IPv4: такой трафик отбрасывается
     if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+        via = None
         try:
-            infos = socket.getaddrinfo(ip, None, socket.AF_INET)
-            resolved = infos[0][4][0]
-        except Exception:  # noqa: BLE001
+            # как разберёт имя DNS клиента — через его выход (resolve_name), а не DNS провайдера хоста
+            if not HOSTNAME_RE.fullmatch(ip.lower().rstrip(".")):
+                raise ValueError(ip)            # не имя в интернете (localhost и т. п.) — как раньше
+            resolved, via = engine.resolve_name(client if client and awgconf.KEY_RE.match(client) else None, ip)
+        except Exception:  # noqa: BLE001  — выхода нет, блок, демо: резолвер панели, как раньше
             try:
-                socket.getaddrinfo(ip, None, socket.AF_INET6)
+                infos = socket.getaddrinfo(ip, None, socket.AF_INET)
+                resolved = infos[0][4][0]
             except Exception:  # noqa: BLE001
-                bad("err.ip_or_domain")
-            bad(Msg("tr.ipv6_only", host=ip))   # у домена только AAAA
+                try:
+                    socket.getaddrinfo(ip, None, socket.AF_INET6)
+                except Exception:  # noqa: BLE001
+                    bad("err.ip_or_domain")
+                bad(Msg("tr.ipv6_only", host=ip))   # у домена только AAAA
         res = engine.trace(client, resolved, ip.lower().rstrip("."))
-        res["steps"].insert(0, Msg("tr.resolved", host=ip, ip=resolved))
+        if via is None:
+            res["steps"].insert(0, Msg("tr.resolved", host=ip, ip=resolved))
+        else:
+            name = Msg("out.direct") if via == "direct" else \
+                (Store.upstream(store.snapshot(), via[3:]) or {}).get("name", via)
+            res["steps"].insert(0, Msg("tr.resolved_via", host=ip, ip=resolved, via=name))
         res["ip"] = resolved
         return res
     try:

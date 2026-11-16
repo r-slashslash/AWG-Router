@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from . import config, domains
@@ -38,7 +39,13 @@ LISTS_DIR = os.path.join(config.DATA_DIR, "lists")
 LINE_TOKEN = re.compile(r"^\s*([0-9.]+(?:/\d{1,2})?)")
 
 
-def parse_cidrs(text: str) -> list[ipaddress.IPv4Network]:
+WIDE_MIN = 8        # в скачанных списках префиксы короче /8 не принимаются (испорченная строка, а не страна)
+
+
+def parse_cidrs(text: str, min_prefix: int = 0) -> list[ipaddress.IPv4Network]:
+    """min_prefix — для скачанных списков (страны, ASN, по ссылке): сеть шире /8 там означает испорченную
+    строку, и правило «список → напрямую» увело бы мимо выхода огромную часть интернета. Ручной список
+    не ограничивается: там это решение человека."""
     nets = []
     for line in text.splitlines():
         line = line.split("#", 1)[0].split(";", 1)[0].strip()
@@ -50,9 +57,11 @@ def parse_cidrs(text: str) -> list[ipaddress.IPv4Network]:
             if not m:
                 continue
             try:
-                nets.append(ipaddress.IPv4Network(m.group(1), strict=False))
+                n = ipaddress.IPv4Network(m.group(1), strict=False)
             except ValueError:
                 continue
+            if n.prefixlen >= min_prefix:
+                nets.append(n)
     return list(ipaddress.collapse_addresses(nets))
 
 
@@ -117,12 +126,53 @@ def fetch_domains(lst: dict) -> list[str]:
     return names
 
 
-def _fetch(url: str, timeout: int = 30) -> str:
+FETCH_MAX = 64 * 1024 * 1024
+# Скачать через рабочий выход (url → (текст, framed)), если напрямую не вышло: задаёт main.py. Нужно серверам в КНР и
+# Иране, где raw.githubusercontent.com часто закрыт, — иначе списки стран пусты и их правила не действуют.
+alt_fetch = None
+
+
+def whole_lines(text: str, framed: bool) -> str:
+    """Ответ без Content-Length и без chunked заканчивается, когда сервер закрыл соединение, — и обрыв
+    выглядит так же. Недописанная последняя строка «185.10.0.0/16» превратилась бы в «185.10.0.0/1»
+    (половина интернета), поэтому у такого ответа она отбрасывается."""
+    if framed or not text or text.endswith("\n"):
+        return text
+    return text[:text.rfind("\n") + 1]
+
+
+def _fetch_direct(url: str, timeout: int = 30) -> tuple[str, bool]:
+    """→ (текст, framed — у ответа есть Content-Length или chunked)."""
     req = urllib.request.Request(url, headers={"User-Agent": "awg-router/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         if r.status != 200:
             raise RuntimeError(f"HTTP {r.status}")
-        return r.read(64 * 1024 * 1024).decode("utf-8", errors="replace")
+        data = r.read(FETCH_MAX + 1)
+        if len(data) > FETCH_MAX:                  # раньше молча обрезалось на середине строки
+            raise RuntimeError("larger than 64 MB")
+        framed = bool(r.headers.get("Content-Length") or r.headers.get("Transfer-Encoding"))
+        return data.decode("utf-8", errors="replace"), framed
+
+
+def _fetch(url: str, timeout: int = 30, lines: bool = True) -> str:
+    """lines — ответ построчный (списки): недописанная последняя строка отбрасывается (whole_lines).
+    JSON (RIPEstat) — без этого: обрыв в нём и так ошибка разбора."""
+    text, framed = _fetch_any(url, timeout)
+    return whole_lines(text, framed) if lines else text
+
+
+def _fetch_any(url: str, timeout: int) -> tuple[str, bool]:
+    try:
+        return _fetch_direct(url, timeout)
+    except urllib.error.HTTPError:
+        raise                                       # сайт ответил (404 и т. п.): через выход ответ тот же
+    except OSError as e:                            # не дошли: нет связи, сброс, подмена сертификата
+        if alt_fetch is None or not url.startswith("https://"):
+            raise
+        try:
+            return alt_fetch(url)
+        except Exception as e2:  # noqa: BLE001
+            raise RuntimeError(f"{e}; via exit: {e2}") from None
 
 
 def fetch_list(lst: dict, stats: dict | None = None) -> list[ipaddress.IPv4Network]:
@@ -139,7 +189,7 @@ def fetch_list(lst: dict, stats: dict | None = None) -> list[ipaddress.IPv4Netwo
         for tpl in COUNTRY_SOURCES:
             url = tpl.format(cc=cc)
             try:
-                nets = parse_cidrs(_fetch(url))
+                nets = parse_cidrs(_fetch(url), WIDE_MIN)
                 if nets:
                     return nets
                 errors.append(f"{url.split('/')[2]}: empty")
@@ -160,7 +210,7 @@ def fetch_list(lst: dict, stats: dict | None = None) -> list[ipaddress.IPv4Netwo
         for url in [u.strip() for u in lst["source"].split() if u.strip()]:
             text = _fetch(url)
             stats["v6"] += count_ipv6(text)
-            nets.extend(parse_cidrs(text))
+            nets.extend(parse_cidrs(text, WIDE_MIN))
         nets = list(ipaddress.collapse_addresses(nets))
         if not nets:
             raise ListError(Msg("list.empty"))
@@ -182,7 +232,7 @@ def _fetch_asn(asn: int) -> list[ipaddress.IPv4Network]:
     errors = []
     for tpl in ASN_SOURCES:
         try:
-            nets = parse_cidrs(_fetch(tpl.format(asn=asn)))
+            nets = parse_cidrs(_fetch(tpl.format(asn=asn)), WIDE_MIN)
             if nets:
                 return nets
             errors.append("ipverse: empty")
@@ -190,8 +240,8 @@ def _fetch_asn(asn: int) -> list[ipaddress.IPv4Network]:
             errors.append(f"ipverse: {e}")
     try:
         import json
-        data = json.loads(_fetch(RIPESTAT_URL.format(asn=asn)))
-        nets = parse_cidrs("\n".join(p["prefix"] for p in data["data"]["prefixes"]))
+        data = json.loads(_fetch(RIPESTAT_URL.format(asn=asn), lines=False))
+        nets = parse_cidrs("\n".join(p["prefix"] for p in data["data"]["prefixes"]), WIDE_MIN)
         if nets:
             return nets
         errors.append("ripestat: empty")

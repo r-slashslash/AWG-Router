@@ -416,6 +416,9 @@ class LimitsTest(unittest.TestCase):
             def snapshot(s):
                 return json.loads(json.dumps(s.st))
 
+            def peek(s, fn):
+                return fn(s.st)
+
             def mutate(s, fn):
                 fn(s.st)
 

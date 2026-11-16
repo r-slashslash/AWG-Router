@@ -57,7 +57,7 @@ class ClockTest(unittest.TestCase):
         self.assertAlmostEqual(notify.clock_skew, 60, delta=2)
 
     def test_tgreq_prints_date(self):
-        with mock.patch.object(tgreq, "request", return_value=(200, b"{}", "Sun, 01 Nov 2026 00:00:00 GMT")), \
+        with mock.patch.object(tgreq, "request", return_value=(200, b"{}", "Sun, 01 Nov 2026 00:00:00 GMT", True)), \
                 mock.patch("sys.stdin", mock.Mock(buffer=mock.Mock(read=lambda: b'{"url":"https://x/y"}\n'))), \
                 mock.patch("sys.argv", ["tgreq.py", "0"]), mock.patch("builtins.print") as pr:
             tgreq.main()

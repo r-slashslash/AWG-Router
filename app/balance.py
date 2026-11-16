@@ -128,15 +128,42 @@ class Balancer:
             self._imb_since = None
             return {}
         loads = self.loads(members)
+        caps = self.capacities(members)
+        proj = {i: self.rate(i) for i in ids}             # скорости выходов с учётом уже назначенных
+        per_exit = self.counts()
+        typical = self._typical()
         for pk in sorted(clients):
             if self.assign.get(pk) not in ids:
-                lost = pk in self.assign
-                self.assign.pop(pk, None)
-                self.assign[pk] = self.pick(members, loads)
-                if lost:
+                prev = self.assign.pop(pk, None)
+                uid = self.pick(members, loads)
+                self.assign[pk] = uid
+                if prev is not None:
                     self.moved[pk] = now
+                # Нагрузка выхода растёт с каждым назначенным клиентом. Без этого все клиенты упавшего
+                # выхода уходили на один и тот же самый свободный выход (нагрузки считались один раз).
+                est = self._estimate(pk, prev, per_exit, typical)
+                proj[uid] = [proj[uid][0] + est[0], proj[uid][1] + est[1]]
+                loads[uid] = self._load(proj[uid], caps[uid])
         self._rebalance(members, loads, now)
         return dict(self.assign)
+
+    def _typical(self) -> list[float]:
+        """Средняя скорость активного клиента — оценка для клиента, о котором ничего не известно."""
+        act = [r for r in self.client_rate.values() if max(r) >= ACTIVE_BPS]
+        if not act:
+            return [0.0, 0.0]
+        return [sum(r[0] for r in act) / len(act), sum(r[1] for r in act) / len(act)]
+
+    def _estimate(self, pk: str, prev: str | None, per_exit: dict[str, int], typical: list[float]) -> list[float]:
+        """Сколько клиент добавит выходу: его недавняя скорость (через любой выход), иначе доля скорости
+        прежнего выхода на одного его клиента (клиент упавшего выхода), иначе средний активный клиент."""
+        own = [r for (p, _), r in self.client_rate.items() if p == pk]
+        if own:
+            return list(max(own, key=max))
+        if prev is not None and per_exit.get(prev):
+            r = self.rate(prev)
+            return [r[0] / per_exit[prev], r[1] / per_exit[prev]]
+        return list(typical)
 
     def _rebalance(self, members: list[dict], loads: dict[str, float], now: float) -> None:
         if len(members) < 2:
