@@ -75,6 +75,9 @@ jobs:
 
       - name: Version
         id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          CHECK: ${{ inputs.check }}
         run: |
           ver=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/version.py)
           [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::app/version.py: bad VERSION '$ver'"; exit 1; }
@@ -85,6 +88,16 @@ jobs:
             echo "$tag is already released, nothing to do"
           elif [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "${latest#v}" "$ver" | sort -V | tail -1)" != "$ver" ]; then
             echo "::error::VERSION $ver is not newer than the latest release $latest"; exit 1
+          fi
+          # ручной запуск: черновик и образы версии — только из main; «check» — только для выпущенной версии
+          # (на новой он собрал бы и опубликовал образы и черновик, а обещает ничего не публиковать)
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if [ "$CHECK" = true ] && [ "$state" != published ]; then
+              echo "::error::check is for a version that is already released; $tag isn't, and this run would publish it"; exit 1
+            fi
+            if [ "$CHECK" != true ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "::error::a draft release is made only from main (this run is on $GITHUB_REF)"; exit 1
+            fi
           fi
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

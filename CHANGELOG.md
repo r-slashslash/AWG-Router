@@ -302,6 +302,17 @@ it grows, so every user-visible change gets a new version.
   screen; the date and time separator follows the language. A port or subnet change says clients need new configs.
   Texts: "If domain rules don't work, block…", where that box works before the panel starts, "Shared rules" on the
   Overview as on Routing, "up to AWG 3.1"; zh and fa wording made consistent.
+- **Installer, release and going back to 1.20.0.** When the own server's container is created again while its config
+  is kept in `awg-server/data` (removed by hand, or a container check failed during an update), the port comes from
+  that config (`saved_port`): a new random port made Docker publish a port nobody listened on. Ports with leading
+  zeros (`0080`, `053`) are refused instead of slipping past "not 80/443", "not 53" and "in use". Uninstall lists what
+  it leaves on the host (the module block, the kernel module, the Amnezia PPA, the panel's ufw rule). A manual run of
+  `release.yml` makes a draft only from main, and **check** only for a released version (on a new one it published).
+  The panel image carries compiled bytecode (`compileall` and an import of the panel at build time): the image had
+  no `.pyc` even for the standard library, `PYTHONDONTWRITEBYTECODE` kept it so, and every start and health check
+  compiled everything — 3 seconds on a one-core VPS before the panel put its rules up. A typed-in list with a text
+  but an empty built file is rebuilt at start (`_rebuild_empty_texts`): 1.20.0's **Refresh now** on 1.21.0's files
+  emptied it, and 1.21.0 never rebuilt typed-in lists. The release notes say how to go back and what to avoid there.
 
 ## 1.20.0 — 2026-11-14
 

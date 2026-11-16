@@ -205,6 +205,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
 
     def _lists_loop(self) -> None:
         time.sleep(2)
+        try:
+            self._rebuild_empty_texts()
+        except Exception:  # noqa: BLE001
+            log.exception("lists")
         while not self.stop_ev.is_set():
             try:
                 self.refresh_lists(only_due=True)
@@ -248,6 +252,25 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             self.store.mutate(upd)
         if changed:
             self.trigger()
+
+    def _rebuild_empty_texts(self) -> None:
+        """Список, набранный руками, с текстом, а собранный из него файл пуст или его нет — собрать заново. Так
+        бывает после возврата с 1.20.0: она видит такие списки пустыми (текст — в data/texts), и её «Обновить»
+        переписывала собранный файл пустым; 1.21.0 сама ручные списки не пересобирает, и правила так и
+        оставались без адресов."""
+        st = self.store.snapshot()
+        ids = []
+        for l in st["lists"]:
+            if l["kind"] == "manual":
+                built = lists.load_cidrs(l["id"])
+            elif l["kind"] == "domains" and not domains.split_source(self.store.list_text(l["id"]))[0]:
+                built = domains.load(l["id"])           # со ссылками он и так скачивается заново раз в сутки
+            else:
+                continue
+            if not built and self.store.list_text(l["id"]).strip():
+                ids.append(l["id"])
+        if ids:
+            self.refresh_lists(False, ids)
 
     def refresh_lists_bg(self, ids: list[str]) -> None:
         """Скачать списки в фоне (сохранение и кнопка «Обновить» в панели): запрос не ждёт скачивания,

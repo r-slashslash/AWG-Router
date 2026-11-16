@@ -169,7 +169,8 @@ AWG_AVOID=" 1080 1194 1701 1723 1812 1813 1900 3478 3479 4500 5060 5061 5353 535
 # "in use" by the panel itself and stays allowed on --reconfigure (80 and 443 too, if it already is there)
 panel_port_problem() {
   local p="$1"
-  if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+  # без ведущих нулей: «0080» для [ ] — это 80, а для сравнений строкой и в .env — не 80
+  if ! [[ "$p" =~ ^[1-9][0-9]*$ ]] || [ "$p" -gt 65535 ]; then
     echo "A number from 1 to 65535 is required"
   elif [ "$p" = "${2:-}" ]; then
     :
@@ -187,7 +188,7 @@ panel_port_problem() {
 # Why a UDP port can't be the AmneziaWG server's: $1 port. 53 is where DNS on the server listens.
 awg_port_problem() {
   local p="$1"
-  if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+  if ! [[ "$p" =~ ^[1-9][0-9]*$ ]] || [ "$p" -gt 65535 ]; then
     echo "A number from 1 to 65535 is required"
   elif [ "$p" = 53 ]; then
     echo "Port 53 is used by DNS on the server, pick another"
@@ -518,6 +519,21 @@ uninstall() {
   else
     echo "Done. Settings are kept in $DIR — delete the folder to remove them too."
   fi
+  leftovers
+}
+# What the panel put on the host and uninstall leaves (the AWG server or other programs may still need it)
+leftovers() {
+  local l=() p
+  [ -f "$MODBLOCK" ] && l+=("the AmneziaWG kernel module is blocked by $MODBLOCK — a module installed by hand won't load until: rm -f $MODBLOCK")
+  dpkg -s amneziawg-dkms >/dev/null 2>&1 && l+=("the AmneziaWG kernel module: apt remove amneziawg-dkms && rm -f $MODLOAD")
+  ls /etc/apt/sources.list.d/ 2>/dev/null | grep -qi amnezia && l+=("the Amnezia PPA: rm -f /etc/apt/sources.list.d/*amnezia* && apt update")
+  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+    p="$(envget PANEL_PORT)"
+    [ -n "$p" ] && ufw status 2>/dev/null | grep -qE "^$p/tcp" && l+=("ufw rule for the panel: ufw delete allow $p/tcp (and 80/tcp if nothing else needs it)")
+  fi
+  [ ${#l[@]} -gt 0 ] || return 0
+  echo "Left on the server (the AWG server or other programs may still need them):"
+  printf '  - %s\n' "${l[@]}"
 }
 if [ "$UNINSTALL" = 1 ]; then uninstall; exit $?; fi
 
@@ -686,6 +702,10 @@ ask_port() { # UDP port for the AmneziaWG server → AWG_PORT
   AWG_PORT="$p"
 }
 
+saved_port() { # UDP port of the own container's config kept in $SRV_DATA (it survives re-creating the container)
+  sed -n 's/^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*\([1-9][0-9]*\)[[:space:]]*$/\1/p' "$SRV_DATA/awg0.conf" 2>/dev/null | head -1
+}
+
 ask_install() { # AmneziaWG not found: offer to install it
   local how="${AWGR_INSTALL:-}"
   if [ -z "$how" ]; then
@@ -704,7 +724,16 @@ ask_install() { # AmneziaWG not found: offer to install it
   fi
   retire_broken
   if [ "${REPLACE_HOST:-0}" = 1 ]; then retire_host_server; REPLACE_HOST=0; fi   # frees its UDP port
-  ask_port
+  local keep=""
+  [ "$how" = container ] && keep="$(saved_port)"
+  if [ -n "$keep" ]; then
+    # the container is re-created with the config kept here (app.initserver doesn't overwrite it): with another
+    # port Docker would publish a port nobody listens on, and every client would lose the connection
+    AWG_PORT="$keep"
+    ok "The server's config is kept in $SRV_DATA (same keys and clients): UDP port $keep"
+  else
+    ask_port
+  fi
   INSTALL_AWG="$how"; AWG_MODE="$how"
   [ "$how" = host ] && AWG_INIT_PORT="$AWG_PORT"
 }

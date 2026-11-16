@@ -1,5 +1,5 @@
 """1.21.0, исправления по второй проверке (2026-11-16): утечки мимо выходов (этап 1), безопасность (этап 2),
-правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4), интерфейс и тексты (этап 5).
+правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4), интерфейс и тексты (этап 5), установщик, выпуск и возврат на 1.20.0 (этап 6).
 
 python3 -m unittest discover tests
 """
@@ -844,6 +844,104 @@ class TextsTest(unittest.TestCase):
         self.assertNotIn("“", zh)
         for w in ("پورت", "قاعده", "رمزنگاری", "حافظهٔ نهان", "{pct}%"):
             self.assertNotIn(w, fa, w)
+
+
+# ============================================================ этап 6: установщик, выпуск, возврат на 1.20.0
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+
+def install_sh():
+    with open(os.path.join(ROOT, "install.sh"), encoding="utf-8") as f:
+        return f.read()
+
+
+def sh_funcs(*names):
+    """Функции install.sh по именам — для проверки по отдельности."""
+    src = install_sh()
+    out = []
+    for n in names:
+        a = src.index(f"\n{n}() {{") + 1
+        out.append(src[a:src.index("\n}\n", a) + 3])
+    return "\n".join(out)
+
+
+class InstallerTest(unittest.TestCase):
+    def bash(self, script, env=None):
+        p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={**os.environ, **(env or {})})
+        return p.stdout
+
+    def test_ports_with_leading_zeros(self):
+        """Н55. «0080», «053» не проходят мимо проверок «не 80/443», «не 53», «занят»."""
+        src = install_sh()
+        defs = "\n".join(ln for ln in src.split("\n") if ln.startswith(("UNSAFE_PORTS=", "unsafe_port()", "port_busy()")))
+        script = defs + "\n" + sh_funcs("panel_port_problem", "awg_port_problem") + """
+ss() { :; }
+for p in 0080 0443 053 080 0 8080; do echo "$p:$(panel_port_problem $p '')|$(awg_port_problem $p)"; done"""
+        out = dict(ln.split(":", 1) for ln in self.bash(script).strip().split("\n"))
+        for p in ("0080", "0443", "053", "080", "0"):
+            self.assertIn("1 to 65535", out[p], p)
+        self.assertEqual(out["8080"], "|")
+
+    def test_kept_config_keeps_its_port(self):
+        """Н51. Контейнер своего сервера создаётся заново, а конфиг в $SRV_DATA остался: порт — из конфига, иначе
+        Docker открыл бы порт, на котором никто не слушает."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        os.makedirs(os.path.join(d, "data"))
+        with open(os.path.join(d, "data", "awg0.conf"), "w") as f:
+            f.write("[Interface]\nPrivateKey = x\nAddress = 10.8.1.0/24\nListenPort = 4782\n")
+        out = self.bash(f'SRV_DATA="{d}/data"\n' + sh_funcs("saved_port") + "\nsaved_port; SRV_DATA=/nonexistent; echo \"[$(saved_port)]\"")
+        self.assertEqual(out.split(), ["4782", "[]"])
+        self.assertIn('[ "$how" = container ] && keep="$(saved_port)"', install_sh())
+
+    def test_uninstall_says_what_is_left(self):
+        """Н56. После удаления — список того, что панель оставила: запрет модуля, модуль, PPA, правило ufw."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        block = os.path.join(d, "block.conf")
+        open(block, "w").close()
+        script = sh_funcs("leftovers") + f"""
+MODBLOCK="{block}"; MODLOAD=/etc/modules-load.d/amneziawg.conf
+envget() {{ echo 4894; }}
+dpkg() {{ return 1; }}
+ufw() {{ [ "$1" = status ] && printf 'Status: active\\n4894/tcp ALLOW Anywhere\\n'; }}
+leftovers"""
+        out = self.bash(script)
+        self.assertIn(f"rm -f {block}", out)
+        self.assertIn("ufw delete allow 4894/tcp", out)
+        self.assertIn("\n  leftovers\n}", install_sh())
+
+
+class ReleaseWorkflowTest(unittest.TestCase):
+    def test_manual_run_guarded(self):
+        """Н54. Ручной запуск выпуска: черновик — только из main, «check» — только для выпущенной версии."""
+        with open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8") as f:
+            y = f.read()
+        self.assertIn('if [ "$CHECK" = true ] && [ "$state" != published ]; then', y)
+        self.assertIn('if [ "$CHECK" != true ] && [ "$GITHUB_REF" != refs/heads/main ]; then', y)
+        self.assertFalse("cache-from:" in y or "cache-to:" in y)       # Н10: без общего кэша
+
+
+class EmptyTextListTest(unittest.TestCase):
+    def test_rebuilt_at_start(self):
+        """Н42. Список, набранный руками, с текстом, а собранный файл пуст (после «Обновить сейчас» в 1.20.0) —
+        собирается заново при запуске. Со ссылками и с собранным файлом — нет."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        s = store.Store(os.path.join(d, "state.json"))
+        s.mutate(lambda st: st["lists"].extend([
+            {"id": "lm1", "name": "a", "kind": "manual", "source": "203.0.113.0/24", "updated": 1},
+            {"id": "lm2", "name": "b", "kind": "manual", "source": "198.51.100.0/24", "updated": 1},
+            {"id": "ld1", "name": "c", "kind": "domains", "source": "a.test", "updated": 1},
+            {"id": "ld2", "name": "d", "kind": "domains", "source": "b.test\nhttps://x.example/l", "updated": 1}]))
+        e = engine.Engine(s)
+        with mock.patch.object(lists, "LISTS_DIR", d), mock.patch.object(domains, "LISTS_DIR", d):
+            open(lists.path_for("lm1"), "w").close()                 # пустой — как после 1.20.0
+            with open(lists.path_for("lm2"), "w") as f:
+                f.write("198.51.100.0/24\n")
+            with mock.patch.object(e, "refresh_lists") as rf:
+                e._rebuild_empty_texts()
+        rf.assert_called_once_with(False, ["lm1", "ld1"])
 
 
 if __name__ == "__main__":
