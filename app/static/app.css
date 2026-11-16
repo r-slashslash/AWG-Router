@@ -88,13 +88,19 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 .lang-select { width: auto !important; min-height: 32px !important; padding-block: 4px !important; font-size: .88rem; }
 .login-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 24px; }
 .summary { margin: 0; padding-inline-start: 20px; display: grid; gap: 6px; }
-/* строка правила: слева — что ловит правило, справа — выход; своё название — серой строкой сверху */
+/* строка правила: что ловит правило — выход (на широком экране сразу за списками, как «Всё остальное — …»; на
+   телефоне — у правого края, и туда же, если строка переносится); своё название — серой строкой сверху */
 .rule-sum { padding-inline-start: 0; list-style: none; }
 .rule-sum li { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: baseline; }
 .rule-sum .rule-n { grid-column: 1; grid-row: 2; font-variant-numeric: tabular-nums; }
 .rule-sum .rule-name { grid-column: 2; grid-row: 1; }
 .rule-sum .rule-row { grid-column: 2; grid-row: 2; }
-.rule-sum .rule-row { display: flex; align-items: center; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap; }
+.rule-sum .rule-row { display: flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; }
+@media (max-width: 560px) {
+  .rule-sum .rule-row { column-gap: 10px; }
+  .rule-sum .rule-dash { display: none; }
+  .rule-sum .rule-row > .line { margin-inline-start: auto; }
+}
 .rule-sum .rule-what { min-width: 0; overflow-wrap: anywhere; }
 .rule-sum .rule-name { font-size: .78rem; color: var(--muted); line-height: 1.2; }
 .rule-sum .rule-warn { grid-column: 2; grid-row: 3; line-height: 1.3; margin-top: 2px; }
@@ -104,6 +110,12 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 .more-chip { font: inherit; font-size: .8rem; line-height: 1.4; padding: 0 7px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--rule-strong); background: transparent; color: var(--muted); vertical-align: 1px; }
 .more-chip:hover { color: var(--ink); }
+/* «+N» правила: скрытые списки (больше двух), на телефоне при compact — всё, кроме первого; открыто — «−» */
+.rule-sum li:not(.open) .rule-rest, .rule-sum li.compact:not(.open) .rule-l2 { display: none; }
+.more-chip .mc-one, .more-chip .mc-open { display: none; }
+.rule-sum li.compact:not(.open) .mc-more, .rule-sum li.open .mc-more { display: none; }
+.rule-sum li.compact:not(.open) .mc-one, .rule-sum li.open .mc-open { display: inline; }
+.rule-sum li.many:not(.three):not(.compact):not(.open) .more-chip { display: none; }
 .status { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: .88rem; color: var(--muted); }
 .status b { color: var(--ink); font-weight: 600; }
 .sysmon { display: inline-flex; gap: 10px; white-space: nowrap; }

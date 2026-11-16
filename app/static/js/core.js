@@ -255,15 +255,25 @@ const listLabelText = (id) => { const d = document.createElement("div"); d.inner
 const ruleOwnName = (r) => (r.comment && r.comment !== exitName(r.outbound)
   && !r.lists.some((l) => listName(l) === r.comment) ? r.comment : "");
 const openRules = new Set();     // правила, у которых по нажатию на «+N» показан весь состав
+/** что ловит правило (HTML): больше двух списков — первые два и «+N»; нажатие показывает остальные на месте (и в окне
+ *  клиента). На телефоне, если выход не влез в строку, — один список и «+N» (fitRules, класс compact): какой «+N»
+ *  видно, решает CSS по классам строки */
+function ruleWhat(r) {
+  const labels = r.lists.map(listLabel), n = labels.length, s = esc(sep("list"));
+  if (n < 2) return labels.join("");
+  return `<span class="rule-l1">${labels[0]}</span><span class="rule-l2">${s}${labels[1]}</span>`
+    + (n > 2 ? `<span class="rule-rest">${s}${labels.slice(2).join(s)}</span>` : "")
+    + ` <button type="button" class="more-chip" dir="ltr" data-rule-more="${esc(r.id)}" aria-expanded="${openRules.has(r.id)}" title="${esc(r.lists.map(listLabelText).join(sep("list")))}" aria-label="${esc(t("rl.show_all"))}">`
+    + `<span class="mc-more">+${esc(fmtNum(n - 2))}</span><span class="mc-one">+${esc(fmtNum(n - 1))}</span><span class="mc-open">−</span></button>`;
+}
 /** строки правил политики: слева — что ловит правило (его списки), справа — выход. Выключенное правило —
  *  серое и зачёркнутое, со своим номером */
 function rulesSummary(rules) {
   if (!rules.length) return `<p class="muted small" style="margin:0">${esc(t("ov.no_rules"))}</p>`;
   return `<ol class="summary rule-sum">${rules.map((r, i) => {
-    const labels = r.lists.map(listLabel), open = openRules.has(r.id), n = labels.length - 2;
-    // больше двух списков: первые два и «+N»; нажатие показывает остальные на месте (и в окне клиента)
-    const rest = n > 0 ? `<span class="rule-rest"${open ? "" : " hidden"}>${esc(sep("list"))}${labels.slice(2).join(esc(sep("list")))}</span>`
-      + ` <button type="button" class="more-chip" dir="ltr" data-rule-more="${esc(r.id)}" data-n="${esc(fmtNum(n))}" aria-expanded="${open}" title="${esc(r.lists.map(listLabelText).join(sep("list")))}" aria-label="${esc(t("rl.show_all"))}">${open ? "−" : "+" + esc(fmtNum(n))}</button>` : "";
+    const n = r.lists.length;
+    const cls = [r.enabled === false ? "off" : "", n > 1 ? "many" : "", n > 2 ? "three" : "", openRules.has(r.id) ? "open" : ""]
+      .filter(Boolean).join(" ");
     const name = ruleOwnName(r);
     // список без записей (не скачался, пустой) правило тихо выключает — говорим об этом в самой строке
     const empty = r.enabled === false ? [] : r.lists.map(listObj).filter((l) => l && !l.busy && !l.count);
@@ -271,20 +281,45 @@ function rulesSummary(rules) {
     const warn = [["rl.lists_failed", empty.filter((l) => l.error)], ["rl.lists_empty", empty.filter((l) => !l.error)]]
       .filter(([, ls]) => ls.length)
       .map(([k, ls]) => `<div class="small warn-text rule-warn">⚠ ${th(k, { lists: names(ls) })}</div>`).join("");
-    return `<li class="${r.enabled === false ? "off" : ""}"${r.enabled === false ? ` title="${esc(t("rl.off"))}"` : ""}>
+    return `<li class="${cls}"${r.enabled === false ? ` title="${esc(t("rl.off"))}"` : ""}>
       <span class="rule-n">${esc(fmtNum(i + 1))}.</span>${name ? `<div class="rule-name"><bdi>${esc(name)}</bdi></div>` : ""}
-      <div class="rule-row"><span class="rule-what">${labels.slice(0, 2).join(esc(sep("list")))}${rest}</span>${outChip(r.outbound)}</div>${warn}</li>`;
+      <div class="rule-row"><span class="rule-what">${ruleWhat(r)}</span><span class="rule-dash" aria-hidden="true">—</span>${outChip(r.outbound)}</div>${warn}</li>`;
   }).join("")}</ol>`;
+}
+/* Телефон: выход правила не влез в строку рядом со списками — показываем один список и «+N» (не влез и тогда —
+   выход под строкой, у правого края). Ширину строк смотрит ResizeObserver: он же видит окно клиента, когда оно
+   открылось, и поворот экрана. Менять классы — в следующем кадре: правка наблюдаемого блока прямо в обработчике
+   даёт ошибку «ResizeObserver loop» в консоли */
+const narrowRules = matchMedia("(max-width: 560px)");
+function fitRules(list) {
+  for (const li of list.querySelectorAll(":scope > li.many")) {
+    li.classList.remove("compact");
+    if (!narrowRules.matches || li.classList.contains("open")) continue;
+    const w = li.querySelector(".rule-what"), c = li.querySelector(".rule-row > .line");
+    if (w && c && c.getBoundingClientRect().top >= w.getBoundingClientRect().bottom - 2) li.classList.add("compact");
+  }
+}
+const ruleWidths = new WeakMap();
+const ruleRO = typeof ResizeObserver === "function" ? new ResizeObserver((entries) => requestAnimationFrame(() => {
+  for (const e of entries) {
+    if (!e.target.isConnected) { ruleRO.unobserve(e.target); continue; }  // перерисовали — старый блок не держим
+    const w = Math.round(e.contentRect.width);
+    if (ruleWidths.get(e.target) === w) continue;
+    ruleWidths.set(e.target, w);
+    fitRules(e.target);
+  }
+})) : null;
+function watchRules(root) {
+  if (ruleRO) root.querySelectorAll(".rule-sum").forEach((el) => ruleRO.observe(el));
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest && e.target.closest("[data-rule-more]");
   if (!b) return;
-  const id = b.dataset.ruleMore, open = !openRules.has(id);
+  const id = b.dataset.ruleMore, open = !openRules.has(id), li = b.closest("li");
   if (open) openRules.add(id); else openRules.delete(id);
-  const rest = b.parentElement.querySelector(".rule-rest");
-  if (rest) rest.hidden = !open;
+  li.classList.toggle("open", open);
   b.setAttribute("aria-expanded", open);
-  b.textContent = open ? "−" : "+" + b.dataset.n;
+  if (!open) fitRules(li.parentElement);
 });
 
 /* ================================================================ язык */
@@ -542,6 +577,7 @@ function render(force = false) {
   if (tab === "clients" && clientParts) clientParts.banner = html.slice(0, html.length - clientParts.html.length);
   clientsShown = tab === "clients" ? clientParts : null;
   $("#main").innerHTML = html;
+  watchRules($("#main"));
   const bindTab = new Map(Object.entries(bind)).get(tab);
   if (bindTab) bindTab();
   $$(".banner [data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));

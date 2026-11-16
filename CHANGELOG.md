@@ -99,7 +99,9 @@ it grows, so every user-visible change gets a new version.
 - **A rule line says what it catches.** In the global policy and on a client's page a rule reads as its lists on
   the left — `Domains work (20)`, an exit's own sites by their first domain `Domains youtube.com +19` (lists keep
   their `first` domain), `Office (12 networks)`, countries and ASNs by name; more than two lists collapse to `+N`,
-  opened by a tap — and the exit on the right. A rule's own name shows small and grey above it only when it is not
+  opened by a tap — and the exit: right after the lists and a dash on a wide screen (as in "Everything else — …"),
+  at the right edge on a phone (≤ 560 px), where a rule whose exit doesn't fit next to its lists shows only the first
+  list and `+N` (`fitRules`, a `ResizeObserver` on the rule list). A rule's own name shows small and grey above it only when it is not
   the exit's or the list's name: the exit window no longer signs the rules it creates, and the names it wrote
   before are removed once (`Store.drop_auto_comments_once`: at the first start of 1.21.0 and when restoring a backup
   of an earlier version, marked in `state.upgraded`); a name given to a rule after that stays, even the exit's. A rule

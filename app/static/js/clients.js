@@ -477,6 +477,7 @@ function editClient(pk, section = null) {
     if (draft.rules_mode === "inherit") {
       box.innerHTML = S.routing.rules.length ? rulesSummary(S.routing.rules)
         : `<p class="muted small">${esc(t("cl.no_global"))}</p>`;
+      watchRules(box);
     } else {
       rulesEditor(box, draft.rules, () => {});
     }
