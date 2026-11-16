@@ -328,7 +328,7 @@ class ServerWatchTest(unittest.TestCase):
         self.now = [1_000_000.0]
         self.patches = [mock.patch.object(self.e, "event", side_effect=lambda lvl, m: self.ev.append(m.key)),
                         mock.patch.object(config, "DRY_RUN", False),
-                        mock.patch.object(engine.time, "time", side_effect=lambda: self.now[0])]
+                        mock.patch.object(time, "time", side_effect=lambda: self.now[0])]
         for p in self.patches:
             p.start()
         self.e._srv_down, self.e._srv_tries, self.e._srv_next = None, 0, 0.0
@@ -347,14 +347,14 @@ class ServerWatchTest(unittest.TestCase):
         up = [False]
         t = self.target("container", up)
         self.e._watch_server(t)
-        self.now[0] += engine.SERVER_GRACE - 1
+        self.now[0] += engine.server.SERVER_GRACE - 1
         self.e._watch_server(t)
         t.restart.assert_not_called()                     # интерфейс мог пропасть ненадолго (смена порта)
         self.now[0] += 2
         self.e._watch_server(t)
         self.assertEqual(t.restart.call_count, 1)
         self.assertEqual(self.ev, ["ev.server_iface_gone"])
-        self.now[0] += engine.SERVER_PAUSES[0] - 1
+        self.now[0] += engine.server.SERVER_PAUSES[0] - 1
         self.e._watch_server(t)
         self.assertEqual(t.restart.call_count, 1)         # не чаще паузы
         self.now[0] += 2
@@ -374,7 +374,7 @@ class ServerWatchTest(unittest.TestCase):
         t = self.target("container", [False])
         t.restart.side_effect = system.SysError("docker: no such container")
         self.e._watch_server(t)
-        self.now[0] += engine.SERVER_GRACE + 1
+        self.now[0] += engine.server.SERVER_GRACE + 1
         self.e._watch_server(t)
         self.assertEqual(self.ev, ["ev.server_iface_gone", "ev.server_start_failed"])
 
@@ -397,7 +397,7 @@ class ResourceAlertTest(unittest.TestCase):
         self.patches = [
             mock.patch.object(self.e, "event", side_effect=lambda lvl, m: self.ev.append((m.key, m.p))),
             mock.patch.object(config, "DRY_RUN", False),
-            mock.patch.object(engine.time, "time", side_effect=lambda: self.now[0]),
+            mock.patch.object(time, "time", side_effect=lambda: self.now[0]),
             mock.patch.object(engine.hostnet, "memory", side_effect=lambda: (self.mem[0] * 2**20, 100 * 2**20)),
             mock.patch.object(engine.hostnet.cpu, "percent", side_effect=lambda: self.cpu[0])]
         for p in self.patches:
@@ -658,9 +658,9 @@ class ExitEngineTest(unittest.TestCase):
         from test_v115 import conf
         pc = awgconf.parse_upstream(conf("203.0.113.7:51820"))
         # без настоящих /var/run/amneziawg и журналов: тесты в CI идут не от root
-        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine.subprocess, "Popen") as po, \
-                mock.patch.object(engine.os.path, "exists", return_value=True), \
-                mock.patch.object(engine.os, "makedirs"), mock.patch.object(engine.os, "remove"), \
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(subprocess, "Popen") as po, \
+                mock.patch.object(os.path, "exists", return_value=True), \
+                mock.patch.object(os, "makedirs"), mock.patch.object(os, "remove"), \
                 mock.patch("builtins.open", mock.mock_open()), \
                 mock.patch.object(engine.Engine, "_setconf"):
             po.return_value.poll.return_value = None
@@ -687,7 +687,7 @@ class ExitEngineTest(unittest.TestCase):
             self.assertEqual(e.server_engine, want)
         self.assertEqual(e.module_warn, "1.0.20251009")
         self.assertEqual(len(events), 2)                                 # по одному на каждый Target.key
-        self.assertEqual(events[0], ("ev.kernel_old", {"version": "1.0.20251009", "min": engine.KERNEL_MIN}))
+        self.assertEqual(events[0], ("ev.kernel_old", {"version": "1.0.20251009", "min": engine.common.KERNEL_MIN}))
 
     def test_state_and_no_choice(self):
         panel.engine.reconcile()
@@ -725,9 +725,9 @@ class ReviewFixesTest(unittest.TestCase):
         t.ns.return_value = subprocess.CompletedProcess([], 0, "", "")
         pc = awgconf.parse_upstream(conf("203.0.113.7:51820"))
         err = None
-        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine.subprocess, "Popen") as po, \
-                mock.patch.object(engine.os.path, "exists", return_value=True), \
-                mock.patch.object(engine.os, "makedirs"), mock.patch.object(engine.os, "remove"), \
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(subprocess, "Popen") as po, \
+                mock.patch.object(os.path, "exists", return_value=True), \
+                mock.patch.object(os, "makedirs"), mock.patch.object(os, "remove"), \
                 mock.patch("builtins.open", mock.mock_open()), \
                 mock.patch.object(engine.Engine, "_setconf", side_effect=setconf):
             po.return_value.poll.return_value = None

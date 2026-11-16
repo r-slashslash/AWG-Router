@@ -615,7 +615,7 @@ def _tcp_pair() -> tuple[socket.socket, socket.socket]:
 
 def _sni_stats():
     from app import engine as eng
-    return eng.SNI_STATS
+    return eng.sni.SNI_STATS
 
 
 # -------------------------------------------------------------- №10 MSS clamp

@@ -315,8 +315,8 @@ class HelperLogTrimTest(unittest.TestCase):
         with open(p, "wb") as f:
             for i in range(200000):
                 f.write(f"2026-11-16 line {i:06d} {'x' * 20}\n".encode())
-        engine._trim_log(p)
-        self.assertLessEqual(os.path.getsize(p), engine.LOG_KEEP)
+        engine.common._trim_log(p)
+        self.assertLessEqual(os.path.getsize(p), engine.common.LOG_KEEP)
         with open(p, "rb") as f:
             data = f.read()
         self.assertTrue(data.startswith(b"2026-11-16 line "))          # с начала строки
@@ -324,7 +324,7 @@ class HelperLogTrimTest(unittest.TestCase):
         small = os.path.join(d, "dnsproxy.log")
         with open(small, "w") as f:
             f.write("ok\n")
-        engine._trim_log(small)
+        engine.common._trim_log(small)
         with open(small) as f:
             self.assertEqual(f.read(), "ok\n")
 
@@ -448,7 +448,7 @@ class SocksResolveTimeoutTest(unittest.TestCase):
             self.assertEqual(socks.resolve("proxy.example", timeout=1), "198.51.100.4")
 
     def test_prefetch_includes_socks(self):
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "engine.py"), encoding="utf-8") as f:
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "engine", "tunnels.py"), encoding="utf-8") as f:
             src = f.read()
         self.assertIn('pc.socks["host"] if pc.kind == "socks5"', src)
 
@@ -1035,7 +1035,7 @@ class PassProcessesTest(unittest.TestCase):
         e.rt["u1"].started += 5                                      # туннель перезапущен
         e._sync_rules(t)
         self.assertEqual(sum("-batch" in c[0] for c in calls), 2)
-        with mock.patch.object(engine.time, "time", return_value=time.time() + engine.ROUTES_EVERY + 1):
+        with mock.patch.object(time, "time", return_value=time.time() + engine.routes.ROUTES_EVERY + 1):
             e._sync_rules(t)
         self.assertEqual(sum("-batch" in c[0] for c in calls), 3)    # и раз в ROUTES_EVERY на всякий случай
 
@@ -1173,7 +1173,7 @@ class OwnerFollowupTest(unittest.TestCase):
         self.assertEqual(sniproxy.QUIC_ERR_LOG_EVERY, 60)
 
     def test_probe_hosts_https(self):
-        self.assertNotIn("ip-api.com", engine.PROBE_HOSTS)
+        self.assertNotIn("ip-api.com", engine.diag.PROBE_HOSTS)
         with open(os.path.join(os.path.dirname(__file__), "..", "app", "probe.py"), encoding="utf-8") as f:
             src = f.read()
         self.assertNotIn('http_get("ip-api.com"', src)

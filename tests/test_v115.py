@@ -387,7 +387,7 @@ class DnsProxyProcessTest(unittest.TestCase):
                    "stats": os.path.join(cls.dir, "stats.json"), "upstreams": ["127.0.0.1"],
                    "upstream_port": cls.up.port, "default": {"mark": 0, "tcp": False}, "routes": {}}
         cls.write(cls.cfg)
-        cls.proc = subprocess.Popen([sys.executable, "-I", engine.DNSPROXY, cls.conf],
+        cls.proc = subprocess.Popen([sys.executable, "-I", engine.dns.DNSPROXY, cls.conf],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for _ in range(50):
             try:
@@ -711,7 +711,7 @@ class DnsEncryptedTest(unittest.TestCase):
                    "stats": os.path.join(cls.dir, "stats.json"), "upstreams": ["127.0.0.1"],
                    "default": {"mark": 0, "tcp": False}, "routes": {}, "ca_file": cls.cert}
         cls.apply(encrypt="dot", upstream_port=cls.up.dot.server_address[1])
-        cls.proc = subprocess.Popen([sys.executable, "-I", engine.DNSPROXY, cls.conf],
+        cls.proc = subprocess.Popen([sys.executable, "-I", engine.dns.DNSPROXY, cls.conf],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for _ in range(50):
             try:

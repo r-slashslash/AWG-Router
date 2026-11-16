@@ -8,12 +8,12 @@ import time
 
 from .. import (awgconf, checks, config, hostnet, limits, lists, notify,
                 selfupdate, totp)
-from .. import engine as engine_mod
 from ..i18n import Msg
 from ..panel import (app, engine, notifier, panel_origin, panel_url, store, tls, updates)
 from ..store import Store
 from ..traffic import month_key
 from . import auth, clients, routing, server, telegram
+from ..engine.common import KERNEL_MIN
 
 # -------------------------------------------------------------------- state
 def _upstream_view(st: dict, u: dict, bal_members: set | None = None, bal_counts: dict | None = None) -> dict:
@@ -134,7 +134,7 @@ def _state_view() -> dict:
         "awg_engine": {"module": engine.module_info(), "server": engine.server_engine,
                        "exits_now": engine.exit_engine(st), "fallback": engine.kernel_fallback,
                        "forced": None if config.EXIT_ENGINE == "auto" else config.EXIT_ENGINE,
-                       "old": engine.module_warn, "min": engine_mod.KERNEL_MIN, **server.engine_offer(t)},
+                       "old": engine.module_warn, "min": KERNEL_MIN, **server.engine_offer(t)},
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**routing.list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),

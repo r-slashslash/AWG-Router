@@ -355,19 +355,19 @@ class EngineWatchTest(unittest.TestCase):
             for _ in range(5):
                 now[0] += 4000                         # дольше любой паузы SERVER_PAUSES
                 self.assertTrue(e._watch_server(t))
-                if e._srv_tries == engine.KERNEL_GIVE_UP:
+                if e._srv_tries == engine.server.KERNEL_GIVE_UP:
                     blk.assert_not_called()            # первые перезапуски — как раньше
         blk.assert_called_once()
         e._stop_all.assert_called()
         self.assertEqual(t.restart.call_count, 5)
         kinds = [x[1] for x in e.events if x[1].startswith("ev.kernel")]
         self.assertEqual(kinds, ["ev.kernel_disabled"])
-        self.assertEqual([x[2]["n"] for x in e.events if x[1] == "ev.kernel_disabled"], [engine.KERNEL_GIVE_UP])
+        self.assertEqual([x[2]["n"] for x in e.events if x[1] == "ev.kernel_disabled"], [engine.server.KERNEL_GIVE_UP])
         self.assertTrue(kernelmod.load()["disabled"]["at"])
 
     def test_unload_failed_says_reboot(self):
         e = self.e
-        e._srv_tries = engine.KERNEL_GIVE_UP + 1
+        e._srv_tries = engine.server.KERNEL_GIVE_UP + 1
         e._stop_all = mock.Mock()
         with mock.patch.object(kernelmod, "block", return_value="in use"):
             e._drop_module()

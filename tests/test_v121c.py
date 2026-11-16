@@ -213,9 +213,9 @@ class SniStaleBeatTest(unittest.TestCase):
         """Файл пульса остался от прошлого процесса (старый mtime): новый посредник, который разбирает большие
         списки дольше SNI_HANG, присмотр убил бы, не дождавшись первого пульса."""
         e = panel.engine
-        os.makedirs(os.path.dirname(engine.SNI_BEAT), exist_ok=True)
-        open(engine.SNI_BEAT, "a").close()
-        os.utime(engine.SNI_BEAT, (time.time() - 3600, time.time() - 3600))
+        os.makedirs(os.path.dirname(engine.sni.SNI_BEAT), exist_ok=True)
+        open(engine.sni.SNI_BEAT, "a").close()
+        os.utime(engine.sni.SNI_BEAT, (time.time() - 3600, time.time() - 3600))
         st = panel.store.snapshot()
         t = mock.Mock(key="k-beat", pid=1, iface="awg0")
         proc = mock.Mock()
@@ -229,13 +229,13 @@ class SniStaleBeatTest(unittest.TestCase):
         with mock.patch.object(config, "DRY_RUN", False), \
                 mock.patch.object(e, "_policies", return_value=(pol, {})), \
                 mock.patch.object(e, "tunnel_addr", return_value=("10.8.1.1", "10.8.1.0/24")), \
-                mock.patch.object(e, "_input_rule"), mock.patch.object(engine.time, "sleep"), \
-                mock.patch.object(engine.subprocess, "Popen", return_value=proc):
+                mock.patch.object(e, "_input_rule"), mock.patch.object(time, "sleep"), \
+                mock.patch.object(subprocess, "Popen", return_value=proc):
             self.assertEqual(e._sync_sni(t, st), config.SNI_PROXY_PORT)
-            self.assertFalse(os.path.exists(engine.SNI_BEAT))
-            e.sni.started = time.time() - engine.SNI_HANG - 5
+            self.assertFalse(os.path.exists(engine.sni.SNI_BEAT))
+            e.sni.started = time.time() - engine.sni.SNI_HANG - 5
             self.assertFalse(e._sni_hung())                  # первого пульса ещё нет — ждём SNI_HANG × 4
-            e.sni.started = time.time() - engine.SNI_HANG * 4 - 5
+            e.sni.started = time.time() - engine.sni.SNI_HANG * 4 - 5
             self.assertTrue(e._sni_hung())
         e.sni = None
 

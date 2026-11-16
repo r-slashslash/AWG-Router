@@ -432,13 +432,13 @@ class PanelTest(unittest.TestCase):
         try:
             # 1.21.0: по файлу пульса, который посредник обновляет каждую секунду
             e.sni.started = time.time() - 600
-            open(eng.SNI_BEAT, "a").close()
-            os.utime(eng.SNI_BEAT, (time.time() - 300, time.time() - 300))
+            open(eng.sni.SNI_BEAT, "a").close()
+            os.utime(eng.sni.SNI_BEAT, (time.time() - 300, time.time() - 300))
             self.assertTrue(e._sni_hung())
-            os.utime(eng.SNI_BEAT)
+            os.utime(eng.sni.SNI_BEAT)
             self.assertFalse(e._sni_hung())
             e.sni.started = time.time() - 2          # только что запущен — рано судить
-            os.utime(eng.SNI_BEAT, (time.time() - 300, time.time() - 300))
+            os.utime(eng.sni.SNI_BEAT, (time.time() - 300, time.time() - 300))
             self.assertFalse(e._sni_hung())
         finally:
             e.sni = old

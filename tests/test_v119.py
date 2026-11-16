@@ -135,7 +135,7 @@ class FakeTarget:
 class SyncShapingTest(unittest.TestCase):
     def engine(self):
         from app import engine as eng_mod
-        os.makedirs(eng_mod.RUN_DIR, exist_ok=True)
+        os.makedirs(eng_mod.common.RUN_DIR, exist_ok=True)
 
         class E:
             _sync_shaping = eng_mod.Engine._sync_shaping

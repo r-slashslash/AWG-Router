@@ -277,9 +277,9 @@ class PrefetchTest(unittest.TestCase):
                 mock.patch.object(awgconf, "resolve_many", return_value=answers) as rm, \
                 mock.patch.object(awgconf, "resolve_host", side_effect=self.only_addresses) as rh, \
                 mock.patch.object(e, "_v6_route"), mock.patch.object(e, "_setconf"), \
-                mock.patch.object(engine.subprocess, "Popen") as po, \
-                mock.patch.object(engine.os.path, "exists", return_value=True), \
-                mock.patch.object(engine.os, "makedirs"), mock.patch.object(engine.os, "remove"), \
+                mock.patch.object(subprocess, "Popen") as po, \
+                mock.patch.object(os.path, "exists", return_value=True), \
+                mock.patch.object(os, "makedirs"), mock.patch.object(os, "remove"), \
                 mock.patch("builtins.open", mock.mock_open()):
             po.return_value.poll.return_value = None
             t.ns.return_value = ok()

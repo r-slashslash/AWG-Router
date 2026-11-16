@@ -255,7 +255,7 @@ class AccountTest(unittest.TestCase):
 
     def engine(self, ns):
         from app import engine as eng_mod
-        os.makedirs(eng_mod.RUN_DIR, exist_ok=True)
+        os.makedirs(eng_mod.common.RUN_DIR, exist_ok=True)
 
         class T:
             key, iface = "k1", "awg0"

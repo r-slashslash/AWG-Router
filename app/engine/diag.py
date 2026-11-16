@@ -1,0 +1,155 @@
+"""Проверки по запросу: путь панели через выход (own_route), разбор имени как у клиента, проверка выхода
+(probe.py) и «Проверка маршрута» (trace)."""
+from __future__ import annotations
+
+import ipaddress
+import json
+import os
+import subprocess
+import sys
+
+from .. import awgconf, config, nftgen, system
+from ..i18n import Msg
+from ..store import Store
+from .common import APP_DIR
+
+PROBE = os.path.join(APP_DIR, "probe.py")
+PROBE_HOSTS = ("ipinfo.io", "ifconfig.me")      # те же имена, что в probe.py
+
+
+class DiagMixin:
+    """Проверка выхода и маршрута (часть Engine)."""
+
+    # ---------------------------------------------------------------- tools
+    def own_route(self, out: str) -> tuple[int, int] | None:
+        """Путь для собственных запросов панели (Telegram): None — напрямую из панели,
+        (PID, fwmark) — через туннель выхода в сети сервера AWG. Выход выбирается так же,
+        как для клиентов: не работает — его резервный выход."""
+        if out == "direct" or config.DRY_RUN:
+            return None
+        name = (Store.upstream(self.store.snapshot(), out[3:]) or {}).get("name", out) \
+            if out.startswith("up:") else out
+        eff = self.resolve(out, self.store.snapshot())
+        if eff == "direct":
+            return None
+        if eff == "block":
+            raise system.SysError(Msg("tg.via_blocked", name=name))
+        t = self.target
+        if not t or eff not in {r.num for r in self.rt.values()}:
+            raise system.SysError(Msg("tg.via_down", name=name))
+        return t.pid, nftgen.mark_for(eff)
+
+    def resolve_name(self, pk: str | None, host: str) -> tuple[str, str]:
+        """Адрес имени для «Проверки маршрута» — тем путём, которым пойдёт DNS клиента: через его выход
+        по умолчанию (запрос к 1.1.1.1 / 8.8.8.8 с меткой выхода), а не резолвером хоста. Местный DNS в РФ,
+        КНР и Иране подменяет ответы для закрытых сайтов, и проверка показывала бы путь к чужому адресу.
+        → (IPv4, выход: "direct" | "up:<id>"). Блок или нет сервера — исключение (вызывающий берёт резолвер хоста)."""
+        st = self.store.snapshot()
+        out = self.default_out(st, pk)
+        eff = self.resolve(out, st)
+        t = self.target
+        if config.DRY_RUN or eff == "block" or not t or not t.exists:
+            raise system.SysError(Msg("tr.no_dns_path"))
+        mark, via = 0, "direct"
+        if isinstance(eff, int):
+            if eff not in {r.num for r in self.rt.values()}:
+                raise system.SysError(Msg("tr.no_dns_path"))
+            mark = nftgen.mark_for(eff)
+            u = next((x for x in st["upstreams"] if x["num"] == eff), None)
+            via = "up:" + u["id"] if u else "direct"
+        from .notify import TGREQ
+        p = subprocess.run(["nsenter", "-t", str(t.pid), "-n", "--", sys.executable, TGREQ, str(mark)],
+                           input=json.dumps({"dns": host}).encode() + b"\n", capture_output=True, timeout=20)
+        try:
+            ips = json.loads(p.stdout.decode(errors="replace")).get("ips") or []
+            ip = str(ipaddress.IPv4Address(ips[0]))
+        except (ValueError, IndexError, TypeError, AttributeError):
+            raise system.SysError(Msg("tr.no_dns_path")) from None
+        return ip, via
+
+    def alt_routes(self, via: str) -> list[str]:
+        """Другие пути к Telegram, когда выбранный не работает: выходы, которые сейчас работают
+        (кроме выбранного), в порядке списка выходов. «Напрямую» добавляет вызывающий."""
+        return [f"up:{u['id']}" for u in self.store.snapshot()["upstreams"]
+                if f"up:{u['id']}" != via and u.get("enabled", True)
+                and (self.health.get(u["id"]) or {}).get("healthy")]
+
+    def probe(self, out: str) -> dict:
+        """Проверка выхода: внешний IP, страна, задержка."""
+        t = self.target
+        if not t:
+            raise system.SysError(self.target_error if isinstance(self.target_error, Msg)
+                                  else Msg("sys.no_container"))
+        st = self.store.snapshot()
+        eff = self.resolve(out, st)
+        if eff == "block":
+            return {"ok": False, "error": Msg("probe.blocked")}
+        mark = 0 if eff == "direct" else nftgen.mark_for(eff)
+        # у выхода SOCKS5 ещё и UDP: пропускает ли прокси QUIC (галочка выхода)
+        socks = False
+        if isinstance(eff, int):
+            u = next((x for x in st["upstreams"] if x.get("num") == eff), None)
+            try:
+                socks = bool(u) and self.parsed(u).kind == "socks5"
+            except Exception:  # noqa: BLE001
+                pass
+        if config.DRY_RUN:
+            res = {"ok": True, "ip": "203.0.113.%d" % (10 + (eff if eff != "direct" else 0)),
+                   "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
+            return {**res, "udp": False} if socks else res
+        # имена разбираем в сети панели — в сети контейнера может не быть DNS
+        hosts = [f"{h}={ip}" for h, ip in awgconf.resolve_many(PROBE_HOSTS, 4).items()]
+        p = t.ns(["python3", PROBE, str(mark), *(["--udp"] if socks else []), *hosts],
+                 check=False, timeout=35)
+        try:
+            res = json.loads(p.stdout)
+        except ValueError:
+            res = {"ok": False, "err": "no_answer", "detail": (p.stderr or p.stdout).strip()[:300]}
+        if res.get("err"):
+            res["error"] = Msg("probe." + res.pop("err"), detail=res.pop("detail", ""))
+        if res.get("warn"):
+            res["warn"] = Msg("probe." + res["warn"], detail=res.pop("detail", ""))
+        res["via"] = eff
+        return res
+
+    def trace(self, pk: str | None, ip: str, name: str | None = None) -> dict:
+        """Куда пойдёт трафик клиента до ip. name — домен, по которому его нашли: правила со
+        списками доменов (HTTPS/HTTP) проверяются по нему первыми — так же, как в sniproxy.py."""
+        st = self.store.snapshot()
+        dl = self.domain_lists(st)
+        sni_on = bool(self.sni_state and self.sni_state.get("state") == "on")
+        steps = []
+        for net in nftgen.LOCAL_NETS:
+            if ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(net):
+                return {"result": "direct", "effective": "direct",
+                        "steps": [Msg("tr.local", ip=ip, net=net)]}
+        pol = self.policy_for(st, pk)
+        steps.append(Msg("tr.client_rules" if pk and st["clients"].get(pk, {}).get("rules_mode")
+                         == "custom" else "tr.global_rules"))
+        for r in pol["rules"] if name and sni_on else []:
+            for lid in r["lists"]:
+                dom = self.domain_matcher.match(lid, name) if lid in dl else None
+                if dom:
+                    steps.append(Msg("tr.match_domain", list=lid, domain=dom))
+                    eff = self.resolve(r["outbound"], st)
+                    return {"result": r["outbound"], "effective": eff, "steps": steps,
+                            "rule": r.get("comment") or r["id"], "domain": dom}
+        for r in pol["rules"]:
+            for lid in r["lists"]:
+                if lid in dl:
+                    continue
+                hit = self.matcher.contains(lid, ip)
+                if hit:
+                    steps.append(Msg("tr.match", list=lid, net=hit))
+                    eff = self.resolve(r["outbound"], st)
+                    return {"result": r["outbound"], "effective": eff, "steps": steps,
+                            "rule": r.get("comment") or r["id"]}
+        out = self.default_out(st, pk, pol)
+        if out != pol["default"]:
+            steps.append(Msg("tr.balance" if pk else "tr.balance_new",
+                             exit=(Store.upstream(st, out[3:]) or {}).get("name", out)))
+        else:
+            steps.append(Msg("tr.default_client" if pk and st["clients"].get(pk, {}).get(
+                "outbound", "inherit") != "inherit" else "tr.balance_down" if pol.get("balanced")
+                else "tr.default"))
+        return {"result": out, "effective": self.resolve(out, st), "steps": steps}

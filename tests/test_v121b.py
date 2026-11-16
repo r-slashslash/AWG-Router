@@ -285,7 +285,7 @@ class SniHeartbeatTest(unittest.TestCase):
         proc = mock.Mock()
         proc.poll.return_value = 1
         eng.sni = engine.HelperRT(proc, "k", "h")
-        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine, "SNI_WATCH_EVERY", 0.01):
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine.sni, "SNI_WATCH_EVERY", 0.01):
             th = threading.Thread(target=eng._watch_sni, daemon=True)
             th.start()
             self.assertTrue(eng.wake.wait(2))
@@ -299,19 +299,19 @@ class SniHeartbeatTest(unittest.TestCase):
         proc.poll.return_value = None
         eng.sni = engine.HelperRT(proc, "k", "h")
         eng.sni.started = time.time() - 600
-        open(engine.SNI_BEAT, "a").close()
-        os.utime(engine.SNI_BEAT, (time.time() - 300, time.time() - 300))
-        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine, "SNI_WATCH_EVERY", 0.01):
+        open(engine.sni.SNI_BEAT, "a").close()
+        os.utime(engine.sni.SNI_BEAT, (time.time() - 300, time.time() - 300))
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(engine.sni, "SNI_WATCH_EVERY", 0.01):
             th = threading.Thread(target=eng._watch_sni, daemon=True)
             th.start()
             self.assertTrue(eng.wake.wait(2))
             eng.stop_ev.set()
             th.join(2)
         proc.kill.assert_called()
-        os.utime(engine.SNI_BEAT)
+        os.utime(engine.sni.SNI_BEAT)
 
     def test_engine_passes_beat_path(self):
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "engine.py"), encoding="utf-8") as f:
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "engine", "sni.py"), encoding="utf-8") as f:
             src = f.read()
         self.assertIn('"beat": SNI_BEAT', src)
 

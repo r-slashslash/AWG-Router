@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from pyroute2 import IPRoute, NetNS, netns
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from app import config, nftgen  # noqa: E402
+from app import config, nftgen, shaping  # noqa: E402
 from app import engine as eng_mod  # noqa: E402
 
 NS = ["cli", "amz", "inet", "up1", "up2"]
@@ -178,7 +178,7 @@ class Target:
 
 def engine():
     """Engine только с тем, что нужно _sync_shaping (без контейнера и state.json)."""
-    os.makedirs(eng_mod.RUN_DIR, exist_ok=True)
+    os.makedirs(eng_mod.common.RUN_DIR, exist_ok=True)
 
     class E:
         _sync_shaping = eng_mod.Engine._sync_shaping
@@ -275,7 +275,7 @@ def main():
         q = sh("amz", "tc", "qdisc", "show").stdout
         links = sh("amz", "ip", "-o", "link", "show").stdout
         results.append(check("выключено: наших очередей и ifb не осталось",
-                             f"htb {eng_mod.shaping.HANDLE}:" not in q and "awgq" not in links))
+                             f"htb {shaping.HANDLE}:" not in q and "awgq" not in links))
         results.append(check("выключено: скорость снова полная", down()[1] > 100))
 
         # балансировка: открытое соединение остаётся на прежнем выходе, новые — на новом
