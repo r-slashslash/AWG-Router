@@ -18,10 +18,11 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import awgserver, config, lists, nftgen, sniproxy, system, users, web  # noqa: E402
-from app import main  # noqa: E402
 from app.i18n import Msg  # noqa: E402
 from app.store import Store  # noqa: E402
 from app.traffic import Traffic  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, exits, routing, state  # noqa: E402
 
 PRIV = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
 PUB = "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw="
@@ -48,7 +49,7 @@ class Fixture(unittest.TestCase):
     """Своё состояние на время теста: выходы, списки и правила потом убираются."""
 
     def setUp(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         self._lists = {l["id"] for l in st["lists"]}
         self._ups = {u["id"] for u in st["upstreams"]}
@@ -57,27 +58,27 @@ class Fixture(unittest.TestCase):
 
     def tearDown(self):
         r = self._routing
-        main.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
-        for u in main.store.snapshot()["upstreams"]:
+        panel.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
+        for u in panel.store.snapshot()["upstreams"]:
             if u["id"] not in self._ups:
-                main.del_upstream(Req({"replace": "direct"}), u["id"])
-        for l in main.store.snapshot()["lists"]:
+                exits.del_upstream(Req({"replace": "direct"}), u["id"])
+        for l in panel.store.snapshot()["lists"]:
             if l["id"] not in self._lists:
-                main.del_list(None, l["id"])
+                routing.del_list(None, l["id"])
         self._fetch.stop()
 
     def exit(self, name="NL", config_text="socks5://198.51.100.9:1080", routing=None):
         b = {"name": name, "config": config_text}
         if routing:
             b["routing"] = routing
-        return main.add_upstream(Req(b))["id"]
+        return exits.add_upstream(Req(b))["id"]
 
     def lst(self, name, src="203.0.113.0/24", kind="manual"):
-        return main.add_list(Req({"kind": kind, "source": src, "name": name}))["id"]
+        return routing.add_list(Req({"kind": kind, "source": src, "name": name}))["id"]
 
     def rules(self):
         return [(r["comment"], r["lists"], r["outbound"], r["enabled"])
-                for r in main.store.snapshot()["routing"]["rules"]]
+                for r in panel.store.snapshot()["routing"]["rules"]]
 
 
 # ------------------------------------------------------------- №2 окно выхода
@@ -86,17 +87,17 @@ class ExitWindowRulesTest(Fixture):
         uid = self.exit()
         a, b, c = self.lst("A"), self.lst("B", "198.51.100.0/24"), self.lst("C", "192.0.2.0/24")
         out = "up:" + uid
-        main.put_routing(Req({"default": "direct", "rules": [
+        routing.put_routing(Req({"default": "direct", "rules": [
             {"lists": [a], "outbound": out, "enabled": True, "comment": "Netflix"},
             {"lists": ["ru"], "outbound": "direct", "enabled": True, "comment": "RU"},
             {"lists": [b], "outbound": out, "enabled": True, "comment": "Office"},
             {"lists": [c], "outbound": out, "enabled": False, "comment": "Paused"}]}))
         before = self.rules()
         # окно показывает списки включённых правил и отправляет их же — ничего не меняется
-        main.edit_upstream(Req({"routing": {"domains": "", "domain_lists": [], "net_lists": [a, b]}}), uid)
+        exits.edit_upstream(Req({"routing": {"domains": "", "domain_lists": [], "net_lists": [a, b]}}), uid)
         self.assertEqual(self.rules(), before)
         # сняли «B»: его правило уходит, выключенное «Paused» и порядок остаются
-        main.edit_upstream(Req({"routing": {"domains": "", "domain_lists": [], "net_lists": [a]}}), uid)
+        exits.edit_upstream(Req({"routing": {"domains": "", "domain_lists": [], "net_lists": [a]}}), uid)
         self.assertEqual(self.rules(), [("Netflix", [a], out, True), ("RU", ["ru"], "direct", True),
                                         ("Paused", [c], out, False)])
 
@@ -104,15 +105,15 @@ class ExitWindowRulesTest(Fixture):
         uid = self.exit()
         a, b = self.lst("A"), self.lst("B", "198.51.100.0/24")
         out = "up:" + uid
-        main.put_routing(Req({"default": "direct", "rules": [
+        routing.put_routing(Req({"default": "direct", "rules": [
             {"lists": ["ru"], "outbound": "direct", "enabled": True, "comment": "RU"},
             {"lists": [a], "outbound": out, "enabled": True, "comment": "Mine"}]}))
-        main.edit_upstream(Req({"routing": {"domains": "", "domain_lists": [], "net_lists": [a, b]}}), uid)
+        exits.edit_upstream(Req({"routing": {"domains": "", "domain_lists": [], "net_lists": [a, b]}}), uid)
         self.assertEqual(self.rules(), [("RU", ["ru"], "direct", True), ("Mine", [a, b], out, True)])
         # сайты выхода — новое правило со списком доменов сразу после правил на выход
-        main.edit_upstream(Req({"routing": {"domains": "example.com", "domain_lists": [],
+        exits.edit_upstream(Req({"routing": {"domains": "example.com", "domain_lists": [],
                                             "net_lists": [a, b]}}), uid)
-        own = Store.upstream(main.store.snapshot(), uid)["own_list"]
+        own = Store.upstream(panel.store.snapshot(), uid)["own_list"]
         # с 1.21.0 без подписи именем выхода: строка правила и так показывает выход справа
         self.assertEqual(self.rules(), [("RU", ["ru"], "direct", True), ("Mine", [a, b], out, True),
                                         ("", [own], out, True)])
@@ -122,28 +123,28 @@ class ExitWindowRulesTest(Fixture):
 class RestoreAndApiTest(Fixture):
     def test_restore_keeps_own_list(self):
         uid = self.exit(routing={"domains": "youtube.com\ngooglevideo.com"})
-        own = Store.upstream(main.store.snapshot(), uid)["own_list"]
-        b = main.make_backup()
-        self.assertEqual(Store.upstream(main.clean_backup_state(b["state"]), uid)["own_list"], own)
+        own = Store.upstream(panel.store.snapshot(), uid)["own_list"]
+        b = backup.make_backup()
+        self.assertEqual(Store.upstream(backup.clean_backup_state(b["state"]), uid)["own_list"], own)
         # чужой id или не список доменов — не берётся
         b["state"]["upstreams"][-1]["own_list"] = "ru"
-        self.assertNotIn("own_list", Store.upstream(main.clean_backup_state(b["state"]), uid))
+        self.assertNotIn("own_list", Store.upstream(backup.clean_backup_state(b["state"]), uid))
 
     def test_exit_type_cannot_change(self):
         uid = self.exit()
         with self.assertRaises(web.HTTPError) as cm:
-            main.edit_upstream(Req({"config": AWG_EXIT}), uid)
+            exits.edit_upstream(Req({"config": AWG_EXIT}), uid)
         self.assertIn("err.exit_kind_change", str(cm.exception))
-        main.edit_upstream(Req({"config": "socks5://u:p@198.51.100.10:1080"}), uid)    # тот же тип — можно
-        self.assertIn("198.51.100.10", Store.upstream(main.store.snapshot(), uid)["config"])
+        exits.edit_upstream(Req({"config": "socks5://u:p@198.51.100.10:1080"}), uid)    # тот же тип — можно
+        self.assertIn("198.51.100.10", Store.upstream(panel.store.snapshot(), uid)["config"])
 
     def test_list_kind_cannot_change(self):
         lid = self.lst("Office")
         with self.assertRaises(web.HTTPError) as cm:
-            main.edit_list(Req({"kind": "country", "source": "de"}), lid)
+            routing.edit_list(Req({"kind": "country", "source": "de"}), lid)
         self.assertIn("err.list_kind_change", str(cm.exception))
-        main.edit_list(Req({"kind": "manual", "source": "203.0.113.0/25", "name": "Office"}), lid)
-        self.assertEqual(Store.lst(main.store.snapshot(), lid)["source"], "203.0.113.0/25")
+        routing.edit_list(Req({"kind": "manual", "source": "203.0.113.0/25", "name": "Office"}), lid)
+        self.assertEqual(Store.lst(panel.store.snapshot(), lid)["source"], "203.0.113.0/25")
 
 
 # ----------------------------------------------------- №3 подсеть и NAT на хосте
@@ -160,12 +161,12 @@ class SubnetNatTest(unittest.TestCase):
         t = _HostDemo()
         sc = awgserver.new_server(PRIV, 51820, "10.8.1.0/24", {})
         t.write_file(t.conf_path, sc.render())
-        old = main.engine.target
-        main.engine.target = t
+        old = panel.engine.target
+        panel.engine.target = t
         try:
-            main.engine.srv.update_server({"address": "10.66.0.1/24"})
+            panel.engine.srv.update_server({"address": "10.66.0.1/24"})
         finally:
-            main.engine.target = old
+            panel.engine.target = old
         new = awgserver.parse(t.read_file(t.conf_path))
         self.assertIn("-s 10.66.0.0/24 ", new.get("PostUp"))
         self.assertIn("-s 10.66.0.0/24 ", new.get("PostDown"))
@@ -213,8 +214,8 @@ class SniTrafficTest(unittest.TestCase):
         self.assertEqual(again.out_month("u1"), [20, 305])
 
     def test_engine_reads_sniproxy_stats(self):
-        e = main.engine
-        uid = main.add_upstream(Req({"name": "S", "config": "socks5://198.51.100.9:1080"}))["id"]
+        e = panel.engine
+        uid = exits.add_upstream(Req({"name": "S", "config": "socks5://198.51.100.9:1080"}))["id"]
         try:
             ip = next(c["ip"] for c in e.clients if c.get("ip"))
             with open(_sni_stats(), "w") as f:
@@ -223,7 +224,7 @@ class SniTrafficTest(unittest.TestCase):
             e._sni_account()
             self.assertEqual([a - b for a, b in zip(e.traffic.out_month(uid), before)], [1000, 9000])
         finally:
-            main.del_upstream(Req({"replace": "direct"}), uid)
+            exits.del_upstream(Req({"replace": "direct"}), uid)
 
     def test_sniproxy_counts_and_misses(self):
         d = tempfile.mkdtemp()
@@ -631,8 +632,8 @@ class MssOutputTest(unittest.TestCase):
 # ---------------------------------------------------- №5 пауза для неработающих выходов
 class ExitBackoffTest(unittest.TestCase):
     def test_failed_start_backs_off_and_resets(self):
-        e = main.engine
-        uid = main.add_upstream(Req({"name": "Dead", "config": "socks5://proxy.invalid:1080"}))["id"]
+        e = panel.engine
+        uid = exits.add_upstream(Req({"name": "Dead", "config": "socks5://proxy.invalid:1080"}))["id"]
         calls = []
 
         def boom(*a, **k):
@@ -650,11 +651,11 @@ class ExitBackoffTest(unittest.TestCase):
                 e.reconcile()
                 self.assertEqual(len(calls), 2)
                 self.assertGreaterEqual(e._up_fail[uid]["next"] - time.time(), 25)   # дальше — дольше
-                main.reapply(None)                                   # «Применить заново» — сразу
+                state.reapply(None)                                   # «Применить заново» — сразу
                 e.reconcile()
                 self.assertEqual(len(calls), 3)
         finally:
-            main.del_upstream(Req({"replace": "direct"}), uid)
+            exits.del_upstream(Req({"replace": "direct"}), uid)
         e.reconcile()
         self.assertNotIn(uid, e._up_fail)                            # выхода нет — нет и паузы
 

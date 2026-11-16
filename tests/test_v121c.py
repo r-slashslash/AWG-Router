@@ -20,9 +20,11 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, dnsproxy, engine, lists, main, nftgen, quic  # noqa: E402
+from app import config, dnsproxy, engine, lists, nftgen, quic  # noqa: E402
 from app.store import Store  # noqa: E402
 from app.web import HTTPError  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, exits, routing, server  # noqa: E402
 
 UP = ("[Interface]\nAddress = 10.9.0.{n}/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n\n"
       "[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\n"
@@ -97,36 +99,36 @@ class QuicPassConntrackTest(unittest.TestCase):
 class DnsOwnPolicyTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         self._lists = {l["id"] for l in st["lists"]}
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            self.lid = main.add_list(Req({"kind": "domains", "source": "youtube.com"}))["id"]
-            self.uid = main.add_upstream(Req({"name": "Exit", "config": UP.format(n=71)}))["id"]
+            self.lid = routing.add_list(Req({"kind": "domains", "source": "youtube.com"}))["id"]
+            self.uid = exits.add_upstream(Req({"name": "Exit", "config": UP.format(n=71)}))["id"]
         self.pk = None
 
     def tearDown(self):
         r = self._routing
-        main.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
+        panel.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
         if self.pk:
-            main.store.mutate(lambda st: st["clients"].pop(self.pk, None))
-        if Store.upstream(main.store.snapshot(), self.uid):
-            main.del_upstream(Req({"replace": "direct"}), self.uid)
-        for l in main.store.snapshot()["lists"]:
+            panel.store.mutate(lambda st: st["clients"].pop(self.pk, None))
+        if Store.upstream(panel.store.snapshot(), self.uid):
+            exits.del_upstream(Req({"replace": "direct"}), self.uid)
+        for l in panel.store.snapshot()["lists"]:
             if l["id"] not in self._lists:
-                main.del_list(None, l["id"])
-        main.engine.reconcile()
+                routing.del_list(None, l["id"])
+        panel.engine.reconcile()
 
     def test_client_without_domain_rules_not_global(self):
         """Общая политика — домены через выход, у клиента своя политика без правил по доменам. Раньше
         клиента не было в "clients", и dnsproxy.py разбирал его имена через выход общего правила."""
-        e = main.engine
-        main.put_routing(Req({"default": "direct", "rules": [
+        e = panel.engine
+        routing.put_routing(Req({"default": "direct", "rules": [
             {"lists": [self.lid], "outbound": "up:" + self.uid, "enabled": True, "comment": ""}]}))
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         num = Store.upstream(st, self.uid)["num"]
         ip = "10.8.1.77"
         with mock.patch.object(e, "_policies", return_value=(
@@ -210,11 +212,11 @@ class SniStaleBeatTest(unittest.TestCase):
     def test_start_removes_old_beat(self):
         """Файл пульса остался от прошлого процесса (старый mtime): новый посредник, который разбирает большие
         списки дольше SNI_HANG, присмотр убил бы, не дождавшись первого пульса."""
-        e = main.engine
+        e = panel.engine
         os.makedirs(os.path.dirname(engine.SNI_BEAT), exist_ok=True)
         open(engine.SNI_BEAT, "a").close()
         os.utime(engine.SNI_BEAT, (time.time() - 3600, time.time() - 3600))
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         t = mock.Mock(key="k-beat", pid=1, iface="awg0")
         proc = mock.Mock()
         proc.poll.return_value = None
@@ -266,19 +268,19 @@ class HevSigstackTest(unittest.TestCase):
 class BadTypesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()                              # демо-сервер AWG: без него put_server — srv.no_server
+        panel.engine.reconcile()                              # демо-сервер AWG: без него put_server — srv.no_server
 
     def test_dom_filter_not_bool(self):
         for v in ("false", 0, 1, None, [], {}):
             with self.assertRaises(HTTPError) as cm:
-                main.put_server(Req({"dom_filter": v}))
+                server.put_server(Req({"dom_filter": v}))
             self.assertEqual((cm.exception.code, getattr(cm.exception.detail, "key", None)), (400, "err.bad_value"), v)
-        self.assertFalse(main.store.snapshot()["settings"].get("dom_filter"))
+        self.assertFalse(panel.store.snapshot()["settings"].get("dom_filter"))
 
     def test_backup_period_list_in_backup(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         st["settings"]["telegram"] = {"token": "", "chat_id": "", "backup": ["daily"]}
-        out = main.clean_backup_state(st)                    # раньше — TypeError (список ключом dict) → 500
+        out = backup.clean_backup_state(st)                    # раньше — TypeError (список ключом dict) → 500
         self.assertNotEqual(out["settings"]["telegram"].get("backup"), ["daily"])
 
 

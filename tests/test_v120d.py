@@ -20,7 +20,10 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app import config, engine, kernelmod, main, notify, web  # noqa: E402
+from app import config, engine, kernelmod, notify, web  # noqa: E402
+from app import i18n  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import server as server_api, telegram  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 with open(os.path.join(ROOT, "install.sh")) as _f:
@@ -247,7 +250,7 @@ class KernelModTest(unittest.TestCase):
             kernelmod.start()
         self.assertEqual(cm.exception.msg.key, "eng.inst_running")
         kernelmod.update(job=None)
-        kernelmod._fit = {"ok": False, "why": main.Msg("eng.fit_arch", arch="armv7l")}
+        kernelmod._fit = {"ok": False, "why": i18n.Msg("eng.fit_arch", arch="armv7l")}
         with self.assertRaises(kernelmod.KernelError) as cm:
             kernelmod.start()
         self.assertEqual(cm.exception.msg.key, "eng.fit_arch")
@@ -404,14 +407,14 @@ class OfferTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.t = mock.Mock(exists=True)
-        self.saved = main.engine.server_engine
-        self.addCleanup(setattr, main.engine, "server_engine", self.saved)
+        self.saved = panel.engine.server_engine
+        self.addCleanup(setattr, panel.engine, "server_engine", self.saved)
 
     def notice(self, mod, server="go", fit=True):
-        main.engine.server_engine = server
-        with mock.patch.object(main.engine, "module_info", return_value=mod), \
+        panel.engine.server_engine = server
+        with mock.patch.object(panel.engine, "module_info", return_value=mod), \
                 mock.patch.object(kernelmod, "fit", return_value={"ok": fit, "why": None}):
-            return main.engine_offer(self.t)["notice"]
+            return server_api.engine_offer(self.t)["notice"]
 
     NONE = {"loaded": False, "version": None, "ok": False}
     OLD = {"loaded": True, "version": "1.0.2025", "ok": False}
@@ -429,26 +432,26 @@ class OfferTest(unittest.TestCase):
         self.assertEqual(self.notice(self.NONE), "disabled:1700000100")
         kernelmod.update(job={"started": time.time()})
         self.assertEqual(self.notice(self.NONE), "installing")
-        self.assertIsNone(main.engine_offer(mock.Mock(exists=False))["notice"])
+        self.assertIsNone(server_api.engine_offer(mock.Mock(exists=False))["notice"])
 
     def test_hide_by_kind(self):
         R = type("R", (), {"__init__": lambda s, b: setattr(s, "b", b), "json": lambda s: s.b})
-        main.put_engine(R({"hidden": "offer"}))
+        server_api.put_engine(R({"hidden": "offer"}))
         self.assertIsNone(self.notice(self.NONE))
         kernelmod.update(lost=5.0)
         self.assertEqual(self.notice(self.NONE), "lost:5")              # новый случай — снова видно
         for bad in ("<b>", 5, "offer:abc", "x" * 40):
             with self.assertRaises(web.HTTPError):
-                main.put_engine(R({"hidden": bad}))
-        main.put_engine(R({"hidden": None}))
+                server_api.put_engine(R({"hidden": bad}))
+        server_api.put_engine(R({"hidden": None}))
         self.assertNotIn("hidden", kernelmod.load())
 
     def test_api(self):
-        with mock.patch.object(kernelmod, "start", side_effect=kernelmod.KernelError(main.Msg("eng.inst_running"))):
+        with mock.patch.object(kernelmod, "start", side_effect=kernelmod.KernelError(i18n.Msg("eng.inst_running"))):
             with self.assertRaises(web.HTTPError) as cm:
-                main.engine_install(None)
+                server_api.engine_install(None)
         self.assertEqual((cm.exception.code, cm.exception.detail.key), (409, "eng.inst_running"))
-        st = main.engine_install_status(None)
+        st = server_api.engine_install_status(None)
         self.assertEqual(st["state"], "idle")
         self.assertIn("log", st)
 
@@ -465,7 +468,7 @@ class TelegramTextsTest(unittest.TestCase):
         n = notify.Notifier.__new__(notify.Notifier)
         n._target_lost = False
         n.event = lambda kind, key, refs=None, **p: sent.append((kind, key, p))
-        n.engine_event(main.Msg("ev.kernel_disabled", n=2))
+        n.engine_event(i18n.Msg("ev.kernel_disabled", n=2))
         self.assertEqual(sent, [("server", "kernel_disabled", {"n": 2})])
 
 
@@ -553,14 +556,14 @@ class SwitchEngineTest(unittest.TestCase):
         R = type("R", (), {"__init__": lambda s, b: setattr(s, "b", b), "json": lambda s: s.b})
         for bad in ("auto", None, 1):
             with self.assertRaises(web.HTTPError):
-                main.engine_choose(R({"engine": bad}))
-        with mock.patch.object(main.engine, "switch_engine", return_value={"action": "restarted"}) as sw:
-            self.assertEqual(main.engine_choose(R({"engine": "go"})), {"action": "restarted"})
+                server_api.engine_choose(R({"engine": bad}))
+        with mock.patch.object(panel.engine, "switch_engine", return_value={"action": "restarted"}) as sw:
+            self.assertEqual(server_api.engine_choose(R({"engine": "go"})), {"action": "restarted"})
         sw.assert_called_once_with("go")
         kernelmod.update(choice="go")
-        with mock.patch.object(main.engine, "module_info", return_value={"loaded": False, "version": None, "ok": False}), \
+        with mock.patch.object(panel.engine, "module_info", return_value={"loaded": False, "version": None, "ok": False}), \
                 mock.patch.object(kernelmod, "fit", return_value={"ok": True, "why": None}):
-            o = main.engine_offer(mock.Mock(exists=True))
+            o = server_api.engine_offer(mock.Mock(exists=True))
         self.assertIsNone(o["notice"])                                 # выбрали amneziawg-go — модуль не навязываем
         self.assertEqual(o["choice"], "go")
 
@@ -576,5 +579,5 @@ class BotEngineLineTest(unittest.TestCase):
             self.assertNotIn("{", tgbot.tr(lang, "st_engine_kernel", version="3.1"))
             self.assertNotIn("{", notify.render(lang, "kernel_on", "", version="3.1"))
         self.assertEqual(notify.ENGINE_EVENTS["ev.kernel_on"], ("server", "kernel_on"))
-        info = main._bot_host_info()
+        info = telegram._bot_host_info()
         self.assertIn("engine", info)

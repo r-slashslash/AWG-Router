@@ -17,9 +17,14 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import (awgserver, balance, checks, dnsproxy, domains, engine, limits, lists, main, nftgen, notify,  # noqa: E402
+from app import (awgserver, balance, checks, dnsproxy, domains, engine, limits, lists, nftgen, notify,  # noqa: E402
                  probe, socks, store, system, tgbot, tgreq, web)
 from app.web import HTTPError  # noqa: E402
+from app import i18n  # noqa: E402
+from app import panel  # noqa: E402
+from app import store as store_mod  # noqa: E402
+from app import users  # noqa: E402
+from app.api import auth, backup, exits, routing, server, state, telegram  # noqa: E402
 
 
 class Req:
@@ -167,14 +172,14 @@ class ClientConfOneLineTest(unittest.TestCase):
 class InputTypesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def test_server_params_not_object(self):
         for v in ("x", ["Jc"], 5, True):
-            self.assertEqual(code(lambda: main.put_server(Req({"params": v}))), (400, "err.bad_value"), v)
+            self.assertEqual(code(lambda: server.put_server(Req({"params": v}))), (400, "err.bad_value"), v)
 
     def test_rule_enabled_string(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         for v in ("false", "no", 0, 1):
             self.assertEqual(code(lambda: checks.rules(st, [{"lists": ["ru"], "outbound": "direct",
                                                               "enabled": v}])), (400, "err.bad_value"), v)
@@ -184,30 +189,30 @@ class InputTypesTest(unittest.TestCase):
         self.assertIs(r[0]["enabled"], False)
 
     def test_list_update_hours_bool(self):
-        self.assertEqual(code(lambda: main.put_settings(Req({"list_update_hours": True}))), (400, "err.hours"))
+        self.assertEqual(code(lambda: state.put_settings(Req({"list_update_hours": True}))), (400, "err.hours"))
 
     def test_restore_flags(self):
-        g = main.clean_backup_state(main.store.snapshot())
+        g = backup.clean_backup_state(panel.store.snapshot())
         g["settings"]["telegram"] = {"token": "123456:" + "A" * 35, "chat_id": "424242",
                                      "enabled": "false", "control": "no"}
-        c = main.clean_backup_state(g)["settings"]["telegram"]
+        c = backup.clean_backup_state(g)["settings"]["telegram"]
         self.assertFalse(c["enabled"])
         self.assertFalse(c["control"])
         g["upstreams"] = [{"id": "uflag", "num": 7, "name": "x", "enabled": "false",
                            "config": "socks5://198.51.100.9:1080"}]
-        self.assertEqual(code(lambda: main.clean_backup_state(g)), (400, "err.backup_field"))
+        self.assertEqual(code(lambda: backup.clean_backup_state(g)), (400, "err.backup_field"))
 
 
 class StaticNulTest(unittest.TestCase):
     def test_nul_is_404(self):
         import http.client
-        srv = main.app.serve("127.0.0.1", 0)
+        srv = panel.app.serve("127.0.0.1", 0)
         th = threading.Thread(target=srv.serve_forever, daemon=True)
         th.start()
         try:
             for path in ("/static/%00", "/static/app.js%00.png", "/s/assets/%00"):
                 c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
-                c.request("GET", main.BASE + path if path.startswith("/static") else path)
+                c.request("GET", panel.BASE + path if path.startswith("/static") else path)
                 self.assertEqual(c.getresponse().status, 404, path)
                 c.close()
         finally:
@@ -232,35 +237,35 @@ class StoreWriteFirstTest(unittest.TestCase):
 
 class LoginAttemptsTest(unittest.TestCase):
     def setUp(self):
-        main._fails.clear()
-        main._inflight.clear()
+        auth._fails.clear()
+        auth._inflight.clear()
 
     def test_parallel_attempts_count(self):
         """24 соединения с одного адреса не проверят 24 пароля разом: идущие проверки тоже считаются."""
         started = []
-        for _ in range(main.FAIL_MAX):
-            main._check_blocked("198.51.100.1")
+        for _ in range(auth.FAIL_MAX):
+            auth._check_blocked("198.51.100.1")
             started.append(1)
-        self.assertEqual(code(lambda: main._check_blocked("198.51.100.1")), (429, "err.too_many_attempts"))
+        self.assertEqual(code(lambda: auth._check_blocked("198.51.100.1")), (429, "err.too_many_attempts"))
         for _ in started:
-            main._done("198.51.100.1")
-        main._check_blocked("198.51.100.1")         # закончились — снова можно
-        main._done("198.51.100.1")
+            auth._done("198.51.100.1")
+        auth._check_blocked("198.51.100.1")         # закончились — снова можно
+        auth._done("198.51.100.1")
 
     def test_old_addresses_forgotten(self):
-        main._fails["198.51.100.2"] = [time.time() - main.FAIL_WINDOW - 5]
-        main._check_blocked("198.51.100.3")
-        main._done("198.51.100.3")
-        self.assertNotIn("198.51.100.2", main._fails)
+        auth._fails["198.51.100.2"] = [time.time() - auth.FAIL_WINDOW - 5]
+        auth._check_blocked("198.51.100.3")
+        auth._done("198.51.100.3")
+        self.assertNotIn("198.51.100.2", auth._fails)
 
     def test_wrong_password_still_blocks(self):
-        with mock.patch.object(main.time, "sleep"):
-            for _ in range(main.FAIL_MAX):
-                self.assertEqual(code(lambda: main.login(Req({"password": "nope"}, "198.51.100.4"))),
+        with mock.patch.object(time, "sleep"):
+            for _ in range(auth.FAIL_MAX):
+                self.assertEqual(code(lambda: auth.login(Req({"password": "nope"}, "198.51.100.4"))),
                                  (403, "err.wrong_password"))
-        self.assertEqual(code(lambda: main.login(Req({"password": "nope"}, "198.51.100.4"))),
+        self.assertEqual(code(lambda: auth.login(Req({"password": "nope"}, "198.51.100.4"))),
                          (429, "err.too_many_attempts"))
-        self.assertEqual(main._inflight, {})
+        self.assertEqual(auth._inflight, {})
 
 
 class BotTextTest(unittest.TestCase):
@@ -328,18 +333,18 @@ class HelperLogTrimTest(unittest.TestCase):
 class CspTest(unittest.TestCase):
     def test_header_on_pages_only(self):
         import http.client
-        srv = main.app.serve("127.0.0.1", 0)
+        srv = panel.app.serve("127.0.0.1", 0)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
             c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
-            c.request("GET", main.BASE + "/")
+            c.request("GET", panel.BASE + "/")
             r = c.getresponse()
             r.read()
             csp = r.getheader("Content-Security-Policy") or ""
             self.assertIn("script-src 'self'", csp)
             self.assertIn("frame-ancestors 'none'", csp)
             self.assertNotIn("unsafe-eval", csp)
-            c.request("GET", main.BASE + "/api/state")
+            c.request("GET", panel.BASE + "/api/state")
             r = c.getresponse()
             r.read()
             self.assertIsNone(r.getheader("Content-Security-Policy"))
@@ -367,46 +372,46 @@ class CspTest(unittest.TestCase):
 
 class ListsInBackgroundTest(unittest.TestCase):
     def test_needs_net(self):
-        self.assertTrue(main._needs_net({"kind": "country", "source": "de"}))
-        self.assertTrue(main._needs_net({"kind": "url", "source": "https://x.example/l.txt"}))
-        self.assertTrue(main._needs_net({"kind": "domains", "source": "youtube.com\nhttps://x.example/d.txt"}))
-        self.assertFalse(main._needs_net({"kind": "domains", "source": "youtube.com"}))
-        self.assertFalse(main._needs_net({"kind": "manual", "source": "10.0.0.0/8"}))
+        self.assertTrue(routing._needs_net({"kind": "country", "source": "de"}))
+        self.assertTrue(routing._needs_net({"kind": "url", "source": "https://x.example/l.txt"}))
+        self.assertTrue(routing._needs_net({"kind": "domains", "source": "youtube.com\nhttps://x.example/d.txt"}))
+        self.assertFalse(routing._needs_net({"kind": "domains", "source": "youtube.com"}))
+        self.assertFalse(routing._needs_net({"kind": "manual", "source": "10.0.0.0/8"}))
 
     def test_add_country_does_not_wait(self):
         gate = threading.Event()
 
         def slow(lst, stats=None):
             gate.wait(5)
-            raise lists.ListError(main.Msg("list.empty"))
-        st0 = main.store.snapshot()
+            raise lists.ListError(i18n.Msg("list.empty"))
+        st0 = panel.store.snapshot()
         try:
             with mock.patch.object(lists, "fetch_list", slow):
                 t0 = time.time()
-                r = main.add_list(Req({"kind": "country", "source": "nl"}))
+                r = routing.add_list(Req({"kind": "country", "source": "nl"}))
                 self.assertLess(time.time() - t0, 1)
                 self.assertTrue(r["busy"])
-                view = next(x for x in main.get_state(Req({}))["lists"] if x["id"] == "nl")
+                view = next(x for x in state.get_state(Req({}))["lists"] if x["id"] == "nl")
                 self.assertTrue(view["busy"])
                 gate.set()
                 for _ in range(50):
-                    if "nl" not in main.engine.lists_busy:
+                    if "nl" not in panel.engine.lists_busy:
                         break
                     time.sleep(0.05)
-            l = main.Store.lst(main.store.snapshot(), "nl")
+            l = store_mod.Store.lst(panel.store.snapshot(), "nl")
             self.assertTrue(l.get("error"))
-            self.assertNotIn("nl", main.engine.lists_busy)
+            self.assertNotIn("nl", panel.engine.lists_busy)
         finally:
-            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+            panel.store.mutate(lambda st: (st.clear(), st.update(st0)))
 
     def test_manual_still_immediate(self):
-        st0 = main.store.snapshot()
+        st0 = panel.store.snapshot()
         try:
-            r = main.add_list(Req({"kind": "manual", "source": "10.0.0.0/8\n1.2.3.0/24", "name": "m"}))
+            r = routing.add_list(Req({"kind": "manual", "source": "10.0.0.0/8\n1.2.3.0/24", "name": "m"}))
             self.assertFalse(r["busy"])
             self.assertEqual(r["count"], 2)
         finally:
-            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+            panel.store.mutate(lambda st: (st.clear(), st.update(st0)))
 
 
 class UiGuardsTest(unittest.TestCase):
@@ -599,14 +604,14 @@ class ListFetchTest(unittest.TestCase):
         alt.assert_not_called()
 
     def test_main_fetch_via_exit(self):
-        with mock.patch.object(main.engine, "alt_routes", return_value=["up:a", "up:b"]), \
-                mock.patch.object(main.engine, "own_route", side_effect=[(10, 0x2001), (10, 0x2002)]), \
+        with mock.patch.object(panel.engine, "alt_routes", return_value=["up:a", "up:b"]), \
+                mock.patch.object(panel.engine, "own_route", side_effect=[(10, 0x2001), (10, 0x2002)]), \
                 mock.patch.object(notify, "get_via", side_effect=[OSError("timed out"),
                                                                   (200, "3.0.0.0/16\n4.0.0.0/1", False)]):
-            self.assertEqual(main._fetch_via_exit("https://raw.example/l"), ("3.0.0.0/16\n4.0.0.0/1", False))
-        with mock.patch.object(main.engine, "alt_routes", return_value=[]):
+            self.assertEqual(panel._fetch_via_exit("https://raw.example/l"), ("3.0.0.0/16\n4.0.0.0/1", False))
+        with mock.patch.object(panel.engine, "alt_routes", return_value=[]):
             with self.assertRaises(OSError):
-                main._fetch_via_exit("https://raw.example/l")
+                panel._fetch_via_exit("https://raw.example/l")
 
 
 class TgreqGetTest(unittest.TestCase):
@@ -642,24 +647,24 @@ class TraceDnsViaExitTest(unittest.TestCase):
     """Б15: имя в «Проверке маршрута» разбирается тем путём, которым пойдёт DNS клиента."""
 
     def test_via_exit(self):
-        with mock.patch.object(main.engine, "resolve_name", return_value=("198.51.100.20", "direct")), \
+        with mock.patch.object(panel.engine, "resolve_name", return_value=("198.51.100.20", "direct")), \
                 mock.patch("socket.getaddrinfo") as gai:
-            res = main.trace_target(None, "blocked.example")
+            res = routing.trace_target(None, "blocked.example")
         gai.assert_not_called()
         self.assertEqual(res["ip"], "198.51.100.20")
         self.assertEqual(res["steps"][0].key, "tr.resolved_via")
 
     def test_fallback(self):
-        with mock.patch.object(main.engine, "resolve_name", side_effect=Exception("demo")), \
+        with mock.patch.object(panel.engine, "resolve_name", side_effect=Exception("demo")), \
                 mock.patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("198.51.100.21", 0))]):
-            res = main.trace_target(None, "blocked.example")
+            res = routing.trace_target(None, "blocked.example")
         self.assertEqual(res["steps"][0].key, "tr.resolved")
         self.assertEqual(res["ip"], "198.51.100.21")
 
     def test_dry_run_has_no_path(self):
         from app import system
         with self.assertRaises(system.SysError):
-            main.engine.resolve_name(None, "blocked.example")
+            panel.engine.resolve_name(None, "blocked.example")
 
 
 class ClientConfigNoLockTest(unittest.TestCase):
@@ -809,8 +814,8 @@ class BotControlIdTest(unittest.TestCase):
         self.assertFalse(a({"id": 5}, {"chat_id": "123"}))
 
     def test_put_refuses_name_for_control(self):
-        with mock.patch.object(main.store, "mutate") as mu:
-            self.assertEqual(code(lambda: main.put_telegram(Req({
+        with mock.patch.object(panel.store, "mutate") as mu:
+            self.assertEqual(code(lambda: telegram.put_telegram(Req({
                 "token": "123456:" + "A" * 35, "chat_id": "@mychannel", "control": True}))),
                 (400, "err.tg_control_id"))
         mu.assert_not_called()
@@ -1053,28 +1058,28 @@ class PassProcessesTest(unittest.TestCase):
 # ============================================================ оптимизация: интерфейс на тысяче клиентов
 class StateTagTest(unittest.TestCase):
     def test_same_state_short_answer(self):
-        full = main.get_state(None)
+        full = state.get_state(None)
         self.assertIn("tag", full)
         self.assertIn("now", full)
         self.assertIn("system", full)
         r = Req({})
         r.headers = {"X-State-Tag": full["tag"]}
-        short = main.get_state(r)
+        short = state.get_state(r)
         self.assertEqual(sorted(short), ["last_reconcile", "now", "same", "system", "tag"])
         r.headers = {"X-State-Tag": "other"}
-        self.assertIn("clients", main.get_state(r))
+        self.assertIn("clients", state.get_state(r))
 
     def test_tag_ignores_time(self):
-        a = main.get_state(None)
-        with mock.patch.object(main.time, "time", return_value=time.time() + 100):
-            b = main.get_state(None)
+        a = state.get_state(None)
+        with mock.patch.object(time, "time", return_value=time.time() + 100):
+            b = state.get_state(None)
         self.assertEqual(a["tag"], b["tag"])
         self.assertNotEqual(a["now"], b["now"])
 
     def test_tag_follows_changes(self):
-        a = main.get_state(None)["tag"]
-        with mock.patch.object(main.engine, "last_error", "something broke"):
-            self.assertNotEqual(main.get_state(None)["tag"], a)
+        a = state.get_state(None)["tag"]
+        with mock.patch.object(panel.engine, "last_error", "something broke"):
+            self.assertNotEqual(state.get_state(None)["tag"], a)
 
     def test_browser_patches_rows(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
@@ -1095,29 +1100,29 @@ def field_of(fn):
 
 class ErrorFieldTest(unittest.TestCase):
     def test_exit_form(self):
-        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": "nonsense", "name": "x"})))[2], "config")
+        self.assertEqual(field_of(lambda: exits.add_upstream(Req({"config": "nonsense", "name": "x"})))[2], "config")
         good = "socks5://198.51.100.9:1080"
-        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "  "})))[2], "name")
-        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "x", "quota_gb": "abc"})))[2],
+        self.assertEqual(field_of(lambda: exits.add_upstream(Req({"config": good, "name": "  "})))[2], "name")
+        self.assertEqual(field_of(lambda: exits.add_upstream(Req({"config": good, "name": "x", "quota_gb": "abc"})))[2],
                          "quota_gb")
-        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "x", "rate_up": -5})))[2],
+        self.assertEqual(field_of(lambda: exits.add_upstream(Req({"config": good, "name": "x", "rate_up": -5})))[2],
                          "rate_up")
-        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "x", "fallback": "up:zz"})))[2],
+        self.assertEqual(field_of(lambda: exits.add_upstream(Req({"config": good, "name": "x", "fallback": "up:zz"})))[2],
                          "fallback")
 
     def test_server_form(self):
-        self.assertEqual(main.server_field(main.Msg("srv.bad_port")), "port")
-        self.assertEqual(main.server_field(main.Msg("srv.bad_int", key="Jc")), "params.Jc")
-        self.assertIsNone(main.server_field(main.Msg("err.internal")))
-        with mock.patch.object(main.engine.srv, "update_server", side_effect=main.UserError(main.Msg("srv.bad_dns", value="x"))):
-            self.assertEqual(field_of(lambda: main.put_server(Req({"client_dns": "x"}))), (400, "srv.bad_dns", "client_dns"))
+        self.assertEqual(server.server_field(i18n.Msg("srv.bad_port")), "port")
+        self.assertEqual(server.server_field(i18n.Msg("srv.bad_int", key="Jc")), "params.Jc")
+        self.assertIsNone(server.server_field(i18n.Msg("err.internal")))
+        with mock.patch.object(panel.engine.srv, "update_server", side_effect=users.UserError(i18n.Msg("srv.bad_dns", value="x"))):
+            self.assertEqual(field_of(lambda: server.put_server(Req({"client_dns": "x"}))), (400, "srv.bad_dns", "client_dns"))
 
     def test_telegram_form(self):
-        with mock.patch.object(main.store, "mutate"):
-            self.assertEqual(field_of(lambda: main.put_telegram(Req({"token": "bad"})))[2], "token")
-            self.assertEqual(field_of(lambda: main.put_telegram(Req({"token": "123456:" + "A" * 35, "chat_id": "@chan",
+        with mock.patch.object(panel.store, "mutate"):
+            self.assertEqual(field_of(lambda: telegram.put_telegram(Req({"token": "bad"})))[2], "token")
+            self.assertEqual(field_of(lambda: telegram.put_telegram(Req({"token": "123456:" + "A" * 35, "chat_id": "@chan",
                                                                     "control": True})))[2], "chat_id")
-            self.assertEqual(field_of(lambda: main.put_telegram(Req({"backup_pw": "short"})))[2], "backup_pw")
+            self.assertEqual(field_of(lambda: telegram.put_telegram(Req({"backup_pw": "short"})))[2], "backup_pw")
 
     def test_field_in_response(self):
         import http.client

@@ -14,6 +14,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import nftgen  # noqa: E402
 from app.traffic import Traffic, month_key  # noqa: E402
+from app import panel  # noqa: E402
+from app import store as store_mod  # noqa: E402
+from app.api import backup, exits, state  # noqa: E402
 
 NOW = 1_790_000_000          # 2026-09
 MK = month_key(NOW)
@@ -324,53 +327,53 @@ class ExitQuotaApiTest(unittest.TestCase):
           "Endpoint = 198.51.100.1:51820\n")
 
     def test_add_edit_delete(self):
-        from app import main, web
-        uid = main.add_upstream(Req({"name": "NL", "config": self.UP, "quota_gb": "1.5",
+        from app import web
+        uid = exits.add_upstream(Req({"name": "NL", "config": self.UP, "quota_gb": "1.5",
                                      "quota_action": "notify"}))["id"]
-        u = main.Store.upstream(main.store.snapshot(), uid)
+        u = store_mod.Store.upstream(panel.store.snapshot(), uid)
         self.assertEqual((u["quota"], u["quota_action"]), (int(1.5 * 1024 ** 3), "notify"))
-        main.store.mutate(lambda s: main.Store.upstream(s, uid).update(quota_hit="2026-10"))
-        main.edit_upstream(Req({"name": "NL2"}), uid)                     # без квоты — не трогаем
-        self.assertEqual(main.Store.upstream(main.store.snapshot(), uid)["quota_hit"], "2026-10")
-        main.edit_upstream(Req({"quota_gb": "", "quota_action": "direct"}), uid)
-        u = main.Store.upstream(main.store.snapshot(), uid)
+        panel.store.mutate(lambda s: store_mod.Store.upstream(s, uid).update(quota_hit="2026-10"))
+        exits.edit_upstream(Req({"name": "NL2"}), uid)                     # без квоты — не трогаем
+        self.assertEqual(store_mod.Store.upstream(panel.store.snapshot(), uid)["quota_hit"], "2026-10")
+        exits.edit_upstream(Req({"quota_gb": "", "quota_action": "direct"}), uid)
+        u = store_mod.Store.upstream(panel.store.snapshot(), uid)
         self.assertEqual((u["quota"], u["quota_hit"]), (None, None))
         for bad in ({"quota_gb": "-1"}, {"quota_gb": "x"}, {"quota_gb": "5", "quota_action": "drop"},
                     {"quota_gb": "5", "quota_action": "fallback"}, {"quota_gb": "5", "quota_action": "up:" + uid},
                     {"quota_gb": "5", "quota_action": "up:u999999"}):
             with self.assertRaises(web.HTTPError):
-                main.edit_upstream(Req(bad), uid)
-        view = main._upstream_view(main.store.snapshot(), main.Store.upstream(main.store.snapshot(), uid))
+                exits.edit_upstream(Req(bad), uid)
+        view = state._upstream_view(panel.store.snapshot(), store_mod.Store.upstream(panel.store.snapshot(), uid))
         self.assertIn("month_rx", view["traffic"])
         self.assertFalse(view["over_quota"])
         # другой выход как цель лимита: показан в «используется», удалить нельзя
-        uid2 = main.add_upstream(Req({"name": "DE", "config": self.UP.replace("10.9.0.2", "10.9.0.3")}))["id"]
-        main.edit_upstream(Req({"quota_gb": "5", "quota_action": "up:" + uid2}), uid)
-        self.assertEqual(main.Store.upstream(main.store.snapshot(), uid)["quota_action"], "up:" + uid2)
-        self.assertEqual([m.key for m in main.Store.outbound_refs(main.store.snapshot(), "up:" + uid2)],
+        uid2 = exits.add_upstream(Req({"name": "DE", "config": self.UP.replace("10.9.0.2", "10.9.0.3")}))["id"]
+        exits.edit_upstream(Req({"quota_gb": "5", "quota_action": "up:" + uid2}), uid)
+        self.assertEqual(store_mod.Store.upstream(panel.store.snapshot(), uid)["quota_action"], "up:" + uid2)
+        self.assertEqual([m.key for m in store_mod.Store.outbound_refs(panel.store.snapshot(), "up:" + uid2)],
                          ["ref.quota"])
         with self.assertRaises(web.HTTPError):
-            main.del_upstream(None, uid2)
-        main.engine.traffic.outs[uid] = {"total": [1, 1], "months": {}}
-        main.del_upstream(None, uid)
-        main.del_upstream(None, uid2)
-        self.assertNotIn(uid, main.engine.traffic.outs)
+            exits.del_upstream(None, uid2)
+        panel.engine.traffic.outs[uid] = {"total": [1, 1], "months": {}}
+        exits.del_upstream(None, uid)
+        exits.del_upstream(None, uid2)
+        self.assertNotIn(uid, panel.engine.traffic.outs)
 
     def test_restore_validates_quota(self):
-        from app import main, web
+        from app import web
         import test_api
         s = test_api.good_state()
         s["upstreams"][0].update(quota=10 ** 9, quota_action="notify", quota_hit="2026-10",
                                  quota_warned="rm -rf")
-        u = main.clean_backup_state(s)["upstreams"][0]
+        u = backup.clean_backup_state(s)["upstreams"][0]
         self.assertEqual((u["quota"], u["quota_action"], u["quota_hit"], u["quota_warned"]),
                          (10 ** 9, "notify", "2026-10", None))
         s["upstreams"][0].update(quota_action="fallback", fallback="block")    # первые сборки 1.3.0
-        self.assertEqual(main.clean_backup_state(s)["upstreams"][0]["quota_action"], "block")
+        self.assertEqual(backup.clean_backup_state(s)["upstreams"][0]["quota_action"], "block")
         for v in ("explode", "up:" + s["upstreams"][0]["id"], "up:u999999"):
             s["upstreams"][0]["quota_action"] = v
             with self.assertRaises(web.HTTPError):
-                main.clean_backup_state(s)
+                backup.clean_backup_state(s)
 
 
 if __name__ == "__main__":

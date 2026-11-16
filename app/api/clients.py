@@ -1,0 +1,295 @@
+"""Клиенты: создание и правка, куда они идут, срок и лимит, маскировка I1–I5, свой адрес сервера и
+личная ссылка (страница /s/… без входа)."""
+from __future__ import annotations
+
+import os
+import secrets
+import time
+
+from .. import (awgconf, checks, config, cps, limits)
+from ..checks import bad
+from ..panel import (STATIC, app, engine, share_url, store, user_errors)
+from ..web import Page
+
+# ----------------------------------------------- срок и лимит трафика клиента
+@app.put("/api/limits/{pk:path}")
+def put_limits(req, pk):
+    _pk(pk)
+    body = req.json()
+    exp = checks.expires(body.get("expires"))
+    quota = checks.quota_gb(body.get("quota_gb"))
+    period = checks.period(body.get("period"))
+    return {"ok": True, "enabled": apply_limits(pk, exp, quota, period, checks.rates(body))}
+
+
+def apply_limits(pk: str, exp: int | None, quota: int | None, period: str, rates: dict | None = None) -> bool:
+    """Срок и лимит клиента (из панели и из Telegram). Если клиента отключили по сроку или
+    лимиту, а новые значения это снимают, — включает его. True — включили."""
+    c = next((x for x in engine.clients if x["public_key"] == pk), None)
+    if not c:
+        bad("err.not_found", 404)
+    now = time.time()
+    enable = False
+
+    def fn(st):
+        nonlocal enable
+        L = st.setdefault("limits", {}).get(pk) or {}
+        if quota != L.get("quota") or period != L.get("period", "month"):
+            L["quota_done"] = L["quota_warned"] = None
+        ao = L.get("auto_off") or ""
+        if not c["enabled"] and ao == "exp" and (exp is None or exp > now):
+            enable = True
+        if not c["enabled"] and ao.startswith("quota:") and \
+                (quota is None or engine.traffic.used(pk, period) < quota):
+            enable = True
+        if enable:
+            L["auto_off"] = None
+        L.update(expires=exp, quota=quota, period=period)
+        for k, v in (rates or {}).items():      # ограничение скорости: только если пришло
+            if v:
+                L[k] = v
+            else:
+                L.pop(k, None)
+        if exp is None and quota is None and not L.get("auto_off") and not L.get("rate_down") \
+                and not L.get("rate_up"):
+            st["limits"].pop(pk, None)
+        else:
+            st["limits"][pk] = L
+    store.mutate(fn)
+    if enable:
+        user_errors(lambda: engine.srv.update_client(pk, enabled=True))
+    engine.reconcile_soon()
+    return enable
+
+
+@app.post("/api/shares/{pk:path}")
+def create_share(req, pk):
+    _pk(pk)
+    return {"url": ensure_share(pk)}
+
+
+def ensure_share(pk: str) -> str:
+    """Личная ссылка клиента: существующая или новая."""
+    if not any(c["public_key"] == pk for c in engine.clients):
+        bad("err.not_found", 404)
+
+    def fn(st):
+        sh = st.setdefault("shares", {})
+        tok = next((k for k, v in sh.items() if v.get("pk") == pk), None)
+        if not tok:
+            tok = secrets.token_urlsafe(18)
+            sh[tok] = {"pk": pk, "created": time.time()}
+        return tok
+    return share_url(store.mutate(fn))
+
+
+@app.delete("/api/shares/{pk:path}")
+def delete_share(req, pk):
+    def fn(st):
+        st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
+    store.mutate(fn)
+    return {"ok": True}
+
+
+SHARE_HTML = os.path.join(STATIC, "share.html")
+TOKEN_RE = checks.TOKEN_RE
+
+
+def _share_exists(token: str) -> bool:
+    # без копии состояния: адреса /s/… открыты без входа, и чужой запрос не должен стоить панели копии
+    # всего state.json (на тысяче клиентов — миллисекунды процессора на каждый)
+    return bool(TOKEN_RE.match(token)) and store.peek(lambda st: token in st.get("shares", {}))
+
+
+def _share_of(token: str) -> tuple[str | None, bool, dict | None]:
+    """Клиент личной ссылки: (ключ, есть ли его закрытый ключ, копия его срока и лимита)."""
+    if not TOKEN_RE.match(token):
+        return None, False, None
+
+    def fn(st):
+        pk = (st.get("shares", {}).get(token) or {}).get("pk")
+        lim = st.get("limits", {}).get(pk) if pk else None
+        return pk, bool(pk) and pk in st.get("keys", {}), dict(lim) if isinstance(lim, dict) else None
+    return store.peek(fn)
+
+
+@app.get("/s/{token}", public=True)
+def share_page(req, token):
+    if not _share_exists(token):       # на чужие адреса — как будто страницы нет
+        bad("err.not_found", 404)
+    with open(SHARE_HTML, "rb") as f:
+        return Page(f.read())
+
+
+@app.get("/s/api/{token}", public=True)
+def share_data(req, token):
+    spk, has_key, lim = _share_of(token)
+    c = next((x for x in engine.clients if x["public_key"] == spk), None) if spk else None
+    if not c:
+        bad("err.share_gone", 404)
+    pk = c["public_key"]
+    cfg = None
+    if has_key:
+        try:
+            cfg = engine.srv.client_config(pk)
+            cfg.pop("warn_host", None)
+        except Exception:  # noqa: BLE001
+            cfg = None
+    live = c.get("live") or {}
+    return {"name": c.get("name") or "", "enabled": c["enabled"], "now": time.time(),
+            "handshake": live.get("handshake") or None, "config": cfg,
+            # разбивка по выходам — только в панели: на публичной странице она ни к чему
+            "traffic": {k: v for k, v in engine.traffic.view(pk).items() if k != "by_out"},
+            "limits": limits.view(lim)}
+
+
+@app.put("/api/clients/{pk:path}")
+def put_client(req, pk):
+    if not awgconf.KEY_RE.match(pk) and not (config.DRY_RUN and pk.startswith("DEMO")):
+        bad("err.bad_client_key")
+    body = req.json()
+
+    def fn(st):
+        c = {**checks.client_policy(st, body),
+             "name": next((x.get("name") for x in engine.clients if x["public_key"] == pk), "")}
+        if c["outbound"] == "inherit" and c["rules_mode"] == "inherit" and not c["note"]:
+            st["clients"].pop(pk, None)
+        else:
+            st["clients"][pk] = c
+    store.mutate(fn)
+    engine.trigger()
+    return {"ok": True}
+
+
+# ------------------------------------------- свои сигнатурные пакеты I1–I5 клиента
+def cps_view(entry) -> dict | None:
+    if not isinstance(entry, dict) or entry.get("preset") not in (*cps.PRESETS, "custom"):
+        return None
+    return {"preset": entry["preset"],
+            "values": cps.for_client(entry) if entry["preset"] == "custom" else None}
+
+
+@app.get("/api/cps")
+def get_cps(req):
+    """Шаблоны и текущие I1–I5 сервера — для выбора маскировки в окне клиента."""
+    try:
+        sv = engine.srv.server_view()
+    except Exception:  # noqa: BLE001  — сервер недоступен: шаблоны всё равно нужны
+        sv = {}
+    params = sv.get("params") or {}
+    return {"presets": cps.catalog(), "server": {k: params.get(k) or "" for k in cps.KEYS},
+            "server_match": sv.get("cps_server")}
+
+
+@app.put("/api/cps/{pk:path}")
+def put_client_cps(req, pk):
+    """preset: "server" (как на сервере) | имя шаблона | "custom" + values {I1..I5}."""
+    if not awgconf.KEY_RE.match(pk) and not (config.DRY_RUN and pk.startswith("DEMO")):
+        bad("err.bad_client_key")
+    if not any(c["public_key"] == pk for c in engine.clients):
+        bad("err.not_found", 404)
+    body = req.json()
+    entry = checks.cps_entry(body.get("preset"), body.get("values"))
+
+    def fn(st):
+        m = st.setdefault("cps", {})
+        if entry:
+            m[pk] = entry
+        else:
+            m.pop(pk, None)
+    store.mutate(fn)
+    return {"ok": True, "cps": cps_view(entry)}
+
+
+# -------------------------------------------------------------------- users
+def _pk(pk: str) -> str:
+    return checks.client_key(pk)
+
+
+def _client_name(v) -> str:
+    """Имя клиента из запроса: только строка (true или 5 стали бы именами «True» и «5»)."""
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        bad("err.name_required")
+    return v
+
+
+@app.post("/api/users")
+def add_user(req):
+    body = req.json()
+    host = _client_host_value(body.get("host"))           # проверка до создания: отказ — без клиента
+    pk = user_errors(lambda: engine.srv.add_client(_client_name(body.get("name"))))
+    if host:
+        store.mutate(lambda st: st.setdefault("chost", {}).__setitem__(pk, host))
+    engine.reconcile_soon()
+    return {"public_key": pk}
+
+
+def _client_host_value(value) -> str:
+    """Свой адрес сервера в конфиге клиента: пусто — как у всех, иначе один из host_choices (#37)."""
+    if value is None or value == "":
+        return ""
+    return checks.client_host(value, engine.srv.host_choices(store.snapshot()))
+
+
+@app.put("/api/hosts/{pk:path}")
+def put_client_host(req, pk):
+    """host: "" — как у всех, иначе адрес из «Сервер → Дополнительные адреса» (или основной)."""
+    _pk(pk)
+    if not any(c["public_key"] == pk for c in engine.clients):
+        bad("err.not_found", 404)
+    host = _client_host_value(req.json().get("host"))
+
+    def fn(st):
+        m = st.setdefault("chost", {})
+        if host:
+            m[pk] = host
+        else:
+            m.pop(pk, None)
+    store.mutate(fn)
+    return {"ok": True, "host": host or None}
+
+
+@app.put("/api/users/{pk:path}")
+def edit_user(req, pk):
+    body = req.json()
+    _pk(pk)
+    if body.get("name") is not None:
+        name = _client_name(body["name"])
+        user_errors(lambda: engine.srv.update_client(pk, name=name))
+    if body.get("enabled") is not None:
+        set_client_enabled(pk, checks.flag(body["enabled"]))
+    engine.reconcile_soon()
+    return {"ok": True}
+
+
+def set_client_enabled(pk: str, on: bool) -> None:
+    """Включить или выключить клиента вручную (из панели и из Telegram)."""
+    user_errors(lambda: engine.srv.update_client(pk, enabled=on))
+
+    # включили или выключили вручную — автоматическое отключение больше не наше
+    def fn(st):
+        L = st.get("limits", {}).get(pk)
+        if L and L.get("auto_off"):
+            L["auto_off"] = None
+    store.mutate(fn)
+    engine.reconcile_soon()
+
+
+@app.delete("/api/users/{pk:path}")
+def del_user(req, pk):
+    delete_user(pk)
+    return {"ok": True}
+
+
+def delete_user(pk: str) -> None:
+    """Удаление клиента: из панели и из бота."""
+    user_errors(lambda: engine.srv.delete_client(_pk(pk)))
+    engine.traffic.forget(pk)
+    engine.reconcile_soon()
+
+
+@app.get("/api/users/{pk:path}/config")
+def user_config(req, pk):
+    return user_errors(lambda: engine.srv.client_config(_pk(pk)))

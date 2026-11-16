@@ -15,14 +15,16 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import limits, main, notify, tgbot  # noqa: E402
+from app import limits, notify, tgbot  # noqa: E402
 from tests.test_v19 import FakeTG, button, cfg, msg  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import telegram  # noqa: E402
 
 
 class BotUiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
         self.tg = FakeTG()
@@ -30,7 +32,7 @@ class BotUiTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
         self.c = cfg()
 
     def run_updates(self, *ups):
@@ -54,7 +56,7 @@ class BotUiTest(unittest.TestCase):
         m = self.menu()
         self.assertEqual([[t for t, _ in row] for row in m],
                          [["🗄 Server", "👥 Clients"], ["🖥 Panel", "💾 Backup"], ["🔄 Refresh"]])   # 1.13.0
-        self.assertEqual(m[1][0][1], main.panel_url())          # «Панель» — сразу ссылка
+        self.assertEqual(m[1][0][1], panel.panel_url())          # «Панель» — сразу ссылка
         self.assertEqual(m[2][0][1], "m")                        # «Обновить» — заново рисует меню
         self.c["lang"] = "ru"
         self.run_updates(msg("/start", uid=2))
@@ -91,9 +93,9 @@ class BotUiTest(unittest.TestCase):
         self.run_updates(msg("/add"))
         self.run_updates(msg("☰ Menu", uid=2))
         self.assertIsNone(self.bot._ask)
-        before = len(main.engine.clients)
+        before = len(panel.engine.clients)
         self.run_updates(msg("Not a name", uid=3))
-        self.assertEqual(len(main.engine.clients), before)
+        self.assertEqual(len(panel.engine.clients), before)
 
     def test_keyboard_removed_when_control_off(self):
         self.run_updates(msg("/help"))
@@ -108,41 +110,41 @@ class BotUiTest(unittest.TestCase):
 
 class FirstSeenTest(unittest.TestCase):
     def setUp(self):
-        main.engine.reconcile()
+        panel.engine.reconcile()
         self.events = []
-        p = mock.patch.object(main.engine, "event",
+        p = mock.patch.object(panel.engine, "event",
                               lambda lvl, m: self.events.append(m) if m.key == "ev.client_first" else None)
         p.start()
         self.addCleanup(p.stop)
-        self.pk = main.engine.srv.add_client("First timer")
+        self.pk = panel.engine.srv.add_client("First timer")
         # список клиентов без reconcile: тот сам вызвал бы first_seen раньше теста
-        main.engine.clients = main.engine.srv.list_clients(main.engine.target)
-        self.addCleanup(lambda: main.engine.srv.delete_client(self.pk)
-                        if any(c["public_key"] == self.pk for c in main.engine.clients) else None)
+        panel.engine.clients = panel.engine.srv.list_clients(panel.engine.target)
+        self.addCleanup(lambda: panel.engine.srv.delete_client(self.pk)
+                        if any(c["public_key"] == self.pk for c in panel.engine.clients) else None)
 
     def client(self):
-        return next(c for c in main.engine.clients if c["public_key"] == self.pk)
+        return next(c for c in panel.engine.clients if c["public_key"] == self.pk)
 
     def test_waits_then_fires_once(self):
-        self.assertIn(self.pk, main.store.snapshot()["await_first"])
+        self.assertIn(self.pk, panel.store.snapshot()["await_first"])
         self.client()["live"] = {"handshake": 0}
-        limits.first_seen(main.engine)
+        limits.first_seen(panel.engine)
         self.assertEqual(self.events, [])
         self.client()["live"] = {"handshake": int(time.time())}
-        limits.first_seen(main.engine)
-        limits.first_seen(main.engine)
+        limits.first_seen(panel.engine)
+        limits.first_seen(panel.engine)
         self.assertEqual([m.key for m in self.events], ["ev.client_first"])
         self.assertEqual(self.events[0].p["pk"], self.pk)
-        self.assertNotIn(self.pk, main.store.snapshot().get("await_first", {}))
+        self.assertNotIn(self.pk, panel.store.snapshot().get("await_first", {}))
 
     def test_old_or_deleted_is_dropped(self):
         self.client()["live"] = {"handshake": 0}
-        limits.first_seen(main.engine, now=time.time() + limits.FIRST_WAIT + 10)
-        self.assertNotIn(self.pk, main.store.snapshot().get("await_first", {}))
+        limits.first_seen(panel.engine, now=time.time() + limits.FIRST_WAIT + 10)
+        self.assertNotIn(self.pk, panel.store.snapshot().get("await_first", {}))
         self.assertEqual(self.events, [])
-        pk2 = main.engine.srv.add_client("Gone")
-        main.engine.srv.delete_client(pk2)
-        self.assertNotIn(pk2, main.store.snapshot().get("await_first", {}))
+        pk2 = panel.engine.srv.add_client("Gone")
+        panel.engine.srv.delete_client(pk2)
+        self.assertNotIn(pk2, panel.store.snapshot().get("await_first", {}))
 
     def test_notification_and_button(self):
         self.assertEqual(notify.ENGINE_EVENTS["ev.client_first"], ("clients", "client_first"))

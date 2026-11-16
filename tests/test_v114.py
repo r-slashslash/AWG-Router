@@ -15,7 +15,9 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, main, tlsconf, tlsmgr, web, webfront  # noqa: E402
+from app import config, tlsconf, tlsmgr, web, webfront  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import server  # noqa: E402
 
 
 def make_cert(d: str, name: str, san: str) -> tuple[str, str]:
@@ -240,7 +242,7 @@ class CertTest(unittest.TestCase):
 
 class ApiTest(unittest.TestCase):
     def setUp(self):
-        self.p = mock.patch.object(main.tls, "mode", "letsencrypt")
+        self.p = mock.patch.object(panel.tls, "mode", "letsencrypt")
         self.p.start()
 
     def tearDown(self):
@@ -249,7 +251,7 @@ class ApiTest(unittest.TestCase):
 
     def err(self, body):
         with self.assertRaises(web.HTTPError) as cm:
-            main.tls_set(Req(body))
+            server.tls_set(Req(body))
         d = cm.exception.detail
         return d.key if hasattr(d, "key") else d
 
@@ -261,27 +263,27 @@ class ApiTest(unittest.TestCase):
 
     def test_dns_asks_first(self):
         with mock.patch.object(tlsmgr, "resolve", return_value=["198.51.100.7"]), \
-                mock.patch.object(main, "_server_ips", return_value=["203.0.113.5"]):
-            r = main.tls_set(Req({"domain": "panel.example.com", "source": "letsencrypt"}))
+                mock.patch.object(server, "_server_ips", return_value=["203.0.113.5"]):
+            r = server.tls_set(Req({"domain": "panel.example.com", "source": "letsencrypt"}))
             self.assertFalse(r["ok"])
             self.assertEqual(r["confirm"].key, "tls.dns_other")
             self.assertNotIn("domain", tlsconf.load())                       # ничего не сохранено
-            with mock.patch.object(main.tls, "reconfigure"):
-                r = main.tls_set(Req({"domain": "panel.example.com", "source": "letsencrypt", "force": True}))
+            with mock.patch.object(panel.tls, "reconfigure"):
+                r = server.tls_set(Req({"domain": "panel.example.com", "source": "letsencrypt", "force": True}))
         self.assertTrue(r["ok"])
         self.assertEqual(tlsconf.load()["domain"], "panel.example.com")
-        self.assertEqual(main.tls.host(), "panel.example.com")
-        self.assertIn("https://panel.example.com:", main.panel_url().replace("http://", "https://"))
+        self.assertEqual(panel.tls.host(), "panel.example.com")
+        self.assertIn("https://panel.example.com:", panel.panel_url().replace("http://", "https://"))
         self.assertEqual(r["web"]["kind"], "nginx")                           # демо: порт 80 «занят» nginx
 
     def test_ssh_mode_has_no_certificate(self):
-        with mock.patch.object(main.tls, "mode", "off"):
+        with mock.patch.object(panel.tls, "mode", "off"):
             self.assertEqual(self.err({"domain": "", "source": "letsencrypt"}), "tls.off")
 
     def test_settings_not_in_backup(self):
         """Домен и пути к сертификату — свои у сервера: в state.json их нет, восстановление их не трогает."""
         tlsconf.update(domain="panel.example.com")
-        self.assertNotIn("tls", main.store.snapshot()["settings"])
+        self.assertNotIn("tls", panel.store.snapshot()["settings"])
 
 
 class CliTest(unittest.TestCase):

@@ -16,8 +16,10 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 
-from app import lists, main, traffic  # noqa: E402
+from app import lists, traffic  # noqa: E402
 from app.store import Store  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, clients, exits, routing  # noqa: E402
 
 LANGS = ("ru", "en", "zh", "fa")
 STR = r'"((?:[^"\\]|\\.)*)"'
@@ -70,9 +72,12 @@ class I18nTest(unittest.TestCase):
                 # только целые ключи: t("cl.sort_" + x) собирается на лету и здесь не проверяется
         lit = r'\bth?\("([a-z][\w.]*)"\s*[,)]'
         used = set(re.findall(lit, read("app", "static", "app.js") + read("app", "static", "share.js")))
-        for name in os.listdir(os.path.join(ROOT, "app")):
-            if name.endswith(".py") and name not in ("notify.py", "tgbot.py", "sniproxy.py", "tgreq.py"):
-                src = read("app", name)
+        files = [os.path.relpath(os.path.join(d, n), ROOT) for d, _, names in os.walk(os.path.join(ROOT, "app"))
+                 for n in names if n.endswith(".py")]
+        self.assertIn(os.path.join("app", "api", "exits.py"), files)         # подпапки тоже
+        for path in files:
+            if os.path.basename(path) not in ("notify.py", "tgbot.py", "sniproxy.py", "tgreq.py"):
+                src = read(path)
                 used |= set(re.findall(r'\b(?:Msg|bad|UserError|HTTPError\(\d+,)\s*\(?\s*"([a-z]+\.[\w.]+)"\s*[,)]', src))
         self.assertEqual(sorted(k for k in used if k not in keys), [])
 
@@ -84,28 +89,28 @@ class ExitReferencesTest(unittest.TestCase):
     def test_delete_with_replace_leaves_no_reference(self):
         R = lambda b: type("R", (), {"json": lambda self: b})()
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            main.engine.reconcile()
-            x = main.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080"}))["id"]
-            y = main.add_upstream(R({"name": "Y", "config": "socks5://198.51.100.10:1080",
+            panel.engine.reconcile()
+            x = exits.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080"}))["id"]
+            y = exits.add_upstream(R({"name": "Y", "config": "socks5://198.51.100.10:1080",
                                      "fallback": "up:" + x, "quota_gb": 1, "quota_action": "up:" + x}))["id"]
-            pk = main.engine.clients[0]["public_key"]
+            pk = panel.engine.clients[0]["public_key"]
             out = "up:" + x
-            st0 = main.store.snapshot()
+            st0 = panel.store.snapshot()
             try:
-                main.put_routing(R({"default": out, "rules": [{"lists": ["ru"], "outbound": out}]}))
-                main.put_client(R({"outbound": out, "rules_mode": "custom",
+                routing.put_routing(R({"default": out, "rules": [{"lists": ["ru"], "outbound": out}]}))
+                clients.put_client(R({"outbound": out, "rules_mode": "custom",
                                    "rules": [{"lists": ["cn"], "outbound": out}]}), pk)
-                main.store.mutate(lambda st: st["settings"].setdefault("telegram", {}).update(via=out))
+                panel.store.mutate(lambda st: st["settings"].setdefault("telegram", {}).update(via=out))
                 # каждое место из outbound_refs: умолчание, правило, резерв и квота Y, Telegram, клиент, его правило
-                self.assertEqual(len(Store.outbound_refs(main.store.snapshot(), out)), 7)
-                main.del_upstream(R({"replace": "direct"}), x)
-                self.assertNotIn(f'"{out}"', json.dumps(main.store.snapshot()))
+                self.assertEqual(len(Store.outbound_refs(panel.store.snapshot(), out)), 7)
+                exits.del_upstream(R({"replace": "direct"}), x)
+                self.assertNotIn(f'"{out}"', json.dumps(panel.store.snapshot()))
             finally:
-                main.store.mutate(lambda st: st.update(routing=st0["routing"], clients=st0["clients"],
+                panel.store.mutate(lambda st: st.update(routing=st0["routing"], clients=st0["clients"],
                                                        settings=st0["settings"]))
                 for uid in (x, y):
-                    if Store.upstream(main.store.snapshot(), uid):
-                        main.del_upstream(R({"replace": "direct"}), uid)
+                    if Store.upstream(panel.store.snapshot(), uid):
+                        exits.del_upstream(R({"replace": "direct"}), uid)
 
 
 class RestoreKeepsFieldsTest(unittest.TestCase):
@@ -123,33 +128,33 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
     def test_round_trip(self):
         R = lambda b: type("R", (), {"json": lambda self: b})()
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            main.engine.reconcile()
-            x = main.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080", "quota_gb": 5,
+            panel.engine.reconcile()
+            x = exits.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080", "quota_gb": 5,
                                      "quota_action": "direct", "routing": {"domains": "a.example"},
                                      "rate_down": 80, "rate_up": 20, "quic": True}))["id"]
-            pk = main.engine.clients[0]["public_key"]
-            st0 = main.store.snapshot()
+            pk = panel.engine.clients[0]["public_key"]
+            st0 = panel.store.snapshot()
             try:
-                main.put_client(R({"outbound": "up:" + x, "rules_mode": "custom", "note": "n",
+                clients.put_client(R({"outbound": "up:" + x, "rules_mode": "custom", "note": "n",
                                    "rules": [{"lists": ["ru"], "outbound": "direct"}]}), pk)
-                main.put_limits(R({"expires": 2_000_000_000, "quota_gb": 4, "period": "total",
+                clients.put_limits(R({"expires": 2_000_000_000, "quota_gb": 4, "period": "total",
                                    "rate_down": 10, "rate_up": 2.5}), pk)
-                main.ensure_share(pk)
-                main.put_client_cps(R({"preset": "stun"}), pk)
-                main.store.mutate(lambda s: s["settings"].update(panel_dns=True, panel_dns_enc="dot",
+                clients.ensure_share(pk)
+                clients.put_client_cps(R({"preset": "stun"}), pk)
+                panel.store.mutate(lambda s: s["settings"].update(panel_dns=True, panel_dns_enc="dot",
                                                                  shaping={"down": 100, "up": 50},
                                                                  extra_hosts=["198.51.100.20"]))
-                main.put_client_host(R({"host": "198.51.100.20"}), pk)
-                main.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}, strict=True))
-                st = main.store.snapshot()
-                new = main.clean_backup_state(st)
+                clients.put_client_host(R({"host": "198.51.100.20"}), pk)
+                panel.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}, strict=True))
+                st = panel.store.snapshot()
+                new = backup.clean_backup_state(st)
             finally:
-                main.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],
+                panel.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],
                                                      shares=st0["shares"], cps=st0["cps"], chost=st0.get("chost", {})))
-                main.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping",
+                panel.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping",
                                                                                    "extra_hosts")])
-                main.store.mutate(lambda s: [s["routing"].pop(k, None) for k in ("balance", "strict")])
-                main.del_upstream(R({"replace": "direct"}), x)
+                panel.store.mutate(lambda s: [s["routing"].pop(k, None) for k in ("balance", "strict")])
+                exits.del_upstream(R({"replace": "direct"}), x)
 
         def walk(a, b, path=""):
             if isinstance(a, dict):
@@ -181,8 +186,8 @@ class FormatsTest(unittest.TestCase):
         used |= {u for u in re.findall(r'url\("?([^")]+)"?\)', read("app", "static", "app.css"))
                  if not u.startswith("data:")}
         self.assertTrue(used, "share.html refers to no assets: the pattern above is out of date")
-        self.assertEqual(sorted(used - main.app.public_files), [])
-        for f in main.app.public_files:
+        self.assertEqual(sorted(used - panel.app.public_files), [])
+        for f in panel.app.public_files:
             self.assertTrue(os.path.isfile(os.path.join(ROOT, "app", "static", f)), f)
 
 

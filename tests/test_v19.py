@@ -21,8 +21,11 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import main, notify, qr, tgbot  # noqa: E402
+from app import notify, qr, tgbot  # noqa: E402
 from app.i18n import Msg  # noqa: E402
+from app import panel  # noqa: E402
+from app import version  # noqa: E402
+from app.api import backup, clients, telegram  # noqa: E402
 
 TOKEN = "123456789:" + "A" * 35
 CHAT = "424242"
@@ -197,8 +200,8 @@ class ButtonsTest(unittest.TestCase):
 class BotTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
-        cls.pk = main.engine.clients[0]["public_key"]
+        panel.engine.reconcile()
+        cls.pk = panel.engine.clients[0]["public_key"]
 
     def setUp(self):
         self.tg = FakeTG()
@@ -206,7 +209,7 @@ class BotTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
         self.c = cfg()
 
     def run_updates(self, *ups):
@@ -222,7 +225,7 @@ class BotTest(unittest.TestCase):
         self.assertIn("<code>777</code>", sent[0]["text"])
         self.assertIn("No access", self.tg.last("answerCallbackQuery")["text"])
         self.assertEqual(self.bot._st["offset"], 3)
-        self.assertTrue(any(c["public_key"] == self.pk and c["enabled"] for c in main.engine.clients))
+        self.assertTrue(any(c["public_key"] == self.pk and c["enabled"] for c in panel.engine.clients))
 
     def test_old_message_and_offset_saved(self):
         self.run_updates(msg("/status", uid=7, date=int(time.time()) - 3600))
@@ -246,20 +249,20 @@ class BotTest(unittest.TestCase):
 
     def test_turn_off_and_on(self):
         self.run_updates(button("off:" + self.pk))
-        main.engine.reconcile()
-        self.assertFalse(next(c for c in main.engine.clients if c["public_key"] == self.pk)["enabled"])
+        panel.engine.reconcile()
+        self.assertFalse(next(c for c in panel.engine.clients if c["public_key"] == self.pk)["enabled"])
         self.assertIn("is off", self.tg.last("answerCallbackQuery")["text"])
         self.run_updates(button("on:" + self.pk, uid=2))
-        main.engine.reconcile()
-        self.assertTrue(next(c for c in main.engine.clients if c["public_key"] == self.pk)["enabled"])
-        self.assertTrue(any(e["msg"].key == "tg.act_on" for e in main.engine.events))
+        panel.engine.reconcile()
+        self.assertTrue(next(c for c in panel.engine.clients if c["public_key"] == self.pk)["enabled"])
+        self.assertTrue(any(e["msg"].key == "tg.act_on" for e in panel.engine.events))
 
     def test_extend_and_quota(self):
         exp = int(time.time()) + 86400
-        main.apply_limits(self.pk, exp, 5 * tgbot.GB, "month")
-        self.addCleanup(lambda: main.apply_limits(self.pk, None, None, "month"))
+        clients.apply_limits(self.pk, exp, 5 * tgbot.GB, "month")
+        self.addCleanup(lambda: clients.apply_limits(self.pk, None, None, "month"))
         self.run_updates(button("d30:" + self.pk), button("g10:" + self.pk, uid=2))
-        L = main.store.snapshot()["limits"][self.pk]
+        L = panel.store.snapshot()["limits"][self.pk]
         self.assertEqual(L["expires"], exp + 30 * 86400)
         self.assertEqual(L["quota"], 15 * tgbot.GB)
         self.assertIn("15 GB", self.tg.last("answerCallbackQuery")["text"])
@@ -269,7 +272,7 @@ class BotTest(unittest.TestCase):
         self.assertIn("sendPhoto", self.tg.methods())
         self.assertIn("sendDocument", self.tg.methods())
         self.assertTrue(any("vpn://" in t for t in self.tg.texts()))
-        self.assertTrue(any(c["name"] == "Telegram friend" for c in main.engine.clients))
+        self.assertTrue(any(c["name"] == "Telegram friend" for c in panel.engine.clients))
 
     def test_add_by_reply(self):
         self.run_updates(msg("/add"))
@@ -277,7 +280,7 @@ class BotTest(unittest.TestCase):
         self.assertTrue(ask["reply_markup"]["force_reply"])
         mid = self.tg.next_id
         self.run_updates(msg("Reply friend", uid=2, reply_to_message={"message_id": mid}))
-        self.assertTrue(any(c["name"] == "Reply friend" for c in main.engine.clients))
+        self.assertTrue(any(c["name"] == "Reply friend" for c in panel.engine.clients))
 
     def test_route(self):
         self.run_updates(msg("/route 192.168.1.10"), msg("/route not a host!", uid=2))
@@ -296,22 +299,22 @@ class BotTest(unittest.TestCase):
         self.assertEqual(self.tg.last("editMessageText")["message_id"], mid)
 
     def test_update_announced_after_restart(self):
-        self.bot._st["update"] = {"to": main.VERSION, "t": time.time()}
-        with mock.patch.object(main.bot_ops, "update_state", return_value={"state": "done"}):
+        self.bot._st["update"] = {"to": version.VERSION, "t": time.time()}
+        with mock.patch.object(telegram.bot_ops, "update_state", return_value={"state": "done"}):
             self.run_updates()
-        self.assertIn(main.VERSION, self.tg.texts()[-1])
+        self.assertIn(version.VERSION, self.tg.texts()[-1])
         self.assertNotIn("update", self.bot._st)
 
 
 class SettingsTest(unittest.TestCase):
     def test_control_saved_and_restored(self):
-        c = main._tg_draft({"token": TOKEN, "chat_id": CHAT, "control": True, "enabled": True})
+        c = telegram._tg_draft({"token": TOKEN, "chat_id": CHAT, "control": True, "enabled": True})
         self.assertTrue(c["control"])
         self.assertFalse(notify.public_view(notify.defaults())["control"])
         from tests.test_api import good_state
         st = good_state()
         st["settings"]["telegram"]["control"] = True
-        self.assertTrue(main.clean_backup_state(st)["settings"]["telegram"]["control"])
+        self.assertTrue(backup.clean_backup_state(st)["settings"]["telegram"]["control"])
 
 
 if __name__ == "__main__":

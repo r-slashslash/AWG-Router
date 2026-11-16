@@ -14,8 +14,10 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import checks, cps, engine, main, system, users  # noqa: E402
+from app import checks, cps, engine, system, users  # noqa: E402
 from app.web import HTTPError  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, clients, server, state, telegram  # noqa: E402
 
 
 class Req:
@@ -120,107 +122,107 @@ class ExtraHostsParseTest(unittest.TestCase):
 class ClientHostTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
-        self.pk = main.add_user(Req({"name": "Host test"}))["public_key"]
-        main.engine.reconcile()
+        self.pk = clients.add_user(Req({"name": "Host test"}))["public_key"]
+        panel.engine.reconcile()
 
     def tearDown(self):
-        main.del_user(None, self.pk)
-        main.store.mutate(lambda st: [st["settings"].pop(k, None) for k in ("extra_hosts", "client_host")])
-        main.engine.reconcile()
+        clients.del_user(None, self.pk)
+        panel.store.mutate(lambda st: [st["settings"].pop(k, None) for k in ("extra_hosts", "client_host")])
+        panel.engine.reconcile()
 
     def endpoint(self, pk):
-        conf = main.engine.srv.client_config(pk)["conf"]
+        conf = panel.engine.srv.client_config(pk)["conf"]
         return next(ln.split("=", 1)[1].strip() for ln in conf.splitlines() if ln.startswith("Endpoint"))
 
     def test_choose_for_client(self):
-        main.put_server(Req({"extra_hosts": "198.51.100.20, vpn2.example.com"}))
-        st = main.get_state(None)
+        server.put_server(Req({"extra_hosts": "198.51.100.20, vpn2.example.com"}))
+        st = state.get_state(None)
         self.assertEqual(st["hosts"]["choices"][-2:], ["198.51.100.20", "vpn2.example.com"])
         default = self.endpoint(self.pk)
-        main.put_client_host(Req({"host": "vpn2.example.com"}), self.pk)
+        clients.put_client_host(Req({"host": "vpn2.example.com"}), self.pk)
         self.assertTrue(self.endpoint(self.pk).startswith("vpn2.example.com:"), self.endpoint(self.pk))
-        c = next(x for x in main.get_state(None)["clients"] if x["public_key"] == self.pk)
+        c = next(x for x in state.get_state(None)["clients"] if x["public_key"] == self.pk)
         self.assertEqual(c["host"], "vpn2.example.com")
-        main.put_client_host(Req({"host": ""}), self.pk)                      # снова как у всех
+        clients.put_client_host(Req({"host": ""}), self.pk)                      # снова как у всех
         self.assertEqual(self.endpoint(self.pk), default)
 
     def test_ipv6_in_brackets(self):
-        main.put_server(Req({"extra_hosts": ["2001:db8::5"]}))
-        main.put_client_host(Req({"host": "2001:db8::5"}), self.pk)
+        server.put_server(Req({"extra_hosts": ["2001:db8::5"]}))
+        clients.put_client_host(Req({"host": "2001:db8::5"}), self.pk)
         self.assertTrue(self.endpoint(self.pk).startswith("[2001:db8::5]:"), self.endpoint(self.pk))
 
     def test_bad_values(self):
-        main.put_server(Req({"extra_hosts": "198.51.100.20"}))
+        server.put_server(Req({"extra_hosts": "198.51.100.20"}))
         for v in ("203.0.113.99", 5, ["198.51.100.20"], {"a": 1}, True):
-            self.assertEqual(code(main.put_client_host, Req({"host": v}), self.pk), 400, v)
-        self.assertEqual(code(main.put_client_host, Req({"host": "198.51.100.20"}), "A" * 43 + "="), 404)
-        self.assertEqual(code(main.put_server, Req({"extra_hosts": "bad host"})), 400)
-        self.assertEqual(code(main.put_server, Req({"extra_hosts": 7})), 400)
-        self.assertEqual(code(main.add_user, Req({"name": "X", "host": "203.0.113.99"})), 400)
+            self.assertEqual(code(clients.put_client_host, Req({"host": v}), self.pk), 400, v)
+        self.assertEqual(code(clients.put_client_host, Req({"host": "198.51.100.20"}), "A" * 43 + "="), 404)
+        self.assertEqual(code(server.put_server, Req({"extra_hosts": "bad host"})), 400)
+        self.assertEqual(code(server.put_server, Req({"extra_hosts": 7})), 400)
+        self.assertEqual(code(clients.add_user, Req({"name": "X", "host": "203.0.113.99"})), 400)
 
     def test_removed_address_falls_back(self):
         """Адрес убрали из дополнительных — у клиента он снимается, конфиг снова с общим адресом."""
-        main.put_server(Req({"extra_hosts": "198.51.100.20"}))
-        main.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
-        main.put_server(Req({"extra_hosts": ""}))
-        self.assertNotIn(self.pk, main.store.snapshot().get("chost", {}))
-        self.assertNotIn("extra_hosts", main.store.snapshot()["settings"])
+        server.put_server(Req({"extra_hosts": "198.51.100.20"}))
+        clients.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
+        server.put_server(Req({"extra_hosts": ""}))
+        self.assertNotIn(self.pk, panel.store.snapshot().get("chost", {}))
+        self.assertNotIn("extra_hosts", panel.store.snapshot()["settings"])
 
     def test_domain_for_everyone(self):
         """Домен из дополнительных можно выбрать и «для всех»; произвольный домен — нет (только IP)."""
-        main.put_server(Req({"extra_hosts": "vpn2.example.com", "client_host": "vpn2.example.com"}))
+        server.put_server(Req({"extra_hosts": "vpn2.example.com", "client_host": "vpn2.example.com"}))
         self.assertTrue(self.endpoint(self.pk).startswith("vpn2.example.com:"))
-        self.assertEqual(code(main.put_server, Req({"client_host": "other.example.com"})), 400)
+        self.assertEqual(code(server.put_server, Req({"client_host": "other.example.com"})), 400)
 
     def test_new_client_with_host_and_delete(self):
-        main.put_server(Req({"extra_hosts": "198.51.100.20"}))
-        pk = main.add_user(Req({"name": "With host", "host": "198.51.100.20"}))["public_key"]
-        main.engine.reconcile()
+        server.put_server(Req({"extra_hosts": "198.51.100.20"}))
+        pk = clients.add_user(Req({"name": "With host", "host": "198.51.100.20"}))["public_key"]
+        panel.engine.reconcile()
         self.assertTrue(self.endpoint(pk).startswith("198.51.100.20:"))
-        main.del_user(None, pk)
-        self.assertNotIn(pk, main.store.snapshot().get("chost", {}))
+        clients.del_user(None, pk)
+        self.assertNotIn(pk, panel.store.snapshot().get("chost", {}))
 
     def test_restore_keeps_only_own_addresses(self):
         """Копия с другого сервера: его дополнительные адреса не берутся, адрес клиента — только если он есть
         и у этого сервера."""
-        main.put_server(Req({"extra_hosts": "198.51.100.20"}))
-        main.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
-        b = main.clean_backup_state(main.store.snapshot())
+        server.put_server(Req({"extra_hosts": "198.51.100.20"}))
+        clients.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
+        b = backup.clean_backup_state(panel.store.snapshot())
         self.assertNotIn("extra_hosts", b["settings"])
         self.assertEqual(b["chost"][self.pk], "198.51.100.20")
-        bad = dict(main.store.snapshot(), chost={self.pk: ["x"]})
-        self.assertEqual(code(main.clean_backup_state, bad), 400)
+        bad = dict(panel.store.snapshot(), chost={self.pk: ["x"]})
+        self.assertEqual(code(backup.clean_backup_state, bad), 400)
         # restore_state: свои дополнительные адреса остаются, чужие и адрес клиента не из них — нет
-        other = main.clean_backup_state(main.store.snapshot())
+        other = backup.clean_backup_state(panel.store.snapshot())
         other["settings"]["extra_hosts"] = ["203.0.113.250"]
         other["chost"] = {self.pk: "203.0.113.250"}
-        cur = main.store.snapshot()
-        main.restore_state(cur, other)
+        cur = panel.store.snapshot()
+        backup.restore_state(cur, other)
         self.assertEqual(cur["settings"]["extra_hosts"], ["198.51.100.20"])
         self.assertEqual(cur["chost"], {})
         other["chost"] = {self.pk: "198.51.100.20"}
-        main.restore_state(cur, other)
+        backup.restore_state(cur, other)
         self.assertEqual(cur["chost"], {self.pk: "198.51.100.20"})
 
     def test_restore_backup_end_to_end(self):
         """Через настоящий restore_backup: свои дополнительные адреса остаются, адрес клиента из копии — если есть."""
-        main.put_server(Req({"extra_hosts": "198.51.100.20"}))
-        main.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
-        st0 = main.store.snapshot()
+        server.put_server(Req({"extra_hosts": "198.51.100.20"}))
+        clients.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
+        st0 = panel.store.snapshot()
         try:
-            g = main.clean_backup_state(main.store.snapshot())
+            g = backup.clean_backup_state(panel.store.snapshot())
             g["settings"]["extra_hosts"] = ["203.0.113.250"]          # чужой сервер
             g["chost"] = {self.pk: "198.51.100.20"}
-            with mock.patch.object(main.engine, "refresh_lists"):       # без сети в юнит-тесте
-                main.restore_backup(Req({"backup": {"format": main.BACKUP_FORMAT, "state": g}}))
-            s = main.store.snapshot()
+            with mock.patch.object(panel.engine, "refresh_lists"):       # без сети в юнит-тесте
+                backup.restore_backup(Req({"backup": {"format": backup.BACKUP_FORMAT, "state": g}}))
+            s = panel.store.snapshot()
             self.assertEqual(s["settings"]["extra_hosts"], ["198.51.100.20"])
             self.assertEqual(s["chost"], {self.pk: "198.51.100.20"})
         finally:
-            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+            panel.store.mutate(lambda st: (st.clear(), st.update(st0)))
 
 
 class FlagsTest(unittest.TestCase):
@@ -230,7 +232,7 @@ class FlagsTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def code(self, fn):
         with self.assertRaises(HTTPError) as cm:
@@ -244,24 +246,24 @@ class FlagsTest(unittest.TestCase):
             self.assertEqual(self.code(lambda: checks.flag(v)), (400, "err.bad_value"), v)
 
     def test_panel_dns(self):
-        before = main.store.snapshot()["settings"].get("panel_dns")
+        before = panel.store.snapshot()["settings"].get("panel_dns")
         for v in self.BAD:
-            self.assertEqual(self.code(lambda: main.put_server(Req({"panel_dns": v}))), (400, "err.bad_value"), v)
-        self.assertEqual(main.store.snapshot()["settings"].get("panel_dns"), before)
+            self.assertEqual(self.code(lambda: server.put_server(Req({"panel_dns": v}))), (400, "err.bad_value"), v)
+        self.assertEqual(panel.store.snapshot()["settings"].get("panel_dns"), before)
 
     def test_other_flags(self):
-        st = main.store.snapshot()
-        pk = main.add_user(Req({"name": "Flag test"}))["public_key"]
+        st = panel.store.snapshot()
+        pk = clients.add_user(Req({"name": "Flag test"}))["public_key"]
         try:
             for v in self.BAD:
-                self.assertEqual(self.code(lambda: main.put_telegram(Req({"enabled": v}))), (400, "err.bad_value"))
-                self.assertEqual(self.code(lambda: main.put_telegram(Req({"events": {"exit": v}}))),
+                self.assertEqual(self.code(lambda: telegram.put_telegram(Req({"enabled": v}))), (400, "err.bad_value"))
+                self.assertEqual(self.code(lambda: telegram.put_telegram(Req({"events": {"exit": v}}))),
                                  (400, "err.bad_value"))
-                self.assertEqual(self.code(lambda: main.edit_user(Req({"enabled": v}), pk)), (400, "err.bad_value"))
+                self.assertEqual(self.code(lambda: clients.edit_user(Req({"enabled": v}), pk)), (400, "err.bad_value"))
                 self.assertEqual(self.code(lambda: checks.balance(st, {"on": v})), (400, "err.bad_value"))
             self.assertEqual(checks.balance(st, {}), {"on": False, "skip": []})     # не прислано — выключено
         finally:
-            main.del_user(None, pk)
+            clients.del_user(None, pk)
 
 
 if __name__ == "__main__":

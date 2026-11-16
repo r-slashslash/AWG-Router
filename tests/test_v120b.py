@@ -30,7 +30,9 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app import awgconf, config, engine, limits, main, sniproxy, store, system, web  # noqa: E402
+from app import awgconf, config, engine, limits, sniproxy, store, system, web  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import state  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -88,7 +90,7 @@ class HoldRulesTest(unittest.TestCase):
     контейнера правил не было до конца прохода, и клиенты шли напрямую даже с резервом «Блокировать»."""
 
     def setUp(self):
-        self.e = main.engine
+        self.e = panel.engine
         self.saved = (self.e.target, self.e.applied_hash, dict(self.e.rt), dict(self.e.health), list(self.e.clients))
 
     def tearDown(self):
@@ -136,7 +138,7 @@ class HoldRulesTest(unittest.TestCase):
         `applied_hash` не меняется — обычное применение в конце прохода заменит эти правила."""
         from test_api import good_state
         e = self.e
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         g = good_state()
         st["upstreams"], st["routing"] = g["upstreams"], {"default": "up:u000001", "rules": []}
         written = []
@@ -161,7 +163,7 @@ class HoldRulesTest(unittest.TestCase):
         t = mock.Mock(kind="container", iface="awg0", key="k", pid=1)
         t.ns.side_effect = system.SysError("nft: syntax error")
         with mock.patch.object(config, "DRY_RUN", False):
-            e._hold_rules(t, main.store.snapshot())             # не бросает: ошибку покажет обычное применение
+            e._hold_rules(t, panel.store.snapshot())             # не бросает: ошибку покажет обычное применение
 
     def test_next_pass_right_after_auto_restart(self):
         """После автоперезапуска сервера следующий проход идёт сразу, а не через RECONCILE_INTERVAL."""
@@ -180,7 +182,7 @@ class EnginePendingTest(unittest.TestCase):
     ждут. Раньше они поднимались на amneziawg-go, а следующим проходом пересоздавались на модуле."""
 
     def setUp(self):
-        self.e = main.engine
+        self.e = panel.engine
         self.saved = (self.e.server_engine, self.e._srv_iface, self.e.kernel_fallback, dict(self.e.rt),
                       dict(self.e._up_fail), dict(self.e.health))
 
@@ -246,7 +248,7 @@ class PrefetchTest(unittest.TestCase):
     проход — и блокировку движка, а с ней выдачу конфигов и личные страницы — 3 × RESOLVE_TIMEOUT секунд."""
 
     def setUp(self):
-        self.e = main.engine
+        self.e = panel.engine
         self.saved = (dict(self.e.rt), dict(self.e._up_fail), dict(self.e.health))
 
     def tearDown(self):
@@ -309,19 +311,19 @@ class SyncRollbackTest(unittest.TestCase):
     сроку» при этом уже стояла, и вторая попытка не делалась."""
 
     def setUp(self):
-        self.e = main.engine
+        self.e = panel.engine
         self.e.reconcile()
         self.t = self.e.target
         self.pk = self.e.clients[0]["public_key"]
         self.conf = self.t.read_file(self.t.conf_path)
         self.table = self.t.read_file(self.t.clients_table_path)
-        self.limits = main.store.snapshot().get("limits") or {}
+        self.limits = panel.store.snapshot().get("limits") or {}
         limits._warned.clear()
 
     def tearDown(self):
         self.t.write_file(self.t.conf_path, self.conf)
         self.t.write_file(self.t.clients_table_path, self.table, 0o644)
-        main.store.mutate(lambda st: st.__setitem__("limits", self.limits))
+        panel.store.mutate(lambda st: st.__setitem__("limits", self.limits))
         self.e.reconcile()
 
     def test_failed_sync_puts_files_back(self):
@@ -339,32 +341,32 @@ class SyncRollbackTest(unittest.TestCase):
         событие есть."""
         e, pk = self.e, self.pk
         exp = int(time.time()) - 60
-        main.store.mutate(lambda st: st.setdefault("limits", {}).__setitem__(
+        panel.store.mutate(lambda st: st.setdefault("limits", {}).__setitem__(
             pk, {"expires": exp, "quota": None, "period": "month"}))
         events = []
         with mock.patch.object(e, "event", side_effect=lambda lvl, m: events.append(m.key)):
             with mock.patch.object(self.t, "sync", side_effect=system.SysError("Device or resource busy")):
                 e.reconcile()
-            L = main.store.snapshot()["limits"][pk]
+            L = panel.store.snapshot()["limits"][pk]
             self.assertIsNone(L.get("exp_done"))
             self.assertNotIn("ev.client_expired", events)
             self.assertEqual(self.t.read_file(self.t.conf_path), self.conf)        # файл возвращён
             e.reconcile()
-        L = main.store.snapshot()["limits"][pk]
+        L = panel.store.snapshot()["limits"][pk]
         self.assertEqual((L.get("exp_done"), L.get("auto_off")), (exp, "exp"))
         self.assertEqual(events.count("ev.client_expired"), 1)
         self.assertFalse(next(c for c in e.clients if c["public_key"] == pk)["enabled"])
 
     def test_quota_is_retried(self):
         e, pk = self.e, self.pk
-        main.store.mutate(lambda st: st.setdefault("limits", {}).__setitem__(
+        panel.store.mutate(lambda st: st.setdefault("limits", {}).__setitem__(
             pk, {"expires": None, "quota": 1, "period": "total"}))
         with mock.patch.object(e.traffic, "used", return_value=10), mock.patch.object(e, "event"):
             with mock.patch.object(self.t, "sync", side_effect=system.SysError("busy")):
                 limits.enforce(e)
-            self.assertIsNone(main.store.snapshot()["limits"][pk].get("quota_done"))
+            self.assertIsNone(panel.store.snapshot()["limits"][pk].get("quota_done"))
             limits.enforce(e)
-        L = main.store.snapshot()["limits"][pk]
+        L = panel.store.snapshot()["limits"][pk]
         self.assertEqual((L.get("quota_done"), L.get("auto_off")), ("total", "quota:total"))
 
 
@@ -467,46 +469,46 @@ class StateSpeedTest(unittest.TestCase):
     клиента со ссылкой заново копировал всё состояние: тысяча клиентов — полторы секунды на каждый опрос."""
 
     def test_snapshots_do_not_grow_with_clients(self):
-        e = main.engine
+        e = panel.engine
         e.reconcile()
         pks = [c["public_key"] for c in e.clients]
         self.assertGreater(len(pks), 3)
-        saved = main.store.snapshot().get("shares") or {}
-        main.store.mutate(lambda st: st.__setitem__("shares", {f"{i:024d}": {"pk": pk, "created": 1.0}
+        saved = panel.store.snapshot().get("shares") or {}
+        panel.store.mutate(lambda st: st.__setitem__("shares", {f"{i:024d}": {"pk": pk, "created": 1.0}
                                                                for i, pk in enumerate(pks)}))
         try:
-            real, n = main.store.snapshot, [0]
+            real, n = panel.store.snapshot, [0]
 
             def snap():
                 n[0] += 1
                 return real()
-            with mock.patch.object(main.store, "snapshot", side_effect=snap):
-                st = main.get_state(None)
+            with mock.patch.object(panel.store, "snapshot", side_effect=snap):
+                st = state.get_state(None)
             with_links, n[0] = n[0], 0
-            main.store.mutate(lambda st: st.__setitem__("shares", {}))
-            with mock.patch.object(main.store, "snapshot", side_effect=snap):
-                main.get_state(None)
+            panel.store.mutate(lambda st: st.__setitem__("shares", {}))
+            with mock.patch.object(panel.store, "snapshot", side_effect=snap):
+                state.get_state(None)
             self.assertEqual(with_links, n[0])                     # ссылки не добавляют ни одного снимка
-            main.store.mutate(lambda st: st.__setitem__("shares", {f"{i:024d}": {"pk": pk, "created": 1.0}
+            panel.store.mutate(lambda st: st.__setitem__("shares", {f"{i:024d}": {"pk": pk, "created": 1.0}
                                                                    for i, pk in enumerate(pks)}))
             by_pk = {c["public_key"]: c["share_url"] for c in st["clients"]}
             for i, pk in enumerate(pks):
-                self.assertEqual(by_pk[pk], main.share_url(f"{i:024d}"))
+                self.assertEqual(by_pk[pk], panel.share_url(f"{i:024d}"))
         finally:
-            main.store.mutate(lambda st: st.__setitem__("shares", saved))
+            panel.store.mutate(lambda st: st.__setitem__("shares", saved))
 
     def test_first_link_wins_and_none_without(self):
-        e = main.engine
+        e = panel.engine
         e.reconcile()
         pk, other = e.clients[0]["public_key"], e.clients[1]["public_key"]
-        saved = main.store.snapshot().get("shares") or {}
-        main.store.mutate(lambda st: st.__setitem__("shares", {"A" * 24: {"pk": pk}, "B" * 24: {"pk": pk}}))
+        saved = panel.store.snapshot().get("shares") or {}
+        panel.store.mutate(lambda st: st.__setitem__("shares", {"A" * 24: {"pk": pk}, "B" * 24: {"pk": pk}}))
         try:
-            by_pk = {c["public_key"]: c["share_url"] for c in main.get_state(None)["clients"]}
+            by_pk = {c["public_key"]: c["share_url"] for c in state.get_state(None)["clients"]}
             self.assertTrue(by_pk[pk].endswith("/s/" + "A" * 24))
             self.assertIsNone(by_pk[other])
         finally:
-            main.store.mutate(lambda st: st.__setitem__("shares", saved))
+            panel.store.mutate(lambda st: st.__setitem__("shares", saved))
 
 
 class KeepAliveGzipTest(unittest.TestCase):

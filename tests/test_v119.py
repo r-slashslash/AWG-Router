@@ -24,6 +24,9 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import balance, nftgen, shaping, sniproxy  # noqa: E402
+from app import panel  # noqa: E402
+from app import store as store_mod  # noqa: E402
+from app.api import backup, clients, exits, routing, state, telegram  # noqa: E402
 
 MB = 1_000_000 / 8          # байт/с в 1 Мбит/с
 UP = ("[Interface]\nAddress = 10.9.0.{n}/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n\n"
@@ -345,61 +348,57 @@ class BalancerTest(unittest.TestCase):
 # ----------------------------------------------------------------- движок и API
 class EngineBalanceTest(unittest.TestCase):
     def setUp(self):
-        from app import main
-        self.main = main
-        main.engine.reconcile()
-        self.ids = [main.add_upstream(Req({"name": f"E{n}", "config": UP.format(n=n)}))["id"] for n in (21, 22)]
-        main.engine.reconcile()
-        st = main.store.snapshot()
+        panel.engine.reconcile()
+        self.ids = [exits.add_upstream(Req({"name": f"E{n}", "config": UP.format(n=n)}))["id"] for n in (21, 22)]
+        panel.engine.reconcile()
+        st = panel.store.snapshot()
         for uid in self.ids:          # в демо второй туннель «мёртвый» — делаем оба рабочими
-            main.engine.health[uid] = {"state": "up", "healthy": True}
+            panel.engine.health[uid] = {"state": "up", "healthy": True}
         self.st = st
 
     def tearDown(self):
-        m = self.main
-        m.store.mutate(lambda s: s["routing"].pop("balance", None))
+        panel.store.mutate(lambda s: s["routing"].pop("balance", None))
         for uid in self.ids:
-            m.del_upstream(Req({"replace": "direct"}), uid)
-        m.engine.bal, m.engine.bal_new, m.engine.bal_nums = {}, None, set()
-        m.engine.balancer = balance.Balancer()
+            exits.del_upstream(Req({"replace": "direct"}), uid)
+        panel.engine.bal, panel.engine.bal_new, panel.engine.bal_nums = {}, None, set()
+        panel.engine.balancer = balance.Balancer()
 
     def nums(self):
-        st = self.main.store.snapshot()
-        return {self.main.Store.upstream(st, u)["num"] for u in self.ids}
+        st = panel.store.snapshot()
+        return {store_mod.Store.upstream(st, u)["num"] for u in self.ids}
 
     def test_balance_rules_trace_state(self):
-        m = self.main
-        st0 = m.store.snapshot()
-        m.put_routing(Req({"default": "direct", "rules": st0["routing"]["rules"],
+        st0 = panel.store.snapshot()
+        routing.put_routing(Req({"default": "direct", "rules": st0["routing"]["rules"],
                            "balance": {"on": True, "skip": ["nope"]}}))
-        st = m.store.snapshot()
+        st = panel.store.snapshot()
         self.assertEqual(st["routing"]["balance"], {"on": True, "skip": []})   # неизвестный id отброшен
         others = [u["id"] for u in st["upstreams"] if u["id"] not in self.ids]
-        m.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"],
+        routing.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"],
                            "balance": {"on": True, "skip": others}}))
-        st = m.store.snapshot()
+        st = panel.store.snapshot()
         for uid in self.ids:
-            m.engine.health[uid] = {"state": "up", "healthy": True}
-        m.engine._balance(st)
-        self.assertEqual(m.engine.bal_nums, self.nums())
-        pks = [c["public_key"] for c in m.engine.clients if c.get("ip")
-               and m.engine.policy_for(st, c["public_key"])["balanced"]]
+            panel.engine.health[uid] = {"state": "up", "healthy": True}
+        panel.engine._balance(st)
+        self.assertEqual(panel.engine.bal_nums, self.nums())
+        pks = [c["public_key"] for c in panel.engine.clients if c.get("ip")
+               and panel.engine.policy_for(st, c["public_key"])["balanced"]]
         self.assertTrue(pks)
-        self.assertEqual(set(m.engine.bal), set(pks))
-        gp, cps = m.engine._policies(st)
+        self.assertEqual(set(panel.engine.bal), set(pks))
+        gp, cps = panel.engine._policies(st)
         self.assertIsInstance(gp["default"], nftgen.Sticky)
-        text = m.engine.build_ruleset(m.engine.target, st)
+        text = panel.engine.build_ruleset(panel.engine.target, st)
         for n in self.nums():
             self.assertIn(f"chain ob_u{n}", text)
         # трассировка и состояние для браузера показывают назначенный выход
         pk = pks[0]
-        tr = m.engine.trace(pk, "8.8.8.8")
-        self.assertEqual(tr["result"], "up:" + m.engine.bal[pk])
+        tr = panel.engine.trace(pk, "8.8.8.8")
+        self.assertEqual(tr["result"], "up:" + panel.engine.bal[pk])
         self.assertEqual(tr["steps"][-1].key, "tr.balance")
-        s = m.get_state(None)
+        s = state.get_state(None)
         c = next(x for x in s["clients"] if x["public_key"] == pk)
         self.assertTrue(c["balanced"])
-        self.assertEqual(c["default"], "up:" + m.engine.bal[pk])
+        self.assertEqual(c["default"], "up:" + panel.engine.bal[pk])
         self.assertEqual(sorted(s["balance"]["members"]), sorted(self.ids))
         v = next(u for u in s["upstreams"] if u["id"] == self.ids[0])
         self.assertTrue(v["balance"])
@@ -407,99 +406,94 @@ class EngineBalanceTest(unittest.TestCase):
                          len(pks))
         # оба выхода упали — запасной путь (выход по умолчанию), без Sticky
         for uid in self.ids:
-            m.engine.health[uid] = {"state": "stale", "healthy": False}
-        m.engine._balance(st)
-        self.assertEqual(m.engine.bal, {})
-        gp, _ = m.engine._policies(st)
+            panel.engine.health[uid] = {"state": "stale", "healthy": False}
+        panel.engine._balance(st)
+        self.assertEqual(panel.engine.bal, {})
+        gp, _ = panel.engine._policies(st)
         self.assertEqual(gp["default"], "direct")
-        self.assertEqual(m.engine.trace(pk, "8.8.8.8")["steps"][-1].key, "tr.balance_down")
+        self.assertEqual(panel.engine.trace(pk, "8.8.8.8")["steps"][-1].key, "tr.balance_down")
 
     def test_client_with_own_exit_not_balanced(self):
-        m = self.main
-        st = m.store.snapshot()
-        m.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"], "balance": {"on": True}}))
-        pk = m.engine.clients[0]["public_key"]
+        st = panel.store.snapshot()
+        routing.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"], "balance": {"on": True}}))
+        pk = panel.engine.clients[0]["public_key"]
         old = st["clients"].get(pk)
         try:
-            m.put_client(Req({"outbound": "block"}), pk)
-            self.assertFalse(m.engine.policy_for(m.store.snapshot(), pk)["balanced"])
+            clients.put_client(Req({"outbound": "block"}), pk)
+            self.assertFalse(panel.engine.policy_for(panel.store.snapshot(), pk)["balanced"])
         finally:
-            m.store.mutate(lambda s: s["clients"].pop(pk, None) if old is None else s["clients"].update({pk: old}))
+            panel.store.mutate(lambda s: s["clients"].pop(pk, None) if old is None else s["clients"].update({pk: old}))
 
     def test_bot_make_default_turns_balance_off(self):
-        m = self.main
-        st = m.store.snapshot()
-        m.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"], "balance": {"on": True}}))
-        m.set_default_outbound("up:" + self.ids[0])
-        r = m.store.snapshot()["routing"]
+        st = panel.store.snapshot()
+        routing.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"], "balance": {"on": True}}))
+        telegram.set_default_outbound("up:" + self.ids[0])
+        r = panel.store.snapshot()["routing"]
         self.assertEqual((r["default"], r["balance"]["on"]), ("up:" + self.ids[0], False))
 
     def test_delete_exit_leaves_skip(self):
-        m = self.main
-        st = m.store.snapshot()
-        m.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"],
+        st = panel.store.snapshot()
+        routing.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"],
                            "balance": {"on": True, "skip": [self.ids[0]]}}))
         uid = self.ids.pop(0)
-        m.del_upstream(Req({"replace": "direct"}), uid)
-        self.assertEqual(m.store.snapshot()["routing"]["balance"]["skip"], [])
+        exits.del_upstream(Req({"replace": "direct"}), uid)
+        self.assertEqual(panel.store.snapshot()["routing"]["balance"]["skip"], [])
 
     def test_routing_without_balance_keeps_it(self):
-        m = self.main
-        st = m.store.snapshot()
-        m.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"], "balance": {"on": True}}))
-        m.put_routing(Req({"default": "block", "rules": st["routing"]["rules"]}))   # старый интерфейс
-        self.assertTrue(m.store.snapshot()["routing"]["balance"]["on"])
-        m.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"]}))
+        st = panel.store.snapshot()
+        routing.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"], "balance": {"on": True}}))
+        routing.put_routing(Req({"default": "block", "rules": st["routing"]["rules"]}))   # старый интерфейс
+        self.assertTrue(panel.store.snapshot()["routing"]["balance"]["on"])
+        routing.put_routing(Req({"default": "direct", "rules": st["routing"]["rules"]}))
 
 
 class RatesApiTest(unittest.TestCase):
     def test_exit_rates(self):
-        from app import main, web
-        uid = main.add_upstream(Req({"name": "R", "config": UP.format(n=31), "rate_down": "80", "rate_up": ""}))["id"]
+        from app import web
+        uid = exits.add_upstream(Req({"name": "R", "config": UP.format(n=31), "rate_down": "80", "rate_up": ""}))["id"]
         try:
-            u = main.Store.upstream(main.store.snapshot(), uid)
+            u = store_mod.Store.upstream(panel.store.snapshot(), uid)
             self.assertEqual((u.get("rate_down"), "rate_up" in u), (80.0, False))
-            main.edit_upstream(Req({"name": "R2"}), uid)                    # без полей — не трогаем
-            self.assertEqual(main.Store.upstream(main.store.snapshot(), uid)["rate_down"], 80.0)
-            main.edit_upstream(Req({"rate_down": None, "rate_up": 12.5}), uid)
-            u = main.Store.upstream(main.store.snapshot(), uid)
+            exits.edit_upstream(Req({"name": "R2"}), uid)                    # без полей — не трогаем
+            self.assertEqual(store_mod.Store.upstream(panel.store.snapshot(), uid)["rate_down"], 80.0)
+            exits.edit_upstream(Req({"rate_down": None, "rate_up": 12.5}), uid)
+            u = store_mod.Store.upstream(panel.store.snapshot(), uid)
             self.assertEqual(("rate_down" in u, u["rate_up"]), (False, 12.5))
             for bad in ("x", -1, 0.01, 10 ** 7):
                 with self.assertRaises(web.HTTPError):
-                    main.edit_upstream(Req({"rate_up": bad}), uid)
-            v = main._upstream_view(main.store.snapshot(), u)
+                    exits.edit_upstream(Req({"rate_up": bad}), uid)
+            v = state._upstream_view(panel.store.snapshot(), u)
             self.assertEqual((v["rate_up"], v["speed"]), (12.5, [0, 0]))
         finally:
-            main.del_upstream(Req({"replace": "direct"}), uid)
+            exits.del_upstream(Req({"replace": "direct"}), uid)
 
     def test_client_and_total(self):
-        from app import main
-        main.engine.reconcile()
-        pk = main.engine.clients[0]["public_key"]
-        st0 = main.store.snapshot()
+        panel.engine.reconcile()
+        pk = panel.engine.clients[0]["public_key"]
+        st0 = panel.store.snapshot()
         try:
-            main.put_limits(Req({"rate_down": 10}), pk)
-            self.assertEqual(main.store.snapshot()["limits"][pk]["rate_down"], 10.0)
+            clients.put_limits(Req({"rate_down": 10}), pk)
+            self.assertEqual(panel.store.snapshot()["limits"][pk]["rate_down"], 10.0)
             # срок и лимит трафика из Telegram не стирают ограничение скорости
-            main.apply_limits(pk, None, None, "month")
-            self.assertEqual(main.store.snapshot()["limits"][pk]["rate_down"], 10.0)
-            main.put_limits(Req({"rate_down": None}), pk)
-            self.assertNotIn(pk, main.store.snapshot()["limits"])            # ничего не осталось
-            main.put_settings(Req({"shaping": {"down": "100", "up": None}}))
-            self.assertEqual(main.store.snapshot()["settings"]["shaping"], {"down": 100.0})
-            main.put_settings(Req({"shaping": {"down": "", "up": ""}}))
-            self.assertNotIn("shaping", main.store.snapshot()["settings"])
+            clients.apply_limits(pk, None, None, "month")
+            self.assertEqual(panel.store.snapshot()["limits"][pk]["rate_down"], 10.0)
+            clients.put_limits(Req({"rate_down": None}), pk)
+            self.assertNotIn(pk, panel.store.snapshot()["limits"])            # ничего не осталось
+            state.put_settings(Req({"shaping": {"down": "100", "up": None}}))
+            self.assertEqual(panel.store.snapshot()["settings"]["shaping"], {"down": 100.0})
+            state.put_settings(Req({"shaping": {"down": "", "up": ""}}))
+            self.assertNotIn("shaping", panel.store.snapshot()["settings"])
         finally:
-            main.store.mutate(lambda s: s.update(limits=st0["limits"]))
-            main.store.mutate(lambda s: s["settings"].pop("shaping", None))
+            panel.store.mutate(lambda s: s.update(limits=st0["limits"]))
+            panel.store.mutate(lambda s: s["settings"].pop("shaping", None))
 
     def test_restore_checks_rates(self):
-        from app import main, web
-        st = main.store.snapshot()
+        from app import web
+        st = panel.store.snapshot()
         for bad in ({"settings": {**st["settings"], "shaping": {"down": "fast"}}},
                     {"routing": {**st["routing"], "balance": "on"}}):
             with self.assertRaises(web.HTTPError):
-                main.clean_backup_state({**st, **bad})
+                backup.clean_backup_state({**st, **bad})
 
 
 # ----------------------------------------------------------------- sniproxy
@@ -940,23 +934,22 @@ class SharedLimitTest(unittest.TestCase):
         self.assertNotIn(("u1", 1), s.share_state)
 
     def test_engine_passes_only_socks_with_limits(self):
-        from app import main
         from types import SimpleNamespace
-        st = main.store.snapshot()
-        socks_id = main.add_upstream(Req({"name": "S", "config": "socks5://198.51.100.77:1080",
+        st = panel.store.snapshot()
+        socks_id = exits.add_upstream(Req({"name": "S", "config": "socks5://198.51.100.77:1080",
                                           "rate_down": 20}))["id"]
-        awg_id = main.add_upstream(Req({"name": "A", "config": UP.format(n=41), "rate_down": 20}))["id"]
+        awg_id = exits.add_upstream(Req({"name": "A", "config": UP.format(n=41), "rate_down": 20}))["id"]
         try:
-            st = main.store.snapshot()
-            e = main.engine
+            st = panel.store.snapshot()
+            e = panel.engine
             saved = dict(e.rt)
             for uid in (socks_id, awg_id):
-                u = main.Store.upstream(st, uid)
+                u = store_mod.Store.upstream(st, uid)
                 e.rt[uid] = SimpleNamespace(num=u["num"], iface=f"awgr{u['num']}", target_key="k")
             rates = {socks_id: [0, 2_500_000], awg_id: [0, 2_500_000]}
             got = e._sni_shared(st, rates)
             self.assertEqual(set(got), {socks_id})
-            n = main.Store.upstream(st, socks_id)["num"]
+            n = store_mod.Store.upstream(st, socks_id)["num"]
             self.assertEqual(got[socks_id]["1"]["dev"], f"awgq{n}")
             self.assertEqual(got[socks_id]["1"]["iface"], f"awgr{n}")
             self.assertNotIn("0", got[socks_id])                 # отдача без предела — не делится
@@ -968,7 +961,7 @@ class SharedLimitTest(unittest.TestCase):
             e.rt.clear()
             e.rt.update(saved)
             for uid in (socks_id, awg_id):
-                main.del_upstream(Req({"replace": "direct"}), uid)
+                exits.del_upstream(Req({"replace": "direct"}), uid)
 
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")

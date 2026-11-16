@@ -16,8 +16,10 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, main, notify, tgbot, web  # noqa: E402
+from app import config, notify, tgbot, web  # noqa: E402
 from tests.test_v19 import FakeTG, button, cfg, msg  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, clients, telegram  # noqa: E402
 
 
 class Req:
@@ -31,7 +33,7 @@ class Req:
 class BotTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
         self.tg = FakeTG()
@@ -39,7 +41,7 @@ class BotTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
         self.c = cfg()
 
     def run_updates(self, *ups):
@@ -62,7 +64,7 @@ class BotTest(unittest.TestCase):
             p = self.sent()[-1]
             self.assertEqual(p["text"].count("\n"), 4, p["text"])   # подпись под логотипом: 5 строк
             self.assertIn(title, p["text"])
-            self.assertIn(main.bot_ops.panel()["host"], p["text"])   # адрес сервера
+            self.assertIn(telegram.bot_ops.panel()["host"], p["text"])   # адрес сервера
             self.assertIn("inline_keyboard", p["reply_markup"])
 
     def test_menu_layout_in_every_language(self):
@@ -97,7 +99,7 @@ class BotTest(unittest.TestCase):
     def test_panel_link(self):
         self.run_updates(msg("/panel"))
         p = self.sent()[-1]
-        url = main.panel_url()
+        url = panel.panel_url()
         self.assertIn(url, p["text"])
         self.assertEqual(self.inline(p), [url, "m"])
         self.assertTrue(p["disable_web_page_preview"])        # Telegram не ходит по секретному адресу сам
@@ -111,9 +113,9 @@ class BotTest(unittest.TestCase):
             return real(token, method, data, ctype, timeout, via)
         with mock.patch.object(notify, "_post", picky):
             self.run_updates(msg("/panel"), msg("/start", uid=2))
-        panel, menu = self.sent()[-2:]
-        self.assertIn(main.panel_url(), panel["text"])
-        self.assertEqual(self.inline(panel), ["m"])
+        panel_msg, menu = self.sent()[-2:]
+        self.assertIn(panel.panel_url(), panel_msg["text"])
+        self.assertEqual(self.inline(panel_msg), ["m"])
         self.assertIn("pn", self.inline(menu))                # в меню «Панель» — экран со ссылкой
 
     def test_panel_ssh_mode(self):
@@ -125,7 +127,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(self.inline(p), ["m"])                # кнопка-ссылка на 127.0.0.1 бесполезна
 
     def _new_client(self, name):
-        pk = main.bot_ops.add_client(name)
+        pk = telegram.bot_ops.add_client(name)
         self.assertIsNotNone(self.bot._client_wait(pk))
         return pk
 
@@ -137,22 +139,22 @@ class BotTest(unittest.TestCase):
         ask = [p for m, p in self.tg.calls if m in ("sendMessage", "editMessageText")][-1]
         self.assertIn("Удалить меня", ask["text"])
         self.assertEqual(self.inline(ask), ["dlgo:" + pk, "c:" + pk])
-        self.assertTrue(any(x["public_key"] == pk for x in main.engine.clients))   # ещё не удалён
+        self.assertTrue(any(x["public_key"] == pk for x in panel.engine.clients))   # ещё не удалён
         self.run_updates(button("c:" + pk, uid=3))                                # «Отмена» — снова карточка
-        self.assertTrue(any(x["public_key"] == pk for x in main.engine.clients))
+        self.assertTrue(any(x["public_key"] == pk for x in panel.engine.clients))
 
     def test_delete(self):
         pk = self._new_client("Gone soon")
-        main.ensure_share(pk)
+        clients.ensure_share(pk)
         self.run_updates(button("dlgo:" + pk))
-        self.assertFalse(any(x["public_key"] == pk for x in main.engine.clients))
-        st = main.store.snapshot()
+        self.assertFalse(any(x["public_key"] == pk for x in panel.engine.clients))
+        st = panel.store.snapshot()
         self.assertNotIn(pk, st.get("limits", {}))
         self.assertFalse(any(v.get("pk") == pk for v in st.get("shares", {}).values()))
         toast = self.tg.last("answerCallbackQuery")["text"]
         self.assertIn("Gone soon", toast)
         self.assertIn("deleted", toast)
-        self.assertIn("tg.act_delete", [getattr(e["msg"], "key", "") for e in main.engine.events])
+        self.assertIn("tg.act_delete", [getattr(e["msg"], "key", "") for e in panel.engine.events])
         self.run_updates(button("dlgo:" + pk, uid=2))         # второй раз — «такого клиента больше нет»
         self.assertIn("no longer", self.tg.last("answerCallbackQuery")["text"].lower())
 
@@ -164,11 +166,11 @@ class BotTest(unittest.TestCase):
 @unittest.skipUnless(shutil.which("openssl"), "openssl")
 class BackupPasswordTest(unittest.TestCase):
     def test_encrypted_download_opens_with_restore(self):
-        r = main.get_backup_encrypted(Req({"password": "password1"}))
+        r = backup.get_backup_encrypted(Req({"password": "password1"}))
         data = base64.b64decode(r["data"])
         self.assertTrue(data.startswith(notify.ENC_MAGIC))
         self.assertNotIn(b"awg-router-backup", data)
-        b = main.decrypt_backup(Req({"data": r["data"], "password": "password1"}))["backup"]
+        b = backup.decrypt_backup(Req({"data": r["data"], "password": "password1"}))["backup"]
         self.assertEqual(b["format"], "awg-router-backup")
         self.assertIn("state", b)
         self.assertIn("host", r)
@@ -176,12 +178,12 @@ class BackupPasswordTest(unittest.TestCase):
     def test_password_rules(self):
         for pw in ("", "short", "x" * 129):
             with self.assertRaises(web.HTTPError):
-                main.get_backup_encrypted(Req({"password": pw}))
+                backup.get_backup_encrypted(Req({"password": pw}))
 
     def test_wrong_password(self):
-        r = main.get_backup_encrypted(Req({"password": "password1"}))
+        r = backup.get_backup_encrypted(Req({"password": "password1"}))
         with self.assertRaises(web.HTTPError):
-            main.decrypt_backup(Req({"data": r["data"], "password": "password2"}))
+            backup.decrypt_backup(Req({"data": r["data"], "password": "password2"}))
 
 
 class UiTextsTest(unittest.TestCase):

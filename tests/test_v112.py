@@ -22,8 +22,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.store import Store  # noqa: E402
 from app import awgconf, config, domains, lists, nftgen, sniproxy, socks, web  # noqa: E402
-from app import main  # noqa: E402
 from tests import e2e_servers  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import exits, routing, state, telegram  # noqa: E402
 
 
 class Req:
@@ -342,90 +343,90 @@ class SocksConnectByNameTest(SocksCheckTest):
 class PanelTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            self.lid = main.add_list(Req({"kind": "domains", "source": "youtube.com\n*.googlevideo.com"}))["id"]
-        self.socks = main.add_upstream(Req({"name": "Proxy", "config": "socks5://bob:secret@198.51.100.20:1080"}))["id"]
-        self.awg = next((u["id"] for u in main.store.snapshot()["upstreams"]
-                         if main.engine.parsed(u).kind == "awg"), None)
+            self.lid = routing.add_list(Req({"kind": "domains", "source": "youtube.com\n*.googlevideo.com"}))["id"]
+        self.socks = exits.add_upstream(Req({"name": "Proxy", "config": "socks5://bob:secret@198.51.100.20:1080"}))["id"]
+        self.awg = next((u["id"] for u in panel.store.snapshot()["upstreams"]
+                         if panel.engine.parsed(u).kind == "awg"), None)
 
     def tearDown(self):
         r = self._routing
-        main.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
-        main.del_upstream(Req({"replace": "direct"}), self.socks)
-        main.del_list(None, self.lid)
-        main.engine.reconcile()
+        panel.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
+        exits.del_upstream(Req({"replace": "direct"}), self.socks)
+        routing.del_list(None, self.lid)
+        panel.engine.reconcile()
 
     def rules(self, *rules):
-        return main.put_routing(Req({"default": "direct", "rules": [
+        return routing.put_routing(Req({"default": "direct", "rules": [
             {"lists": l, "outbound": o, "enabled": True, "comment": ""} for l, o in rules]}))
 
     def test_list_named_by_first_domain(self):
-        self.assertEqual(main.get_list(None, self.lid)["name"], "youtube.com")
-        self.assertIsNone(next(l for l in main.get_state(None)["lists"] if l["id"] == self.lid)["source"])
+        self.assertEqual(routing.get_list(None, self.lid)["name"], "youtube.com")
+        self.assertIsNone(next(l for l in state.get_state(None)["lists"] if l["id"] == self.lid)["source"])
 
     def test_domain_rules_to_any_exit(self):
         # с 1.21.0 правило по доменам ведёт на любой выход: SOCKS5, AWG, напрямую, блок
         for out in ["up:" + self.socks, "direct", "block"] + (["up:" + self.awg] if self.awg else []):
             self.rules(([self.lid], out))
-            self.assertEqual(main.get_state(None)["routing"]["rules"][0]["outbound"], out)
+            self.assertEqual(state.get_state(None)["routing"]["rules"][0]["outbound"], out)
         with self.assertRaises(web.HTTPError) as cm:
             self.rules(([self.lid, "ru"], "up:" + self.socks))
         self.assertIn("err.rule_mixed_domains", str(cm.exception))
 
     def test_sniffer_in_ruleset_and_trace(self):
         self.rules((["ru"], "direct"), ([self.lid], "up:" + self.socks))
-        main.engine.reconcile()
-        self.assertEqual(main.engine.sni_view()["state"], "on")
-        self.assertIn("c_sniff", main.engine.ruleset)
+        panel.engine.reconcile()
+        self.assertEqual(panel.engine.sni_view()["state"], "on")
+        self.assertIn("c_sniff", panel.engine.ruleset)
         with mock.patch.object(socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("142.250.74.110", 0))]):
-            t = main.trace_target(None, "rr1.googlevideo.com")
+            t = routing.trace_target(None, "rr1.googlevideo.com")
         self.assertEqual(t["result"], "up:" + self.socks)
         self.assertEqual(t["domain"], "googlevideo.com")
         self.assertIn("tr.match_domain", [m.key for m in t["steps"]])
-        t = main.trace_target(None, "142.250.74.110")                    # по одному IP домен не узнать
+        t = routing.trace_target(None, "142.250.74.110")                    # по одному IP домен не узнать
         self.assertNotIn("domain", t)
         self.rules((["ru"], "direct"))
-        main.engine.reconcile()
-        self.assertIsNone(main.engine.sni_view())
-        self.assertNotIn("c_sniff", main.engine.ruleset)
+        panel.engine.reconcile()
+        self.assertIsNone(panel.engine.sni_view())
+        self.assertNotIn("c_sniff", panel.engine.ruleset)
 
     def test_sniffer_config_targets(self):
         self.rules(([self.lid], "up:" + self.socks))
-        main.engine.reconcile()
-        st = main.store.snapshot()
-        to = main.engine._sni_target(st, "up:" + self.socks)
+        panel.engine.reconcile()
+        st = panel.store.snapshot()
+        to = panel.engine._sni_target(st, "up:" + self.socks)
         u = next(u for u in st["upstreams"] if u["id"] == self.socks)
-        if main.engine.health.get(self.socks, {}).get("healthy"):
+        if panel.engine.health.get(self.socks, {}).get("healthy"):
             self.assertEqual(to["socks"]["port"], 1080)
             self.assertEqual(to["socks"]["user"], "bob")
             self.assertEqual(to["acct"], self.socks)                      # байты — на счёт этого выхода
         else:                                                             # демо: «нерабочий» выход → резерв
             self.assertEqual(to, {"mark": 0, "acct": "direct"})
-        self.assertEqual(main.engine._sni_target(st, "block"), {"block": True})
-        self.assertEqual(main.engine._sni_target(st, "direct"), {"mark": 0, "acct": "direct"})
+        self.assertEqual(panel.engine._sni_target(st, "block"), {"block": True})
+        self.assertEqual(panel.engine._sni_target(st, "direct"), {"mark": 0, "acct": "direct"})
         self.assertTrue(u)
 
     def test_socks_exit_view(self):
-        main.engine.reconcile()
-        v = next(u for u in main.get_state(None)["upstreams"] if u["id"] == self.socks)
+        panel.engine.reconcile()
+        v = next(u for u in state.get_state(None)["upstreams"] if u["id"] == self.socks)
         self.assertEqual(v["kind"], "socks5")
         self.assertEqual(v["endpoint"], "198.51.100.20:1080")
         self.assertEqual(v["socks_user"], "bob")
         self.assertNotIn("secret", str(v))                               # пароль в состояние не попадает
-        self.assertEqual(main.get_upstream_config(None, self.socks)["config"], "socks5://bob:secret@198.51.100.20:1080")
+        self.assertEqual(exits.get_upstream_config(None, self.socks)["config"], "socks5://bob:secret@198.51.100.20:1080")
         self.assertEqual(v["health"]["kind"], "socks5")
-        self.assertNotIn(f'oifname "awgr{v["num"]}" snat', main.engine.ruleset)
+        self.assertNotIn(f'oifname "awgr{v["num"]}" snat', panel.engine.ruleset)
         with self.assertRaises(web.HTTPError):
-            main.edit_upstream(Req({"config": "socks5://h:99999"}), self.socks)
+            exits.edit_upstream(Req({"config": "socks5://h:99999"}), self.socks)
 
     def test_sni_hung(self):
         from app import engine as eng
-        e = main.engine
+        e = panel.engine
         old = e.sni
         e.sni = eng.HelperRT(mock.Mock(pid=4242), "k", "h")
         try:
@@ -449,57 +450,57 @@ class ExitDialogRoutingTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         self._lists = {l["id"] for l in st["lists"]}
         self.ids = []
 
     def tearDown(self):
         r = self._routing
-        main.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
+        panel.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
         for uid in self.ids:
-            if Store.upstream(main.store.snapshot(), uid):
-                main.del_upstream(Req({"replace": "direct"}), uid)
-        for l in main.store.snapshot()["lists"]:
+            if Store.upstream(panel.store.snapshot(), uid):
+                exits.del_upstream(Req({"replace": "direct"}), uid)
+        for l in panel.store.snapshot()["lists"]:
             if l["id"] not in self._lists:
-                main.del_list(None, l["id"])
-        main.engine.reconcile()
+                routing.del_list(None, l["id"])
+        panel.engine.reconcile()
 
     def add(self, routing, name="Seller"):
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            uid = main.add_upstream(Req({"name": name, "config": "socks5://u:p@198.51.100.30:1080",
+            uid = exits.add_upstream(Req({"name": name, "config": "socks5://u:p@198.51.100.30:1080",
                                          "routing": routing}))["id"]
         self.ids.append(uid)
         return uid
 
     def mine(self, uid):
-        return [r for r in main.store.snapshot()["routing"]["rules"] if r["outbound"] == "up:" + uid]
+        return [r for r in panel.store.snapshot()["routing"]["rules"] if r["outbound"] == "up:" + uid]
 
     def test_own_sites_list_and_rules(self):
         uid = self.add({"domains": "youtube.com\nInstagram.com", "net_lists": ["ru"], "default": False})
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         u = Store.upstream(st, uid)
         own = Store.lst(st, u["own_list"])
         self.assertEqual((own["kind"], own["name"]), ("domains", "Seller"))
         self.assertEqual([r["lists"] for r in self.mine(uid)], [[own["id"]], ["ru"]])
-        self.assertEqual(main.get_state(None)["upstreams"][-1]["own_list"], own["id"])
+        self.assertEqual(state.get_state(None)["upstreams"][-1]["own_list"], own["id"])
 
     def test_edit_keeps_position_and_default(self):
         uid = self.add({"domains": "a.example"})
-        main.put_routing(Req({"default": "direct", "rules": [
+        routing.put_routing(Req({"default": "direct", "rules": [
             {"lists": ["ru"], "outbound": "block", "enabled": True, "comment": ""},
             *self.mine(uid)]}))
-        main.edit_upstream(Req({"name": "Seller", "routing": {"domains": "a.example\nb.example",
+        exits.edit_upstream(Req({"name": "Seller", "routing": {"domains": "a.example\nb.example",
                                                              "net_lists": ["ru"], "default": True}}), uid)
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self.assertEqual(st["routing"]["default"], "up:" + uid)
         self.assertEqual(st["routing"]["rules"][0]["outbound"], "block")    # чужое правило осталось первым
         self.assertIn("b.example", Store.lst(st, Store.upstream(st, uid)["own_list"])["source"])
-        main.edit_upstream(Req({"name": "Seller", "routing": {"domains": "", "default": False}}), uid)
-        st = main.store.snapshot()
+        exits.edit_upstream(Req({"name": "Seller", "routing": {"domains": "", "default": False}}), uid)
+        st = panel.store.snapshot()
         self.assertEqual(st["routing"]["default"], "direct")
         self.assertEqual(self.mine(uid), [])
         self.assertNotIn("own_list", Store.upstream(st, uid))              # свой список удалён
@@ -508,9 +509,9 @@ class ExitDialogRoutingTest(unittest.TestCase):
     def test_edit_without_routing_changes_nothing(self):
         uid = self.add({"domains": "a.example"})
         before = self.mine(uid)
-        main.edit_upstream(Req({"name": "Renamed"}), uid)
+        exits.edit_upstream(Req({"name": "Renamed"}), uid)
         self.assertEqual(self.mine(uid), before)
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self.assertEqual(Store.lst(st, Store.upstream(st, uid)["own_list"])["name"], "Renamed")
 
     def test_bad_input(self):
@@ -520,9 +521,9 @@ class ExitDialogRoutingTest(unittest.TestCase):
 
     def test_delete_drops_own_list_and_domain_rules(self):
         uid = self.add({"domains": "a.example"})
-        own = Store.upstream(main.store.snapshot(), uid)["own_list"]
-        main.del_upstream(Req({"replace": "direct"}), uid)
-        st = main.store.snapshot()
+        own = Store.upstream(panel.store.snapshot(), uid)["own_list"]
+        exits.del_upstream(Req({"replace": "direct"}), uid)
+        st = panel.store.snapshot()
         self.assertIsNone(Store.lst(st, own))
         self.assertFalse(any(own in r["lists"] for r in st["routing"]["rules"]))
 
@@ -552,10 +553,10 @@ class RoutingTabTest(unittest.TestCase):
 class BotMenuTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
-        if not any(c.get("has_config") for c in main.engine.clients):
-            main.bot_ops.add_client("Menu test")             # клиент с конфигом (QR и файл)
-            main.engine.reconcile()
+        panel.engine.reconcile()
+        if not any(c.get("has_config") for c in panel.engine.clients):
+            telegram.bot_ops.add_client("Menu test")             # клиент с конфигом (QR и файл)
+            panel.engine.reconcile()
 
     def setUp(self):
         from app import notify, tgbot
@@ -566,9 +567,9 @@ class BotMenuTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
         self.c = cfg()
-        self.pk = next(c["public_key"] for c in main.engine.clients if c.get("has_config"))
+        self.pk = next(c["public_key"] for c in panel.engine.clients if c.get("has_config"))
 
     def run_updates(self, *ups):
         self.tg.updates = list(ups)
@@ -618,7 +619,7 @@ class BotMenuTest(unittest.TestCase):
         self.assertNotEqual(self.menu_id(), old)
         self.assertEqual(self.tg.last("deleteMessage")["message_id"], old)
         # меню помнит себя после перезапуска панели
-        bot2 = self.tgbot.Bot(main.store, main.bot_ops)
+        bot2 = self.tgbot.Bot(panel.store, telegram.bot_ops)
         self.assertEqual(bot2._panel_msgs, self.bot._panel_msgs)
 
     def test_share_and_probe_stay_in_message(self):
@@ -629,7 +630,7 @@ class BotMenuTest(unittest.TestCase):
         e = self.tg.edited()
         self.assertEqual(e["message_id"], mid)
         self.assertIn("/s/", e["text"])                                  # личная ссылка — в карточке
-        uid = main.store.snapshot()["upstreams"][0]["id"] if main.store.snapshot()["upstreams"] else None
+        uid = panel.store.snapshot()["upstreams"][0]["id"] if panel.store.snapshot()["upstreams"] else None
         if uid:
             self.press("pr:" + uid, uid=3)
             e = self.tg.edited()
@@ -654,7 +655,7 @@ class BotMenuTest(unittest.TestCase):
         ask_id = self.tg.next_id
         self.run_updates(msg("Menu friend", uid=3, reply_to_message={"message_id": ask_id}))
         self.assertIn(ask_id, [p["message_id"] for x, p in self.tg.calls if x == "deleteMessage"])
-        self.assertTrue(any(c["name"] == "Menu friend" for c in main.engine.clients))
+        self.assertTrue(any(c["name"] == "Menu friend" for c in panel.engine.clients))
         self.assertIn("Menu friend", self.tg.last("sendMessage")["text"])   # карточка нового клиента внизу
 
 

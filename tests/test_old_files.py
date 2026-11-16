@@ -22,9 +22,11 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 
-from app import lists, main, notify  # noqa: E402
+from app import lists, notify  # noqa: E402
 from app.store import Store  # noqa: E402
 from app.traffic import Traffic  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup  # noqa: E402
 
 FIX = os.path.join(ROOT, "tests", "fixtures", "old")
 PASSWORD = "fixture-backup-pw"
@@ -52,12 +54,12 @@ def loaded_state(v: str) -> dict:
 def from_backup(b: dict) -> dict:
     """Что делает «Восстановить из файла» с копией b, по шагам: проверенное состояние, состояние после замены
     (на чистом сервере без своих адресов), файлы сервера AWG и итоги трафика."""
-    new = main.clean_backup_state(b["state"])
+    new = backup.clean_backup_state(b["state"])
     cur = {"settings": {}}
-    main.restore_state(cur, copy.deepcopy(new))
+    backup.restore_state(cur, copy.deepcopy(new))
     out = {"clean": new, "restored": cur}
     if b.get("server"):
-        sc, files = main.clean_server_files(b["server"], b["server"]["kind"])
+        sc, files = backup.clean_server_files(b["server"], b["server"]["kind"])
         out["server"] = {"conf": sc.render(), "files": files}
     d = tempfile.mkdtemp()
     try:
@@ -102,31 +104,31 @@ class OldFilesTest(unittest.TestCase):
                 plain = notify.decrypt(base64.b64decode(f.read().strip()), PASSWORD)
                 self.assertIsNotNone(plain)
                 b = json.loads(plain)
-                self.assertEqual(main.clean_backup_state(b["state"]),
-                                 main.clean_backup_state(read_json(v, "backup.json")["state"]))
+                self.assertEqual(backup.clean_backup_state(b["state"]),
+                                 backup.clean_backup_state(read_json(v, "backup.json")["state"]))
 
     def test_restore_end_to_end(self):
         """Настоящий «Восстановить из файла» (с сервером AWG) на самой старой и самой новой копии."""
         R = lambda body: type("R", (), {"json": lambda self: body})()
-        if main.engine.target is None:
+        if panel.engine.target is None:
             with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-                main.engine.reconcile()
-        st0 = main.store.snapshot()
-        tr0 = main.engine.traffic.export()
-        t = main.engine.target
-        conf0 = {n: t.read_file(f"{t.dir}/{n}") for n in (os.path.basename(t.conf_path),) + main.SERVER_FILES}
+                panel.engine.reconcile()
+        st0 = panel.store.snapshot()
+        tr0 = panel.engine.traffic.export()
+        t = panel.engine.target
+        conf0 = {n: t.read_file(f"{t.dir}/{n}") for n in (os.path.basename(t.conf_path),) + backup.SERVER_FILES}
         try:
             for v in (versions()[1], versions()[-1]):
-                with self.subTest(v=v), mock.patch.object(main.engine, "refresh_lists"):
+                with self.subTest(v=v), mock.patch.object(panel.engine, "refresh_lists"):
                     b = read_json(v, "backup.json")
-                    self.assertEqual(main.restore_backup(R({"backup": b, "server": True})),
+                    self.assertEqual(backup.restore_backup(R({"backup": b, "server": True})),
                                      {"ok": True, "restarted": True})
                     exp = read_json(v, "expected.json")["backup"]
-                    self.assertEqual(main.store.snapshot()["upstreams"], exp["restored"]["upstreams"])
-                    self.assertEqual(main.store.snapshot()["lists"], exp["restored"]["lists"])
+                    self.assertEqual(panel.store.snapshot()["upstreams"], exp["restored"]["upstreams"])
+                    self.assertEqual(panel.store.snapshot()["lists"], exp["restored"]["lists"])
         finally:
-            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
-            main.engine.traffic.replace(tr0)
+            panel.store.mutate(lambda st: (st.clear(), st.update(st0)))
+            panel.engine.traffic.replace(tr0)
             for n, text in conf0.items():
                 if text is not None:
                     t.write_file(f"{t.dir}/{n}", text)

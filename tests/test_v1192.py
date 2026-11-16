@@ -13,7 +13,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import main  # noqa: E402
+from app.api import auth  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -21,24 +21,24 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 class SessionTagTest(unittest.TestCase):
     def test_tag_is_keyed(self):
         # метка зависит от ключа панели: с другим SECRET та же строка даёт другую метку
-        saved = main.SECRET
+        saved = auth.SECRET
         try:
-            main.SECRET = b"x" * 64
-            other = main._tag("same material")
+            auth.SECRET = b"x" * 64
+            other = auth._tag("same material")
         finally:
-            main.SECRET = saved
-        self.assertNotEqual(main._tag("same material"), other)
-        self.assertEqual(len(main.PW_TAG), 8)
+            auth.SECRET = saved
+        self.assertNotEqual(auth._tag("same material"), other)
+        self.assertEqual(len(auth.PW_TAG), 8)
 
     def test_session_roundtrip(self):
-        s = main.make_session()
-        self.assertTrue(main.check_session(s))
+        s = auth.make_session()
+        self.assertTrue(auth.check_session(s))
         exp, tag, sig = s.split(".")
-        self.assertEqual(tag, main.sec_tag())
-        self.assertFalse(main.check_session(f"{exp}.{'0' * 8}.{sig}"))
+        self.assertEqual(tag, auth.sec_tag())
+        self.assertFalse(auth.check_session(f"{exp}.{'0' * 8}.{sig}"))
 
     def test_no_bare_password_hash(self):
-        with open(os.path.join(ROOT, "app", "main.py"), encoding="utf-8") as f:
+        with open(os.path.join(ROOT, "app", "api", "auth.py"), encoding="utf-8") as f:
             src = f.read()
         self.assertNotRegex(src, r"hashlib\.sha256\([^)]*PASSWORD")
         self.assertNotRegex(src, r"hashlib\.sha256\(f\"\{material\}")

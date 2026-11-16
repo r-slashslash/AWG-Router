@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.store import Store  # noqa: E402
 from app import lists, nftgen  # noqa: E402
-from app import main  # noqa: E402
 
 UP = ("[Interface]\nAddress = 10.9.0.{n}/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n\n"
       "[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\n"
@@ -42,77 +41,77 @@ def read(*path):
 class DomainsAnyExitTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         self._lists = {l["id"] for l in st["lists"]}
         self.ids = []
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            self.lid = main.add_list(Req({"kind": "domains", "source": "youtube.com"}))["id"]
+            self.lid = routing.add_list(Req({"kind": "domains", "source": "youtube.com"}))["id"]
 
     def tearDown(self):
         r = self._routing
-        main.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
+        panel.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
         for uid in self.ids:
-            if Store.upstream(main.store.snapshot(), uid):
-                main.del_upstream(Req({"replace": "direct"}), uid)
-        for l in main.store.snapshot()["lists"]:
+            if Store.upstream(panel.store.snapshot(), uid):
+                exits.del_upstream(Req({"replace": "direct"}), uid)
+        for l in panel.store.snapshot()["lists"]:
             if l["id"] not in self._lists:
-                main.del_list(None, l["id"])
-        main.engine.reconcile()
+                routing.del_list(None, l["id"])
+        panel.engine.reconcile()
 
     def awg(self, n=61, routing=None, name="Mobile"):
         body = {"name": name, "config": UP.format(n=n)}
         if routing is not None:
             body["routing"] = routing
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            uid = main.add_upstream(Req(body))["id"]
+            uid = exits.add_upstream(Req(body))["id"]
         self.ids.append(uid)
         return uid
 
     def rules(self, default, *rules):
-        main.put_routing(Req({"default": default, "rules": [
+        routing.put_routing(Req({"default": default, "rules": [
             {"lists": l, "outbound": o, "enabled": True, "comment": ""} for l, o in rules]}))
 
     def test_awg_target_is_exit_mark(self):
         uid = self.awg()
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         num = Store.upstream(st, uid)["num"]
-        with mock.patch.object(main.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
-            to = main.engine._sni_target(st, "up:" + uid)
+        with mock.patch.object(panel.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
+            to = panel.engine._sni_target(st, "up:" + uid)
         self.assertEqual(to, {"mark": nftgen.mark_for(num), "acct": uid})
 
     def test_rule_reaches_sniproxy(self):
         uid = self.awg()
         self.rules("direct", ([self.lid], "up:" + uid))
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         num = Store.upstream(st, uid)["num"]
-        with mock.patch.object(main.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
-            gp, _ = main.engine._policies(st)
+        with mock.patch.object(panel.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
+            gp, _ = panel.engine._policies(st)
         self.assertEqual(gp["domain"], [([self.lid], "up:" + uid)])
         # выход лёг и резерв — «напрямую», как и всё остальное: перехват не нужен до его возвращения
-        with mock.patch.object(main.engine, "resolve", side_effect=lambda o, s: "direct" if o == "up:" + uid else o):
-            gp, _ = main.engine._policies(st)
+        with mock.patch.object(panel.engine, "resolve", side_effect=lambda o, s: "direct" if o == "up:" + uid else o):
+            gp, _ = panel.engine._policies(st)
         self.assertEqual(gp["domain"], [])
 
     def test_useless_domain_rule_skips_sniffing(self):
         # домены туда же, куда всё остальное, и правил по адресам нет — перехват не нужен
         self.rules("direct", ([self.lid], "direct"))
-        gp, _ = main.engine._policies(main.store.snapshot())
+        gp, _ = panel.engine._policies(panel.store.snapshot())
         self.assertEqual(gp["domain"], [])
         # с правилом по адресам — нужен: домен проверяется раньше и уводит сайт мимо него
         self.rules("direct", ([self.lid], "direct"), (["ru"], "block"))
-        gp, _ = main.engine._policies(main.store.snapshot())
+        gp, _ = panel.engine._policies(panel.store.snapshot())
         self.assertEqual(gp["domain"], [([self.lid], "direct")])
         self.rules("direct", ([self.lid], "block"))
-        gp, _ = main.engine._policies(main.store.snapshot())
+        gp, _ = panel.engine._policies(panel.store.snapshot())
         self.assertEqual(gp["domain"], [([self.lid], "block")])
 
     def test_exit_window_routing_for_awg(self):
         uid = self.awg(routing={"domains": "youtube.com\ngooglevideo.com", "default": False})
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         own = Store.upstream(st, uid)["own_list"]
         self.assertEqual(Store.lst(st, own)["kind"], "domains")
         self.assertIn({"lists": [own], "outbound": "up:" + uid},
@@ -120,10 +119,10 @@ class DomainsAnyExitTest(unittest.TestCase):
 
     def test_delete_takes_own_sites_but_replaces_shared(self):
         uid = self.awg(routing={"domains": "a.example", "domain_lists": [self.lid], "default": False})
-        own = Store.upstream(main.store.snapshot(), uid)["own_list"]
-        main.del_upstream(Req({"replace": "block"}), uid)
+        own = Store.upstream(panel.store.snapshot(), uid)["own_list"]
+        exits.del_upstream(Req({"replace": "block"}), uid)
         self.ids.remove(uid)
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self.assertIsNone(Store.lst(st, own))                      # свой список ушёл с выходом
         self.assertFalse(any(own in r["lists"] for r in st["routing"]["rules"]))
         shared = [r for r in st["routing"]["rules"] if self.lid in r["lists"]]
@@ -318,7 +317,7 @@ class HeaderPhaseTest(unittest.TestCase):
         self.assertFalse(e.switching)
 
     def test_state_has_phase(self):
-        self.assertIn("phase", main.get_state(None))
+        self.assertIn("phase", state.get_state(None))
 
 
 class CliUpdateTest(unittest.TestCase):
@@ -357,6 +356,8 @@ import socket as _socket  # noqa: E402
 import struct as _struct  # noqa: E402
 
 from app import config as _config, dnsproxy, nfqueue, quic, sniproxy  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, exits, routing, server, state  # noqa: E402
 
 DATA = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -669,32 +670,32 @@ class EngineDomainDnsTest(DomainsAnyExitTest):
     def test_dns_domains_and_quic_marks(self):
         uid = self.awg()
         self.rules("direct", ([self.lid], "up:" + uid), ([self.lid], "block"))
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         num = Store.upstream(st, uid)["num"]
-        with mock.patch.object(main.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
-            d = main.engine.dns_domains(st, with_set=False)
+        with mock.patch.object(panel.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
+            d = panel.engine.dns_domains(st, with_set=False)
             self.assertEqual(d["policies"]["p_global"], [[[self.lid], {"mark": nftgen.mark_for(num), "tcp": False}]])
             self.assertIsNone(d["set"])
-            d = main.engine.dns_domains(st, with_set=True)
+            d = panel.engine.dns_domains(st, with_set=True)
             self.assertEqual(d["policies"]["p_global"][1], [[self.lid], None])     # блок — только для набора
             self.assertEqual(d["set"], [_config.NFT_TABLE, nftgen.DOM_SET])
-            self.assertEqual(main.engine._quic_mark(st, "up:" + uid), nftgen.mark_for(num))
-        self.assertEqual(main.engine._quic_mark(st, "direct"), _config.QUIC_DIRECT_MARK)
-        self.assertEqual(main.engine._quic_mark(st, "block"), _config.MARK_BLOCK)
+            self.assertEqual(panel.engine._quic_mark(st, "up:" + uid), nftgen.mark_for(num))
+        self.assertEqual(panel.engine._quic_mark(st, "direct"), _config.QUIC_DIRECT_MARK)
+        self.assertEqual(panel.engine._quic_mark(st, "block"), _config.MARK_BLOCK)
 
     def test_dom_filter_setting(self):
-        main.put_server(Req({"dom_filter": True}))
-        self.addCleanup(main.store.mutate, lambda st: st["settings"].pop("dom_filter", None))
-        st = main.store.snapshot()
+        server.put_server(Req({"dom_filter": True}))
+        self.addCleanup(panel.store.mutate, lambda st: st["settings"].pop("dom_filter", None))
+        st = panel.store.snapshot()
         self.assertTrue(st["settings"]["dom_filter"])
-        self.assertTrue(main.get_server(None)["dom_filter"])
-        self.assertFalse(main.engine.dom_filter(st))                  # без DNS на сервере фильтра нет
-        self.assertTrue(main.clean_backup_state(st)["settings"]["dom_filter"])
+        self.assertTrue(server.get_server(None)["dom_filter"])
+        self.assertFalse(panel.engine.dom_filter(st))                  # без DNS на сервере фильтра нет
+        self.assertTrue(backup.clean_backup_state(st)["settings"]["dom_filter"])
 
     def test_apply_falls_back_without_queue(self):
         """Ядро без nft_queue: набор правил с очередью не применился — применяется без неё, и QUIC у этих
         клиентов блокируется, как раньше."""
-        e = main.engine
+        e = panel.engine
         tried = []
 
         def ns(cmd, **kw):
@@ -707,7 +708,7 @@ class EngineDomainDnsTest(DomainsAnyExitTest):
             return subprocess.CompletedProcess(cmd, 0, "", "")
         uid = self.awg()
         self.rules("direct", ([self.lid], "up:" + uid))
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         num = Store.upstream(st, uid)["num"]
         with mock.patch.object(e._fake, "ns", side_effect=ns), \
                 mock.patch.object(e, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o), \

@@ -18,7 +18,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, engine, main, nftgen, users, web  # noqa: E402
+from app import config, engine, nftgen, users, web  # noqa: E402
 from app.store import Store  # noqa: E402
 import importlib.util  # noqa: E402
 
@@ -27,6 +27,8 @@ _spec = importlib.util.spec_from_file_location("probe", os.path.join(os.path.dir
 probe = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(probe)
 from app import sniproxy  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, exits, routing, state  # noqa: E402
 
 PK = "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw="
 
@@ -98,39 +100,39 @@ class NftNoQuicTest(unittest.TestCase):
 class SocksQuicApiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
         self.ids = []
 
     def tearDown(self):
         for uid in self.ids:
-            if Store.upstream(main.store.snapshot(), uid):
-                main.del_upstream(Req({"replace": "direct"}), uid)
+            if Store.upstream(panel.store.snapshot(), uid):
+                exits.del_upstream(Req({"replace": "direct"}), uid)
 
     def add(self, **kw):
-        uid = main.add_upstream(Req({"name": "P", "config": "socks5://198.51.100.9:1080", **kw}))["id"]
+        uid = exits.add_upstream(Req({"name": "P", "config": "socks5://198.51.100.9:1080", **kw}))["id"]
         self.ids.append(uid)
         return uid
 
     def view(self, uid):
-        return next(u for u in main.get_state(None)["upstreams"] if u["id"] == uid)
+        return next(u for u in state.get_state(None)["upstreams"] if u["id"] == uid)
 
     def test_off_by_default(self):
         uid = self.add()
         self.assertIs(self.view(uid)["quic"], False)
-        ups = {u["num"]: u for u in main.engine._up_list(main.store.snapshot())}
-        num = Store.upstream(main.store.snapshot(), uid)["num"]
+        ups = {u["num"]: u for u in panel.engine._up_list(panel.store.snapshot())}
+        num = Store.upstream(panel.store.snapshot(), uid)["num"]
         if num in ups:                      # выход запущен (в демо — да)
             self.assertTrue(ups[num]["no_quic"])
 
     def test_turn_on_and_off(self):
         uid = self.add(quic=True)
         self.assertIs(self.view(uid)["quic"], True)
-        main.edit_upstream(Req({"quic": False}), uid)
-        self.assertNotIn("quic", Store.upstream(main.store.snapshot(), uid))
-        main.edit_upstream(Req({"quic": True}), uid)
-        self.assertTrue(Store.upstream(main.store.snapshot(), uid)["quic"])
+        exits.edit_upstream(Req({"quic": False}), uid)
+        self.assertNotIn("quic", Store.upstream(panel.store.snapshot(), uid))
+        exits.edit_upstream(Req({"quic": True}), uid)
+        self.assertTrue(Store.upstream(panel.store.snapshot(), uid)["quic"])
 
     def test_bad_value(self):
         with self.assertRaises(web.HTTPError):
@@ -140,24 +142,24 @@ class SocksQuicApiTest(unittest.TestCase):
         up = ("[Interface]\nAddress = 10.9.0.7/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n\n"
               "[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\n"
               "Endpoint = 198.51.100.7:51820\n")
-        uid = main.add_upstream(Req({"name": "A", "config": up, "quic": True}))["id"]
+        uid = exits.add_upstream(Req({"name": "A", "config": up, "quic": True}))["id"]
         self.ids.append(uid)
-        self.assertNotIn("quic", Store.upstream(main.store.snapshot(), uid))
+        self.assertNotIn("quic", Store.upstream(panel.store.snapshot(), uid))
         self.assertIs(self.view(uid)["quic"], True)          # AWG пропускает QUIC всегда
 
     def test_rule_quic_mark(self):
         """Первый пакет QUIC к сайту из правила на SOCKS5: с галочкой — в туннель выхода, без — отказ."""
         uid = self.add()
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         u = Store.upstream(st, uid)
-        with mock.patch.object(main.engine, "resolve", return_value=u["num"]):
-            self.assertEqual(main.engine._quic_mark(st, "up:" + uid), config.MARK_BLOCK)
-            main.edit_upstream(Req({"quic": True}), uid)
-            st = main.store.snapshot()
-            self.assertEqual(main.engine._quic_mark(st, "up:" + uid), nftgen.mark_for(u["num"]))
+        with mock.patch.object(panel.engine, "resolve", return_value=u["num"]):
+            self.assertEqual(panel.engine._quic_mark(st, "up:" + uid), config.MARK_BLOCK)
+            exits.edit_upstream(Req({"quic": True}), uid)
+            st = panel.store.snapshot()
+            self.assertEqual(panel.engine._quic_mark(st, "up:" + uid), nftgen.mark_for(u["num"]))
 
     def test_restore_keeps_only_for_socks(self):
-        st = main.clean_backup_state({
+        st = backup.clean_backup_state({
             "upstreams": [{"id": "u000001", "name": "S", "num": 1, "config": "socks5://198.51.100.9:1080", "quic": True},
                           {"id": "u000002", "name": "S2", "num": 2, "config": "socks5://198.51.100.8:1080", "quic": "1"}],
             "routing": {"default": "direct", "rules": []}})
@@ -341,30 +343,30 @@ class StrictNftTest(unittest.TestCase):
 class StrictEngineTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
+        panel.engine.reconcile()
 
     def setUp(self):
-        st = main.store.snapshot()
+        st = panel.store.snapshot()
         self._routing = json.loads(json.dumps(st["routing"]))
 
     def tearDown(self):
         r = self._routing
-        main.store.mutate(lambda st: st.update(routing=r))
-        main.engine.reconcile()
+        panel.store.mutate(lambda st: st.update(routing=r))
+        panel.engine.reconcile()
 
     def test_api_and_state(self):
         r = dict(self._routing)
-        main.put_routing(Req({**r, "strict": True}))
-        self.assertTrue(main.store.snapshot()["routing"]["strict"])
-        main.put_routing(Req({"default": r["default"], "rules": r["rules"]}))       # без поля — как было
-        self.assertTrue(main.store.snapshot()["routing"]["strict"])
-        main.put_routing(Req({**r, "strict": False}))
-        self.assertNotIn("strict", main.store.snapshot()["routing"])
+        routing.put_routing(Req({**r, "strict": True}))
+        self.assertTrue(panel.store.snapshot()["routing"]["strict"])
+        routing.put_routing(Req({"default": r["default"], "rules": r["rules"]}))       # без поля — как было
+        self.assertTrue(panel.store.snapshot()["routing"]["strict"])
+        routing.put_routing(Req({**r, "strict": False}))
+        self.assertNotIn("strict", panel.store.snapshot()["routing"])
         with self.assertRaises(web.HTTPError):
-            main.put_routing(Req({**r, "strict": "on"}))
+            routing.put_routing(Req({**r, "strict": "on"}))
 
     def test_blocked_only_with_domain_rules_and_no_handler(self):
-        e = main.engine
+        e = panel.engine
         st = {"routing": {"strict": True}}
         with mock.patch.object(e, "_policies", return_value=(DPOL, {})):
             self.assertTrue(e.strict_blocked(st, None))
@@ -374,23 +376,23 @@ class StrictEngineTest(unittest.TestCase):
             self.assertFalse(e.strict_blocked(st, None))
 
     def test_events_on_change(self):
-        e = main.engine
+        e = panel.engine
         events = []
         with mock.patch.object(e, "event", lambda lvl, m: events.append(m.key)), \
                 mock.patch.object(e, "strict_blocked", return_value=True):
             e.reconcile()
             e.reconcile()
         self.assertEqual(events.count("ev.dom_strict_on"), 1)
-        self.assertTrue(main.engine.strict_on)
+        self.assertTrue(panel.engine.strict_on)
         with mock.patch.object(e, "event", lambda lvl, m: events.append(m.key)), \
                 mock.patch.object(e, "strict_blocked", return_value=False):
             e.reconcile()
         self.assertEqual(events[-1], "ev.dom_strict_off")
 
     def test_backup_keeps_it(self):
-        st = main.clean_backup_state({"routing": {"default": "direct", "rules": [], "strict": True}})
+        st = backup.clean_backup_state({"routing": {"default": "direct", "rules": [], "strict": True}})
         self.assertTrue(st["routing"]["strict"])
-        st = main.clean_backup_state({"routing": {"default": "direct", "rules": [], "strict": "yes"}})
+        st = backup.clean_backup_state({"routing": {"default": "direct", "rules": [], "strict": "yes"}})
         self.assertNotIn("strict", st["routing"])
 
     def test_telegram_texts(self):

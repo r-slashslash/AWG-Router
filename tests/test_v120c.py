@@ -24,7 +24,9 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app import checks, config, engine, limits, main, traffic, web  # noqa: E402
+from app import checks, config, engine, limits, traffic, web  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import auth, backup, clients, telegram  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -83,27 +85,27 @@ class ShareNoCopyTest(unittest.TestCase):
     """Адреса /s/… открыты без входа: чужой токен не должен стоить панели копии всего состояния."""
 
     def setUp(self):
-        main.engine.reconcile()
-        self.pk = main.engine.clients[0]["public_key"]
-        self.saved = main.store.snapshot()
+        panel.engine.reconcile()
+        self.pk = panel.engine.clients[0]["public_key"]
+        self.saved = panel.store.snapshot()
         exp = int(time.time()) + 86400
-        main.store.mutate(lambda st: (st.setdefault("shares", {}).__setitem__("T" * 24, {"pk": self.pk}),
+        panel.store.mutate(lambda st: (st.setdefault("shares", {}).__setitem__("T" * 24, {"pk": self.pk}),
                                       st.setdefault("limits", {}).__setitem__(self.pk, {"expires": exp})))
         self.exp = exp
 
     def tearDown(self):
-        main.store.mutate(lambda st: (st.clear(), st.update(self.saved)))
+        panel.store.mutate(lambda st: (st.clear(), st.update(self.saved)))
 
     def test_unknown_token_without_snapshot(self):
-        with mock.patch.object(main.store, "snapshot", side_effect=AssertionError("копия состояния")):
-            for fn in (main.share_page, main.share_data):
+        with mock.patch.object(panel.store, "snapshot", side_effect=AssertionError("копия состояния")):
+            for fn in (clients.share_page, clients.share_data):
                 with self.assertRaises(web.HTTPError) as cm:
                     fn(None, "x" * 24)
                 self.assertEqual(cm.exception.code, 404)
-            self.assertIsNotNone(main.share_page(None, "T" * 24))
+            self.assertIsNotNone(clients.share_page(None, "T" * 24))
 
     def test_known_token_still_answers(self):
-        d = main.share_data(None, "T" * 24)
+        d = clients.share_data(None, "T" * 24)
         self.assertEqual(d["limits"]["expires"], self.exp)
         self.assertIn("handshake", d)
 
@@ -126,28 +128,28 @@ class SameOriginTest(unittest.TestCase):
             ("DELETE", {"Origin": "null", "Host": "203.0.113.5:4821"}, False),
         ]
         for method, h, ok in cases:
-            self.assertEqual(main.same_origin(R(method=method, headers=h)), ok, (method, h))
+            self.assertEqual(auth.same_origin(R(method=method, headers=h)), ok, (method, h))
 
     def test_middleware_refuses_before_anything(self):
-        req = R(headers={"Sec-Fetch-Site": "same-site"}, path=main.BASE + "/api/server/restart")
+        req = R(headers={"Sec-Fetch-Site": "same-site"}, path=panel.BASE + "/api/server/restart")
         with self.assertRaises(web.HTTPError) as cm:
-            main.auth_mw(req)
+            auth.auth_mw(req)
         self.assertEqual((cm.exception.code, cm.exception.detail.key), (403, "err.cross_site"))
-        req = R(headers={"Sec-Fetch-Site": "cross-site"}, path=main.BASE + "/api/login")
+        req = R(headers={"Sec-Fetch-Site": "cross-site"}, path=panel.BASE + "/api/login")
         with self.assertRaises(web.HTTPError):
-            main.auth_mw(req)                                         # и вход с чужой страницы
+            auth.auth_mw(req)                                         # и вход с чужой страницы
 
 
 class InputTypesTest(unittest.TestCase):
     """Неверный тип в запросе — 400, а не 500 (нашёл перебор всех маршрутов API)."""
 
     def setUp(self):
-        main.engine.reconcile()
-        self.pk = main.engine.clients[0]["public_key"]
-        self.saved = main.store.snapshot()
+        panel.engine.reconcile()
+        self.pk = panel.engine.clients[0]["public_key"]
+        self.saved = panel.store.snapshot()
 
     def tearDown(self):
-        main.store.mutate(lambda st: (st.clear(), st.update(self.saved)))
+        panel.store.mutate(lambda st: (st.clear(), st.update(self.saved)))
 
     def code(self, fn, *a):
         with self.assertRaises(web.HTTPError) as cm:
@@ -156,29 +158,29 @@ class InputTypesTest(unittest.TestCase):
 
     def test_telegram_fields(self):
         for body in ({"backup": []}, {"backup": {"a": 1}}, {"lang": ["ru"]}, {"lang": {}}):
-            for fn in (main.put_telegram, main.telegram_test, main.telegram_backup, main.telegram_detect):
+            for fn in (telegram.put_telegram, telegram.telegram_test, telegram.telegram_backup, telegram.telegram_detect):
                 self.assertEqual(self.code(fn, R(body)), 400, (fn.__name__, body))
 
     def test_client_name(self):
         for v in (False, True, 1.5, -1, [], {}):
-            self.assertEqual(self.code(main.edit_user, R({"name": v}), self.pk), 400, v)
-            self.assertEqual(self.code(main.add_user, R({"name": v})), 400, v)
-        n = len(main.engine.clients)
-        main.add_user(R({"name": "Ok"}))
-        self.assertEqual(len(main.engine.clients), n + 1)
+            self.assertEqual(self.code(clients.edit_user, R({"name": v}), self.pk), 400, v)
+            self.assertEqual(self.code(clients.add_user, R({"name": v})), 400, v)
+        n = len(panel.engine.clients)
+        clients.add_user(R({"name": "Ok"}))
+        self.assertEqual(len(panel.engine.clients), n + 1)
 
     def test_expiry_limit(self):
         """Срок позже 9999 года не перевести в дату: бот падал на карточке клиента, браузер писал Invalid Date."""
-        self.assertEqual(self.code(main.put_limits, R({"expires": 10 ** 17}), self.pk), 400)
-        main.put_limits(R({"expires": limits.EXPIRES_MAX}), self.pk)
+        self.assertEqual(self.code(clients.put_limits, R({"expires": 10 ** 17}), self.pk), 400)
+        clients.put_limits(R({"expires": limits.EXPIRES_MAX}), self.pk)
         time.strftime("%Y-%m-%d", time.gmtime(limits.EXPIRES_MAX))
-        self.assertEqual(main.store.snapshot()["limits"][self.pk]["expires"], limits.EXPIRES_MAX)
+        self.assertEqual(panel.store.snapshot()["limits"][self.pk]["expires"], limits.EXPIRES_MAX)
 
     def test_restore_drops_impossible_dates(self):
         from test_api import PUB, good_state
         g = good_state()
         g["limits"][PUB].update(expires=10 ** 17, exp_done=10 ** 17, exp_warned=10 ** 16)
-        st = main.clean_backup_state(g)
+        st = backup.clean_backup_state(g)
         L = st["limits"][PUB]
         self.assertEqual((L["expires"], L["exp_done"], L["exp_warned"]), (None, None, None))
 
@@ -195,7 +197,7 @@ class RestoreLoopTest(unittest.TestCase):
         b.update(id="u000002", name="DE", num=2)
         a["fallback"], b["fallback"] = "up:u000002", "up:u000001"
         g["upstreams"].append(b)
-        st = main.clean_backup_state(g)
+        st = backup.clean_backup_state(g)
         fbs = {u["id"]: u["fallback"] for u in st["upstreams"]}
         self.assertEqual(sorted(fbs.values()), ["direct", "up:u000001"])
         for u in st["upstreams"]:
@@ -208,7 +210,7 @@ class RestoreLoopTest(unittest.TestCase):
         b.update(id="u000002", name="DE", num=2, fallback="block")
         g["upstreams"][0]["fallback"] = "up:u000002"
         g["upstreams"].append(b)
-        st = main.clean_backup_state(g)
+        st = backup.clean_backup_state(g)
         self.assertEqual([u["fallback"] for u in st["upstreams"]], ["up:u000002", "block"])
 
 
@@ -271,7 +273,7 @@ class EngineSmallTest(unittest.TestCase):
 
     def test_no_lookups_while_exits_wait(self):
         from test_v115 import conf
-        e = main.engine
+        e = panel.engine
         saved = (dict(e.rt), dict(e._up_fail), dict(e.health))
         self.addCleanup(lambda: setattr(e, "rt", saved[0]) or setattr(e, "_up_fail", saved[1])
                         or setattr(e, "health", saved[2]))

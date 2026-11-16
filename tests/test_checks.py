@@ -12,9 +12,13 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from app import checks, limits, lists, main, users  # noqa: E402
+from app import checks, limits, lists, users  # noqa: E402
 from app.i18n import MsgError  # noqa: E402
 from app.web import HTTPError  # noqa: E402
+from app import notify  # noqa: E402
+from app import panel  # noqa: E402
+from app import store as store_mod  # noqa: E402
+from app.api import backup, clients, exits, state  # noqa: E402
 
 PK = "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw="
 PRIV = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
@@ -53,7 +57,7 @@ class SameRuleTest(unittest.TestCase):
     def backup_error(self, patch) -> str | None:
         b = base()
         patch(b)
-        r = code(lambda: main.clean_backup_state(b))
+        r = code(lambda: backup.clean_backup_state(b))
         if r:
             self.assertEqual(r[:2], (400, "err.backup_field"))
             return r[2]
@@ -63,7 +67,7 @@ class SameRuleTest(unittest.TestCase):
         self.assertIsNone(self.backup_error(lambda b: None))
 
     def test_exit(self):
-        st = main.clean_backup_state(base())
+        st = backup.clean_backup_state(base())
         for form, patch, path in (
             (lambda: checks.name("  "), lambda b: b["upstreams"][0].update(name=" "), "upstreams[0].name"),
             (lambda: checks.exit_config("nonsense"), lambda b: b["upstreams"][0].update(config="nonsense"),
@@ -80,7 +84,7 @@ class SameRuleTest(unittest.TestCase):
                 self.assertEqual(self.backup_error(patch), path)
 
     def test_list_and_rule(self):
-        st = main.clean_backup_state(base())
+        st = backup.clean_backup_state(base())
         self.assertEqual(code(lambda: checks.list_fields({"kind": "manual", "source": "no nets", "name": "x"}))[1],
                          "err.no_cidr")
         self.assertEqual(self.backup_error(lambda b: b["lists"][0].update(source="no nets")), "lists[0]")
@@ -90,7 +94,7 @@ class SameRuleTest(unittest.TestCase):
                          "routing.rules")
 
     def test_client_and_limits(self):
-        st = main.clean_backup_state(base())
+        st = backup.clean_backup_state(base())
         self.assertIsNotNone(code(lambda: checks.client_policy(st, {"rules_mode": "own"})))
         self.assertEqual(self.backup_error(lambda b: b["clients"][PK].update(rules_mode="own")), "clients." + PK[:12])
         self.assertIsNotNone(code(lambda: checks.rate(0.01)))
@@ -115,13 +119,13 @@ class SameRuleTest(unittest.TestCase):
                 self.assertEqual(self.backup_error(patch), path)
 
     def test_telegram(self):
-        st = main.clean_backup_state(base())
+        st = backup.clean_backup_state(base())
         for body, key, path in (({"token": "nope"}, "err.tg_token", "settings.telegram"),
                                 ({"backup_pw": "short"}, "err.backup_pw", "settings.telegram"),
                                 ({"backup_pw": "x" * 129}, "err.backup_pw", "settings.telegram"),
                                 ({"via": "block"}, "err.bad_value", "settings.telegram.via")):
             with self.subTest(body=body):
-                self.assertEqual(code(lambda: checks.telegram(st, main.notify.defaults(), body))[1], key)
+                self.assertEqual(code(lambda: checks.telegram(st, notify.defaults(), body))[1], key)
                 self.assertEqual(self.backup_error(lambda b: b["settings"]["telegram"].update(body)), path)
 
 
@@ -135,7 +139,7 @@ class BackupForgivesTest(unittest.TestCase):
         b["limits"][PK].update(period="week", expires="soon", quota=-1)
         b["routing"]["strict"] = "yes"
         b["upstreams"][0].update(quic="yes", quota="lots")
-        st = main.clean_backup_state(b)
+        st = backup.clean_backup_state(b)
         s, tg = st["settings"], st["settings"]["telegram"]
         self.assertNotIn("on_stop", s)
         self.assertNotIn("panel_dns", s)
@@ -150,10 +154,10 @@ class BackupForgivesTest(unittest.TestCase):
         # уведомления и управление без чата — выключены, а не ошибка
         b = base()
         b["settings"]["telegram"].update(chat_id="", control=True)
-        tg = main.clean_backup_state(b)["settings"]["telegram"]
+        tg = backup.clean_backup_state(b)["settings"]["telegram"]
         self.assertEqual((tg["enabled"], tg["control"]), (False, False))
         # форма на то же отвечает ошибкой
-        self.assertEqual(code(lambda: main.put_settings(R({"on_stop": "sometimes"})))[1], "err.bad_value")
+        self.assertEqual(code(lambda: state.put_settings(R({"on_stop": "sometimes"})))[1], "err.bad_value")
 
 
 class AgreedChangesTest(unittest.TestCase):
@@ -163,7 +167,7 @@ class AgreedChangesTest(unittest.TestCase):
         b = base()
         b["upstreams"][0]["quota"] = checks.QUOTA_MAX + 1
         b["limits"][PK]["quota"] = checks.QUOTA_MAX * 2
-        st = main.clean_backup_state(b)
+        st = backup.clean_backup_state(b)
         self.assertIsNone(st["upstreams"][0]["quota"])
         self.assertIsNone(st["limits"][PK]["quota"])
         self.assertEqual(code(lambda: checks.quota_gb(1_000_001))[1], "err.quota")
@@ -172,7 +176,7 @@ class AgreedChangesTest(unittest.TestCase):
     def test_dns_first_four(self):
         b = base()
         b["settings"]["client_dns"] = ["1.1.1.1", "2001:db8::1", "8.8.8.8", "9.9.9.9", "8.8.4.4", "1.0.0.1"]
-        self.assertEqual(main.clean_backup_state(b)["settings"]["client_dns"],
+        self.assertEqual(backup.clean_backup_state(b)["settings"]["client_dns"],
                          ["1.1.1.1", "8.8.8.8", "9.9.9.9", "8.8.4.4"])       # IPv6 из старых копий — молча нет
         self.assertEqual(users.check_client_dns("1.1.1.1 8.8.8.8, 9.9.9.9 8.8.4.4 1.0.0.1"),
                          ["1.1.1.1", "8.8.8.8", "9.9.9.9", "8.8.4.4"])
@@ -182,7 +186,7 @@ class AgreedChangesTest(unittest.TestCase):
         b = base()
         b["settings"].update(list_update_hours="12", client_mtu="1380", client_keepalive=25)
         b["limits"][PK]["expires"] = "1900000000"
-        st = main.clean_backup_state(b)
+        st = backup.clean_backup_state(b)
         self.assertEqual((st["settings"]["list_update_hours"], st["settings"]["client_mtu"],
                           st["settings"]["client_keepalive"]), (12, 1380, "25"))
         self.assertEqual(st["limits"][PK]["expires"], 1900000000)
@@ -200,34 +204,34 @@ class FormStillWorksTest(unittest.TestCase):
 
     def test_exit_form(self):
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            main.engine.reconcile()
-        self.assertEqual(code(lambda: main.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080",
+            panel.engine.reconcile()
+        self.assertEqual(code(lambda: exits.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080",
                                                             "quota_gb": 0}))), (400, "err.quota", "quota_gb"))
-        self.assertEqual(code(lambda: main.add_upstream(R({"name": "", "config": "socks5://198.51.100.9:1080"}))),
+        self.assertEqual(code(lambda: exits.add_upstream(R({"name": "", "config": "socks5://198.51.100.9:1080"}))),
                          (400, "err.name_required", "name"))
-        self.assertEqual(code(lambda: main.add_upstream(R({"name": "X", "config": "x"})))[2], "config")
-        uid = main.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080", "quota_gb": 2.5}))["id"]
+        self.assertEqual(code(lambda: exits.add_upstream(R({"name": "X", "config": "x"})))[2], "config")
+        uid = exits.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080", "quota_gb": 2.5}))["id"]
         try:
-            u = main.Store.upstream(main.store.snapshot(), uid)
+            u = store_mod.Store.upstream(panel.store.snapshot(), uid)
             self.assertEqual(u["quota"], int(2.5 * limits.GB))
-            self.assertEqual(code(lambda: main.edit_upstream(R({"fallback": "up:" + uid}), uid)),
+            self.assertEqual(code(lambda: exits.edit_upstream(R({"fallback": "up:" + uid}), uid)),
                              (400, "err.fallback_self", "fallback"))
         finally:
-            main.del_upstream(R({}), uid)
+            exits.del_upstream(R({}), uid)
 
     def test_limits_form(self):
-        pk = main.engine.clients[0]["public_key"] if main.engine.clients else None
+        pk = panel.engine.clients[0]["public_key"] if panel.engine.clients else None
         if not pk:
             self.skipTest("нет клиента в демо")
-        L0 = copy.deepcopy(main.store.snapshot()["limits"])
+        L0 = copy.deepcopy(panel.store.snapshot()["limits"])
         try:
-            self.assertEqual(code(lambda: main.put_limits(R({"expires": True}), pk))[1], "err.bad_value")
-            self.assertEqual(code(lambda: main.put_limits(R({"period": "week"}), pk))[1], "err.bad_value")
-            main.put_limits(R({"expires": 1900000000, "quota_gb": 3, "period": "total"}), pk)
-            L = main.store.snapshot()["limits"][pk]
+            self.assertEqual(code(lambda: clients.put_limits(R({"expires": True}), pk))[1], "err.bad_value")
+            self.assertEqual(code(lambda: clients.put_limits(R({"period": "week"}), pk))[1], "err.bad_value")
+            clients.put_limits(R({"expires": 1900000000, "quota_gb": 3, "period": "total"}), pk)
+            L = panel.store.snapshot()["limits"][pk]
             self.assertEqual((L["expires"], L["quota"], L["period"]), (1900000000, 3 * limits.GB, "total"))
         finally:
-            main.store.mutate(lambda st: st.update(limits=L0))
+            panel.store.mutate(lambda st: st.update(limits=L0))
 
 
 if __name__ == "__main__":

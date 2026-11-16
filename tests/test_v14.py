@@ -18,6 +18,9 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import selfupdate  # noqa: E402
+from app import panel  # noqa: E402
+from app import notify  # noqa: E402
+from app.api import backup, telegram  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -124,61 +127,59 @@ class BackupCryptoTest(unittest.TestCase):
         self.assertIsNone(notify.decrypt(enc, "wrong password"))
 
     def test_decrypt_endpoint(self):
-        from app import main, notify, web
+        from app import notify, web
         b = {"format": "awg-router-backup", "state": {}}
         enc = base64.b64encode(notify.encrypt(json.dumps(b).encode(), "password1")).decode()
-        self.assertEqual(main.decrypt_backup(Req({"data": enc, "password": "password1"}))["backup"], b)
+        self.assertEqual(backup.decrypt_backup(Req({"data": enc, "password": "password1"}))["backup"], b)
         for body in ({"data": enc, "password": "nope"}, {"data": "not base64!", "password": "x"},
                      {"data": base64.b64encode(b"plain").decode(), "password": "x"}):
             with self.assertRaises(web.HTTPError):
-                main.decrypt_backup(Req(body))
+                backup.decrypt_backup(Req(body))
 
 
 class TelegramBackupTest(unittest.TestCase):
     TOKEN = "123456789:" + "A" * 35
 
     def setUp(self):
-        from app import main
-        self.main = main
-        main.store.mutate(lambda st: st["settings"].__setitem__("telegram", {
-            **main.notify.defaults(), "enabled": True, "token": self.TOKEN, "chat_id": "42"}))
-        main._backup_try = 0.0
+        panel.store.mutate(lambda st: st["settings"].__setitem__("telegram", {
+            **notify.defaults(), "enabled": True, "token": self.TOKEN, "chat_id": "42"}))
+        backup._backup_try = 0.0
 
     def test_settings(self):
         from app import notify, web
-        c = self.main._tg_draft({"backup": "weekly", "backup_pw": "longenough"})
+        c = telegram._tg_draft({"backup": "weekly", "backup_pw": "longenough"})
         self.assertEqual((c["backup"], c["backup_pw"]), ("weekly", "longenough"))
-        self.assertEqual(self.main._tg_draft({"backup_pw_clear": True})["backup_pw"], "")
+        self.assertEqual(telegram._tg_draft({"backup_pw_clear": True})["backup_pw"], "")
         for bad in ({"backup": "hourly"}, {"backup_pw": "short"}):
             with self.assertRaises(web.HTTPError):
-                self.main._tg_draft(bad)
+                telegram._tg_draft(bad)
         v = notify.public_view(c)
         self.assertNotIn("backup_pw", v)
         self.assertTrue(v["backup_pw_set"])
 
     def test_schedule(self):
         sent = []
-        set_cfg = lambda **kw: self.main.store.mutate(  # noqa: E731
+        set_cfg = lambda **kw: panel.store.mutate(  # noqa: E731
             lambda st: st["settings"]["telegram"].update(kw))
-        with mock.patch.object(self.main, "send_backup", side_effect=lambda c: sent.append(c["backup"])):
-            self.assertFalse(self.main.backup_tick(now=1000.0))               # выключено
+        with mock.patch.object(backup, "send_backup", side_effect=lambda c: sent.append(c["backup"])):
+            self.assertFalse(backup.backup_tick(now=1000.0))               # выключено
             set_cfg(backup="daily")
-            self.assertTrue(self.main.backup_tick(now=10_000.0))               # первая — сразу
-            self.assertFalse(self.main.backup_tick(now=10_000.0 + 3600 * 5))  # ещё рано
-            self.main._backup_try = 0.0
-            self.assertTrue(self.main.backup_tick(now=10_000.0 + 86400 - 300))  # через сутки (с запасом)
+            self.assertTrue(backup.backup_tick(now=10_000.0))               # первая — сразу
+            self.assertFalse(backup.backup_tick(now=10_000.0 + 3600 * 5))  # ещё рано
+            backup._backup_try = 0.0
+            self.assertTrue(backup.backup_tick(now=10_000.0 + 86400 - 300))  # через сутки (с запасом)
         self.assertEqual(sent, ["daily", "daily"])
-        c = self.main.notify.cfg_of(self.main.store.snapshot())
+        c = notify.cfg_of(panel.store.snapshot())
         self.assertEqual((c["backup_last"], c["backup_error"]), (10_000.0 + 86400 - 300, None))
 
     def test_failure_retries_after_an_hour(self):
-        self.main.store.mutate(lambda st: st["settings"]["telegram"].update(backup="weekly"))
-        with mock.patch.object(self.main, "send_backup", side_effect=self.main.notify.NotifyError("down")):
-            self.assertFalse(self.main.backup_tick(now=50_000.0))
-        self.assertEqual(self.main.notify.cfg_of(self.main.store.snapshot())["backup_error"], "down")
-        with mock.patch.object(self.main, "send_backup") as s:
-            self.assertFalse(self.main.backup_tick(now=50_000.0 + 1800))       # раньше часа — нет
-            self.assertTrue(self.main.backup_tick(now=50_000.0 + 3700))
+        panel.store.mutate(lambda st: st["settings"]["telegram"].update(backup="weekly"))
+        with mock.patch.object(backup, "send_backup", side_effect=notify.NotifyError("down")):
+            self.assertFalse(backup.backup_tick(now=50_000.0))
+        self.assertEqual(notify.cfg_of(panel.store.snapshot())["backup_error"], "down")
+        with mock.patch.object(backup, "send_backup") as s:
+            self.assertFalse(backup.backup_tick(now=50_000.0 + 1800))       # раньше часа — нет
+            self.assertTrue(backup.backup_tick(now=50_000.0 + 3700))
             self.assertEqual(s.call_count, 1)
 
     def test_send_document_multipart(self):
@@ -210,7 +211,7 @@ class TelegramBackupTest(unittest.TestCase):
         s = test_api.good_state()
         s["settings"]["telegram"] = {"enabled": True, "token": self.TOKEN, "chat_id": "42",
                                      "backup": "daily", "backup_pw": "secret-pass", "backup_last": 5}
-        t = self.main.clean_backup_state(s)["settings"]["telegram"]
+        t = backup.clean_backup_state(s)["settings"]["telegram"]
         self.assertEqual((t["backup"], t["backup_pw"], t["backup_last"]), ("daily", "secret-pass", None))
 
 

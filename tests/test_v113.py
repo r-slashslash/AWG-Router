@@ -15,9 +15,12 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import hostnet, lists, main, notify, tgbot  # noqa: E402
+from app import hostnet, lists, notify, tgbot  # noqa: E402
 from app.traffic import FORMAT, Traffic, month_key  # noqa: E402
 from tests.test_v19 import FakeTG, button, cfg, msg  # noqa: E402
+from app import panel  # noqa: E402
+from app import version  # noqa: E402
+from app.api import exits, state, telegram  # noqa: E402
 
 STATIC = os.path.join(os.path.dirname(__file__), "..", "app", "static")
 
@@ -74,7 +77,7 @@ class ServerTrafficTest(unittest.TestCase):
         self.assertEqual(tr.server_view()["total_tx"], 2)           # копия без "server" — сумма клиентов
 
     def test_in_state(self):
-        self.assertIn("server_traffic", json.dumps(main.get_state(None), default=str))
+        self.assertIn("server_traffic", json.dumps(state.get_state(None), default=str))
 
 
 class PanelHeaderTest(unittest.TestCase):
@@ -126,17 +129,17 @@ class HostInfoTest(unittest.TestCase):
 class BotMenuV113Test(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        main.engine.reconcile()
-        if not main.engine.clients:
-            main.bot_ops.add_client("v113")
-            main.engine.reconcile()
+        panel.engine.reconcile()
+        if not panel.engine.clients:
+            telegram.bot_ops.add_client("v113")
+            panel.engine.reconcile()
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
-            cls.uid = main.add_upstream(type("R", (), {"json": lambda self: {
+            cls.uid = exits.add_upstream(type("R", (), {"json": lambda self: {
                 "name": "Exit113", "config": "socks5://u:p@198.51.100.31:1080"}})())["id"]
 
     @classmethod
     def tearDownClass(cls):
-        main.del_upstream(type("R", (), {"json": lambda self: {"replace": "direct"}})(), cls.uid)
+        exits.del_upstream(type("R", (), {"json": lambda self: {"replace": "direct"}})(), cls.uid)
 
     def setUp(self):
         self.tg = FakeTG()
@@ -144,7 +147,7 @@ class BotMenuV113Test(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
         self.c = cfg()
         self.upd(msg("/start"))
 
@@ -162,9 +165,9 @@ class BotMenuV113Test(unittest.TestCase):
 
     def test_menu_header(self):
         p = self.tg.screen()
-        n = len(main.engine.clients)
+        n = len(panel.engine.clients)
         self.assertIn(f"Clients: {n}\n", p["text"])
-        for line in ("Host:", "Panel version: " + main.VERSION, "Clients online:", "Total traffic:"):
+        for line in ("Host:", "Panel version: " + version.VERSION, "Clients online:", "Total traffic:"):
             self.assertIn(line, p["text"])
         self.assertNotIn("remote", p["text"])
 
@@ -193,10 +196,10 @@ class BotMenuV113Test(unittest.TestCase):
         self.assertIn("🔍", p["text"])
         self.assertIn("pr:" + self.uid, self.cbs(p))                # остаёмся на экране выхода
         p = self.press("df:up:" + self.uid)
-        self.assertEqual(main.store.snapshot()["routing"]["default"], "up:" + self.uid)
+        self.assertEqual(panel.store.snapshot()["routing"]["default"], "up:" + self.uid)
         self.assertIn("Default exit", p["text"])
         p = self.press("df:direct")
-        self.assertEqual(main.store.snapshot()["routing"]["default"], "direct")
+        self.assertEqual(panel.store.snapshot()["routing"]["default"], "direct")
         self.assertIn("pr:direct", self.cbs(p))
 
     def test_clients_new_client_first(self):

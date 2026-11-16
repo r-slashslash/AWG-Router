@@ -16,7 +16,8 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, main  # noqa: E402
+from app import config  # noqa: E402
+from app import panel  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -161,21 +162,21 @@ class PanelAddressTest(unittest.TestCase):
     """Сохранение вкладки «Сервер» не должна превращать адрес из .env в свою настройку панели."""
 
     def setUp(self):
-        main.engine.reconcile()
-        self.saved = main.store.snapshot()["settings"].get("public_host")
+        panel.engine.reconcile()
+        self.saved = panel.store.snapshot()["settings"].get("public_host")
 
     def tearDown(self):
         def restore(st):
             st["settings"].pop("public_host", None)
             if self.saved is not None:
                 st["settings"]["public_host"] = self.saved
-        main.store.mutate(restore)
+        panel.store.mutate(restore)
 
     def save(self, host, env="vpn.example.com"):
         with mock.patch.object(config, "PUBLIC_HOST", env):
-            main.engine.srv.update_server({"public_host": host})
-            st = main.store.snapshot()
-            return st["settings"].get("public_host"), main.engine.srv.public_host(st)
+            panel.engine.srv.update_server({"public_host": host})
+            st = panel.store.snapshot()
+            return st["settings"].get("public_host"), panel.engine.srv.public_host(st)
 
     def test_same_as_env_not_stored(self):
         self.assertEqual(self.save("vpn.example.com"), (None, "vpn.example.com"))
@@ -184,7 +185,7 @@ class PanelAddressTest(unittest.TestCase):
     def test_env_change_then_applies(self):
         self.save("vpn.example.com")
         with mock.patch.object(config, "PUBLIC_HOST", "new.example.com"):
-            self.assertEqual(main.engine.srv.public_host(main.store.snapshot()), "new.example.com")
+            self.assertEqual(panel.engine.srv.public_host(panel.store.snapshot()), "new.example.com")
 
     def test_other_address_overrides(self):
         self.assertEqual(self.save("203.0.113.9"), ("203.0.113.9", "203.0.113.9"))

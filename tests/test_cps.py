@@ -19,6 +19,8 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import awgserver, cps  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, clients  # noqa: E402
 
 PUB = "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw="
 PRIV = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
@@ -203,34 +205,34 @@ class ClientOverrideTest(unittest.TestCase):
 
 class ApiTest(unittest.TestCase):
     def test_put_client_cps(self):
-        from app import main, web
-        with mock.patch.object(main.engine, "clients", [{"public_key": PUB}]):
-            self.assertEqual(main.put_client_cps(Req({"preset": "quic"}), PUB)["cps"],
+        from app import web
+        with mock.patch.object(panel.engine, "clients", [{"public_key": PUB}]):
+            self.assertEqual(clients.put_client_cps(Req({"preset": "quic"}), PUB)["cps"],
                              {"preset": "quic", "values": None})
-            self.assertEqual(main.store.snapshot()["cps"][PUB], {"preset": "quic"})
-            r = main.put_client_cps(Req({"preset": "custom", "values": {"I1": "<rc 8>"}}), PUB)
+            self.assertEqual(panel.store.snapshot()["cps"][PUB], {"preset": "quic"})
+            r = clients.put_client_cps(Req({"preset": "custom", "values": {"I1": "<rc 8>"}}), PUB)
             self.assertEqual(r["cps"]["values"]["I1"], "<rc 8>")
             for bad in ({"preset": "custom", "values": {"I1": "<c>"}}, {"preset": "nope"}):
                 with self.assertRaises(web.HTTPError):
-                    main.put_client_cps(Req(bad), PUB)
-            main.put_client_cps(Req({"preset": "server"}), PUB)
-            self.assertNotIn(PUB, main.store.snapshot()["cps"])
+                    clients.put_client_cps(Req(bad), PUB)
+            clients.put_client_cps(Req({"preset": "server"}), PUB)
+            self.assertNotIn(PUB, panel.store.snapshot()["cps"])
         with self.assertRaises(web.HTTPError):
-            main.put_client_cps(Req({"preset": "quic"}), PUB)     # нет такого клиента
+            clients.put_client_cps(Req({"preset": "quic"}), PUB)     # нет такого клиента
 
     def test_restore(self):
-        from app import main, web
+        from app import web
         import test_api
         s = test_api.good_state()
         s["cps"] = {PUB: {"preset": "sip", "junk": 1}}
-        self.assertEqual(main.clean_backup_state(s)["cps"], {PUB: {"preset": "sip"}})
+        self.assertEqual(backup.clean_backup_state(s)["cps"], {PUB: {"preset": "sip"}})
         s["cps"] = {PUB: {"preset": "amnezia"}}      # копия старой версии
-        self.assertEqual(main.clean_backup_state(s)["cps"], {PUB: {"preset": "icloud"}})
+        self.assertEqual(backup.clean_backup_state(s)["cps"], {PUB: {"preset": "icloud"}})
         for bad in ({PUB: {"preset": "custom", "values": {"I1": "<c>"}}}, {PUB: {"preset": "x"}},
                     {"not-a-key": {"preset": "sip"}}):
             s["cps"] = bad
             with self.assertRaises(web.HTTPError):
-                main.clean_backup_state(s)
+                backup.clean_backup_state(s)
 
 
 if __name__ == "__main__":

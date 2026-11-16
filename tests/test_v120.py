@@ -22,6 +22,8 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import awgserver, checks, config, engine, main, system, tlsconf, tlsmgr, web, webfront  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import backup, exits, server, state  # noqa: E402
 
 
 class SelfTestPathTest(unittest.TestCase):
@@ -104,13 +106,13 @@ class PanelV6Test(unittest.TestCase):
     выписан сертификат и к нему подключаются клиенты, как и задумано у одного поля (issue #20)."""
 
     def test_v6_public_host_accepted(self):
-        main.engine.reconcile()            # демо-сервер AWG как цель
+        panel.engine.reconcile()            # демо-сервер AWG как цель
         try:
-            main.engine.srv.update_server({"public_host": "[2001:db8::5]"})
-            self.assertEqual(main.store.snapshot()["settings"]["public_host"], "2001:db8::5")
-            self.assertEqual(main.panel_url().split("//", 1)[1].split("/", 1)[0][:14], "[2001:db8::5]:")
+            panel.engine.srv.update_server({"public_host": "[2001:db8::5]"})
+            self.assertEqual(panel.store.snapshot()["settings"]["public_host"], "2001:db8::5")
+            self.assertEqual(panel.panel_url().split("//", 1)[1].split("/", 1)[0][:14], "[2001:db8::5]:")
         finally:
-            main.engine.srv.update_server({"public_host": "203.0.113.5"})
+            panel.engine.srv.update_server({"public_host": "203.0.113.5"})
 
     def test_client_key(self):
         self.assertEqual(web.client_key("203.0.113.5"), "203.0.113.5")
@@ -266,10 +268,10 @@ class TwoAddressCertTest(unittest.TestCase):
 
     def test_main_alt(self):
         """Второй адрес — только если IPv6 в ходу: в «Внешнем адресе» или в «Адрес в конфигах»."""
-        st = main.store.snapshot()["settings"]
+        st = panel.store.snapshot()["settings"]
         def with_settings(**kw):
-            main.store.mutate(lambda s: s["settings"].update(kw))
-            return main._tls_alt()
+            panel.store.mutate(lambda s: s["settings"].update(kw))
+            return panel._tls_alt()
         try:
             with mock.patch.object(config, "PUBLIC_HOST", "203.0.113.5"):
                 self.assertEqual(with_settings(public_host="2001:db8::5", client_host=""), ["203.0.113.5"])
@@ -277,7 +279,7 @@ class TwoAddressCertTest(unittest.TestCase):
                 self.assertEqual(with_settings(public_host="203.0.113.5", client_host=""), [])
                 self.assertEqual(with_settings(public_host="vpn.example.com", client_host="2001:db8::9"), [])
         finally:
-            main.store.mutate(lambda s: s["settings"].update({k: st.get(k, "") for k in ("public_host", "client_host")}))
+            panel.store.mutate(lambda s: s["settings"].update({k: st.get(k, "") for k in ("public_host", "client_host")}))
 
 
 class SysMonTest(unittest.TestCase):
@@ -310,8 +312,8 @@ class SysMonTest(unittest.TestCase):
         self.assertIsNone(m.percent())
 
     def test_in_state(self):
-        main.engine.reconcile()            # демо-сервер AWG как цель
-        st = main.get_state(None)
+        panel.engine.reconcile()            # демо-сервер AWG как цель
+        st = state.get_state(None)
         self.assertEqual(sorted(st["system"]), ["cores", "cpu", "load", "mem"])
         self.assertLess(len(json.dumps(st["system"])), 120)      # /api/state опрашивается часто
 
@@ -321,7 +323,7 @@ class ServerWatchTest(unittest.TestCase):
     сама — контейнер после SERVER_GRACE, дальше с паузами SERVER_PAUSES; кнопка — сразу."""
 
     def setUp(self):
-        self.e = main.engine
+        self.e = panel.engine
         self.ev = []
         self.now = [1_000_000.0]
         self.patches = [mock.patch.object(self.e, "event", side_effect=lambda lvl, m: self.ev.append(m.key)),
@@ -379,18 +381,18 @@ class ServerWatchTest(unittest.TestCase):
     def test_button(self):
         t = self.target("container", [True])
         with mock.patch.object(self.e, "target", t):
-            self.assertEqual(main.restart_server(None), {"ok": True})
+            self.assertEqual(server.restart_server(None), {"ok": True})
         t.restart.assert_called_once()
         with mock.patch.object(self.e, "target", None):
             with self.assertRaises(web.HTTPError):
-                main.restart_server(None)
+                server.restart_server(None)
 
 
 class ResourceAlertTest(unittest.TestCase):
     """Память или процессор выше порога RES_ALERT_SECS — одно событие, ниже MEM_OK / CPU_OK — второе."""
 
     def setUp(self):
-        self.e = main.engine
+        self.e = panel.engine
         self.ev, self.now, self.mem, self.cpu = [], [2_000_000.0], [50], [10.0]
         self.patches = [
             mock.patch.object(self.e, "event", side_effect=lambda lvl, m: self.ev.append((m.key, m.p))),
@@ -571,7 +573,7 @@ class ExitEngineTest(unittest.TestCase):
     amneziawg-go до перезапуска сервера; EXIT_ENGINE в .env закрепляет движок для разбора проблем."""
 
     def setUp(self):
-        self.e = main.engine
+        self.e = panel.engine
         self.e.kernel_fallback = None
         self.saved = self.e.server_engine
 
@@ -688,8 +690,8 @@ class ExitEngineTest(unittest.TestCase):
         self.assertEqual(events[0], ("ev.kernel_old", {"version": "1.0.20251009", "min": engine.KERNEL_MIN}))
 
     def test_state_and_no_choice(self):
-        main.engine.reconcile()
-        st = main.get_state(None)
+        panel.engine.reconcile()
+        st = state.get_state(None)
         self.assertEqual(sorted(st["awg_engine"]), ["choice", "disabled", "exits_now", "fallback", "fit", "fit_why", "forced",
                                                     "install", "lost", "min", "module", "notice", "old", "server"])
         self.assertIsNone(st["awg_engine"]["forced"])
@@ -697,7 +699,7 @@ class ExitEngineTest(unittest.TestCase):
         from test_api import good_state
         g = good_state()
         g.setdefault("settings", {})["exit_engine"] = "kernel"           # из черновика 1.20.0 — отбрасывается
-        self.assertNotIn("exit_engine", main.clean_backup_state(g)["settings"])
+        self.assertNotIn("exit_engine", backup.clean_backup_state(g)["settings"])
 
 
 
@@ -748,7 +750,7 @@ class ReviewFixesTest(unittest.TestCase):
         self.assertIn("ev.kernel_conf", events)                 # с 1.21.0 — своё сообщение: модуль не принял конфиг
 
     def test_pass_stops_after_server_restart(self):
-        e = main.engine
+        e = panel.engine
         t = mock.Mock(kind="host", iface="awg0", exists=True)
         t.is_up = lambda: False
         with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(e, "event"), \
@@ -771,16 +773,16 @@ class ReviewFixesTest(unittest.TestCase):
         from test_api import good_state
         g = good_state()
         g["settings"].update(public_host="198.51.100.1", client_host="198.51.100.2")
-        main.store.mutate(lambda st: st["settings"].update(local) or
+        panel.store.mutate(lambda st: st["settings"].update(local) or
                           [st["settings"].pop(k, None) for k in ("public_host", "client_host") if k not in local])
-        b = {"format": main.BACKUP_FORMAT, "state": g}
+        b = {"format": backup.BACKUP_FORMAT, "state": g}
         # фоновое обновление списков после восстановления не должно ходить в сеть из юнит-теста
-        with mock.patch.object(main.engine, "refresh_lists"):
-            main.restore_backup(type("R", (), {"json": lambda self: {"backup": b}})())
-        return main.store.snapshot()["settings"]
+        with mock.patch.object(panel.engine, "refresh_lists"):
+            backup.restore_backup(type("R", (), {"json": lambda self: {"backup": b}})())
+        return panel.store.snapshot()["settings"]
 
     def test_restore_ignores_old_server_address(self):
-        st0 = main.store.snapshot()
+        st0 = panel.store.snapshot()
         try:
             s = self.restore({})                                 # свой адрес — PUBLIC_HOST из .env
             self.assertNotIn("public_host", s)
@@ -789,7 +791,7 @@ class ReviewFixesTest(unittest.TestCase):
             self.assertEqual(s.get("public_host"), "203.0.113.9")
             self.assertNotIn("client_host", s)
         finally:
-            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+            panel.store.mutate(lambda st: (st.clear(), st.update(st0)))
 
     def test_non_finite_and_deep_json_are_400(self):
         def req(raw):
@@ -836,18 +838,18 @@ class ReviewFixesTest(unittest.TestCase):
         self.assertTrue(tlsmgr._san_matches(cert, "203.0.113.8"))
     def test_fallback_loop_rejected(self):
         R = lambda b: type("R", (), {"json": lambda self: b})()
-        st0 = main.store.snapshot()
+        st0 = panel.store.snapshot()
         try:
-            a = main.add_upstream(R({"name": "A", "config": "socks5://198.51.100.21:1080"}))["id"]
-            b = main.add_upstream(R({"name": "B", "config": "socks5://198.51.100.22:1080", "fallback": "up:" + a}))["id"]
-            c = main.add_upstream(R({"name": "C", "config": "socks5://198.51.100.23:1080", "fallback": "up:" + b}))["id"]
+            a = exits.add_upstream(R({"name": "A", "config": "socks5://198.51.100.21:1080"}))["id"]
+            b = exits.add_upstream(R({"name": "B", "config": "socks5://198.51.100.22:1080", "fallback": "up:" + a}))["id"]
+            c = exits.add_upstream(R({"name": "C", "config": "socks5://198.51.100.23:1080", "fallback": "up:" + b}))["id"]
             with self.assertRaises(web.HTTPError) as cm:
-                main.edit_upstream(R({"fallback": "up:" + c}), a)          # A → C → B → A
+                exits.edit_upstream(R({"fallback": "up:" + c}), a)          # A → C → B → A
             self.assertEqual(cm.exception.detail.key, "err.fallback_loop")
-            main.edit_upstream(R({"fallback": "direct"}), b)
-            main.edit_upstream(R({"fallback": "up:" + c}), a)              # цепочка без круга — можно
+            exits.edit_upstream(R({"fallback": "direct"}), b)
+            exits.edit_upstream(R({"fallback": "up:" + c}), a)              # цепочка без круга — можно
         finally:
-            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+            panel.store.mutate(lambda st: (st.clear(), st.update(st0)))
 
 class SubnetViewTest(unittest.TestCase):
     """#26: в поле «Подсеть» — подсеть (10.8.1.0/24), а не адрес сервера на хосте (10.8.1.1/24); смена
@@ -866,14 +868,14 @@ class SubnetViewTest(unittest.TestCase):
         t = HostDemo()
         sc = awgserver.new_server(self.PRIV, 51820, "10.8.1.0/24", {}, amnezia_style=amnezia_style)
         t.write_file(t.conf_path, sc.render())
-        old = main.engine.target
-        main.engine.target = t
+        old = panel.engine.target
+        panel.engine.target = t
         try:
-            view = main.engine.srv.server_view()
+            view = panel.engine.srv.server_view()
             if body:
-                main.engine.srv.update_server(body)
+                panel.engine.srv.update_server(body)
         finally:
-            main.engine.target = old
+            panel.engine.target = old
         return view, awgserver.parse(t.read_file(t.conf_path)).get("Address")
 
     def test_view_shows_subnet(self):

@@ -17,8 +17,10 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import main, notify, tgbot, tgreq, web  # noqa: E402
+from app import notify, tgbot, tgreq, web  # noqa: E402
 from tests.test_v19 import CHAT, TOKEN, FakeTG, cfg, msg  # noqa: E402
+from app import panel  # noqa: E402
+from app.api import telegram  # noqa: E402
 
 
 class ClockTest(unittest.TestCase):
@@ -72,7 +74,7 @@ class BotTest(unittest.TestCase):
         self.addCleanup(p.stop)
         self.addCleanup(lambda: setattr(notify, "clock_skew", 0.0))
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
 
     def run_updates(self, *ups):
         self.tg.updates = list(ups)
@@ -119,7 +121,7 @@ class BotTest(unittest.TestCase):
                     raise notify.NotifyError("Conflict: can't use getUpdates method while webhook is active")
                 self.bot.stop_ev.set()
             return self.tg(token, method, data, ctype, timeout, via)
-        main.store.mutate(lambda st: st["settings"].__setitem__("telegram", cfg()))
+        panel.store.mutate(lambda st: st["settings"].__setitem__("telegram", cfg()))
         with mock.patch.object(notify, "_post", post):
             self.bot._loop()
         self.assertIn("deleteWebhook", self.tg.methods())
@@ -144,10 +146,10 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
 
     def run_loop_once(self, c):
-        main.store.mutate(lambda st: st["settings"].__setitem__("telegram", c))
+        panel.store.mutate(lambda st: st["settings"].__setitem__("telegram", c))
         self.tg.updates = [msg("/start")]
 
         def post(*a):
@@ -166,21 +168,21 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
 
     def test_off_without_control(self):
         self.bot.stop_ev.clear()
-        main.store.mutate(lambda st: st["settings"].__setitem__("telegram", cfg(enabled=True, control=False)))
+        panel.store.mutate(lambda st: st["settings"].__setitem__("telegram", cfg(enabled=True, control=False)))
         with mock.patch.object(self.bot.wake, "wait", side_effect=lambda t: self.bot.stop_ev.set()):
             self.bot._loop()
         self.assertNotIn("getUpdates", self.tg.methods())
         self.assertEqual(self.bot.state, "off")
 
     def test_control_needs_token_and_chat(self):
-        main.store.mutate(lambda st: st["settings"].__setitem__("telegram", notify.defaults()))
+        panel.store.mutate(lambda st: st["settings"].__setitem__("telegram", notify.defaults()))
         req = mock.Mock(json=lambda: {"enabled": False, "control": True, "chat_id": ""})
         with self.assertRaises(web.HTTPError) as cm:
-            main.put_telegram(req)
+            telegram.put_telegram(req)
         self.assertEqual(cm.exception.detail.key, "err.tg_incomplete")
         req = mock.Mock(json=lambda: {"enabled": False, "control": True, "token": TOKEN, "chat_id": CHAT})
-        main.put_telegram(req)
-        c = notify.cfg_of(main.store.snapshot())
+        telegram.put_telegram(req)
+        c = notify.cfg_of(panel.store.snapshot())
         self.assertEqual((c["enabled"], c["control"]), (False, True))
 
     def test_panel_shows_state_without_notifications(self):
@@ -200,13 +202,13 @@ class NoDuplicateMenuTest(unittest.TestCase):
     """Главное меню — только на клавиатуре внизу, под сообщениями — только их кнопки."""
 
     def setUp(self):
-        main.engine.reconcile()
+        panel.engine.reconcile()
         self.tg = FakeTG()
         p = mock.patch.object(notify, "_post", self.tg)
         p.start()
         self.addCleanup(p.stop)
         tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
-        self.bot = tgbot.Bot(main.store, main.bot_ops)
+        self.bot = tgbot.Bot(panel.store, telegram.bot_ops)
 
     def inline(self, p):
         return [b.get("callback_data") or b.get("url") for row in (p.get("reply_markup") or {}).get("inline_keyboard", []) for b in row]

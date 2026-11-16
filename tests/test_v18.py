@@ -18,9 +18,13 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, main, notify, tgreq, web  # noqa: E402
+from app import config, notify, tgreq, web  # noqa: E402
 from app.store import Store  # noqa: E402
 from tests.test_api import PUB, UPSTREAM, good_state  # noqa: E402
+from app import i18n  # noqa: E402
+from app import panel  # noqa: E402
+from app import system  # noqa: E402
+from app.api import backup, exits, telegram  # noqa: E402
 
 TOKEN = "123456789:" + "A" * 35
 
@@ -91,14 +95,14 @@ class PostViaTest(unittest.TestCase):
             self.assertEqual(str(cm.exception), want)
 
     def test_router_error_has_msg(self):
-        main_route = main._tg_route
+        main_route = panel._tg_route
         notify.router = main_route
-        with mock.patch.object(main.engine, "own_route",
-                               side_effect=main.system.SysError(main.Msg("tg.via_down", name="NL"))):
+        with mock.patch.object(panel.engine, "own_route",
+                               side_effect=system.SysError(i18n.Msg("tg.via_down", name="NL"))):
             with self.assertRaises(notify.NotifyError) as cm:
                 notify.send(TOKEN, "42", "hi", via="up:u1")
         self.assertEqual(cm.exception.msg.key, "tg.via_down")
-        self.assertEqual(main.msg_of(cm.exception).p, {"name": "NL"})
+        self.assertEqual(i18n.msg_of(cm.exception).p, {"name": "NL"})
 
 
 class OwnRouteTest(unittest.TestCase):
@@ -106,10 +110,10 @@ class OwnRouteTest(unittest.TestCase):
         st = good_state()
         st["upstreams"][0]["fallback"] = "block"
         self.p = [mock.patch.object(config, "DRY_RUN", False),
-                  mock.patch.object(main.engine.store, "snapshot", return_value=st),
-                  mock.patch.object(main.engine, "target", mock.Mock(pid=777)),
-                  mock.patch.object(main.engine, "rt", {"u000001": mock.Mock(num=1)}),
-                  mock.patch.object(main.engine, "health", {"u000001": {"healthy": True}})]
+                  mock.patch.object(panel.engine.store, "snapshot", return_value=st),
+                  mock.patch.object(panel.engine, "target", mock.Mock(pid=777)),
+                  mock.patch.object(panel.engine, "rt", {"u000001": mock.Mock(num=1)}),
+                  mock.patch.object(panel.engine, "health", {"u000001": {"healthy": True}})]
         for p in self.p:
             p.start()
 
@@ -118,51 +122,51 @@ class OwnRouteTest(unittest.TestCase):
             p.stop()
 
     def test_route(self):
-        e = main.engine
+        e = panel.engine
         self.assertIsNone(e.own_route("direct"))
         self.assertEqual(e.own_route("up:u000001"), (777, 0x2001))
         e.health["u000001"] = {"healthy": False}             # не работает → резерв «блок»
-        with self.assertRaises(main.system.SysError) as cm:
+        with self.assertRaises(system.SysError) as cm:
             e.own_route("up:u000001")
         self.assertEqual((cm.exception.msg.key, cm.exception.msg.p), ("tg.via_blocked", {"name": "NL"}))
         e.health["u000001"] = {"healthy": True}
         e.rt.clear()                                         # туннель не запущен
-        with self.assertRaises(main.system.SysError) as cm:
+        with self.assertRaises(system.SysError) as cm:
             e.own_route("up:u000001")
         self.assertEqual(cm.exception.msg.key, "tg.via_down")
 
 
 class SettingsTest(unittest.TestCase):
     def setUp(self):
-        main.store.mutate(lambda st: (
+        panel.store.mutate(lambda st: (
             st["upstreams"].__setitem__(slice(None), [{"id": "u000001", "name": "NL", "num": 1,
                                                        "config": UPSTREAM, "enabled": True,
                                                        "fallback": "direct"}]),
             st["settings"].__setitem__("telegram", {**notify.defaults(), "token": TOKEN, "chat_id": "42"})))
 
     def tearDown(self):
-        main.store.mutate(lambda st: (st["upstreams"].clear(),
+        panel.store.mutate(lambda st: (st["upstreams"].clear(),
                                       st["settings"].__setitem__("telegram", notify.defaults())))
 
     def test_draft(self):
-        self.assertEqual(main._tg_draft({})["via"], "direct")
-        self.assertEqual(main._tg_draft({"via": "up:u000001"})["via"], "up:u000001")
+        self.assertEqual(telegram._tg_draft({})["via"], "direct")
+        self.assertEqual(telegram._tg_draft({"via": "up:u000001"})["via"], "up:u000001")
         for bad in ("block", "up:nope", 5):
             with self.assertRaises(web.HTTPError):
-                main._tg_draft({"via": bad})
-        self.assertEqual(notify.public_view(main._tg_draft({"via": "up:u000001"}))["via"], "up:u000001")
+                telegram._tg_draft({"via": bad})
+        self.assertEqual(notify.public_view(telegram._tg_draft({"via": "up:u000001"}))["via"], "up:u000001")
 
     def test_exit_in_use(self):
-        main.store.mutate(lambda st: st["settings"]["telegram"].update(via="up:u000001"))
-        refs = Store.outbound_refs(main.store.snapshot(), "up:u000001")
+        panel.store.mutate(lambda st: st["settings"]["telegram"].update(via="up:u000001"))
+        refs = Store.outbound_refs(panel.store.snapshot(), "up:u000001")
         self.assertIn("ref.telegram", [r.key for r in refs])
         with self.assertRaises(web.HTTPError):
-            main.del_upstream(None, "u000001")
+            exits.del_upstream(None, "u000001")
 
     def test_notifier_passes_via(self):
-        main.store.mutate(lambda st: st["settings"]["telegram"].update(enabled=True, via="up:u000001"))
+        panel.store.mutate(lambda st: st["settings"]["telegram"].update(enabled=True, via="up:u000001"))
         n = notify.Notifier.__new__(notify.Notifier)
-        n.store, n.host_fn, n._sent = main.store, lambda st: "h", {}
+        n.store, n.host_fn, n._sent = panel.store, lambda st: "h", {}
         n.q = notify.queue.Queue()
         n.event("login", "login_ok", ip="1.2.3.4")
         self.assertEqual(n.q.get_nowait()[3], "up:u000001")
@@ -170,20 +174,20 @@ class SettingsTest(unittest.TestCase):
     def test_backup_restore(self):
         st = good_state()
         st["settings"]["telegram"]["via"] = "up:u000001"
-        self.assertEqual(main.clean_backup_state(st)["settings"]["telegram"]["via"], "up:u000001")
-        self.assertEqual(main.clean_backup_state(good_state())["settings"]["telegram"]["via"], "direct")
+        self.assertEqual(backup.clean_backup_state(st)["settings"]["telegram"]["via"], "up:u000001")
+        self.assertEqual(backup.clean_backup_state(good_state())["settings"]["telegram"]["via"], "direct")
         for bad in ("up:nope", "block"):
             st["settings"]["telegram"]["via"] = bad
             with self.assertRaises(web.HTTPError):
-                main.clean_backup_state(st)
+                backup.clean_backup_state(st)
 
     def test_backup_error_translatable(self):
-        main._backup_try = 0.0
-        main.store.mutate(lambda st: st["settings"]["telegram"].update(enabled=True, backup="daily"))
-        err = notify.NotifyError("x", main.Msg("tg.via_down", name="NL"))
-        with mock.patch.object(main, "send_backup", side_effect=err):
-            self.assertFalse(main.backup_tick(now=10_000.0))
-        self.assertEqual(notify.cfg_of(main.store.snapshot())["backup_error"],
+        backup._backup_try = 0.0
+        panel.store.mutate(lambda st: st["settings"]["telegram"].update(enabled=True, backup="daily"))
+        err = notify.NotifyError("x", i18n.Msg("tg.via_down", name="NL"))
+        with mock.patch.object(backup, "send_backup", side_effect=err):
+            self.assertFalse(backup.backup_tick(now=10_000.0))
+        self.assertEqual(notify.cfg_of(panel.store.snapshot())["backup_error"],
                          {"$t": "tg.via_down", "p": {"name": "NL"}})
 
 
@@ -264,38 +268,38 @@ class DeleteApiTest(unittest.TestCase):
             s["upstreams"][:] = [up("u000001", 1, fallback="up:u000002"), up("u000002", 2)]
             s["routing"]["default"] = "up:u000001"
             s["settings"]["telegram"] = {**notify.defaults(), "via": "up:u000001"}
-        main.store.mutate(fn)
+        panel.store.mutate(fn)
 
     def tearDown(self):
         def fn(s):
             s["upstreams"].clear()
             s["routing"]["default"] = "direct"
             s["settings"]["telegram"] = notify.defaults()
-        main.store.mutate(fn)
+        panel.store.mutate(fn)
 
     def test_in_use_needs_replace(self):
         with self.assertRaises(web.HTTPError) as cm:
-            main.del_upstream(Req({}), "u000001")
+            exits.del_upstream(Req({}), "u000001")
         self.assertEqual(cm.exception.detail.key, "err.upstream_in_use")
-        self.assertEqual(len(main.store.snapshot()["upstreams"]), 2)       # ничего не изменилось
+        self.assertEqual(len(panel.store.snapshot()["upstreams"]), 2)       # ничего не изменилось
 
     def test_bad_replace(self):
         for bad in ("up:u000001", "up:nope", "elsewhere", 1):
             with self.assertRaises(web.HTTPError):
-                main.del_upstream(Req({"replace": bad}), "u000001")
-        self.assertEqual(main.store.snapshot()["routing"]["default"], "up:u000001")
+                exits.del_upstream(Req({"replace": bad}), "u000001")
+        self.assertEqual(panel.store.snapshot()["routing"]["default"], "up:u000001")
 
     def test_replace(self):
-        main.del_upstream(Req({"replace": "up:u000002"}), "u000001")
-        st = main.store.snapshot()
+        exits.del_upstream(Req({"replace": "up:u000002"}), "u000001")
+        st = panel.store.snapshot()
         self.assertEqual([u["id"] for u in st["upstreams"]], ["u000002"])
         self.assertEqual(st["routing"]["default"], "up:u000002")
         self.assertEqual(st["settings"]["telegram"]["via"], "up:u000002")
 
     def test_unused_without_body(self):
-        main.del_upstream(Req({"replace": "direct"}), "u000001")
-        main.del_upstream(None, "u000002")
-        self.assertEqual(main.store.snapshot()["upstreams"], [])
+        exits.del_upstream(Req({"replace": "direct"}), "u000001")
+        exits.del_upstream(None, "u000002")
+        self.assertEqual(panel.store.snapshot()["upstreams"], [])
 
 
 

