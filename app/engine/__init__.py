@@ -58,6 +58,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self.applied_hash: str | None = None
         self._hold_key: tuple | None = None      # с чем записан файл правил «до панели» (_save_hold)
         self._hold_ok: dict[str, bool] = {}      # контейнер сервера сам ставит эти правила при запуске
+        self._sniff_slots: dict[tuple, int] = {}  # номера меток sniproxy.py у политик (nftgen.sniff_marks)
         self.ruleset: str = ""
         self.last_apply: float | None = None
         self.last_error: str | None = None
@@ -385,11 +386,18 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     self.srv.upgrade_masking(t)
                 except Exception:  # noqa: BLE001
                     log.exception("masking upgrade")
+            listed = False
             try:
                 self.clients = self.srv.list_clients(t)
+                listed = True
             except Exception as e:  # noqa: BLE001
                 self.event("warn", Msg("ev.clients_failed", error=msg_of(e)))
-            else:
+            if fresh:
+                # в новой сети сервера правил панели нет: ставим их сразу, как только известны клиенты
+                # (их личные правила), — до учёта трафика, лимитов и запуска туннелей. Сервер в контейнере
+                # приложения AmneziaVPN сам их не ставит, и всё это время клиенты шли бы мимо выходов
+                self._hold_rules(t, st)
+            if listed:
                 try:
                     self.traffic.update(self.clients)
                     limits.enforce(self)
@@ -405,9 +413,9 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 log.exception("exit traffic")
             self.balancer.feed(self.traffic.take_recent(), time.time())
 
-            if fresh:
-                self._hold_rules(t, st)
             self._sync_upstreams(t, st)
+            # ip rule запущенных выходов — сразу, до DNS на сервере и правил nftables с их метками
+            self._sync_rules(t, add_only=True)
             self._update_health(t, st)
             try:
                 self._balance(st)

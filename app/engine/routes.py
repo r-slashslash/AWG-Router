@@ -158,7 +158,7 @@ class RoutesMixin:
         return nftgen.generate(t.iface, lst, [] if hold else self._up_list(st), gp, cps, sniff_port,
                                frozenset() if hold else self.bal_nums,
                                dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
-                               strict=sniff_port is None and self.strict(st))
+                               strict=sniff_port is None and self.strict(st), slots=self._sniff_slots)
 
     @staticmethod
     def strict(st: dict) -> bool:
@@ -190,11 +190,17 @@ class RoutesMixin:
         return config.DRY_RUN or (self.sni_stats().get("quic") == "on")
 
     # -------------------------------------------------------- ip rule/route
-    def _sync_rules(self, t: system.Target) -> None:
+    def _sync_rules(self, t: system.Target, add_only: bool = False) -> None:
         """ip rule и маршруты таблиц выходов — одной командой `ip -batch` (раньше — по два процесса на выход
         каждый проход). Маршруты заново ставятся, когда изменился набор туннелей (новый туннель — новое
-        время запуска) или прошло ROUTES_EVERY: исчезнуть сами они могут только вместе с интерфейсом."""
+        время запуска) или прошло ROUTES_EVERY: исчезнуть сами они могут только вместе с интерфейсом.
+        add_only — проход сразу после запуска туннелей, до правил nftables с их метками (метка без своего
+        ip rule ушла бы по основной таблице, мимо выхода): только добавить недостающее. Лишнее убирается в
+        конце прохода, когда новые правила nftables уже не ставят метку остановленного выхода."""
         want = {r.num: r for r in self.rt.values()}
+        key = (t.key, tuple(sorted((n, r.iface, r.started) for n, r in want.items())))
+        if add_only and getattr(self, "_rules_ok", None) == key:
+            return              # туннели те же, что при прошлой сверке: правила и маршруты уже на месте
         lo, hi = config.RULE_PRIO_BASE + 1, config.RULE_PRIO_BASE + config.MAX_UPSTREAMS
         have = self._ip_rules(t)
         present = set()
@@ -208,7 +214,9 @@ class RoutesMixin:
                 int(str(rule.get("fwmark", "0")), 0) == nftgen.mark_for(num)
             if ok and num not in present:
                 present.add(num)
-            else:
+            elif not add_only or num in want:
+                # add_only не трогает правила остановленных выходов: их метку nftables ещё ставит, и без
+                # правила (таблица с unreachable) она ушла бы по основной таблице
                 cmds.append(f"rule del priority {prio}")
                 if num not in want:
                     cmds.append(f"route flush table {config.TABLE_BASE + num}")
@@ -217,7 +225,6 @@ class RoutesMixin:
                 adds.append((num, ["rule", "add", "fwmark", hex(nftgen.mark_for(num)), "lookup",
                                    str(config.TABLE_BASE + num), "priority", str(config.RULE_PRIO_BASE + num)]))
         cmds += [" ".join(a) for _, a in adds]
-        key = (t.key, tuple(sorted((n, r.iface, r.started) for n, r in want.items())))
         now = time.time()
         routes = key != getattr(self, "_routes_key", None) or now - getattr(self, "_routes_at", 0) >= ROUTES_EVERY
         if routes:
@@ -227,8 +234,10 @@ class RoutesMixin:
                 cmds.append(f"route replace unreachable default metric 4096 table {table}")
                 cmds.append(f"route replace default dev {want[num].iface} table {table}")
         if not cmds:
+            self._rules_ok = key
             return
         p = t.ns(["ip", "-force", "-batch", "-"], input="\n".join(cmds) + "\n", check=False)
+        self._rules_ok = None
         if p.returncode != 0:
             # Что-то не прошло (интерфейс как раз пропал и т. п.). Маршруты — заново на следующем проходе;
             # недостающее правило — отдельной командой, и её ошибка видна, как раньше.
@@ -241,6 +250,7 @@ class RoutesMixin:
             return
         if routes:
             self._routes_key, self._routes_at = key, now
+        self._rules_ok = key
 
     @staticmethod
     def _ip_rules(t: system.Target) -> list[dict]:

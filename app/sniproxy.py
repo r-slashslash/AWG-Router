@@ -616,6 +616,10 @@ class Sniffer:
     def decide(self, client: str, name: str | None) -> tuple[dict, str | None]:
         """→ (куда: {"socks"} | {"mark"} | {"block"}, список). Без совпадения — метка политики."""
         pol = self.policy(client)
+        if not pol:
+            # клиента нет в настройках (панель только что их сменила, а nftables ещё прежние): его путь не
+            # известен — закрыть, а не отпустить с меткой 0 по основной таблице мимо выхода
+            return {"block": True}, None
         if name:
             for rule in pol.get("rules") or []:
                 for lid in rule.get("lists") or []:

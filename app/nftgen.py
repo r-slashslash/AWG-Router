@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import itertools
+
 from . import config
 
 LOCAL_NETS = [
@@ -155,6 +157,8 @@ def _set_block(name: str, cidrs: list[str], comment: str = "") -> str:
 
 
 DOM_SET = "dom4"     # адреса сайтов из правил по доменам по ответам DNS на сервере (режим «фильтр по DNS»)
+# метки выходов (MARK_BASE + 1…MAX_UPSTREAMS) и политик sniproxy.py (SNIFF_OUT_BASE + i) — по старшим битам
+EXIT_MASK = 0xFFFFFF00
 
 
 def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = False,
@@ -213,16 +217,31 @@ def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[i
     return policies, client_map
 
 
-def sniff_marks(policies: dict) -> dict[str, int]:
-    """Метки соединений sniproxy.py для политик с правилами по доменам."""
+def sniff_marks(policies: dict, slots: dict | None = None) -> dict[str, int]:
+    """Метки соединений sniproxy.py для политик с правилами по доменам.
+    slots — {политика: номер} движка между проходами (меняется здесь): у политики тот же номер, пока она есть.
+    Иначе номера сдвигались бы при добавлении клиента, и на миг между новыми настройками sniproxy.py и прежними
+    правилами nftables метка одной политики вела бы по правилам другой. Номер ушедшей политики занимается
+    снова не раньше следующего прохода: до конца этого он ещё в прежних правилах nftables."""
     names = sorted((n for n, p in policies.items() if p.get("domain")), key=lambda n: (n != "p_global", n))
-    return {n: config.SNIFF_OUT_BASE + i for i, n in enumerate(names)}
+    if slots is None:
+        return {n: config.SNIFF_OUT_BASE + i for i, n in enumerate(names)}
+    keys = {n: _policy_key(policies[n]) for n in names}
+    busy = set(slots.values())
+    new = {k: slots[k] for k in keys.values() if k in slots}
+    free = (i for i in itertools.count() if i not in busy)
+    for n in names:
+        if keys[n] not in new:
+            new[keys[n]] = next(free)
+    slots.clear()
+    slots.update(new)
+    return {n: config.SNIFF_OUT_BASE + new[keys[n]] for n in names}
 
 
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
-             quic: bool = False, strict: bool = False) -> str:
+             quic: bool = False, strict: bool = False, slots: dict | None = None) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
@@ -236,7 +255,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
     policies, client_map = layout(global_policy, client_policies, up_nums, balance)
-    marks = sniff_marks(policies) if sniff_port else {}
+    marks = sniff_marks(policies, slots) if sniff_port else {}
 
     used_lists = sorted({lid for p in policies.values() for l, _ in p["rules"] for lid in l})
     available = {lid for lid in used_lists if lists.get(lid)}
@@ -294,6 +313,10 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         "\tchain c_forward {",
         "\t\ttype filter hook forward priority filter; policy accept;",
         f"\t\tmeta mark {config.MARK_BLOCK:#x} reject with icmp type admin-prohibited",
+        # страховка: пакет с меткой выхода уходит не в туннель (ip rule этой метки ещё нет или уже нет —
+        # основная таблица) — отказ, а не путь мимо выхода
+        f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "{config.IFACE_PREFIX}*" '
+        "reject with icmp type admin-prohibited",
     ]
     for u in sorted(upstreams, key=lambda x: x["num"]):
         ifn = f"{config.IFACE_PREFIX}{u['num']}"
@@ -368,6 +391,14 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         if mss:
             out.append("\tchain c_mss_out {\n\t\ttype filter hook postrouting priority mangle; policy accept;\n"
                        + "\n".join(mss) + "\n\t}")
+
+    # та же страховка для своих соединений сервера (sniproxy.py, dnsproxy.py, проверки выходов): метка выхода
+    # мимо туннеля — отказ; метка политики sniproxy.py, которой нет в c_output (его настройки и nftables на миг
+    # разошлись, NET-3), — тоже отказ, а не основная таблица
+    out.append("\tchain c_guard_out {\n\t\ttype filter hook output priority filter; policy accept;\n"
+               f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "lo" '
+               f'oifname != "{config.IFACE_PREFIX}*" reject\n'
+               f"\t\tmeta mark & {EXIT_MASK:#x} == {config.SNIFF_OUT_BASE:#x} reject\n\t}}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]

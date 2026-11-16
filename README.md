@@ -211,6 +211,7 @@ Limitations:
 - The container's port can only be changed in the AmneziaVPN app.
 - In a container created by the AmneziaVPN app the subnet can't be changed either: the app writes it into the container's start script.
 - If you change server-side parameters in the panel (S1–S4, H1–H4, header protection key), the app doesn't learn about it. New clients from the app won't connect until you re-check the server in the app, which reads the parameters back from the server.
+- After the server reboots, a container created by the AmneziaVPN app starts before the panel and without its rules: for a few seconds, until the panel starts, clients go direct, past the exits. The panel's own container and a server on the host put the panel's rules up before the VPN starts. If this matters, move the server to the host with `awg-router reconfigure` (the same keys, port and clients).
 
 If the AWG Router installer created the container, its configs live on the host in `/opt/awg-router/awg-server/data` and survive re-creating the container.
 

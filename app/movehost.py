@@ -70,6 +70,12 @@ def install(src: str) -> str:
     system.install_host_runtime(t)
     t.write_file(t.conf_path, sc.render())
     t.write_file(t.clients_table_path, table, 0o644)
+    # правила «до панели» из контейнера (если они там были) — служба на хосте ставит их до подъёма сервера:
+    # иначе до первого прохода панели клиенты шли бы мимо выходов напрямую
+    hold = os.path.join(src, system.HOLD_NAME.format(iface=IFACE))
+    if os.path.isfile(hold):
+        with open(hold) as f:
+            t.write_file(os.path.join(config.HOST_AWG_DIR, os.path.basename(hold)), f.read(), 0o600)
     t.exists = True
     t.native(["systemctl", "enable", "--now", f"awg-quick@{IFACE}"], timeout=60)
     for _ in range(UP_WAIT):

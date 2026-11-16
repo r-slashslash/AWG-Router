@@ -201,7 +201,8 @@ class ServerMixin:
         if config.DRY_RUN:
             return
         restore = st["settings"].get("on_stop") == "restore"
-        key = (self.applied_hash, restore, t.key)
+        # strict меняет эти правила, даже когда посредник работает и применённые правила те же
+        key = (self.applied_hash, restore, t.key, self.strict(st))
         if key == self._hold_key:
             return
         try:

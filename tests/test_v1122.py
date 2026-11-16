@@ -458,7 +458,7 @@ class SniTrafficTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, d)
         p = os.path.join(d, "sni.json")
         with open(p, "w") as f:
-            json.dump({"listen": "127.0.0.1"}, f)
+            json.dump({"listen": "127.0.0.1", "policies": {"p_global": {"mark": 0, "rules": []}}}, f)
         s = sniproxy.Sniffer(p)
         site = socket.create_server(("127.0.0.1", 0))
         self.addCleanup(site.close)
