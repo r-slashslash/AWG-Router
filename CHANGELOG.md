@@ -231,6 +231,12 @@ it grows, so every user-visible change gets a new version.
   `PUT /api/limits` is refused (it was saved as 1970 and turned the client off at once). State files and backups made
   by the real code of releases 1.0.0–1.20.0 are in `tests/fixtures/old` (`tools/fixtures/make_old.py`), and
   `tests/test_old_files.py` checks that they load as before.
+- **The big files are split by topic** (nothing changes for users). `main.py` (2,600 lines) is now `app/panel.py`
+  (shared objects) and `app/api/` (auth, clients, exits, routing, server, state, backup, telegram); `engine.py`
+  (2,400 lines) is the package `app/engine/`, where `Engine` is put together from parts (tunnels, routes, sni, dns,
+  server, speed, diag); `app.js` (2,900 lines) is `app/static/js/` — `core.js`, a file per tab and `start.js`, loaded
+  in that order. Tests that read the interface's code read all its parts (`tests/panel_js.py`), and
+  `tests/test_rules.py` checks that every part is in `index.html` and no top-level name is declared twice.
 
 ## 1.20.0 — 2026-11-14
 

@@ -21,6 +21,8 @@ from app import notify, tgbot, tgreq, web  # noqa: E402
 from tests.test_v19 import CHAT, TOKEN, FakeTG, cfg, msg  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import telegram  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
 
 
 class ClockTest(unittest.TestCase):
@@ -186,8 +188,7 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
         self.assertEqual((c["enabled"], c["control"]), (False, True))
 
     def test_panel_shows_state_without_notifications(self):
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
-            src = f.read()
+        src = panel_js.source()
         self.assertIn("${c.control && S.tg_bot ? viewBotState(S.tg_bot)", src)
 
     def test_logs_helper_does_not_hang_in_a_pipe(self):

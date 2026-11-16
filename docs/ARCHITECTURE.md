@@ -9,9 +9,9 @@ mostly in `app/config.py`.
 ```
 browser / Telegram bot
         │
-   panel (app/main.py, app/web.py)  ──  state.json, traffic.json, tls.json  (./data)
+   panel (app/panel.py, app/api/*, app/web.py)  ──  state.json, traffic.json, tls.json  (./data)
         │
-   engine (app/engine.py)  ──►  AWG server  (container, host or demo "Target")
+   engine (app/engine/*)  ──►  AWG server  (container, host or demo "Target")
         │                         exits: AmneziaWG tunnels awgrN, SOCKS5 proxies
         ├─ nftables / ip rule / tc      (routing, accounting, speed limits)
         ├─ sniproxy.py                  (domain rules; quic.py, nfqueue.py — HTTP/3 by name)
@@ -21,6 +21,17 @@ browser / Telegram bot
 The panel is a single Python process that uses only the standard library, including its own small
 HTTP framework (`app/web.py`). It runs in a privileged container with the host network and PID
 namespace, and enters the network of the AWG container with `nsenter`.
+
+## Where the code lives
+
+| Part | Files |
+|---|---|
+| Start | `app/main.py` (`python3 -m app.main`) |
+| Shared objects: state, engine, HTTPS, notifications, the web app | `app/panel.py` |
+| API by topic | `app/api/`: `auth` (login, sessions, 2FA, `same_origin`), `clients` (clients, limits, masking, the client's page `/s/…`), `exits`, `routing` (rules, lists, route check), `server` (AWG server, engine, HTTPS, updates), `state` (`/api/state`, settings), `backup`, `telegram` (settings and bot control) |
+| Input checks, one per kind of thing | `app/checks.py`; the server's client settings in `users.py` |
+| Engine (`Engine`, one class in parts) | `app/engine/`: `__init__` (the pass, loops, events), `tunnels` (exits' tunnels, health, traffic, quotas), `routes` (routing decisions, nftables, ip rule), `sni` (domain rules, QUIC by name), `dns` (DNS on the server), `server` (AWG server, kernel module, rules "before the panel"), `speed` (`tc`), `diag` (exit check, route check), `common` |
+| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` with lists, `exits`, `server`, `system`, `settings` — Telegram, password, backup), `start.js` last; texts in `i18n.js` |
 
 ## The AWG server ("Target")
 
@@ -42,7 +53,7 @@ still there (for example, the kernel killed `amneziawg-go` when memory ran out),
 server with growing pauses.
 
 The kernel module is the recommended engine. The installer asks for it on a new install (`kernel_fit`), and
-the panel offers it (`main.engine_offer`) with a button that runs `install.sh --install-kernel` on the host
+the panel offers it (`api.server.engine_offer`) with a button that runs `install.sh --install-kernel` on the host
 (`app/kernelmod.py`; its own state is `data/engine.json`, not part of backups). Whatever goes wrong, the
 server ends up on `amneziawg-go`: a failed build changes nothing; a module lost after a kernel update is
 reported (`Engine._watch_module`); a server that doesn't come up on a loaded module after `KERNEL_GIVE_UP`
@@ -130,7 +141,7 @@ domain rules become a block.
   and read the state once per request (`store.snapshot()` copies all of it). The server keeps connections
   open (HTTP/1.1) and compresses text responses from `web.GZIP_MIN` bytes; static files are compressed once per
   version (`web.gzip_static`). Public routes (`/s/…`) read the state with `store.peek`, without a copy.
-- Requests that change something must come from the panel's own page (`main.same_origin`: `Sec-Fetch-Site`,
+- Requests that change something must come from the panel's own page (`api.auth.same_origin`: `Sec-Fetch-Site`,
   or `Origin`): the `SameSite=Strict` cookie is also sent from other pages of the same site.
 
 ## Interface and texts

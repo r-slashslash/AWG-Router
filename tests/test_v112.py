@@ -25,6 +25,8 @@ from app import awgconf, config, domains, lists, nftgen, sniproxy, socks, web  #
 from tests import e2e_servers  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import exits, routing, state, telegram  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
 
 
 class Req:
@@ -539,7 +541,7 @@ class RoutingTabTest(unittest.TestCase):
         html = self.read("index.html")
         self.assertIn('data-tab="routing"', html)
         self.assertNotIn('data-tab="lists"', html)
-        js = self.read("app.js")
+        js = panel_js.source()
         self.assertIn('if (tab === "lists")', js)            # старые закладки #lists
         self.assertIn('id="lists-sec"', js)
 

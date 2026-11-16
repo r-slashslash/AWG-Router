@@ -129,7 +129,7 @@ class DomainsAnyExitTest(unittest.TestCase):
         self.assertEqual([r["outbound"] for r in shared], ["block"])  # общий список — на замену
 
     def test_ui_has_no_socks_only(self):
-        js = read("app", "static", "app.js")
+        js = panel_js.source()
         self.assertNotIn("socksOnly", js)
         i18n = read("app", "static", "i18n.js")
         for key in ("re.need_socks", "re.domain_no_socks", "err.domains_need_socks"):
@@ -270,7 +270,7 @@ class RuleLineTest(unittest.TestCase):
         self.assertEqual((res["first"], res["count"]), ("youtube.com", 2))
 
     def test_ui(self):
-        js = read("app", "static", "app.js")
+        js = panel_js.source()
         self.assertIn("function listLabel(", js)
         self.assertIn("data-rule-more", js)
         self.assertNotIn("${esc(u.iface)}</span>", js)                   # имя awgrN в карточке выхода не показываем
@@ -343,7 +343,7 @@ class CliUpdateTest(unittest.TestCase):
         self.assertLess(sh.index("data/installing"), sh.index('step "Starting"'))
 
     def test_ui(self):
-        js = read("app", "static", "app.js")
+        js = panel_js.source()
         for key in ("status.offline", "status.updating_s", "status.starting", "status.server_restart",
                     "status.engine", "status.server_down", "sy.updating_cli"):
             self.assertIn(f'"{key}"', js)
@@ -358,6 +358,8 @@ import struct as _struct  # noqa: E402
 from app import config as _config, dnsproxy, nfqueue, quic, sniproxy  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import backup, exits, routing, server, state  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
 
 DATA = os.path.join(os.path.dirname(__file__), "fixtures")
 

@@ -20,6 +20,8 @@ from app import lists, traffic  # noqa: E402
 from app.store import Store  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import backup, clients, exits, routing  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
 
 LANGS = ("ru", "en", "zh", "fa")
 STR = r'"((?:[^"\\]|\\.)*)"'
@@ -71,7 +73,7 @@ class I18nTest(unittest.TestCase):
         keys = set(self.d["en"])
                 # только целые ключи: t("cl.sort_" + x) собирается на лету и здесь не проверяется
         lit = r'\bth?\("([a-z][\w.]*)"\s*[,)]'
-        used = set(re.findall(lit, read("app", "static", "app.js") + read("app", "static", "share.js")))
+        used = set(re.findall(lit, panel_js.source() + read("app", "static", "share.js")))
         files = [os.path.relpath(os.path.join(d, n), ROOT) for d, _, names in os.walk(os.path.join(ROOT, "app"))
                  for n in names if n.endswith(".py")]
         self.assertIn(os.path.join("app", "api", "exits.py"), files)         # подпапки тоже
@@ -80,6 +82,62 @@ class I18nTest(unittest.TestCase):
                 src = read(path)
                 used |= set(re.findall(r'\b(?:Msg|bad|UserError|HTTPError\(\d+,)\s*\(?\s*"([a-z]+\.[\w.]+)"\s*[,)]', src))
         self.assertEqual(sorted(k for k in used if k not in keys), [])
+
+
+class PanelScriptsTest(unittest.TestCase):
+    """Код интерфейса разделён на части (app/static/js): все они в index.html, core.js первым, start.js
+    последним, и ни одно имя верхнего уровня не объявлено дважды (у let/const это ошибка при загрузке, и
+    панель не открылась бы, у function — молча побеждает последняя)."""
+
+    def test_all_parts_loaded_in_order(self):
+        names = [os.path.basename(p) for p in panel_js.files()]
+        on_disk = sorted(n for n in os.listdir(os.path.join(ROOT, "app", "static", "js")) if n.endswith(".js"))
+        self.assertEqual(sorted(names), on_disk)
+        self.assertEqual((names[0], names[-1]), ("core.js", "start.js"))
+
+    @staticmethod
+    def top_names(src: str) -> list[str]:
+        """Имена верхнего уровня: function, class и все имена const/let/var — и после запятой (как top() в
+        eslint.config.mjs: объявление читается до «;» вне скобок и строк)."""
+        names = re.findall(r"^(?:async\s+)?(?:function\*?|class)\s+([A-Za-z_$][\w$]*)", src, re.M)
+        for m in re.finditer(r"^(?:const|let|var)\s+", src, re.M):
+            depth, part, quote, i = 0, "", None, m.end()
+            while i < len(src):
+                c = src[i]
+                if quote:
+                    i += 2 if c == "\\" else 1
+                    quote = None if c == quote else quote
+                    continue
+                if src.startswith("//", i) or src.startswith("/*", i):
+                    end = src.find("\n" if src[i + 1] == "/" else "*/", i)
+                    i = len(src) if end < 0 else end + (0 if src[i + 1] == "/" else 2)
+                    continue
+                if c in "\"'`":
+                    quote = c
+                elif c in "([{":
+                    depth += 1
+                elif c in ")]}":
+                    depth -= 1
+                elif depth == 0 and c in ",;":
+                    if mm := re.match(r"\s*([A-Za-z_$][\w$]*)\s*=", part):
+                        names.append(mm.group(1))
+                    part = ""
+                    if c == ";":
+                        break
+                if depth == 0 and c not in ",;":
+                    part += c
+                i += 1
+        return names
+
+    def test_top_level_names_unique(self):
+        seen, dup = {}, []
+        for p in panel_js.files() + [os.path.join(ROOT, "app", "static", "i18n.js")]:
+            for n in self.top_names(read(os.path.relpath(p, ROOT))):
+                if n in seen:
+                    dup.append(f"{n}: {seen[n]}, {os.path.basename(p)}")
+                seen.setdefault(n, os.path.basename(p))
+        self.assertEqual(dup, [])
+        self.assertIn("clientsShown", seen)          # имя после запятой («let a = …, b = …») тоже видно
 
 
 class ExitReferencesTest(unittest.TestCase):

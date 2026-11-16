@@ -14,6 +14,8 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.api import auth  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -46,8 +48,7 @@ class SessionTagTest(unittest.TestCase):
 
 class TabFromHashTest(unittest.TestCase):
     def test_render_uses_map(self):
-        with open(os.path.join(ROOT, "app", "static", "app.js"), encoding="utf-8") as f:
-            js = f.read()
+        js = panel_js.source()
         body = js[js.index("function render("):js.index("function banners(")]
         # #toString, #constructor, #__proto__ в адресе не должны доставать свойства Object.prototype
         self.assertNotIn("views[tab]", body)

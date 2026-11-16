@@ -56,6 +56,15 @@
 
 <dialog id="modal"><div id="modal-body"></div></dialog>
 <div id="toasts" aria-live="polite"></div>
-<script src="static/app.js"></script>
+<!-- скрипты панели: core.js первым (общие имена), start.js последним (запуск) -->
+<script src="static/js/core.js"></script>
+<script src="static/js/overview.js"></script>
+<script src="static/js/clients.js"></script>
+<script src="static/js/routing.js"></script>
+<script src="static/js/exits.js"></script>
+<script src="static/js/server.js"></script>
+<script src="static/js/system.js"></script>
+<script src="static/js/settings.js"></script>
+<script src="static/js/start.js"></script>
 </body>
 </html>

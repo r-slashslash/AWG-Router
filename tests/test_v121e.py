@@ -25,6 +25,8 @@ from app import panel  # noqa: E402
 from app import store as store_mod  # noqa: E402
 from app import users  # noqa: E402
 from app.api import auth, backup, exits, routing, server, state, telegram  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
 
 
 class Req:
@@ -210,7 +212,7 @@ class StaticNulTest(unittest.TestCase):
         th = threading.Thread(target=srv.serve_forever, daemon=True)
         th.start()
         try:
-            for path in ("/static/%00", "/static/app.js%00.png", "/s/assets/%00"):
+            for path in ("/static/%00", "/static/js/core.js%00.png", "/s/assets/%00"):
                 c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
                 c.request("GET", panel.BASE + path if path.startswith("/static") else path)
                 self.assertEqual(c.getresponse().status, 404, path)
@@ -362,8 +364,9 @@ class CspTest(unittest.TestCase):
                 html = f.read()
             self.assertFalse(re.search(r"<script(?![^>]*\bsrc=)", html), name)
             self.assertFalse(re.search(r"\son[a-z]+\s*=", html), name)
-        for name in ("app.js", "share.js", "i18n.js", "qrcode.js"):
-            with open(os.path.join(static, name)) as f:
+        for path in panel_js.files() + [os.path.join(static, n) for n in ("share.js", "i18n.js", "qrcode.js")]:
+            name = os.path.basename(path)
+            with open(path) as f:
                 js = f.read()
             self.assertNotIn("eval(", js, name)
             self.assertNotIn("new Function", js, name)
@@ -415,10 +418,9 @@ class ListsInBackgroundTest(unittest.TestCase):
 
 
 class UiGuardsTest(unittest.TestCase):
-    """Б 12, 13 — проверка по тексту app.js (браузерная проверка — Playwright, вне юнит-тестов)."""
+    """Б 12, 13 — проверка по тексту кода панели (браузерная проверка — Playwright, вне юнит-тестов)."""
     def setUp(self):
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js")) as f:
-            self.js = f.read()
+        self.js = panel_js.source()
 
     def test_server_tab_leave_guard(self):
         self.assertIn('if (tab === "server" && srvDirty()) return confirm(t("srv.leave"));', self.js)
@@ -1082,8 +1084,7 @@ class StateTagTest(unittest.TestCase):
             self.assertNotEqual(state.get_state(None)["tag"], a)
 
     def test_browser_patches_rows(self):
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
-            js = f.read()
+        js = panel_js.source()
         self.assertIn('"X-State-Tag": S.tag', js)
         self.assertIn("patchClients(html)", js)
         self.assertIn('id="cl-rows"', js)
@@ -1147,8 +1148,7 @@ class ErrorFieldTest(unittest.TestCase):
         self.assertNotIn("field", json.loads(c.getresponse().read()))
 
     def test_browser_marks_fields(self):
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
-            js = f.read()
+        js = panel_js.source()
         for fld in ("config", "name", "port", "address", "client_dns", "token", "chat_id", "params.${k}"):
             self.assertIn(f'data-field="{fld}"', js)
         self.assertEqual(js.count("markField(e, "), 3)
@@ -1159,8 +1159,7 @@ class ErrorFieldTest(unittest.TestCase):
 class OwnerFollowupTest(unittest.TestCase):
     def test_empty_list_warning_in_rule(self):
         """Б7: список без записей (не скачался или пустой) — пометка прямо в строке правила, 4 языка."""
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
-            js = f.read()
+        js = panel_js.source()
         self.assertIn('"rl.lists_failed"', js)
         self.assertIn('"rl.lists_empty"', js)
         with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "i18n.js"), encoding="utf-8") as f:

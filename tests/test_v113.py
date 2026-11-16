@@ -21,6 +21,8 @@ from tests.test_v19 import FakeTG, button, cfg, msg  # noqa: E402
 from app import panel  # noqa: E402
 from app import version  # noqa: E402
 from app.api import exits, state, telegram  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
 
 STATIC = os.path.join(os.path.dirname(__file__), "..", "app", "static")
 
@@ -86,7 +88,7 @@ class PanelHeaderTest(unittest.TestCase):
             return f.read()
 
     def test_header_shows_traffic_not_applied(self):
-        js = self.read("app.js")
+        js = panel_js.source()
         body = js[js.index("function renderStatus()"):]
         body = body[:body.index("\n}\n")]
         self.assertNotIn("status.applied", body)
@@ -96,7 +98,7 @@ class PanelHeaderTest(unittest.TestCase):
 
     def test_client_month_on_phone(self):
         """Трафик клиента за месяц виден и в карточке на телефоне (раньше ячейка там пряталась)."""
-        js, css = self.read("app.js"), self.read("app.css")
+        js, css = panel_js.source(), self.read("app.css")
         self.assertIn('<td data-m="month"', js)
         self.assertIn('td[data-m="month"]', css)
         self.assertNotIn('data-m="hide" class="nowrap muted">${trafficCell(c)}', js)
