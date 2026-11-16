@@ -190,13 +190,13 @@ class ClientHostTest(unittest.TestCase):
         и у этого сервера."""
         server.put_server(Req({"extra_hosts": "198.51.100.20"}))
         clients.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
-        b = backup.clean_backup_state(panel.store.snapshot())
+        b = backup.clean_backup_state(panel.store.snapshot(texts=True))
         self.assertNotIn("extra_hosts", b["settings"])
         self.assertEqual(b["chost"][self.pk], "198.51.100.20")
         bad = dict(panel.store.snapshot(), chost={self.pk: ["x"]})
         self.assertEqual(code(backup.clean_backup_state, bad), 400)
         # restore_state: свои дополнительные адреса остаются, чужие и адрес клиента не из них — нет
-        other = backup.clean_backup_state(panel.store.snapshot())
+        other = backup.clean_backup_state(panel.store.snapshot(texts=True))
         other["settings"]["extra_hosts"] = ["203.0.113.250"]
         other["chost"] = {self.pk: "203.0.113.250"}
         cur = panel.store.snapshot()
@@ -213,7 +213,7 @@ class ClientHostTest(unittest.TestCase):
         clients.put_client_host(Req({"host": "198.51.100.20"}), self.pk)
         st0 = panel.store.snapshot()
         try:
-            g = backup.clean_backup_state(panel.store.snapshot())
+            g = backup.clean_backup_state(panel.store.snapshot(texts=True))
             g["settings"]["extra_hosts"] = ["203.0.113.250"]          # чужой сервер
             g["chost"] = {self.pk: "198.51.100.20"}
             with mock.patch.object(panel.engine, "refresh_lists"):       # без сети в юнит-тесте

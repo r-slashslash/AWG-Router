@@ -33,7 +33,7 @@ def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | No
         text = checks.list_fields({"kind": "domains", "source": text, "name": name})["source"]
         if own:
             l = Store.lst(st, own)
-            if l["source"] != text or l.get("name") != name:
+            if store.list_text(own) != text or l.get("name") != name:
                 l.update(source=text, name=name)
                 refresh = own
         else:

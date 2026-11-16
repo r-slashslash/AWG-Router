@@ -194,7 +194,7 @@ class InputTypesTest(unittest.TestCase):
         self.assertEqual(code(lambda: state.put_settings(Req({"list_update_hours": True}))), (400, "err.hours"))
 
     def test_restore_flags(self):
-        g = backup.clean_backup_state(panel.store.snapshot())
+        g = backup.clean_backup_state(panel.store.snapshot(texts=True))
         g["settings"]["telegram"] = {"token": "123456:" + "A" * 35, "chat_id": "424242",
                                      "enabled": "false", "control": "no"}
         c = backup.clean_backup_state(g)["settings"]["telegram"]

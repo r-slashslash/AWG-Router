@@ -204,7 +204,7 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                                                                  extra_hosts=["198.51.100.20"]))
                 clients.put_client_host(R({"host": "198.51.100.20"}), pk)
                 panel.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}, strict=True))
-                st = panel.store.snapshot()
+                st = panel.store.snapshot(texts=True)          # так состояние выглядит в резервной копии
                 new = backup.clean_backup_state(st)
             finally:
                 panel.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],

@@ -144,7 +144,7 @@ class RestoreAndApiTest(Fixture):
             routing.edit_list(Req({"kind": "country", "source": "de"}), lid)
         self.assertIn("err.list_kind_change", str(cm.exception))
         routing.edit_list(Req({"kind": "manual", "source": "203.0.113.0/25", "name": "Office"}), lid)
-        self.assertEqual(Store.lst(panel.store.snapshot(), lid)["source"], "203.0.113.0/25")
+        self.assertEqual(panel.store.list_text(lid), "203.0.113.0/25")
 
 
 # ----------------------------------------------------- №3 подсеть и NAT на хосте

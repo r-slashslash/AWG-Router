@@ -237,6 +237,15 @@ it grows, so every user-visible change gets a new version.
   server, speed, diag); `app.js` (2,900 lines) is `app/static/js/` — `core.js`, a file per tab and `start.js`, loaded
   in that order. Tests that read the interface's code read all its parts (`tests/panel_js.py`), and
   `tests/test_rules.py` checks that every part is in `index.html` and no top-level name is declared twice.
+- **Texts of typed-in lists live in their own files.** The text of a manual network list or a domain list (up to
+  2 MB each) is kept in `data/texts/<id>-<tag>.txt`; `state.json` has an empty `source` and the file's tag `text`
+  (`store.TEXT_KINDS`, `Store.list_text`). `state.json` is written whole on every change and the state is copied on
+  every request, so it stays small. A new text goes to a new file, written and fsynced before `state.json` refers
+  to it, and the old file stays while `state.json.bak` needs it: a failed write or a start from `.bak` never loses
+  a text. The first start on a `state.json` of an earlier release moves the texts out (`Store._upgrade`; tested on
+  the files of 1.0.0–1.20.0). Backups still carry the texts in `source` (`Store.snapshot(texts=True)`), so earlier
+  releases restore them. 1.20.0 started on these files (checked with its real code) shows such lists empty until a
+  backup is restored, and comes back to 1.21.0 with the texts in place (it keeps the `text` tags).
 
 ## 1.20.0 — 2026-11-14
 

@@ -9,7 +9,7 @@ from .. import (awgconf, checks, domains, lists)
 from ..checks import bad
 from ..i18n import Msg
 from ..panel import (app, engine, store)
-from ..store import Store, new_id
+from ..store import TEXT_KINDS, Store, new_id
 
 # ------------------------------------------------------------------ routing
 @app.put("/api/routing")
@@ -85,7 +85,8 @@ def list_view(l: dict | None) -> dict | None:
     if l is None:
         return None
     v = {**l, "busy": l["id"] in engine.lists_busy}
-    if l.get("kind") in ("manual", "domains"):
+    v.pop("text", None)                  # метка файла с текстом (Store.list_text) браузеру ни к чему
+    if l.get("kind") in TEXT_KINDS:
         v["source"] = None
     return v
 
@@ -95,7 +96,7 @@ def _needs_net(l: dict) -> bool:
     разбираются за доли секунды — их по-прежнему готовим сразу, и ответ уже с числом записей."""
     if l["kind"] in ("country", "asn", "url"):
         return True
-    return l["kind"] == "domains" and bool(domains.split_source(l.get("source") or "")[0])
+    return l["kind"] == "domains" and bool(domains.split_source(l.get("source") or store.list_text(l["id"]))[0])
 
 
 def refresh_now_or_bg(lid: str) -> dict | None:
@@ -112,7 +113,10 @@ def get_list(req, lid):
     l = Store.lst(store.snapshot(), lid)
     if not l:
         bad("err.not_found", 404)
-    return l
+    out = {k: v for k, v in l.items() if k != "text"}
+    if l["kind"] in TEXT_KINDS:
+        out["source"] = store.list_text(lid)      # текст ручного списка — из его файла
+    return out
 
 
 @app.post("/api/lists")
@@ -142,7 +146,8 @@ def edit_list(req, lid):
             # вид списка не меняется: от него зависят правила (домены не смешиваются с сетями),
             # а у стран id = код страны
             bad("err.list_kind_change")
-        d = checks.list_fields(body, l)
+        # без нового текста в запросе (только название) проверяется прежний текст — из его файла
+        d = checks.list_fields(body, {**l, "source": store.list_text(lid)} if l["kind"] in TEXT_KINDS else l)
         if l["kind"] == "country":
             d["source"] = l["source"]  # страну у существующего списка не меняем
         l.update(d)

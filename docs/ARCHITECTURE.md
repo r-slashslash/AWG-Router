@@ -135,6 +135,11 @@ domain rules become a block.
   `fsync`; the previous version stays as `state.json.bak`, and the panel starts from it when `state.json`
   is damaged. State and backups of earlier releases are kept in `tests/fixtures/old` and must load as
   before (`tests/test_old_files.py`).
+- Texts of the lists typed in by hand (networks and domains, up to 2 MB each) are not in `state.json`: each
+  is in `data/texts/<id>-<tag>.txt`, and the list in the state has an empty `source` and the file's tag
+  `text`. Read a text with `Store.list_text`; a backup is `Store.snapshot(texts=True)` (texts inline, as
+  before 1.21.0). A new text gets a new file written before `state.json` refers to it; the previous one
+  stays while `state.json.bak` needs it.
 - `traffic.json` — counters (`traffic.FORMAT` stays 2 so older panels can still read it).
 - `tls.json` — HTTPS settings for this particular server; not part of backups.
 - `/api/state` is polled every few seconds, so keep it small; load big data with separate requests,

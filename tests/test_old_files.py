@@ -42,11 +42,12 @@ def read_json(*path):
 
 
 def loaded_state(v: str) -> dict:
-    """state.json выпуска v, как его читает панель при запуске (Store)."""
+    """state.json выпуска v, как его читает панель при запуске (Store), — с текстами ручных списков (с 1.21.0
+    они лежат в своих файлах, а не в state.json: Store переносит их при первом запуске)."""
     d = tempfile.mkdtemp()
     try:
         shutil.copy(os.path.join(FIX, v, "state.json"), os.path.join(d, "state.json"))
-        return json.loads(json.dumps(Store(os.path.join(d, "state.json")).state))
+        return json.loads(json.dumps(Store(os.path.join(d, "state.json")).snapshot(texts=True)))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -94,6 +95,32 @@ class OldFilesTest(unittest.TestCase):
             with self.subTest(v=v):
                 self.assertEqual(expected_now(v), read_json(v, "expected.json"))
 
+    def test_texts_move_out_of_state(self):
+        """Первый запуск 1.21.0 на state.json прежнего выпуска: тексты ручных списков — в своих файлах, в
+        state.json их нет, а состояние с текстами (резервная копия) — прежнее."""
+        for v in versions():
+            with self.subTest(v=v):
+                d = tempfile.mkdtemp()
+                try:
+                    path = os.path.join(d, "state.json")
+                    shutil.copy(os.path.join(FIX, v, "state.json"), path)
+                    old = read_json(v, "state.json")
+                    texts = {l["id"]: l["source"] for l in old["lists"] if l["kind"] in ("manual", "domains")}
+                    self.assertTrue(texts)
+                    st = Store(path)
+                    with open(path, encoding="utf-8") as f:
+                        disk = json.load(f)
+                    for l in disk["lists"]:
+                        if l["id"] in texts:
+                            self.assertEqual(l["source"], "")
+                            self.assertRegex(l["text"], r"^[0-9a-f]{16}$")
+                            self.assertEqual(st.list_text(l["id"]), texts[l["id"]])
+                    self.assertEqual(len(os.listdir(os.path.join(d, "texts"))), len(texts))
+                    again = Store(path)                     # второй запуск ничего не переносит заново
+                    self.assertEqual(again.snapshot(), st.snapshot())
+                finally:
+                    shutil.rmtree(d, ignore_errors=True)
+
     def test_encrypted_backups(self):
         """Копия с паролем (Telegram с 1.5.0, «Скачать копию» с паролем с 1.12.0) открывается и даёт то же."""
         found = glob.glob(os.path.join(FIX, "*", "backup.enc"))
@@ -125,7 +152,7 @@ class OldFilesTest(unittest.TestCase):
                                      {"ok": True, "restarted": True})
                     exp = read_json(v, "expected.json")["backup"]
                     self.assertEqual(panel.store.snapshot()["upstreams"], exp["restored"]["upstreams"])
-                    self.assertEqual(panel.store.snapshot()["lists"], exp["restored"]["lists"])
+                    self.assertEqual(panel.store.snapshot(texts=True)["lists"], exp["restored"]["lists"])
         finally:
             panel.store.mutate(lambda st: (st.clear(), st.update(st0)))
             panel.engine.traffic.replace(tr0)

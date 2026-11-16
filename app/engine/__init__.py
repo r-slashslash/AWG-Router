@@ -23,7 +23,7 @@ import time
 
 from .. import awgconf, balance, config, domains, hostnet, limits, lists, nftgen, system
 from ..i18n import Msg, msg_of
-from ..store import Store
+from ..store import TEXT_KINDS, Store
 from ..traffic import Traffic
 from ..users import ServerManager
 from .common import DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, UpRT, _sha, log
@@ -228,6 +228,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     continue
                 if l.get("error") and since_check < 900:
                     continue
+            if l["kind"] in TEXT_KINDS:          # текст ручного списка — в своём файле (Store.list_text)
+                l = {**l, "source": self.store.list_text(l["id"])}
             res = lists.refresh(l)
             if res.get("error"):
                 self.event("warn", Msg("ev.list_failed", list=l["id"],

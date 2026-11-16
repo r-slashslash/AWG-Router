@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,14 @@ DEFAULT_STATE = {
 
 ID_RE = re.compile(r"^[a-z0-9_]{1,24}$")
 
+# Списки, чей текст вводят руками (сети и домены, до LIST_TEXT_MAX): текст лежит в своём файле texts/<id>-<метка>.txt
+# рядом с state.json, а в состоянии — только метка файла "text" и пустой "source". Так state.json маленький: он
+# пишется целиком при каждом изменении и копируется на каждый запрос. Резервная копия несёт сами тексты
+# (snapshot(texts=True)). Прежний выпуск, запущенный на этих файлах, увидит такие списки пустыми — текст вернёт
+# загрузка резервной копии.
+TEXT_KINDS = ("manual", "domains")
+TEXT_RE = re.compile(r"^[0-9a-f]{16}$")
+
 
 def new_id(prefix: str) -> str:
     return f"{prefix}{secrets.token_hex(3)}"
@@ -51,13 +60,16 @@ def new_id(prefix: str) -> str:
 class Store:
     def __init__(self, path: str = STATE_PATH):
         self.path = path
+        self.text_dir = os.path.join(os.path.dirname(path), "texts")
         self.lock = threading.RLock()
         self.rev = 0
+        self._texts: set[str] = set()       # файлы текстов, на которые ссылается записанное состояние
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path):
             self.state = self._read()
             for k, v in DEFAULT_STATE.items():
                 self.state.setdefault(k, copy.deepcopy(v))
+            self._texts = self._text_refs(self.state)
             if self._upgrade() or not os.path.exists(path):     # нет файла — взяли запасную копию (_read)
                 self._write()
         else:
@@ -75,6 +87,9 @@ class Store:
                 changed = True
         if Store.drop_auto_comments(self.state):
             changed = True
+        if any(isinstance(l, dict) and l.get("kind") in TEXT_KINDS and l.get("source")
+               for l in self.state.get("lists") or []):
+            changed = True              # state.json до 1.21.0: тексты списков — в свои файлы (_write)
         s = self.state.get("settings") or {}
         if s.get("panel_dns") and "panel_dns_enc" not in s:
             # DNS на сервере включили в 1.15.0, до шифрования: оставляем как было — DoH по умолчанию
@@ -125,10 +140,12 @@ class Store:
             return state
 
     def _write(self, state: dict | None = None) -> None:
+        state = self.state if state is None else state
+        refs = self._save_texts(state)          # сначала тексты: state.json ссылается только на записанное
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump(self.state if state is None else state, f, ensure_ascii=False, indent=2)
+            json.dump(state, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
         # прежняя версия — жёсткой ссылкой рядом (тот же файл, без копирования): её читает _read
@@ -141,10 +158,93 @@ class Store:
         except OSError:
             pass                        # файловая система без жёстких ссылок — живём без запасной копии
         os.replace(tmp, self.path)
+        # лишние тексты — после записи; тексты прежнего состояния остаются: оно теперь state.json.bak
+        self._drop_texts(refs | self._texts)
+        self._texts = refs
 
-    def snapshot(self) -> dict:
+    # --- тексты ручных списков (TEXT_KINDS) --------------------------------
+    @staticmethod
+    def _text_refs(state: dict) -> set[str]:
+        return {f"{l['id']}-{l['text']}.txt" for l in state.get("lists") or []
+                if isinstance(l, dict) and isinstance(l.get("id"), str) and ID_RE.match(l["id"])
+                and isinstance(l.get("text"), str) and TEXT_RE.match(l["text"])}
+
+    def _save_texts(self, state: dict) -> set[str]:
+        """Текст, который пришёл в "source" (ввод в панели, резервная копия, state.json до 1.21.0), — в файл
+        texts/<id>-<метка>.txt (метка — от содержимого: новый текст — новый файл, старый цел до записи
+        state.json); в состоянии остаются пустой "source" и метка "text". → файлы, на которые оно ссылается."""
+        wrote = False
+        for l in state.get("lists") or []:
+            if not (isinstance(l, dict) and l.get("kind") in TEXT_KINDS and isinstance(l.get("id"), str)
+                    and ID_RE.match(l["id"]) and l.get("source")):
+                continue
+            text = str(l["source"])
+            h = hashlib.sha256(text.encode()).hexdigest()[:16]
+            path = os.path.join(self.text_dir, f"{l['id']}-{h}.txt")
+            if not os.path.exists(path):
+                os.makedirs(self.text_dir, mode=0o700, exist_ok=True)
+                tmp = path + ".tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(text)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+                wrote = True
+            l["source"], l["text"] = "", h
+        if wrote:
+            try:
+                d = os.open(self.text_dir, os.O_RDONLY)
+                try:
+                    os.fsync(d)             # имя нового файла — на диске раньше, чем state.json со ссылкой на него
+                finally:
+                    os.close(d)
+            except OSError:
+                pass
+        return self._text_refs(state)
+
+    def _drop_texts(self, keep: set[str]) -> None:
+        try:
+            names = os.listdir(self.text_dir)
+        except OSError:
+            return
+        for n in names:
+            if n not in keep:
+                try:
+                    os.remove(os.path.join(self.text_dir, n))
+                except OSError:
+                    pass
+
+    def list_text(self, lid: str) -> str:
+        """Текст ручного списка (сети или домены) — из его файла. Нет файла — "" (и запись в журнал)."""
         with self.lock:
-            return copy.deepcopy(self.state)
+            l = Store.lst(self.state, lid)
+            return self._read_text(l) if l else ""
+
+    def _read_text(self, l: dict) -> str:
+        if l.get("source") or l.get("kind") not in TEXT_KINDS:
+            return l.get("source") or ""
+        h = l.get("text")
+        if not (isinstance(h, str) and TEXT_RE.match(h) and ID_RE.match(l["id"])):
+            return ""
+        try:
+            with open(os.path.join(self.text_dir, f"{l['id']}-{h}.txt"), encoding="utf-8") as f:
+                return f.read()
+        except OSError as e:
+            log.warning("list %s: its text is lost (%s)", l["id"], e)
+            return ""
+
+    def snapshot(self, texts: bool = False) -> dict:
+        """Копия состояния. texts — с текстами ручных списков в "source" (резервная копия): так состояние
+        выглядело до 1.21.0, и его понимают прежние выпуски."""
+        with self.lock:
+            st = copy.deepcopy(self.state)
+            if texts:
+                for l in st.get("lists") or []:
+                    if isinstance(l, dict) and l.get("kind") in TEXT_KINDS:
+                        l["source"] = self._read_text(l)
+                        l.pop("text", None)
+            return st
 
     def peek(self, fn):
         """fn(state) под блокировкой, без копии: для маленьких ответов (есть ли токен ссылки). fn ничего не

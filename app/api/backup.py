@@ -43,7 +43,7 @@ def get_backup_encrypted(req):
 
 
 def make_backup() -> dict:
-    st = store.snapshot()
+    st = store.snapshot(texts=True)          # тексты ручных списков — в самой копии, как до 1.21.0
     srv = None
     t = engine.target
     if t and t.exists:

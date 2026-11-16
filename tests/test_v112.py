@@ -500,7 +500,7 @@ class ExitDialogRoutingTest(unittest.TestCase):
         st = panel.store.snapshot()
         self.assertEqual(st["routing"]["default"], "up:" + uid)
         self.assertEqual(st["routing"]["rules"][0]["outbound"], "block")    # чужое правило осталось первым
-        self.assertIn("b.example", Store.lst(st, Store.upstream(st, uid)["own_list"])["source"])
+        self.assertIn("b.example", panel.store.list_text(Store.upstream(st, uid)["own_list"]))
         exits.edit_upstream(Req({"name": "Seller", "routing": {"domains": "", "default": False}}), uid)
         st = panel.store.snapshot()
         self.assertEqual(st["routing"]["default"], "direct")

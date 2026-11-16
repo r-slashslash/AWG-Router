@@ -692,7 +692,7 @@ class EngineDomainDnsTest(DomainsAnyExitTest):
         self.assertTrue(st["settings"]["dom_filter"])
         self.assertTrue(server.get_server(None)["dom_filter"])
         self.assertFalse(panel.engine.dom_filter(st))                  # без DNS на сервере фильтра нет
-        self.assertTrue(backup.clean_backup_state(st)["settings"]["dom_filter"])
+        self.assertTrue(backup.clean_backup_state(panel.store.snapshot(texts=True))["settings"]["dom_filter"])
 
     def test_apply_falls_back_without_queue(self):
         """Ядро без nft_queue: набор правил с очередью не применился — применяется без неё, и QUIC у этих
