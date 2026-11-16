@@ -133,6 +133,11 @@ it grows, so every user-visible change gets a new version.
   before `awg-quick up`: `awg-server/start.sh` (the image now has `nftables`) and, on the host, `ExecStartPre` in the
   panel's `awg-quick@.service`, there only when the panel's table isn't there (a reboot, not a service restart).
   With "When the panel is stopped: Send everything direct" (`on_stop = restore`) there is no such file; uninstalling removes it.
+  For a server on the host the installer puts the `nft` program on the host when it is missing (`ensure_nft`); if the
+  package's own `nftables.service` came enabled, it is disabled, not stopped (stopping it flushes every rule, Docker's
+  too). Checked end to end on GitHub machines with the panel installed from the code (`tests/e2e/restart.sh`, job
+  `restart` in `e2e.yml`): a restart of the server while the panel runs, and a "reboot" with the panel down, in both
+  modes; `tests/container_e2e.py` and `movehost_e2e.py` in the network tests check the pieces.
 - **The panel's web server can't be tied up by slow clients.** `IDLE_TIMEOUT` was per read, so a byte every 59 s kept
   a connection forever. Now the TLS handshake, request line and headers have `HEAD_DEADLINE` (30 s) in total and the
   body `BODY_DEADLINE` (120 s); a watchdog thread shuts the socket down when they run out (`Server.arm`). IPv6
