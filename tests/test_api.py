@@ -177,7 +177,7 @@ class TraceIpv6Test(unittest.TestCase):
         def __init__(self, ip):
             self.ip = ip
 
-        def json(self):
+        def json(self, limit=None):
             return {"ip": self.ip}
 
     def detail(self, ip, resolver=None):

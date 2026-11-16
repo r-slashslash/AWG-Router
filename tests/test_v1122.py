@@ -41,7 +41,7 @@ class Req:
     def __init__(self, body):
         self.body = body
 
-    def json(self):
+    def json(self, limit=None):
         return self.body
 
 

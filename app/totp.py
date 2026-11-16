@@ -17,6 +17,7 @@ import time
 from urllib.parse import quote
 
 from . import config
+from .store import fsync_dir
 
 PATH = os.path.join(config.DATA_DIR, "totp.json")
 STEP = 30
@@ -98,7 +99,10 @@ def save(d: dict | None) -> None:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(d, f)
+            f.flush()
+            os.fsync(f.fileno())    # после сбоя питания вход по коду не должен выключиться сам
         os.replace(tmp, PATH)
+        fsync_dir(os.path.dirname(PATH))
         _cache = (None, None)
 
 

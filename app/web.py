@@ -15,7 +15,6 @@ import ssl
 import threading
 import time
 import traceback
-from http import cookies as httpcookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -103,13 +102,13 @@ def net_key(addr: str) -> str | None:
     return None
 
 
-def content_length(headers) -> int:
+def content_length(headers, limit: int = MAX_BODY) -> int:
     """Длина тела из заголовка; отрицательная, нечисловая или больше лимита — ошибка."""
     raw = (headers.get("Content-Length") or "0").strip()
     if not (raw.isascii() and raw.isdigit()):
         raise HTTPError(400, "err.bad_json")
     n = int(raw)
-    if n > MAX_BODY:
+    if n > limit:
         raise HTTPError(413, "err.too_large")
     return n
 
@@ -134,6 +133,20 @@ class Page:
         self.ctype = ctype
 
 
+def parse_cookies(header: str) -> dict[str, str]:
+    """Заголовок Cookie → {имя: значение}. Не SimpleCookie: на одной чужой cookie, которую он не принимает
+    (пробел или запятая в значении — так их ставят другие сайты на том же адресе), он бросает разбор и
+    теряет остальные, вместе с сессией панели — и владельца выбрасывает из панели по кругу. Из одинаковых имён —
+    первое (браузер ставит раньше cookie с более длинным путём, то есть панели)."""
+    out: dict[str, str] = {}
+    for part in header.split(";"):
+        k, sep, v = part.partition("=")
+        k, v = k.strip(), v.strip()
+        if sep and k and k not in out:
+            out[k] = v[1:-1] if len(v) > 1 and v[0] == v[-1] == '"' else v
+    return out
+
+
 class Request:
     def __init__(self, h: BaseHTTPRequestHandler, path: str, params: dict):
         self.h = h
@@ -142,18 +155,15 @@ class Request:
         self.params = params
         self.headers = h.headers
         self.client_ip = client_key(h.client_address[0])     # IPv6 — сетью /64 (client_key)
-        c = httpcookies.SimpleCookie()
-        try:
-            c.load(h.headers.get("Cookie", ""))
-        except httpcookies.CookieError:
-            pass
-        self.cookies = {k: m.value for k, m in c.items()}
+        self.cookies = parse_cookies(h.headers.get("Cookie", ""))
         self.set_cookies: list[str] = []
         self._body = None
+        self.authed = False             # вход проверен (auth_mw) или только что выдан (вход в панель)
 
-    def json(self) -> dict:
+    def json(self, limit: int = MAX_BODY) -> dict:
+        """limit — для запросов без входа (вход в панель): тело до MAX_BODY читается в память целиком."""
         if self._body is None:
-            n = content_length(self.headers)
+            n = content_length(self.headers, limit)
             raw = _read_body(self.h, n) if n else b"{}"
             self.h.body_read = True
             try:
@@ -164,6 +174,12 @@ class Request:
                 raise HTTPError(400, "err.bad_json") from None
             if not isinstance(self._body, dict):
                 raise HTTPError(400, "err.bad_json")
+            try:
+                # одиночная половинка пары UTF-16 («\\ud800») — не текст: запись в файл упала бы ошибкой 500
+                json.dumps(self._body, ensure_ascii=False).encode()
+            except UnicodeEncodeError:
+                self._body = None
+                raise HTTPError(400, "err.bad_json") from None
         return self._body
 
     def cookie(self, name: str, value: str, *, max_age: int, path: str, secure: bool = False):
@@ -289,7 +305,7 @@ class App:
                     return
                 if 0 < n <= MAX_BODY:
                     try:
-                        _read_body(self, n)
+                        _skip_body(self, n)
                         return
                     except OSError:
                         pass
@@ -326,12 +342,15 @@ class App:
                         if method != self.command:
                             continue
                         req = Request(self, path, m.groupdict())
+                        trust = getattr(self.server, "trust", None)
                         if app.middleware and fn not in app.public:
                             app.middleware(req)
-                            trust = getattr(self.server, "trust", None)
-                            if trust:                   # вход проверен: адресу — запасные места (RESERVE)
+                            if trust and req.authed:     # вход проверен: адресу — запасные места (RESERVE)
                                 trust(self.client_address[0])
+                        was = req.authed
                         res = fn(req, **m.groupdict())
+                        if trust and req.authed and not was:     # вход в панель прошёл
+                            trust(self.client_address[0])
                         if isinstance(res, Page):
                             return self._send(200, res.body, res.ctype, [("Cache-Control", "no-store")])
                         return self._json(200, res if res is not None else {"ok": True},
@@ -420,6 +439,20 @@ def _read_body(h, n: int) -> bytes:
     _arm(h.server, h.connection, BODY_DEADLINE)
     try:
         return h.rfile.read(n)
+    finally:
+        _disarm(h.server, h.connection)
+
+
+def _skip_body(h, n: int) -> None:
+    """Ненужное тело (ответ раньше json(): 401, 404…) — кусками и в никуда: целиком в памяти тела до MAX_BODY
+    от кого угодно без пароля заняли бы сотни мегабайт, и Python их системе не возвращает."""
+    _arm(h.server, h.connection, BODY_DEADLINE)
+    try:
+        while n > 0:
+            got = h.rfile.read(min(n, 65536))
+            if not got:
+                raise OSError("body cut short")
+            n -= len(got)
     finally:
         _disarm(h.server, h.connection)
 

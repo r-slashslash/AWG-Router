@@ -36,7 +36,7 @@ class Req:
         self.headers = {}
         self.set_cookies = []
 
-    def json(self):
+    def json(self, limit=None):
         return self.body
 
     def cookie(self, *a, **kw):

@@ -16,6 +16,7 @@ import re
 import secrets
 import struct
 import time
+import unicodedata
 import zlib
 from dataclasses import dataclass, field
 
@@ -523,6 +524,27 @@ def new_server(priv: str, port: int, subnet: str, params: dict[str, str], wan_ma
 
 
 HOOK_KEYS = ("PreUp", "PostUp", "PreDown", "PostDown")
+NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+PEER_EXTRA = {"Endpoint", "PersistentKeepalive"}     # что ещё бывает у клиента в конфиге сервера
+
+
+def foreign_ok(text: str, sc: ServerConf) -> bool:
+    """Чужой конфиг сервера (резервная копия): то, что awg-quick прочтёт не так, как parse, — отказ. bash
+    выбрасывает NUL («Post\\0Up» для него — PostUp, и safe_hooks его не узнал бы), а строка «[Interface] = x» в
+    разделе клиента снова открывает раздел сервера, и PostUp после неё выполнился бы от root. Поэтому: никаких
+    управляющих и невидимых символов, имена ключей — только латиница и цифры. У клиентов остаются только
+    известные поля (sc меняется). Комментарии не проверяются: awg-quick их не читает, а в них бывают имена
+    с эмодзи."""
+    live = "".join(ln.split("#", 1)[0] for ln in text.split("\n"))
+    if any(c not in "\t\r" and unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in live):
+        return False
+    if not all(NAME_RE.match(k) for k, _ in sc.iface):
+        return False
+    for p in sc.peers:
+        if not all(NAME_RE.match(k) for k, _ in p.extra):
+            return False
+        p.extra = [(k, v) for k, v in p.extra if k in PEER_EXTRA]
+    return True
 
 
 WAN = "$(ip -4 route show default | awk '{print $5; exit}')"

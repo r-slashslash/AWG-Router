@@ -331,6 +331,8 @@ def clean_server_files(srv: dict, kind: str) -> tuple[awgserver.ServerConf, dict
     sc = awgserver.parse(conf)
     if not awgconf.KEY_RE.match(sc.get("PrivateKey")) or not sc.network:
         bad("err.backup_format")
+    if not awgserver.foreign_ok(conf, sc):
+        bad(Msg("err.backup_field", field="server.conf"))
     for p in sc.peers:
         if not awgconf.KEY_RE.match(p.public_key) or (p.psk and not awgconf.KEY_RE.match(p.psk)):
             bad(Msg("err.backup_field", field="server.peers"))

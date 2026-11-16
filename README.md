@@ -286,7 +286,7 @@ Everything that's applied is visible on the **System** tab under **What's applie
 
 The panel effectively has root access to the server.
 - The password is long and random, and the address includes a random port and a secret path.
-- After 8 wrong passwords, logins from that IP are blocked for 10 minutes.
+- After 8 wrong passwords, logins from that IP are blocked for 10 minutes. Behind your own reverse proxy (nginx and the like in front of the panel) every visitor comes from the proxy's address, so 8 wrong passwords from anyone block everyone, you included; open the panel directly or through an SSH tunnel instead.
 - The most locked-down option is access through an SSH tunnel only.
 - Private keys of exits and of clients created in the panel are stored in `/opt/awg-router/data/state.json`, with permissions 600.
 - Telegram control obeys a chat, not a person: if that chat is a group, every member can control the panel. Use a private chat with the bot.

@@ -14,6 +14,7 @@ import time
 from .. import (config, totp)
 from ..checks import bad
 from ..panel import (BASE, app, engine, notifier, store, tls)
+from ..store import fsync_dir
 from ..web import HTTPError, content_length
 
 log = logging.getLogger("awgr")
@@ -101,7 +102,10 @@ def set_password(pw: str) -> None:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(d, f)
+        f.flush()
+        os.fsync(f.fileno())        # после сбоя питания — новый пароль, а не пустой файл или прежний
     os.replace(tmp, PW_FILE)
+    fsync_dir(os.path.dirname(PW_FILE))
 
 
 def _sign(payload: str) -> str:
@@ -164,6 +168,7 @@ def auth_mw(req) -> None:
         return
     if not check_session(req.cookies.get(COOKIE)):
         raise HTTPError(401, "auth")
+    req.authed = True
     # тело запроса — только JSON (простые формы с чужих сайтов так не отправить)
     ctype = req.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
     if content_length(req.headers) > 0 and ctype != "application/json":
@@ -175,6 +180,7 @@ app.middleware = auth_mw
 
 # --------------------------------------------------------------------- auth
 FAIL_WINDOW, FAIL_MAX = 600, 8      # не больше FAIL_MAX неудачных попыток за FAIL_WINDOW секунд с адреса
+LOGIN_BODY = 64 * 1024              # тело запроса входа: пароль и код, а не мегабайты от кого угодно
 _fails_lock = threading.Lock()
 _inflight: dict[str, int] = {}     # проверки пароля, которые идут сейчас (ещё не засчитаны)
 
@@ -217,6 +223,7 @@ def _failed(ip: str, msg: str) -> None:
 def _set_session(req) -> None:
     req.cookie(COOKIE, make_session(), max_age=SESSION_TTL, path=BASE or "/",
                secure=bool(tls.context()) or req.headers.get("X-Forwarded-Proto") == "https")
+    req.authed = True               # вход прошёл: адресу — запасные места (web.RESERVE)
 
 
 @app.post("/api/login")
@@ -230,7 +237,7 @@ def login(req):
 
 
 def _login(req, ip: str):
-    body = req.json()
+    body = req.json(limit=LOGIN_BODY)
     if not check_password(str(body.get("password", ""))):
         _failed(ip, "err.wrong_password")
     if totp.load():

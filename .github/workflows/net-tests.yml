@@ -59,7 +59,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq nftables strace >/dev/null   # strace — разбор, если hev не запустится
-          python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2
+          python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2==0.9.7
           nft --version
           PYTHONPATH="$RUNNER_TEMP/py" python -c "import pyroute2; print('pyroute2', pyroute2.__version__)"
           uname -r
@@ -139,7 +139,7 @@ jobs:
 
       - name: Tools (pyroute2, awg, amneziawg-go)
         run: |
-          python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2
+          python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2==0.9.7
           mkdir -p "$RUNNER_TEMP/bin"
           for stage in awg-go awg-tools; do
             docker build -q --target "$stage" -t "e2e-$stage" . >/dev/null

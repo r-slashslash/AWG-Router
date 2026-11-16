@@ -57,6 +57,18 @@ def new_id(prefix: str) -> str:
     return f"{prefix}{secrets.token_hex(3)}"
 
 
+
+def fsync_dir(path: str) -> None:
+    """Сбросить на диск саму папку: после os.replace новое имя файла иначе может не пережить сбой питания."""
+    try:
+        d = os.open(path or ".", os.O_RDONLY)
+        try:
+            os.fsync(d)
+        finally:
+            os.close(d)
+    except OSError:
+        pass
+
 class Store:
     def __init__(self, path: str = STATE_PATH):
         self.path = path
@@ -193,14 +205,7 @@ class Store:
                 wrote = True
             l["source"], l["text"] = "", h
         if wrote:
-            try:
-                d = os.open(self.text_dir, os.O_RDONLY)
-                try:
-                    os.fsync(d)             # имя нового файла — на диске раньше, чем state.json со ссылкой на него
-                finally:
-                    os.close(d)
-            except OSError:
-                pass
+            fsync_dir(self.text_dir)        # имя нового файла — на диске раньше, чем state.json со ссылкой на него
         return self._text_refs(state)
 
     def _drop_texts(self, keep: set[str]) -> None:

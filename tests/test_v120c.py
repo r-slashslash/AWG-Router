@@ -38,7 +38,7 @@ class R:
         self._b, self.method, self.headers, self.path = body or {}, method, headers or {}, path
         self.cookies, self.client_ip = {}, "203.0.113.9"
 
-    def json(self):
+    def json(self, limit=None):
         return self._b
 
 

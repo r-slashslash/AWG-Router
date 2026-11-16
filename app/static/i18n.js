@@ -2137,7 +2137,7 @@ function fmtNum(n) { return Number(n).toLocaleString(LANG); }
 Object.assign(I18N.ru, {
   "tg.control_title": "Управление из Telegram",
   "tg.control": "Принимать команды и кнопки",
-  "tg.control_hint": "Бот станет пультом: /status, список клиентов с кнопками «Включить», «Выключить», «QR и файл», «+30 дней», новый клиент командой /add, смена основного выхода, резервная копия и обновление панели. Кнопки появятся и под уведомлениями. Команды принимаются только из чата, указанного выше; в группе их может отправить любой участник, поэтому лучше личный чат. Удалить что-либо из бота нельзя.",
+  "tg.control_hint": "Бот станет пультом: /status, список клиентов с кнопками «Включить», «Выключить», «QR и файл», «+30 дней», новый клиент командой /add, смена основного выхода, резервная копия и обновление панели. Кнопки появятся и под уведомлениями. Команды принимаются только из чата, указанного выше; в группе их может отправить любой участник, поэтому лучше личный чат. Из бота можно удалить клиента (с подтверждением), а менять параметры сервера нельзя.",
   "tg.bot_ok": "Бот слушает команды — напишите ему /help",
   "tg.bot_error": "Бот не получает команды",
   "tg.act_on": "Telegram: клиент «{name}» включён",
@@ -2156,7 +2156,7 @@ Object.assign(I18N.ru, {
 Object.assign(I18N.en, {
   "tg.control_title": "Control from Telegram",
   "tg.control": "Accept commands and buttons",
-  "tg.control_hint": "The bot becomes a remote: /status, a client list with Turn on, Turn off, QR and file and +30 days buttons, a new client with /add, changing the default exit, a backup and a panel update. Buttons also appear under notifications. Commands are accepted only from the chat above; in a group any member can send them, so a private chat is better. Nothing can be deleted from the bot.",
+  "tg.control_hint": "The bot becomes a remote: /status, a client list with Turn on, Turn off, QR and file and +30 days buttons, a new client with /add, changing the default exit, a backup and a panel update. Buttons also appear under notifications. Commands are accepted only from the chat above; in a group any member can send them, so a private chat is better. The bot can delete a client (after a confirmation), but it can't change server parameters.",
   "tg.bot_ok": "The bot is listening — send it /help",
   "tg.bot_error": "The bot doesn't receive commands",
   "tg.act_on": "Telegram: client “{name}” turned on",
@@ -2175,7 +2175,7 @@ Object.assign(I18N.en, {
 Object.assign(I18N.zh, {
   "tg.control_title": "通过 Telegram 控制",
   "tg.control": "接受命令和按钮",
-  "tg.control_hint": "机器人将成为遥控器：/status、带“启用”“停用”“二维码和文件”“+30 天”按钮的客户端列表、用 /add 新建客户端、更换默认出口、备份和更新面板。通知下方也会出现按钮。只接受上面所填聊天中的命令；在群组中任何成员都能发送命令，因此最好使用私聊。无法通过机器人删除任何内容。",
+  "tg.control_hint": "机器人将成为遥控器：/status、带“启用”“停用”“二维码和文件”“+30 天”按钮的客户端列表、用 /add 新建客户端、更换默认出口、备份和更新面板。通知下方也会出现按钮。只接受上面所填聊天中的命令；在群组中任何成员都能发送命令，因此最好使用私聊。机器人可以删除客户端（需确认），但不能修改服务器参数。",
   "tg.bot_ok": "机器人正在接收命令——给它发送 /help",
   "tg.bot_error": "机器人收不到命令",
   "tg.act_on": "Telegram：客户端“{name}”已启用",
@@ -2194,7 +2194,7 @@ Object.assign(I18N.zh, {
 Object.assign(I18N.fa, {
   "tg.control_title": "کنترل از تلگرام",
   "tg.control": "پذیرفتن دستورها و دکمه‌ها",
-  "tg.control_hint": "ربات به کنترل از راه دور تبدیل می‌شود: ‎/status، فهرست کلاینت‌ها با دکمه‌های «فعال کردن»، «غیرفعال کردن»، «QR و فایل» و «+۳۰ روز»، ساخت کلاینت با ‎/add، تغییر خروجی اصلی، پشتیبان‌گیری و به‌روزرسانی پنل. زیر اعلان‌ها هم دکمه نمایش داده می‌شود. دستورها فقط از چتی که بالا وارد شده پذیرفته می‌شوند؛ در گروه هر عضوی می‌تواند دستور بفرستد، پس چت خصوصی بهتر است. از ربات نمی‌توان چیزی را حذف کرد.",
+  "tg.control_hint": "ربات به کنترل از راه دور تبدیل می‌شود: ‎/status، فهرست کلاینت‌ها با دکمه‌های «فعال کردن»، «غیرفعال کردن»، «QR و فایل» و «+۳۰ روز»، ساخت کلاینت با ‎/add، تغییر خروجی اصلی، پشتیبان‌گیری و به‌روزرسانی پنل. زیر اعلان‌ها هم دکمه نمایش داده می‌شود. دستورها فقط از چتی که بالا وارد شده پذیرفته می‌شوند؛ در گروه هر عضوی می‌تواند دستور بفرستد، پس چت خصوصی بهتر است. ربات می‌تواند کلاینت را حذف کند (پس از تأیید)، اما پارامترهای سرور را نمی‌تواند تغییر دهد.",
   "tg.bot_ok": "ربات دستورها را می‌پذیرد — به آن ‎/help بفرستید",
   "tg.bot_error": "ربات دستورها را دریافت نمی‌کند",
   "tg.act_on": "تلگرام: کلاینت «{name}» فعال شد",

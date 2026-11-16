@@ -118,6 +118,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # Образы собираются без кэша GitHub (cache-from/to type=gha): в общий кэш пишут и другие задания —
+      # сетевые тесты с пакетами из интернета, сервер в России, — и отравленный слой попал бы в выпуск.
+      # Сборка от этого на несколько минут дольше.
       - name: Panel image (amd64, arm64)
         if: steps.v.outputs.state != 'published' || inputs.check
         id: panel
@@ -128,8 +131,6 @@ jobs:
           push: ${{ steps.v.outputs.state != 'published' }}   # проверка (check) ничего не публикует
           provenance: false     # без манифестов аттестации: индекс читают и старые Docker
           tags: ${{ steps.img.outputs.repo }}:${{ steps.v.outputs.ver }}
-          cache-from: type=gha,scope=panel
-          cache-to: type=gha,scope=panel,mode=max
 
       - name: AmneziaWG server image (amd64)
         if: steps.v.outputs.state != 'published' || inputs.check
@@ -141,8 +142,6 @@ jobs:
           push: ${{ steps.v.outputs.state != 'published' }}   # проверка (check) ничего не публикует
           provenance: false
           tags: ${{ steps.img.outputs.repo }}:server-${{ steps.v.outputs.ver }}
-          cache-from: type=gha,scope=server
-          cache-to: type=gha,scope=server,mode=max
 
       - name: Anyone can pull the images
         if: steps.v.outputs.state != 'published'
