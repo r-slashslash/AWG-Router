@@ -158,7 +158,7 @@ class Request:
                 # вложенность — RecursionError: всё это неверный запрос (400), а не ошибка панели (500)
                 self._body = json.loads(raw or b"{}", parse_constant=_no_constant, parse_float=_finite)
             except (ValueError, RecursionError):
-                raise HTTPError(400, "err.bad_json")
+                raise HTTPError(400, "err.bad_json") from None
             if not isinstance(self._body, dict):
                 raise HTTPError(400, "err.bad_json")
         return self._body

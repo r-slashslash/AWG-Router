@@ -258,7 +258,7 @@ def feed_rates(b, rates: dict, now: float):
     """Установившиеся скорости: {(клиент, выход): (отдача, загрузка) в Мбит/с}."""
     b.client_rate = {k: [v[0] * MB, v[1] * MB] for k, v in rates.items()}
     per = {}
-    for (pk, out), v in rates.items():
+    for (_pk, out), v in rates.items():
         e = per.setdefault(out, [0.0, 0.0])
         e[0] += v[0] * MB
         e[1] += v[1] * MB

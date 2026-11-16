@@ -10,6 +10,8 @@
 # awg, amneziawg-go и hev-socks5-tunnel собираются из стадий текущего Dockerfile — те же версии и флаги,
 # что попадут в образ следующего релиза. pyroute2 и nftables ставятся только на машину CI (в панель
 # не попадают: там по-прежнему только стандартная библиотека).
+# Задание lint: проверка кода — Python (ruff, ruff.toml) и скрипты интерфейса (eslint, eslint.config.mjs):
+# неизвестные имена и явные ошибки. Ставятся только на машину CI.
 # Идут на каждом пуше в main перед черновиком релиза (release.yml, задание net) и вручную.
 name: Network tests
 
@@ -21,6 +23,26 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: "3.13"
+
+      - name: Python (ruff)
+        run: |
+          python -m pip install -q ruff==0.16.9
+          ruff check . --output-format github
+
+      - name: Interface scripts (eslint)
+        run: |
+          node --version
+          npx --yes eslint@9 app/static
+
   net:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

@@ -104,9 +104,9 @@ def parse_socks(text: str) -> UpstreamConf:
             u = urllib.parse.urlsplit(t)
             host, port = u.hostname or "", u.port
         except ValueError:
-            raise ConfigError(Msg("cfg.socks_bad"))
+            raise ConfigError(Msg("cfg.socks_bad")) from None
         if u.path not in ("", "/") or u.query or u.fragment:
-            raise ConfigError(Msg("cfg.socks_bad"))
+            raise ConfigError(Msg("cfg.socks_bad")) from None
         user = urllib.parse.unquote(u.username or "")
         pw = urllib.parse.unquote(u.password or "")
     try:
@@ -120,7 +120,7 @@ def parse_socks(text: str) -> UpstreamConf:
         host = str(ip)
     except ValueError:
         if not _HOSTNAME.match(host or ""):
-            raise ConfigError(Msg("cfg.socks_host"))
+            raise ConfigError(Msg("cfg.socks_host")) from None
         host = host.lower()
     if len(user) > 255 or len(pw) > 255 or bool(pw) and not user:
         raise ConfigError(Msg("cfg.socks_auth"))
@@ -200,7 +200,7 @@ def _inflate(data: bytes) -> bytes | None:
     except zlib.error:
         return None
     if len(out) > LINK_MAX:
-        raise ConfigError(Msg("cfg.bad_vpn_link"))
+        raise ConfigError(Msg("cfg.bad_vpn_link")) from None
     return out if d.eof else None
 
 
@@ -228,7 +228,7 @@ def _extract_conf_text(user_input: str) -> str:
     try:
         raw = _b64_any(t)
     except Exception:
-        raise ConfigError(Msg("cfg.unrecognized"))
+        raise ConfigError(Msg("cfg.unrecognized")) from None
     data = None
     # qCompress: 4 байта длины (big-endian) + zlib
     for cand in (raw[4:], raw):
@@ -243,7 +243,7 @@ def _extract_conf_text(user_input: str) -> str:
     try:
         obj = json.loads(text)
     except Exception:
-        raise ConfigError(Msg("cfg.bad_vpn_link"))
+        raise ConfigError(Msg("cfg.bad_vpn_link")) from None
     conf = _find_conf_in_json(obj)
     if not conf:
         raise ConfigError(Msg("cfg.vpn_no_awg"))

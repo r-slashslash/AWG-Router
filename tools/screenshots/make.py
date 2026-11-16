@@ -117,7 +117,7 @@ class Api:
             with self.op.open(req, timeout=60) as r:
                 return json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
-            raise SystemExit(f"{method} {path}: {e.code} {e.read()[:300]!r}")
+            raise SystemExit(f"{method} {path}: {e.code} {e.read()[:300]!r}") from None
 
 
 def build(api: Api) -> dict:

@@ -358,7 +358,7 @@ class FakeUpstream:
 
 
 def free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u, socket.socket() as t:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _u, socket.socket() as _t:
         for _ in range(50):
             u2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             u2.bind(("127.0.0.1", 0))

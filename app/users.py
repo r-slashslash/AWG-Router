@@ -104,7 +104,7 @@ def parse_extra_hosts(value) -> list[str]:
             h = str(ipaddress.ip_address(h))
         except ValueError:
             if not _HOSTNAME.fullmatch(h):
-                raise UserError(Msg("srv.bad_extra_host", value=raw.strip()[:60]))
+                raise UserError(Msg("srv.bad_extra_host", value=raw.strip()[:60])) from None
             h = h.lower()
         if h not in out:
             out.append(h)
@@ -433,7 +433,7 @@ class ServerManager:
                     try:
                         ch = str(ipaddress.ip_address(ch))
                     except ValueError:
-                        raise UserError(Msg("srv.bad_client_host"))
+                        raise UserError(Msg("srv.bad_client_host")) from None
                 settings_patch["client_host"] = ch
             if "client_dns" in body:
                 dns = [d.strip() for d in re.split(r"[,\s]+", str(body["client_dns"] or "")) if d.strip()]
@@ -441,7 +441,7 @@ class ServerManager:
                     try:
                         a = ipaddress.ip_address(d)
                     except ValueError:
-                        raise UserError(Msg("srv.bad_dns", value=d))
+                        raise UserError(Msg("srv.bad_dns", value=d)) from None
                     if a.version != 4:
                         raise UserError(Msg("srv.dns_v6", value=d))
                 settings_patch["client_dns"] = dns[:4]
@@ -461,9 +461,9 @@ class ServerManager:
                 try:
                     mtu = int(body["client_mtu"])
                 except (TypeError, ValueError):
-                    raise UserError(Msg("srv.bad_mtu"))
+                    raise UserError(Msg("srv.bad_mtu")) from None
                 if not 1100 <= mtu <= 1500:
-                    raise UserError(Msg("srv.bad_mtu"))
+                    raise UserError(Msg("srv.bad_mtu")) from None
                 settings_patch["client_mtu"] = mtu
             if "client_keepalive" in body:
                 ka = str(body["client_keepalive"] or "").strip()
@@ -484,12 +484,12 @@ class ServerManager:
             try:
                 port = int(body.get("port") or sc.port)
             except (TypeError, ValueError):
-                raise UserError(Msg("srv.bad_port"))
+                raise UserError(Msg("srv.bad_port")) from None
             if port != sc.port:
                 if t.kind != "host":
                     raise UserError(Msg("srv.port_container"))
                 if not 1 <= port <= 65535:
-                    raise UserError(Msg("srv.bad_port"))
+                    raise UserError(Msg("srv.bad_port")) from None
                 if port in system.AWG_RESERVED:
                     raise UserError(Msg("srv.port_dns", port=port))
                 sc.set("ListenPort", str(port))
@@ -505,9 +505,9 @@ class ServerManager:
                 try:
                     i = ipaddress.ip_interface(body["address"])
                 except ValueError:
-                    raise UserError(Msg("srv.bad_subnet"))
+                    raise UserError(Msg("srv.bad_subnet")) from None
                 if i.version != 4 or i.network.prefixlen > 29:
-                    raise UserError(Msg("srv.bad_subnet"))
+                    raise UserError(Msg("srv.bad_subnet")) from None
                 old_net = str(sc.network.network) if sc.network else None
                 sc.set("Address", self._server_address(i, sc))
                 # NAT на хосте задан в PostUp для подсети: без замены клиенты новой подсети
@@ -560,7 +560,7 @@ class ServerManager:
             if not isinstance(t, system.HostTarget):
                 raise UserError(Msg("srv.init_only_host"))
             if not 1 <= port <= 65535:
-                raise UserError(Msg("srv.bad_port"))
+                raise UserError(Msg("srv.bad_port")) from None
             if port in system.AWG_RESERVED:
                 raise UserError(Msg("srv.port_dns", port=port))
             system.init_host_server(t, port, subnet, awgserver.generate_params(True))

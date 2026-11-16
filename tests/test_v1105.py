@@ -18,7 +18,7 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import main, notify, tgbot, tgreq, web  # noqa: E402
-from tests.test_v19 import CHAT, TOKEN, FakeTG, button, cfg, msg  # noqa: E402
+from tests.test_v19 import CHAT, TOKEN, FakeTG, cfg, msg  # noqa: E402
 
 
 class ClockTest(unittest.TestCase):

@@ -2219,7 +2219,7 @@ class Engine:
             self._shape.pop(dev, None)
         self._shape_key = t.key
         errors = []
-        for src, ifb in ingress.items():
+        for ifb in ingress.values():
             if ifb not in links:
                 r = t.ns(["ip", "link", "add", ifb, "type", "ifb"], check=False)
                 if r.returncode != 0:

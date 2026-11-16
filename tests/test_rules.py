@@ -185,5 +185,68 @@ class FormatsTest(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(ROOT, "app", "static", f)), f)
 
 
+class ProjectRulesTest(unittest.TestCase):
+    """Правила из заметок для разработки, которые раньше держались только на памяти."""
+
+    TEXT = (".py", ".js", ".css", ".html", ".md", ".sh", ".yml", ".yaml", ".txt", ".json")
+
+    def files(self):
+        for d, dirs, names in os.walk(ROOT):
+            dirs[:] = [x for x in dirs if x not in (".git", "__pycache__", "node_modules", ".ruff_cache", "data")]
+            for n in names:
+                if n.endswith(self.TEXT):
+                    yield os.path.join(d, n)
+
+    def test_no_ai_attribution(self):
+        """Никакого упоминания ИИ в файлах репозитория: ни строки соавторства, ни подписи «сделано с помощью»
+        (сами строки здесь собраны из частей, чтобы тест не находил себя)."""
+        bad = re.compile("co-" + "authored-by|generated " + "with", re.I)
+        found = []
+        for path in self.files():
+            with open(path, encoding="utf-8", errors="replace") as f:
+                if bad.search(f.read()):
+                    found.append(os.path.relpath(path, ROOT))
+        self.assertEqual(found, [])
+
+    def test_actions_pinned_by_sha(self):
+        """Каждый uses: в workflow закреплён SHA из 40 знаков с комментарием # vN (Dependabot обновляет сам)."""
+        wf = os.path.join(ROOT, ".github", "workflows")
+        bad = []
+        for n in sorted(os.listdir(wf)):
+            for i, line in enumerate(read(".github", "workflows", n).splitlines(), 1):
+                m = re.match(r"\s*(?:-\s*)?uses:\s*(\S+)(.*)", line)
+                if not m or m.group(1).startswith("./"):
+                    continue
+                if not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", m.group(1)) \
+                        or not re.search(r"#\s*v\d", m.group(2)):
+                    bad.append(f"{n}:{i}: {line.strip()}")
+        self.assertEqual(bad, [])
+
+    def test_static_loads_nothing_from_other_hosts(self):
+        """Браузер не обращается к сторонним хостам: страницы, стили и скрипты панели ничего не грузят с
+        чужих адресов (ссылки для перехода по нажатию и адреса в комментариях — можно)."""
+        static = os.path.join(ROOT, "app", "static")
+        loads = [
+            re.compile(r"<(?:script|img|iframe|audio|video|source|embed)[^>]*\ssrc=[\"']?(?:https?:)?//", re.I),
+            re.compile(r"<link[^>]*\shref=[\"']?(?:https?:)?//", re.I),
+            re.compile(r"url\(\s*[\"']?(?:https?:)?//", re.I),
+            re.compile(r"@import\s", re.I),
+            re.compile(r"\b(?:fetch|EventSource|WebSocket|importScripts|import)\s*\(\s*[`\"'](?:https?|wss?):", re.I),
+            re.compile(r"\bfrom\s+[\"'](?:https?:)?//", re.I),
+            re.compile(r"\.src\s*=\s*[`\"'](?:https?:)?//", re.I),
+        ]
+        found = []
+        for d, _, names in os.walk(static):
+            for n in names:
+                if not n.endswith((".html", ".js", ".css")):
+                    continue
+                with open(os.path.join(d, n), encoding="utf-8") as f:
+                    text = f.read()
+                for rx in loads:
+                    for m in rx.finditer(text):
+                        found.append(f"{n}: {m.group(0)[:80]}")
+        self.assertEqual(found, [])
+
+
 if __name__ == "__main__":
     unittest.main()
