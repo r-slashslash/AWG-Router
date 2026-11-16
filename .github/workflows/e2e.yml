@@ -7,6 +7,7 @@
 #
 # Задания:
 # - github: машины GitHub, одноразовые; прошлая версия → последняя; сервер AWG в контейнере и на хосте.
+# - restart: машины GitHub; панель из этого кода, перезапуск и «перезагрузка» сервера AWG (tests/e2e/restart.sh).
 # - russia: свой сервер в России (self-hosted runner с меткой russia) — настоящая фильтрация. Включается
 #   переменной репозитория RU_RUNNER=on (Settings → Secrets and variables → Actions → Variables), чтобы
 #   выключенный сервер не держал задание в очереди. Машина не одноразовая: cleanup.sh до и после.
@@ -59,6 +60,28 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: e2e-github-${{ matrix.mode }}
+          path: ${{ runner.temp }}/e2e
+
+  # Перезапуск и «перезагрузка» сервера AWG с панелью, поставленной из этого кода (tests/e2e/restart.sh):
+  # пока панель не поставила свои правила, клиенты выходов в блоке, а не мимо выходов. Образы собираются на машине.
+  restart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [container, host]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: Restart and reboot of the AWG server (AmneziaWG ${{ matrix.mode }})
+        run: sudo E2E_MODE=${{ matrix.mode }} E2E_LOGS="$RUNNER_TEMP/e2e" bash tests/e2e/restart.sh
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: e2e-restart-${{ matrix.mode }}
           path: ${{ runner.temp }}/e2e
 
   russia:

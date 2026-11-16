@@ -750,6 +750,21 @@ elif [ "$AWG_MODE" = host ] && [ ! -f "$HOSTCONF" ]; then
 fi
 retire_broken     # an empty container is no use in any mode, but would keep its port and the name
 
+# A server on the host puts the panel's rules in by itself when it starts, before the panel does (ExecStartPre
+# of the awg-quick@ service the panel writes): after a reboot clients then don't go past the exits until the panel
+# is up. That needs the nft program on the host. Only the program: if the package brought its own service enabled,
+# it is disabled (not stopped — stopping it flushes all rules, Docker's too), so it never flushes rules at boot.
+ensure_nft() {
+  command -v nft >/dev/null && return 0
+  apt_install nftables || return 1
+  systemctl is-enabled --quiet nftables 2>/dev/null && systemctl disable nftables >/dev/null 2>&1
+  command -v nft >/dev/null
+}
+if [ "$AWG_MODE" = host ]; then
+  if ensure_nft; then ok "nft for the server's rules before the panel starts"
+  else warn "nft is not available: after a reboot, until the panel starts, clients may go past the exits"; fi
+fi
+
 case "$INSTALL_AWG" in
   container) ok "AmneziaWG will be installed into container $SRV_NAME, UDP port $AWG_PORT" ;;
   host)      ok "AmneziaWG will be installed on the host, UDP port $AWG_PORT" ;;
