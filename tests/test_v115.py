@@ -82,11 +82,16 @@ class ResolveTest(unittest.TestCase):
             self.assertLess(time.monotonic() - t0, 2)
 
 
+def resolved(pc):
+    """Текст для `awg setconf` с найденным адресом Endpoint — как его собирает запуск туннеля (_start_up)."""
+    return awgconf.setconf_for(pc, awgconf.resolve_host(awgconf.split_endpoint(pc.endpoint)[0]))
+
+
 class SetconfTest(unittest.TestCase):
     def test_domain_replaced_raw_kept(self):
         pc = awgconf.parse_upstream(conf("relay.example.com:30070"))
         with mock.patch("socket.getaddrinfo", return_value=answer("203.0.113.7")):
-            text = awgconf.setconf_resolved(pc)
+            text = resolved(pc)
         self.assertIn("Endpoint = 203.0.113.7:30070\n", text)
         self.assertNotIn("relay.example.com", text)
         self.assertIn("PersistentKeepalive = 25", text)
@@ -98,17 +103,17 @@ class SetconfTest(unittest.TestCase):
     def test_ipv6_in_brackets(self):
         pc = awgconf.parse_upstream(conf("relay.example.com:30070"))
         with mock.patch("socket.getaddrinfo", side_effect=[socket.gaierror(-2, "x"), answer("2001:db8::7", socket.AF_INET6)]):
-            self.assertIn("Endpoint = [2001:db8::7]:30070\n", awgconf.setconf_resolved(pc))
+            self.assertIn("Endpoint = [2001:db8::7]:30070\n", resolved(pc))
 
     def test_ip_endpoint_unchanged(self):
         pc = awgconf.parse_upstream(conf("203.0.113.5:51820"))
         with mock.patch("socket.getaddrinfo", side_effect=AssertionError("DNS не нужен")):
-            self.assertEqual(awgconf.setconf_resolved(pc), pc.setconf)
+            self.assertEqual(resolved(pc), pc.setconf)
 
     def test_lowercase_key(self):
         pc = awgconf.parse_upstream(conf("relay.example.com:30070").replace("Endpoint", "endpoint"))
         with mock.patch("socket.getaddrinfo", return_value=answer("203.0.113.7")):
-            self.assertIn("endpoint = 203.0.113.7:30070\n", awgconf.setconf_resolved(pc))
+            self.assertIn("endpoint = 203.0.113.7:30070\n", resolved(pc))
 
 
 class StartUpTest(unittest.TestCase):
@@ -405,6 +410,7 @@ class DnsProxyProcessTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.proc.terminate()
         cls.proc.wait(5)
+        cls.proc.stdout.close()          # иначе в конце тестов — «ResourceWarning: unclosed file»
         cls.up.close()
 
     def udp(self, msg):
@@ -732,6 +738,7 @@ class DnsEncryptedTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.proc.terminate()
         cls.proc.wait(5)
+        cls.proc.stdout.close()          # иначе в конце тестов — «ResourceWarning: unclosed file»
         cls.up.close()
 
     def ask(self, name):

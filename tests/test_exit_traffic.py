@@ -11,6 +11,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # соседние файлы тестов (test_api и др.)
 
 from app import nftgen  # noqa: E402
 from app.traffic import Traffic, month_key  # noqa: E402

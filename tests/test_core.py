@@ -82,18 +82,6 @@ class AwgConfTest(unittest.TestCase):
         with self.assertRaises(awgconf.ConfigError):
             awgconf.parse_upstream("vpn://AAAA")
 
-    def test_server_conf(self):
-        srv = awgconf.parse_server_conf(f"""[Interface]
-PrivateKey = {PRIV}
-Address = 10.8.1.0/24
-ListenPort = 47823
-
-[Peer]
-PublicKey = {PUB}
-PresharedKey = {PUB}
-AllowedIPs = 10.8.1.2/32
-""")
-        self.assertEqual(srv["peers"], [{"public_key": PUB, "ip": "10.8.1.2"}])
 
 
 class ListsTest(unittest.TestCase):

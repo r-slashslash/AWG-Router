@@ -92,10 +92,6 @@ class RoutesMixin:
                 return "up:" + uid
         return pol["default"]
 
-    def _resolved(self, st: dict, pol: dict) -> dict:
-        return {"rules": [(r["lists"], self.resolve(r["outbound"], st)) for r in pol["rules"]],
-                "default": self.resolve(pol["default"], st)}
-
     @staticmethod
     def domain_lists(st: dict) -> set[str]:
         return {l["id"] for l in st["lists"] if l.get("kind") == "domains"}

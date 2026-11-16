@@ -164,6 +164,12 @@ Every string exists in four languages (ru, en, zh, fa) in `app/static/i18n.js`; 
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |
 | `awgconf.py`, `awgserver.py`, `cps.py` | AmneziaWG configs and the I1–I5 masking templates |
+| `tgreq.py` | A request through an exit (Telegram, list downloads, a name's address), run inside the AWG server's network with the exit's mark |
+| `totp.py` | Two-factor sign-in codes (RFC 6238); the secret is in `data/totp.json` |
+| `qr.py`, `static/qrcode.js` | QR codes: PNG for Telegram (no third-party library), the browser's own for the panel and the client's page |
+| `static/share.html`, `static/share.js` | The client's personal page (`/s/…`, no sign-in): config, QR code, traffic and term |
+| `hostnet.py` | The host's addresses, CPU and memory without outside requests (`/proc`; the panel runs in the host's network) |
+| `initserver.py`, `movehost.py`, `uninstall.py` | Run by the installer: a new AWG server in the AmneziaVPN format, moving the container's server to the host, removing the panel's routing |
 
 ## Tests
 

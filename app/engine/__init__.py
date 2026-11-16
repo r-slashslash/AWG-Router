@@ -64,7 +64,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self.last_error: str | None = None
         self.last_reconcile: float | None = None
         self.events: list[dict] = []
-        self.notifier = None          # notify.Notifier, задаёт main.py
+        self.notifier = None          # notify.Notifier, задаёт app/panel.py
         self.traffic = Traffic()
         # учёт трафика по выходам (таблица nftables awgr_acct): ok | off | None (ещё не было)
         self.acct_state: str | None = None

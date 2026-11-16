@@ -347,28 +347,6 @@ def parse_upstream(user_input: str) -> UpstreamConf:
     )
 
 
-def parse_server_conf(text: str) -> dict:
-    """Серверный awg0.conf/wg0.conf Amnezia → адрес интерфейса и пиры."""
-    res = {"address": None, "peers": []}
-    for name, kv in _parse_sections(text, strict=False):
-        d = {k.lower(): v for k, v in kv}
-        if name == "interface":
-            res["address"] = d.get("address")
-            res["mtu"] = d.get("mtu")
-        elif name == "peer":
-            ip = None
-            for a in re.split(r"[,\s]+", d.get("allowedips", "")):
-                try:
-                    n = ipaddress.ip_network(a, strict=False)
-                except ValueError:
-                    continue
-                if n.version == 4:
-                    ip = str(n.network_address)
-                    break
-            res["peers"].append({"public_key": d.get("publickey", ""), "ip": ip})
-    return res
-
-
 def split_endpoint(endpoint: str) -> tuple[str, str]:
     """«host:port» или «[v6]:port» → (host, port). Порт остаётся строкой, как в конфиге."""
     host, _, port = endpoint.strip().rpartition(":")
@@ -418,12 +396,6 @@ def resolve_many(hosts, timeout: float) -> dict[str, str]:
     for th in ths:
         th.join(timeout + 1)
     return dict(res)
-
-
-def setconf_resolved(pc: UpstreamConf) -> str:
-    """Текст для `awg setconf` с IP-адресом вместо имени в Endpoint. Исходный конфиг (`pc.raw`) не
-    меняется: имя разбирается при каждом запуске туннеля, поэтому смена записи DNS подхватывается."""
-    return setconf_for(pc, resolve_host(split_endpoint(pc.endpoint)[0]))
 
 
 def setconf_for(pc: UpstreamConf, ip: str) -> str:

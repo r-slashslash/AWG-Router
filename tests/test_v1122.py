@@ -576,8 +576,17 @@ class SniproxyServeTest(unittest.TestCase):
         s = self.sniffer(port=port)
         loop = asyncio.new_event_loop()
         self.addCleanup(loop.close)
+        made = []                                       # слушающий сокет serve: в работе его закрывает выход процесса
+        real = socket.socket
+
+        def listener(*a, **k):
+            sock = real(*a, **k)
+            made.append(sock)
+            self.addCleanup(sock.close)
+            return sock
         with mock.patch.object(s, "accept_loop", side_effect=RuntimeError("boom")), \
-                mock.patch.object(sniproxy, "log") as log:
+                mock.patch.object(sniproxy, "log") as log, \
+                mock.patch.object(sniproxy.socket, "socket", side_effect=listener):
             loop.create_task(s.serve())
             guard = loop.call_later(3, loop.stop)       # не дать тесту зависнуть, если остановки нет
             t0 = time.monotonic()

@@ -7,6 +7,7 @@ import http.client
 import io
 import json
 import os
+import pathlib
 import socket
 import subprocess
 import sys
@@ -20,6 +21,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # соседние файлы тестов (test_api и др.)
 
 from app import awgserver, checks, config, engine, main, system, tlsconf, tlsmgr, web, webfront  # noqa: E402
 from app import panel  # noqa: E402
@@ -140,7 +142,10 @@ class PanelV6Test(unittest.TestCase):
                 c = http.client.HTTPConnection(host, port, timeout=5)
                 c.request("GET", "/ping")
                 r = c.getresponse()
-                return json.loads(r.read())["ip"]
+                try:
+                    return json.loads(r.read())["ip"]
+                finally:
+                    c.close()
             self.assertEqual(get("127.0.0.1"), "127.0.0.1")
             if srv.address_family == socket.AF_INET6:
                 self.assertEqual(get("::1"), "::/64")
@@ -169,6 +174,7 @@ class LePathsTest(unittest.TestCase):
             self.assertEqual(tlsmgr.TLSManager(lambda: "203.0.113.5")._le_paths(),
                              (os.path.join(d, "203.0.113.5.crt"), os.path.join(d, "203.0.113.5.key")))
         finally:
+            tlsconf.update(domain=None)
             for p in (cert, key):
                 os.remove(p)
 
@@ -208,6 +214,7 @@ class TwoAddressCertTest(unittest.TestCase):
             p.stop()
         for n in os.listdir(self.d):
             os.remove(os.path.join(self.d, n))
+        tlsconf.update(domain=None, web=None)       # настройки TLS — общие для всего процесса тестов
 
     def mgr(self, host, alt):
         m = tlsmgr.TLSManager(lambda: host, lambda: alt)
@@ -499,7 +506,7 @@ class KernelInstallTest(unittest.TestCase):
              "AWGR_PANIC_CONF": os.path.join(self.tmp, "sysctl.d", "panic.conf"),
              "NEWVER": newver, "VIRT": virt, "AWGR_YES": yes, **env}
         p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, timeout=30)
-        calls = open(self.log).read() if os.path.exists(self.log) else ""
+        calls = pathlib.Path(self.log).read_text() if os.path.exists(self.log) else ""
         return p.returncode, p.stdout, calls
 
     def test_already_new_enough(self):

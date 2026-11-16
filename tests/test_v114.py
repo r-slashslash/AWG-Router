@@ -3,6 +3,7 @@
 python3 -m unittest discover tests
 """
 import os
+import pathlib
 import subprocess
 import sys
 import tempfile
@@ -43,8 +44,8 @@ class HostPathTest(unittest.TestCase):
         root = tempfile.mkdtemp()
         os.makedirs(f"{root}/etc/letsencrypt/archive/x")
         os.makedirs(f"{root}/etc/letsencrypt/live/x")
-        open(f"{root}/etc/letsencrypt/archive/x/fullchain1.pem", "w").write("A")
-        open(f"{root}/etc/letsencrypt/archive/x/privkey1.pem", "w").write("B")
+        pathlib.Path(f"{root}/etc/letsencrypt/archive/x/fullchain1.pem").write_text("A")
+        pathlib.Path(f"{root}/etc/letsencrypt/archive/x/privkey1.pem").write_text("B")
         os.symlink("../../archive/x/fullchain1.pem", f"{root}/etc/letsencrypt/live/x/fullchain.pem")
         os.symlink("/etc/letsencrypt/archive/x/privkey1.pem", f"{root}/etc/letsencrypt/live/x/privkey.pem")
         with mock.patch.object(config, "HOST_ROOT", root):

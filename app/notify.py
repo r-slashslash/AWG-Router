@@ -27,7 +27,7 @@ log = logging.getLogger("awgr.notify")
 API = "https://api.telegram.org"
 TGREQ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tgreq.py")
 # Путь запросов: via ("direct" | "up:<id>") → None (напрямую из панели) или (PID, fwmark) —
-# через туннель выхода в сети сервера AWG. Задаёт main.py; может бросить NotifyError.
+# через туннель выхода в сети сервера AWG. Задаёт app/panel.py; может бросить NotifyError.
 router = None
 # Другие пути к Telegram, когда выбранный выход не работает: alt_routes(via) → список «up:<id>»
 alt_routes = None

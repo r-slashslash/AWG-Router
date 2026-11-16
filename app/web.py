@@ -114,7 +114,7 @@ def content_length(headers, limit: int = MAX_BODY) -> int:
 
 
 class HTTPError(Exception):
-    """field — поле запроса, о котором ошибка: браузер выделяет его в форме (markField в app.js)."""
+    """field — поле запроса, о котором ошибка: браузер выделяет его в форме (markField в js/core.js)."""
 
     def __init__(self, code: int, detail, field: str | None = None):
         if isinstance(detail, str):

@@ -1,5 +1,5 @@
 """1.21.0, исправления по второй проверке (2026-11-16): утечки мимо выходов (этап 1), безопасность (этап 2),
-правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4), интерфейс и тексты (этап 5), установщик, выпуск и возврат на 1.20.0 (этап 6), скорость (этап 7).
+правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4), интерфейс и тексты (этап 5), установщик, выпуск и возврат на 1.20.0 (этап 6), скорость (этап 7), тесты и код (этап 8).
 
 python3 -m unittest discover tests
 """
@@ -411,6 +411,8 @@ class ServerTest(unittest.TestCase):
 
     def call(self, method, path, body=b"", conn=None, headers=None):
         c = conn or http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=10)
+        if conn is None:
+            self.addCleanup(c.close)
         h = {"Content-Type": "application/json", **(headers or {})}
         c.request(method, auth.BASE + path, body=body, headers=h)
         r = c.getresponse()
@@ -981,6 +983,42 @@ class SpeedTest(unittest.TestCase):
         for old in ("toLocaleString(LANG", "toLocaleDateString(LANG", "toLocaleTimeString(LANG",
                     "new Intl.RelativeTimeFormat(LANG"):
             self.assertFalse(old in js, old)
+
+
+# ============================================================ этап 8: тесты и код
+class RoutesTest(unittest.TestCase):
+    def test_every_route_takes_its_path_parameters(self):
+        """Н40. Каждый адрес API вызывает функцию, которая принимает ровно параметры своего пути. В v1.21.0-audit
+        пометка PUT /api/upstreams/{uid} стояла на соседней функции (_exit_rates(body)), и любая правка выхода
+        давала ошибку 500, а тесты и E2E были зелёными."""
+        import inspect
+        seen = set()
+        for method, rx, fn in panel.app.routes:
+            params = {p for p in inspect.signature(fn).parameters if p != "req"}
+            self.assertEqual(params, set(rx.groupindex), f"{method} {rx.pattern} → {fn.__name__}")
+            self.assertNotIn((method, rx.pattern), seen)
+            seen.add((method, rx.pattern))
+        self.assertGreater(len(seen), 50)
+
+
+class DeadCodeTest(unittest.TestCase):
+    def test_removed(self):
+        """Неиспользуемые функции и константа убраны (их звали только тесты)."""
+        self.assertFalse(hasattr(awgconf, "parse_server_conf"))
+        self.assertFalse(hasattr(awgconf, "setconf_resolved"))
+        self.assertFalse(hasattr(cps, "WARN_PACKET"))
+        self.assertFalse(hasattr(engine.Engine, "_resolved"))
+        self.assertFalse(hasattr(tgbot.Bot, "_move"))
+
+    def test_no_old_file_names_in_comments(self):
+        """Комментарии называют файлы, которые есть: main.py с 1.21.0 — только запуск, app.js разделён."""
+        import re
+        for root, _, files in os.walk(os.path.join(ROOT, "app")):
+            for n in files:
+                if n.endswith((".py", ".js")) and n != "main.py":
+                    with open(os.path.join(root, n), encoding="utf-8") as f:
+                        txt = f.read()
+                    self.assertIsNone(re.search(r"\b(main\.py|app\.js)\b", txt), n)
 
 
 if __name__ == "__main__":

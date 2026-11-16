@@ -209,7 +209,7 @@ function engKind() {
   return n ? n.split(":")[0] : null;
 }
 
-/** Оповещение про модуль ядра (вид — engine_offer в main.py); «Скрыть» запоминает вид на сервере. */
+/** Оповещение про модуль ядра (вид — engine_offer в app/api/server.py); «Скрыть» запоминает вид на сервере. */
 function engineBanner() {
   const E = S.awg_engine || {}, kind = engKind();
   if (!kind) return "";

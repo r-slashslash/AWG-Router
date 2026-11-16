@@ -22,7 +22,6 @@ PORTABLE = ("b", "r", "rc", "rd", "t")
 ENGINE_ONLY = ("c", "d", "ds", "dz")
 MAX_PACKET = 1400       # больше — пакет фрагментируется почти на любом пути (MTU 1500 − заголовки)
 MAX_TAG = 1400
-WARN_PACKET = 1200
 
 TOKEN_RE = re.compile(r"<[^<>]*>|[^<>\s]+|[<>]")
 HEX_RE = re.compile(r"^0x((?:[0-9a-fA-F]{2})+)$")

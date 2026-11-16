@@ -546,7 +546,7 @@ class BotError(Exception):
 
 
 class Bot:
-    """Цикл getUpdates и разбор команд. ops — действия панели (их собирает main.py):
+    """Цикл getUpdates и разбор команд. ops — действия панели (их собирает app/api/telegram.py):
     тот же код, что за кнопками в браузере."""
 
     def __init__(self, store, ops, stop_ev: threading.Event | None = None):
@@ -770,10 +770,6 @@ class Bot:
             notify._call(c["token"], "deleteMessage", {"chat_id": c["chat_id"], "message_id": mid}, via=c["via"])
         except notify.NotifyError:
             pass       # старше 48 часов или уже удалено
-
-    def _move(self, c: dict, text: str, markup: dict | None) -> None:
-        """Меню — новым сообщением внизу (после файлов: QR, конфиг, копия), прежнее удаляется."""
-        self._send(c, text, markup, panel=True)
 
     def _show(self, c: dict, text: str, markup: dict | None, msg: dict | None) -> None:
         """Экран меню: если кнопку нажали в сообщении-меню — меняем его на месте."""

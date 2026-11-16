@@ -16,6 +16,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # соседние файлы тестов (test_api и др.)
 
 from app import selfupdate  # noqa: E402
 from app import panel  # noqa: E402
@@ -124,7 +125,9 @@ class BackupCryptoTest(unittest.TestCase):
         self.assertTrue(enc.startswith(notify.ENC_MAGIC))
         self.assertNotIn(b"awg-router-backup", enc)
         self.assertEqual(notify.decrypt(enc, "correct horse"), data)
-        self.assertIsNone(notify.decrypt(enc, "wrong password"))
+        # AES-CBC без проверки целостности: с чужим паролем дополнение сходится примерно 1 раз из 256, и openssl
+        # отдаёт мусор вместо ошибки (decrypt_backup его отвергает: это не JSON). Поэтому — «не исходные данные»
+        self.assertNotEqual(notify.decrypt(enc, "wrong password"), data)
 
     def test_decrypt_endpoint(self):
         from app import notify, web

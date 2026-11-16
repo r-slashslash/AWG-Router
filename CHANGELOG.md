@@ -318,6 +318,14 @@ it grows, so every user-visible change gets a new version.
   (`store.peek`): at 1,000 clients a full answer took 59 ms of server time instead of 71.5, a tagged one 30 instead
   of 38.5. The interface reuses its `Intl` number and date formatters instead of making one for every value (3,000
   numbers: 80 ms → 3 ms). `traffic.json` is written only when a client's counters changed, not every minute.
+- **Tests and code tidy-up** (nothing changes for users). Two tests failed now and then: a wrong-password decrypt
+  of a Telegram backup could, about once in 300 runs, give bytes instead of `None` (the test now checks that the data
+  isn't returned), and the demo install test waited on a real clock under load. Every test file runs on its own, a
+  test cleans the TLS domain it set, and tests close their connections, files and sockets. A test checks that every
+  API handler is called with the arguments it takes (it catches `PUT /api/upstreams/{uid}` calling `_exit_rates`
+  with the wrong one, as on the audit branch). Unused functions are gone (`parse_server_conf`, `setconf_resolved`,
+  `WARN_PACKET`, `_resolved`, `tgbot._move`), comments name the files after the split, and `docs/ARCHITECTURE.md`
+  lists every module.
 
 ## 1.20.0 — 2026-11-14
 

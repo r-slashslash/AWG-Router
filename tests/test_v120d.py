@@ -6,11 +6,14 @@
 python3 -m unittest discover tests
 """
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -82,7 +85,7 @@ class InstallerBase(unittest.TestCase):
         e = {"PATH": self.bin + ":/usr/bin:/bin", "AWGR_SYS": self.sys, "AWGR_OS_RELEASE": self.osr, "LOG": self.log,
              "AWGR_MODLOAD": self.modload, "AWGR_MODBLOCK": self.block, "AWGR_PANIC_CONF": self.panic, **env}
         p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, timeout=30)
-        calls = open(self.log).read() if os.path.exists(self.log) else ""
+        calls = pathlib.Path(self.log).read_text() if os.path.exists(self.log) else ""
         return p.returncode, p.stdout + p.stderr, calls
 
 
@@ -234,13 +237,14 @@ class KernelModTest(unittest.TestCase):
         self.assertEqual(kernelmod.load(), {})                         # повреждённый файл — как пустой
 
     def test_demo_install(self):
-        with mock.patch.object(kernelmod.time, "sleep"):
+        # Часы только у kernelmod: patch.object(kernelmod.time, "sleep") подменял time.sleep всему процессу —
+        # и ожиданию в этом тесте (цикл «до 2 с» шёл миллисекунды и под нагрузкой не дожидался), и чужим потокам
+        clock = types.SimpleNamespace(time=time.time, sleep=lambda s: None)
+        with mock.patch.object(kernelmod, "time", clock):
             st = kernelmod.start()
             self.assertIn(st["state"], ("running", "done"))
-            for _ in range(100):
-                if kernelmod.status()["state"] == "done":
-                    break
-                time.sleep(0.02)
+            for th in [t for t in threading.enumerate() if t.name == "demo-kernel"]:
+                th.join(10)
         self.assertEqual(kernelmod.status()["state"], "done")
         self.assertIn("  ✓ Kernel module loaded: version 3.1.20261113", kernelmod.log_lines())
 
