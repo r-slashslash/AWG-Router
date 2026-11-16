@@ -12,11 +12,18 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome, in Eng
 
 ## Rules for the code
 
-New to the code? Start with the [architecture overview](docs/ARCHITECTURE.md). The rules — standard library
-only, every text a user sees in four languages (ru, en, zh, fa), the four READMEs changed together, comments in
-Russian, nothing loaded from third-party hosts — the checklists for typical changes and what "done" means are in
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). If you only know some of the languages, write the text you can and
-say so in the pull request; the maintainer will help with the rest.
+New to the code? Start with the [architecture overview](docs/ARCHITECTURE.md).
+
+- **Standard library only.** The panel has no Python dependencies; the HTTP layer is `app/web.py`.
+- **Every text a user sees exists in four languages: ru, en, zh, fa** (fa is right to left).
+  Add the key to all four dictionaries in `app/static/i18n.js` with the same `{placeholders}`.
+  Telegram texts live in `notify.TEXTS` and `tgbot.py`.
+- **README changes go to all four files together:** `README.md`, `README.ru.md`, `README.zh.md`,
+  `README.fa.md`. If you only know some of the languages, write the text you can and say so
+  in the pull request; the maintainer will help with the rest.
+- Comments and docstrings in `app/`, `tests/` and `tools/` are written in Russian.
+  `install.sh` talks only in English.
+- The browser never loads anything from a third-party host: fonts and scripts are served by the panel.
 
 ## Tests
 
@@ -24,10 +31,10 @@ say so in the pull request; the maintainer will help with the rest.
 python3 -m unittest discover tests
 ```
 
-These run without root and must pass, and so do `ruff check .` and `eslint app/static`. `tests/test_rules.py`
-checks many of the rules (translations, saved fields, exit references, pinned actions, no third-party hosts), so
-a failure there tells you what was missed. Network tests (`tests/*_e2e.py`) need root; see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+These run without root and must pass, and so do `ruff check .` and `eslint app/static` (CI runs them too).
+`tests/test_rules.py` checks many of the rules above (translations, saved fields, exit references, pinned
+actions, nothing loaded from third-party hosts), so a failure there tells you what was missed.
+Network tests (`tests/*_e2e.py`) need root and are listed in the README, "Development".
 
 ## Pull requests
 

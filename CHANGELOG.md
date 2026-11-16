@@ -200,8 +200,7 @@ it grows, so every user-visible change gets a new version.
 - **Code checks on GitHub.** `net-tests.yml` has a `lint` job: ruff (`ruff.toml`: F, B, E9, PLE) over the repository and
   eslint (`eslint.config.mjs`, `no-undef` and plain errors) over the interface scripts; nothing of it goes into the
   panel. `tests/test_rules.py` also checks that files have no co-author lines, that every action is pinned by SHA and
-  that the panel's pages load nothing from other hosts. `docs/DEVELOPMENT.md` collects the rules, checklists, what
-  "done" means and the invariants of the subsystems; `CONTRIBUTING.md` points to it.
+  that the panel's pages load nothing from other hosts.
 - **The domain lists hint says** that a browser may send a request for another site over an open HTTP/2 or HTTP/3
   connection when the sites share an address and certificate, and suggests keeping all domains of one owner in one
   list plus an address list for what matters.

@@ -315,8 +315,6 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 
 The panel has no Python dependencies outside the standard library. The Docker image adds `amneziawg-go`, `amneziawg-tools`, `hev-socks5-tunnel` and `lego`.
 
-Rules for changes, checklists and what "done" means: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-
 ## Credits
 
 ### People who helped

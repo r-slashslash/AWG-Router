@@ -348,8 +348,6 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 
 خود پنل فقط به کتابخانهٔ استاندارد پایتون نیاز دارد. ایمیج داکر علاوه بر آن `amneziawg-go`، ‏`amneziawg-tools`، ‏`hev-socks5-tunnel` و `lego` را دارد.
 
-قاعده‌های تغییر، فهرست‌های بررسی و این‌که «تمام شده» یعنی چه، در [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) است (به انگلیسی).
-
 ## سپاسگزاری
 
 ### کسانی که کمک کردند
