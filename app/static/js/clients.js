@@ -218,6 +218,7 @@ function addClient() {
   const go = async () => {
     const name = $("#n-name").value.trim();
     if (!name) { $("#n-name").focus(); return; }
+    if ($("#n-save").disabled) return;          // второй Enter, пока первый запрос идёт, — не второй клиент
     $("#n-save").disabled = true;
     try {
       const body = { name };

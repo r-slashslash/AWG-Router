@@ -86,8 +86,11 @@ _HOSTNAME = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A
 
 def is_socks(text: str) -> bool:
     t = text.strip()
+    # «хост:порт» без логина — тоже прокси (форма выхода так его и понимает): раньше он уходил в разбор
+    # конфига AWG и получал ошибку про ссылку vpn://
     return bool(_SOCKS_URL.match(t) or (("\n" not in t) and "[Interface]" not in t and
-                                        (_HOST_PORT_USER_PASS.match(t) or re.match(r"^[^\s/@]+@[^\s/@]+:\d+$", t))))
+                                        (_HOST_PORT_USER_PASS.match(t) or re.match(r"^[^\s/@]+@[^\s/@]+:\d+$", t)
+                                         or re.match(r"^[A-Za-z0-9.-]+:\d{1,5}$", t))))
 
 
 def parse_socks(text: str) -> UpstreamConf:

@@ -1,5 +1,5 @@
 """1.21.0, исправления по второй проверке (2026-11-16): утечки мимо выходов (этап 1), безопасность (этап 2),
-правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4).
+правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4), интерфейс и тексты (этап 5).
 
 python3 -m unittest discover tests
 """
@@ -27,7 +27,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from app import (awgserver, checks, config, cps, dnsproxy, domains, engine, lists, movehost, nftgen,  # noqa: E402
+from app import (awgconf, awgserver, checks, config, cps, dnsproxy, domains, engine, lists, movehost, nftgen,  # noqa: E402
                  notify, panel, quic, sniproxy, store, system, tgbot, totp, users, web)
 from app import api  # noqa: E402,F401  — импорт app.api регистрирует все адреса
 from app.api import auth, backup  # noqa: E402
@@ -765,6 +765,85 @@ class BotFixesTest(unittest.TestCase):
             self.assertTrue(t.is_alive())
             b.stop_ev.set()
             b.wake.set()
+
+
+# ============================================================ этап 5: интерфейс и тексты
+import panel_js  # noqa: E402
+
+I18N = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app", "static", "i18n.js")
+
+
+def i18n_text():
+    with open(I18N, encoding="utf-8") as f:
+        return f.read()
+
+
+class InterfaceTest(unittest.TestCase):
+    """Проверено и в Chromium (4 языка, 375 и 1280 px); здесь — чтобы правки не потерялись."""
+
+    def setUp(self):
+        self.js = panel_js.source()
+
+    def test_toasts_inside_open_window(self):
+        """Н31. Сообщения — внутри открытого окна (оно в верхнем слое), после закрытия — снова на странице."""
+        self.assertIn('document.querySelector("dialog[open]") || document.body', self.js)
+        self.assertIn('document.body.append($("#toasts"))', self.js)
+
+    def test_dns_filter_shows_save_bar(self):
+        """Н32. Галочка «только для адресов из ответов этого DNS» показывает «Сохранить»."""
+        self.assertIn('["#s-pdns", "#s-domf"].forEach', self.js)
+
+    def test_lower_buttons_keep_edits(self):
+        """Н33. «Сохранить» скорости и «Перезапустить сервер» не выбрасывают несохранённое выше."""
+        self.assertEqual(self.js.count("saveFirst()"), 2)
+        self.assertEqual(i18n_text().count('"srv.save_first":'), 4)
+
+    def test_first_request_retried(self):
+        """Н34. Первый запрос после входа не прошёл — страница пробует снова, а не остаётся пустой."""
+        self.assertIn("setTimeout(() => boot(true), 3000)", self.js)
+
+    def test_host_port_proxy(self):
+        """Н35. «хост:порт» без логина — SOCKS5, как его понимает форма выхода."""
+        self.assertTrue(awgconf.is_socks("198.51.100.9:1080"))
+        self.assertEqual(awgconf.parse_upstream("proxy.example.com:1080").kind, "socks5")
+        self.assertFalse(awgconf.is_socks("vpn://AAAA"))
+
+    def test_small_things(self):
+        """Н37: двойной Enter, выделение мышью за край окна, сообщение «нет связи» вместо «Failed to fetch»,
+        курсор в поиске, стрелка справа налево, разделитель даты и времени."""
+        self.assertIn('if ($("#n-save").disabled) return;', self.js)
+        self.assertIn('e.target.id === "modal" && downOnBackdrop', self.js)
+        self.assertIn('new Error(t("status.offline"))', self.js)
+        self.assertIn("setSelectionRange(...keepCaret)", self.js)
+        self.assertIn('LANGS[LANG].dir === "rtl" ? "←" : "→"', self.js)
+        self.assertNotIn('+ ", " +', self.js)
+        self.assertEqual(i18n_text().count('"btn.retry":'), 4)
+
+
+class TextsTest(unittest.TestCase):
+    def test_wording(self):
+        """Тексты из раздела об удобстве: одно название общих правил, понятная галочка strict, честная подсказка
+        о том, где она действует до запуска панели, AWG 3.1 в подсказке выхода."""
+        import re
+        s = i18n_text()
+        self.assertIn('"rt.strict": "Если правила по доменам не работают', s)
+        self.assertNotIn("Глобальная политика", s)
+        self.assertNotIn("Global policy", s)
+        self.assertIn('"err.fallback_self": "Выход не может быть резервом самому себе"', s)
+        self.assertIsNone(re.search(r"(до|up to) AWG 3(?!\.1)", s))
+        self.assertIn("не в контейнере приложения AmneziaVPN", s)
+
+    def test_zh_and_fa_consistency(self):
+        """zh: кнопка «Проверить» называется так же, как в README, кавычки одного вида. fa: одно слово для
+        порта, правила, шифрования и кэша; свой знак процента."""
+        import re
+        s = i18n_text()
+        zh = "\n".join(ln for ln in s.split("\n") if re.search(r"[一-鿿]", ln))
+        fa = "\n".join(ln for ln in s.split("\n") if re.search(r"[؀-ۿ]", ln))
+        self.assertIn('"btn.check": "检查"', zh)
+        self.assertNotIn("“", zh)
+        for w in ("پورت", "قاعده", "رمزنگاری", "حافظهٔ نهان", "{pct}%"):
+            self.assertNotIn(w, fa, w)
 
 
 if __name__ == "__main__":

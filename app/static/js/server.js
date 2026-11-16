@@ -62,6 +62,8 @@ function viewServer() {
   if (!S.target) return `<div class="panel empty"><p>${esc(t("status.no_target"))}</p></div>`;
   if (!SRV) { loadServer(); return `<p class="muted">${esc(t("probe.checking"))}</p>`; }
   if (!SRV.exists) {
+    // панель не ответила — это не «сервера нет»
+    if (SRV.error) return `<div class="panel empty"><p>${esc(SRV.error)}</p><button class="btn" id="s-retry">${esc(t("btn.retry"))}</button></div>`;
     if (!SRV.can_init) return `<div class="panel empty"><p>${esc(t("srv.missing"))}</p></div>`;
     return `
     <section class="section">
@@ -385,6 +387,8 @@ async function loadServer() {
   if (tab === "server") render();
 }
 bind.server = () => {
+  const retry = $("#s-retry");
+  if (retry) retry.onclick = () => { SRV = null; render(); };
   const create = $("#i-create");
   if (create) {
     create.onclick = async () => {
@@ -400,7 +404,15 @@ bind.server = () => {
   $$("[data-eng-choose]").forEach((b) => b.onclick = () => engChoose(b.dataset.engChoose));
   const ec = $("#eng-copy");
   if (ec) ec.onclick = () => copyText(KERNEL_CMD);
+  // кнопки ниже перерисовывают вкладку: несохранённые правки выше пропали бы без слова
+  const saveFirst = () => {
+    if (!srvDirty()) return false;
+    toast(t("srv.save_first"), true);
+    $("#s-bar").scrollIntoView({ block: "center" });
+    return true;
+  };
   $("#sh-save").onclick = async () => {
+    if (saveFirst()) return;
     const b = $("#sh-save"); b.disabled = true;
     try {
       await api("PUT", "settings", { shaping: { down: $("#sh-down").value.trim() || null, up: $("#sh-up").value.trim() || null } });
@@ -413,7 +425,7 @@ bind.server = () => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar; el.onchange = showBar;
   });
-  if ($("#s-pdns")) $("#s-pdns").onchange = showBar;
+  ["#s-pdns", "#s-domf"].forEach((sel) => { if ($(sel)) $(sel).onchange = showBar; });
 
   const syncTpl = () => {
     const sel = $("#s-cps"); if (!sel) return;
@@ -433,7 +445,7 @@ bind.server = () => {
   if (ch) ch.onchange = () => { $("#s-ch-hint").innerHTML = clientHostHint(ch.value); showBar(); };
   showBar();
   $("#s-restart").onclick = async () => {
-    if (!confirm(t("srv.restart_confirm"))) return;
+    if (saveFirst() || !confirm(t("srv.restart_confirm"))) return;
     const b = $("#s-restart");
     b.disabled = true;
     try { await api("POST", "server/restart", {}); toast(t("srv.restarting")); }
@@ -464,7 +476,9 @@ bind.server = () => {
     try {
       const r = await api("PUT", "server", body);
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
-      if (r.server_side_changed || r.host_changed || r.dns_changed) toast(t("toast.reimport"));
+      // новый порт или подсеть — тоже новые конфиги у всех клиентов (Endpoint, Address)
+      const moved = (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
+      if (r.server_side_changed || r.host_changed || r.dns_changed || moved) toast(t("toast.reimport"));
       SRV = null; srvDraft = null; await refresh(); loadServer();
     } catch (e) { toast(e.message, true); markField(e, $("#main")); $("#s-save").disabled = false; }
   };

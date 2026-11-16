@@ -170,7 +170,8 @@ function listUses(l) {
   const out = [];
   S.routing.rules.forEach((r, i) => {
     if (!r.lists.includes(l.id)) return;
-    out.push(`<div class="use ${r.enabled === false ? "off" : ""}"><span>${esc(t("ref.rule", { rule: r.comment || "#" + (i + 1) }))}</span> → ${outChip(r.outbound)}</div>`);
+    const arrow = LANGS[LANG].dir === "rtl" ? "←" : "→";       // справа налево стрелка смотрит влево
+    out.push(`<div class="use ${r.enabled === false ? "off" : ""}"><span>${esc(t("ref.rule", { rule: r.comment || "#" + (i + 1) }))}</span> ${arrow} ${outChip(r.outbound)}</div>`);
   });
   for (const m of l.refs || []) if (m && m.$t === "ref.client_rule") out.push(`<div class="use"><span>${esc(tm(m))}</span></div>`);
   return out.length ? out.join("") : `<span class="muted">${esc(t("ls.unused"))}</span>`;

@@ -30,10 +30,12 @@ function fmtAge(sec) {
   if (sec < 86400) return rtf.format(-Math.floor(sec / 3600), "hour");
   return rtf.format(-Math.floor(sec / 86400), "day");
 }
+/** между датой и временем: в персидском — своя запятая, в китайском — пробел */
+function dtSep() { return LANG === "fa" ? "، " : LANG === "zh" ? " " : ", "; }
 /** когда начнётся следующий месяц учёта (1-е число, 00:00 UTC) по часам браузера — для подсказок */
 function monthResetLocal() {
   const n = new Date(), d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1));
-  return d.toLocaleDateString(LANG, { day: "numeric", month: "short" }) + ", "
+  return d.toLocaleDateString(LANG, { day: "numeric", month: "short" }) + dtSep()
     + d.toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" });
 }
 function fmtTime(ts) {
@@ -41,7 +43,7 @@ function fmtTime(ts) {
   const d = new Date(ts * 1000), now = new Date();
   const time = d.toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" });
   return d.toDateString() === now.toDateString() ? time
-    : d.toLocaleDateString(LANG, { day: "numeric", month: "short" }) + ", " + time;
+    : d.toLocaleDateString(LANG, { day: "numeric", month: "short" }) + dtSep() + time;
 }
 function fmtCompact(n) { return Number(n).toLocaleString(LANG, { notation: "compact", maximumSignificantDigits: 3 }); }
 let _regions = null;
@@ -68,7 +70,10 @@ function toast(msg, bad = false) {
   const el = document.createElement("div");
   el.className = "toast" + (bad ? " bad" : "");
   el.textContent = msg;
-  $("#toasts").append(el);
+  // открытое окно (dialog) лежит в верхнем слое поверх всей страницы: сообщения — в нём, иначе их не видно
+  const box = $("#toasts"), host = document.querySelector("dialog[open]") || document.body;
+  if (box.parentNode !== host) host.append(box);
+  box.append(el);
   setTimeout(() => el.remove(), bad ? 6000 : 3000);
 }
 
@@ -81,7 +86,14 @@ async function api(method, path, body, timeoutMs = 0, headers = null) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
   }
-  const r = await fetch("api/" + path, opt);
+  let r;
+  try { r = await fetch("api/" + path, opt); }
+  catch {
+    // связь оборвалась или запрос не дождался ответа: вместо «Failed to fetch» / «signal timed out» браузера
+    const err = new Error(t("status.offline"));
+    err.offline = true;
+    throw err;
+  }
   if (r.status === 401 && path !== "login") { showLogin(); throw new AuthError(t("auth.required")); }
   let data = null;
   try { data = await r.json(); } catch { /* пусто */ }
@@ -359,7 +371,7 @@ async function refresh(auto = false) {
     pollFails++;
     if (S) renderStatus();
     if (updatingTo) { setUpdLine(t("sy.updating_restart")); return; }   // панель перезапускается
-    if (!auto) toast(t("panel.offline", { e: e.message }), true);      // при опросе об этом говорит шапка
+    if (!auto) toast(e.offline ? e.message : t("panel.offline", { e: e.message }), true);   // при опросе — шапка
     return;
   }
   if (pendingS && $("#modal").open) {           // шапка — по новому состоянию, окно — по своему
@@ -390,10 +402,15 @@ async function refresh(auto = false) {
   renderCost = performance.now() - t0;
 }
 
-async function boot() {
+async function boot(retry = false) {
   $("#login").hidden = true;
-  await refresh();
-  if (!S) return;
+  await refresh(retry);
+  if (!S) {
+    // первый запрос не прошёл (панель перезапускалась, оборвалась связь): снова через 3 секунды, а не пустая
+    // страница навсегда; просит пароль — showLogin, и тогда ждём входа
+    if ($("#login").hidden) setTimeout(() => boot(true), 3000);
+    return;
+  }
   if (((S.awg_engine || {}).install || {}).state === "running") { engWatching = true; engWatch(); }
   try {
     const done = sessionStorage.getItem("awgr.updated");
@@ -505,7 +522,10 @@ function render(force = false) {
     return;
   }
   if (!views.has(tab)) tab = "overview";
-  const keepSearch = $("#client-search") ? $("#client-search").value : null;
+  const sEl = $("#client-search");
+  const keepSearch = sEl ? sEl.value : null;
+  // поиск печатают, пока идёт опрос: перерисовка не должна уводить курсор из поля
+  const keepCaret = sEl && document.activeElement === sEl ? [sEl.selectionStart, sEl.selectionEnd] : null;
   const html = banners() + views.get(tab)();
   if (!force && tab === "clients" && patchClients(html)) return;
   if (tab === "clients" && clientParts) clientParts.banner = html.slice(0, html.length - clientParts.html.length);
@@ -515,7 +535,11 @@ function render(force = false) {
   if (bindTab) bindTab();
   $$(".banner [data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
   $$("[data-eng]").forEach((b) => b.onclick = () => engAction(b.dataset.eng, b));
-  if (keepSearch !== null && $("#client-search")) { $("#client-search").value = keepSearch; filterClients(); }
+  const s2 = $("#client-search");
+  if (keepSearch !== null && s2) {
+    s2.value = keepSearch; filterClients();
+    if (keepCaret) { s2.focus(); try { s2.setSelectionRange(...keepCaret); } catch { /* поле без выделения */ } }
+  }
   $$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
 }
 
@@ -595,8 +619,13 @@ function openModal(title, body, foot, tag) {
   m.showModal();
 }
 function closeModal() { $("#modal").close(); }
-$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+// окно закрывает только нажатие на затемнение: выделение текста мышью, отпущенной за краем окна, — тоже «щелчок»
+// по нему, и введённое пропадало
+let downOnBackdrop = false;
+$("#modal").addEventListener("pointerdown", (e) => { downOnBackdrop = e.target.id === "modal"; });
+$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal" && downOnBackdrop) closeModal(); });
 $("#modal").addEventListener("close", () => {
+  document.body.append($("#toasts"));          // сообщения, начатые в окне, досматриваются после него
   if (pendingS) { S = pendingS; pendingS = null; }
   if (tab !== "routing") render();
 });

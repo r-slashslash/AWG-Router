@@ -47,7 +47,7 @@ function viewTelegram() {
         </div><div>
           <p class="small muted" style="margin-top:0">${esc(t("tg.backup_hint"))}</p>
           ${c.backup_error ? `<p class="err small">${esc(t("tg.backup_failed", { error: tm(c.backup_error) }))}</p>`
-            : c.backup_last ? `<p class="small">${esc(t("tg.backup_last", { time: fmtDay(c.backup_last) + ", " + fmtTime(c.backup_last) }))}</p>` : ""}
+            : c.backup_last ? `<p class="small">${esc(t("tg.backup_last", { time: fmtDay(c.backup_last) + dtSep() + fmtTime(c.backup_last) }))}</p>` : ""}
           <button type="button" class="btn sm" id="tg-bk-send">${esc(t("tg.backup_send"))}</button>
         </div></div>
       </fieldset>
@@ -61,7 +61,7 @@ function viewBotState(b) {
   const out = [];
   if (b.state === "error") out.push(`<p class="err small">${esc(t("tg.bot_error"))}: <bdi>${esc(tm(b.error))}</bdi></p>`);
   else if (b.state === "ok") out.push(`<p class="small"><span class="dot ok"></span> ${esc(t("tg.bot_ok"))}</p>`);
-  if (b.last) out.push(`<p class="small muted">${esc(t("tg.bot_last", { time: fmtDay(b.last) + ", " + fmtTime(b.last) }))}</p>`);
+  if (b.last) out.push(`<p class="small muted">${esc(t("tg.bot_last", { time: fmtDay(b.last) + dtSep() + fmtTime(b.last) }))}</p>`);
   if (b.skew) out.push(`<p class="small muted">${esc(t("tg.bot_skew", { n: Math.round(Math.abs(b.skew) / 60) || 1 }))}</p>`);
   return out.join("");
 }
@@ -245,7 +245,7 @@ function showRestore(b) {
   const nClients = srv ? ((srv.files.clientsTable || "").match(/"clientId"/g) || []).length : 0;
   openModal(t("bk.restore_title"), `
     <div class="kv" style="margin-bottom:14px">
-      <div><span>${esc(t("bk.created"))}</span><b>${esc(b.created ? fmtDay(b.created) + ", " + new Date(b.created * 1000).toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" }) : "—")}</b></div>
+      <div><span>${esc(t("bk.created"))}</span><b>${esc(b.created ? fmtDay(b.created) + dtSep() + new Date(b.created * 1000).toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" }) : "—")}</b></div>
       <div><span>${esc(t("bk.from"))}</span><b><bdi>${esc(b.host || "—")}</bdi></b></div>
       <div><span>${esc(t("tab.exits"))}</span><b>${esc(fmtNum((st.upstreams || []).length))}</b></div>
       <div><span>${esc(t("tab.lists"))}</span><b>${esc(fmtNum((st.lists || []).length))}</b></div>
