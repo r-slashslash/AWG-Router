@@ -167,7 +167,7 @@ It asks for the panel port (Enter — a random free 4-digit one); the rest is au
 | `awg-router logs` | show the panel log |
 | `awg-router reconfigure` | choose the mode and access method again; can also move the AmneziaWG server from its container to the host with the same keys, port and clients |
 | `awg-router install-kernel` | build and load the AmneziaWG kernel module (see [AmneziaWG engine](#amneziawg-engine)) |
-| `awg-router uninstall` | remove the panel and its routing rules; asks whether to keep the AmneziaWG server it installed (kept by default; its keys live in `/opt/awg-router/awg-server`, so don't delete the folder while it runs) |
+| `awg-router uninstall` | remove the panel and its routing rules; asks whether to keep the AmneziaWG server it installed (kept by default; its keys live in `/opt/awg-router/awg-server`, so don't delete the folder while it runs), then whether to remove the panel settings in `/opt/awg-router` too (kept by default, and a new install picks them up; not asked while the kept server's keys are there) |
 
 ### Access through an SSH tunnel
 

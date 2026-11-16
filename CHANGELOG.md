@@ -317,6 +317,10 @@ it grows, so every user-visible change gets a new version.
   emptied it, and 1.21.0 never rebuilt typed-in lists. The release notes say how to go back and what to avoid there.
   `install.sh --install-kernel` tries `add-apt-repository ppa:amnezia/ppa` three times (10 and 30 s apart):
   Launchpad's API now and then cuts an answer short (`IncompleteRead`), as it did in three CI runs in a row.
+  `awg-router uninstall` also asks whether to remove the panel settings (`/opt/awg-router`; kept on Enter): before,
+  the folder always stayed, and a new install quietly took its `.env` and `data/` over, the access method too. Not
+  asked while the kept server of our own container has its keys there; only a folder with the panel's
+  `docker-compose.yml` is removed, after the list of leftovers (it reads the panel's port from `.env`).
 - **Speed.** `/api/state` no longer carries each client's 12-month traffic history (the interface never read it;
   `Traffic.view(history=False)`), and the panel's and certificate's address are read without copying the whole state
   (`store.peek`): at 1,000 clients a full answer took 59 ms of server time instead of 71.5, a tagged one 30 instead

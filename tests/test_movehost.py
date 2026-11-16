@@ -301,7 +301,7 @@ class InstallerMoveTest(unittest.TestCase):
         out, log = self.run_sh(self.uninstall_block(), answers="yes,2")
         self.assertIn("docker rm -f amnezia-awg2", log)
         self.assertLess(log.index("app.uninstall"), log.index("docker rm -f"))   # правила убраны до сервера
-        self.assertIn("delete the folder to remove them too", out)
+        self.assertIn("delete the folder to start from scratch", out)
 
     def test_uninstall_leaves_amnezia_app_container(self):
         self.container("amnezia-awg2")                              # создан приложением AmneziaVPN

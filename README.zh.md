@@ -167,7 +167,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router logs` | 查看面板日志 |
 | `awg-router reconfigure` | 重新选择模式和访问方式；也可以把 AmneziaWG 服务器从容器迁移到主机，密钥、端口和客户端保持不变 |
 | `awg-router install-kernel` | 编译并加载 AmneziaWG 内核模块（见 [AmneziaWG 引擎](#amneziawg-引擎)） |
-| `awg-router uninstall` | 删除面板及其路由规则；会询问是否保留面板安装的 AmneziaWG 服务器（默认保留；其密钥位于 `/opt/awg-router/awg-server`，服务器运行期间不要删除该目录） |
+| `awg-router uninstall` | 删除面板及其路由规则；会询问是否保留面板安装的 AmneziaWG 服务器（默认保留；其密钥位于 `/opt/awg-router/awg-server`，服务器运行期间不要删除该目录），然后询问是否一并删除 `/opt/awg-router` 中的面板设置（默认保留，重新安装时会沿用；若其中有保留的服务器的密钥，则不会询问） |
 
 ### 通过 SSH 隧道访问
 

@@ -192,7 +192,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 | `awg-router logs` | نمایش گزارش پنل |
 | `awg-router reconfigure` | انتخاب دوبارهٔ حالت و روش دسترسی؛ همچنین می‌تواند سرور AmneziaWG را با همان کلیدها، درگاه و کلاینت‌ها از کانتینر به میزبان منتقل کند |
 | `awg-router install-kernel` | ساخت و بارگذاری ماژول هستهٔ AmneziaWG (بخش [موتور AmneziaWG](#موتور-amneziawg) را ببینید) |
-| `awg-router uninstall` | حذف پنل و قانون‌های مسیریابی آن؛ می‌پرسد سرور AmneziaWG نصب‌شده توسط پنل بماند یا نه (پیش‌فرض: می‌ماند؛ کلیدهایش در <bdi>`/opt/awg-router/awg-server`</bdi> است، پس تا وقتی کار می‌کند پوشه را پاک نکنید) |
+| `awg-router uninstall` | حذف پنل و قانون‌های مسیریابی آن؛ می‌پرسد سرور AmneziaWG نصب‌شده توسط پنل بماند یا نه (پیش‌فرض: می‌ماند؛ کلیدهایش در <bdi>`/opt/awg-router/awg-server`</bdi> است، پس تا وقتی کار می‌کند پوشه را پاک نکنید)، سپس می‌پرسد تنظیمات پنل در <bdi>`/opt/awg-router`</bdi> هم پاک شود یا نه (پیش‌فرض: می‌ماند و نصب تازه همان‌ها را برمی‌دارد؛ تا وقتی کلیدهای سرورِ نگه‌داشته‌شده آن‌جاست، پرسیده نمی‌شود) |
 
 ### دسترسی از راه تونل SSH
 

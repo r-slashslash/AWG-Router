@@ -911,7 +911,7 @@ leftovers"""
         out = self.bash(script)
         self.assertIn(f"rm -f {block}", out)
         self.assertIn("ufw delete allow 4894/tcp", out)
-        self.assertIn("\n  leftovers\n}", install_sh())
+        self.assertRegex(install_sh(), r"\n  leftovers  [^\n]*\n  if \[ \"\$purge\" = 1 \]")   # до удаления папки
 
 
 class ReleaseWorkflowTest(unittest.TestCase):
@@ -1213,6 +1213,68 @@ class CloudMetadataTest(unittest.TestCase):
         src = read_src("tests", "netns_e2e.py")
         self.assertIn('"metadata": "169.254.169.254"', src)
         self.assertIn('"metadata", "FAIL"', src)
+
+
+
+# ------------------------------------------------------------------ удаление: и настройки панели (решение владельца 2026-11-17)
+import test_movehost  # noqa: E402
+
+
+class UninstallPurgeTest(unittest.TestCase):
+    """awg-router uninstall спрашивает и о настройках панели (/opt/awg-router): прежде папка оставалась всегда, и новая
+    установка молча брала из неё старые настройки (например, доступ только через SSH-туннель). Пока в папке ключи
+    оставленного сервера (свой контейнер), вопроса нет."""
+
+    def setUp(self):
+        self.h = test_movehost.InstallerMoveTest("test_uninstall_needs_yes")       # его заглушки docker и systemctl
+        self.h.setUp()
+        self.addCleanup(self.h.doCleanups)
+        self.panel = tempfile.mkdtemp()                                           # папка панели — отдельно от заглушек
+        self.addCleanup(shutil.rmtree, self.panel, ignore_errors=True)
+        for f in ("docker-compose.yml", ".env", "data/state.json"):
+            os.makedirs(os.path.dirname(os.path.join(self.panel, f)), exist_ok=True)
+            with open(os.path.join(self.panel, f), "w") as fh:
+                fh.write("PANEL_ACCESS=ssh\n" if f == ".env" else "x")
+
+    def run_un(self, answers, ours=False, kind="amnezia"):
+        if kind:
+            self.h.container("amnezia-awg2", ours=False)
+            if ours:                                    # контейнер сервера смонтирован из папки этой панели
+                with open(os.path.join(self.h.state, "mounts-amnezia-awg2"), "w") as f:
+                    f.write(f"{self.panel}/awg-server/data\n")
+        body = (f'DIR="{self.panel}"; ENV_FILE="$DIR/.env"; SRV_DATA="$DIR/awg-server/data"\n'
+                'MODBLOCK=/nonexistent; MODLOAD=/nonexistent; dpkg() { return 1; }; ufw() { return 1; }\n'
+                + self.h.uninstall_block())
+        return self.h.run_sh(body, answers=answers)
+
+    def test_remove_settings(self):
+        out, log = self.run_un("yes,2")                 # сервер — контейнер приложения AmneziaVPN: о нём не спрашивают
+        self.assertIn("Panel settings in", out)
+        self.assertIn("Panel settings removed", out)
+        self.assertFalse(os.path.exists(self.panel))
+        self.assertIn("belongs to the AmneziaVPN app", out)
+
+    def test_keep_settings_by_default(self):
+        out, log = self.run_un("yes")                   # Enter — «оставить»
+        self.assertTrue(os.path.exists(os.path.join(self.panel, ".env")))
+        self.assertIn("a new install picks them up", out)
+
+    def test_own_server_kept_no_question(self):
+        out, log = self.run_un("yes,1", ours=True)      # свой сервер остаётся — его ключи в этой папке
+        self.assertNotIn("Panel settings in", out)
+        self.assertTrue(os.path.exists(os.path.join(self.panel, ".env")))
+        self.assertIn("do not delete", out)
+
+    def test_own_server_removed_then_settings(self):
+        out, log = self.run_un("yes,2,2", ours=True)
+        self.assertIn("docker rm -f amnezia-awg2", log)
+        self.assertFalse(os.path.exists(self.panel))
+        self.assertLess(out.index("what should happen to it"), out.index("Panel settings in"))
+
+    def test_not_a_panel_folder_stays(self):
+        os.unlink(os.path.join(self.panel, "docker-compose.yml"))
+        self.run_un("yes,2")
+        self.assertTrue(os.path.exists(os.path.join(self.panel, ".env")))       # без файла панели — не трогаем
 
 
 def read_src(*parts):

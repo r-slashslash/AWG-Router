@@ -6,7 +6,7 @@
 #   bash install.sh --reconfigure  — choose the server mode and access method again
 #   bash install.sh --info         — show the panel link and password
 #   bash install.sh --install-kernel — build and load the AmneziaWG kernel module (awg-router install-kernel)
-#   bash install.sh --uninstall    — remove the panel; asks whether to remove the AWG server too (awg-router uninstall)
+#   bash install.sh --uninstall    — remove the panel; asks whether to remove the AWG server and the panel settings too (awg-router uninstall)
 # Non-interactive:
 #   AWGR_MODE=container|host  AWGR_ACCESS=public|ssh  bash install.sh
 #   if AmneziaWG is missing:   AWGR_INSTALL=container|host  AWGR_AWG_PORT=4782 (empty — a random free 4-digit one)
@@ -496,6 +496,17 @@ uninstall() {
   elif [ -n "$amn" ]; then
     ok "Container $amn belongs to the AmneziaVPN app and stays (remove it there if needed)"
   fi
+  # The panel's folder: its settings (.env, data/) and, for the server in our own container, that server's keys
+  # (awg-server/data). A kept server of ours still needs it, so then it isn't even offered.
+  local purge=0
+  if [ "$srv" = container ] && [ "$drop" = 0 ]; then
+    :
+  else
+    choose "Panel settings in $DIR (clients, exits, rules, lists, access to the panel) — what should happen to them?" \
+           "Keep them: a new install picks them up as they are" \
+           "Remove them too: a new install starts from scratch"
+    [ "$CHOICE" = 2 ] && purge=1
+  fi
   cd "$DIR" || exit 1
   docker compose down >/dev/null 2>&1
   docker compose run --rm --no-deps awg-router python3 -m app.uninstall
@@ -517,11 +528,20 @@ uninstall() {
     echo "do not delete $DIR while the server is in use. Panel settings are in $DIR/data."
   elif [ "$srv" = host ] && [ "$drop" = 0 ]; then
     echo "Done. The AmneziaWG server keeps running on the host ($(dirname "$HOSTCONF")): a new install picks it"
-    echo "up again and asks whether to keep it. Panel settings are kept in $DIR — delete the folder to remove them too."
+    echo "up again and asks whether to keep it."
   else
-    echo "Done. Settings are kept in $DIR — delete the folder to remove them too."
+    echo "Done."
   fi
-  leftovers
+  if [ "$purge" = 0 ] && { [ "$srv" != container ] || [ "$drop" = 1 ]; }; then
+    echo "Panel settings are kept in $DIR: a new install picks them up (delete the folder to start from scratch)."
+  fi
+  leftovers                               # reads the panel's port from .env: before the folder goes
+  if [ "$purge" = 1 ]; then
+    # only our own folder: the one with the panel's compose file, never / or an empty path
+    if [ -n "$DIR" ] && [ "$DIR" != / ] && [ -f "$DIR/docker-compose.yml" ]; then
+      cd / && rm -rf "$DIR" && ok "Panel settings removed ($DIR): a new install starts from scratch"
+    fi
+  fi
 }
 # What the panel put on the host and uninstall leaves (the AWG server or other programs may still need it)
 leftovers() {
