@@ -1,0 +1,42 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.only_v6", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+ok   POST /api/upstreams
+FAIL PUT /api/upstreams/u4490c0 400 b'{"detail": {"$t": "err.fallback_loop", "p": {}}}'
+ok   PUT /api/upstreams/u4490c0
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/u0136d6
+ok   GET /api/state
+FAIL PUT /api/routing 400 b'{"detail": {"$t": "err.domains_need_socks", "p": {}}}'
+ok   PUT /api/routing
+ok   PUT /api/clients/JW5S3PD5jo5h1tlNitRauC6lT7nTrNyKpJPEeJZyhjw=
+ok   PUT /api/limits/JW5S3PD5jo5h1tlNitRauC6lT7nTrNyKpJPEeJZyhjw=
+ok   POST /api/shares/JW5S3PD5jo5h1tlNitRauC6lT7nTrNyKpJPEeJZyhjw=
+FAIL PUT /api/cps/JW5S3PD5jo5h1tlNitRauC6lT7nTrNyKpJPEeJZyhjw= 400 b'{"detail": {"$t": "err.bad_value", "p": {}}}'
+ok   PUT /api/cps/JW5S3PD5jo5h1tlNitRauC6lT7nTrNyKpJPEeJZyhjw=
+ok   PUT /api/clients/taNkmkIZUFZeUMPmcp3AVGjn44PcBtIBtM3QXyPGE+Q=
+ok   PUT /api/limits/taNkmkIZUFZeUMPmcp3AVGjn44PcBtIBtM3QXyPGE+Q=
+ok   PUT /api/cps/taNkmkIZUFZeUMPmcp3AVGjn44PcBtIBtM3QXyPGE+Q=
+ok   POST /api/shares/taNkmkIZUFZeUMPmcp3AVGjn44PcBtIBtM3QXyPGE+Q=
+ok   PUT /api/users/7lsrK4KNTsF39ydGVZDlzNWocbUDocG8trMMwIw9XdI=
+ok   PUT /api/settings
+ok   PUT /api/telegram
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+FAIL PUT /api/hosts/JW5S3PD5jo5h1tlNitRauC6lT7nTrNyKpJPEeJZyhjw= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   GET /api/backup
+ok   POST /api/backup/encrypted

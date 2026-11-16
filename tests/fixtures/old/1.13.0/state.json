@@ -1,0 +1,337 @@
+{
+  "version": 1,
+  "routing": {
+    "default": "up:u1df08a",
+    "rules": [
+      {
+        "id": "r_a72b32",
+        "lists": [
+          "la2d34c",
+          "l2c521c"
+        ],
+        "outbound": "up:u5eae6e",
+        "enabled": true,
+        "comment": "Proxy"
+      },
+      {
+        "id": "r_8afffa",
+        "lists": [
+          "l170c6c"
+        ],
+        "outbound": "up:u5eae6e",
+        "enabled": true,
+        "comment": "Proxy"
+      },
+      {
+        "id": "r_geo",
+        "lists": [
+          "ru",
+          "cn",
+          "ir"
+        ],
+        "outbound": "direct",
+        "enabled": true,
+        "comment": ""
+      },
+      {
+        "id": "r_0d7067",
+        "lists": [
+          "ru",
+          "cn"
+        ],
+        "outbound": "direct",
+        "enabled": true,
+        "comment": "geo"
+      },
+      {
+        "id": "r_c0f64d",
+        "lists": [
+          "l170c6c"
+        ],
+        "outbound": "up:u5eae6e",
+        "enabled": true,
+        "comment": "Proxy"
+      },
+      {
+        "id": "r_715673",
+        "lists": [
+          "l2c521c"
+        ],
+        "outbound": "up:u5eae6e",
+        "enabled": false,
+        "comment": "off"
+      },
+      {
+        "id": "r_ec3a36",
+        "lists": [
+          "l7cd27f",
+          "lcaee69",
+          "de"
+        ],
+        "outbound": "direct",
+        "enabled": true,
+        "comment": ""
+      }
+    ]
+  },
+  "upstreams": [
+    {
+      "id": "u1df08a",
+      "name": "NL",
+      "num": 1,
+      "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+      "enabled": true,
+      "fallback": "up:u5eae6e",
+      "created": 1794807830.8302803,
+      "quota": 53687091200,
+      "quota_action": "up:u5eae6e",
+      "quota_hit": null,
+      "quota_warned": null
+    },
+    {
+      "id": "u5eae6e",
+      "name": "Proxy",
+      "num": 2,
+      "config": "socks5://user:pass@198.51.100.9:1080",
+      "enabled": true,
+      "fallback": "up:u1df08a",
+      "created": 1794807830.8335812,
+      "quota": 2684354560,
+      "quota_action": "block",
+      "own_list": "la2d34c"
+    },
+    {
+      "id": "uc0b412",
+      "name": "Spare",
+      "num": 3,
+      "config": "socks5://198.51.100.10:1080",
+      "enabled": false,
+      "fallback": "direct",
+      "created": 1794807830.8430533,
+      "quota": null,
+      "quota_action": "notify"
+    }
+  ],
+  "lists": [
+    {
+      "id": "ru",
+      "name": "",
+      "kind": "country",
+      "source": "ru",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+        }
+      },
+      "checked": 1794807830.2698135
+    },
+    {
+      "id": "cn",
+      "name": "",
+      "kind": "country",
+      "source": "cn",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+        }
+      },
+      "checked": 1794807830.9299555
+    },
+    {
+      "id": "ir",
+      "name": "",
+      "kind": "country",
+      "source": "ir",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+        }
+      },
+      "checked": 1794807831.659769
+    },
+    {
+      "id": "l170c6c",
+      "kind": "manual",
+      "source": "203.0.113.0/24\n198.51.100.0/25 # склад\n192.0.2.7\n2001:db8::/32",
+      "name": "Office",
+      "error": null,
+      "count": 3,
+      "addresses": 385,
+      "skipped_v6": 1,
+      "updated": 1794807828.9115891,
+      "checked": 1794807828.9115894
+    },
+    {
+      "id": "l2c521c",
+      "kind": "domains",
+      "source": "example.com\n*.example.org\n# comment\nhttps://lists.example/d.txt",
+      "name": "Sites",
+      "error": null,
+      "count": 2,
+      "addresses": null,
+      "skipped_v6": 0,
+      "updated": 1794807831.8239486,
+      "checked": 1794807831.8239489
+    },
+    {
+      "id": "l7cd27f",
+      "kind": "asn",
+      "source": "AS64496 AS64511",
+      "name": "AS64496 AS64511",
+      "error": {
+        "$t": "list.asn_failed",
+        "p": {
+          "asn": 64496,
+          "detail": "ipverse: <urlopen error Tunnel connection failed: 403 Forbidden>; ripestat: <urlopen error Tunnel connection failed: 403 Forbidden>"
+        }
+      },
+      "checked": 1794807832.40862
+    },
+    {
+      "id": "lcaee69",
+      "kind": "url",
+      "source": "https://lists.example/nets.txt",
+      "name": "Feed",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "<urlopen error Tunnel connection failed: 403 Forbidden>"
+        }
+      },
+      "checked": 1794807829.960578
+    },
+    {
+      "id": "de",
+      "kind": "country",
+      "source": "de",
+      "name": "Germany",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+        }
+      },
+      "checked": 1794807830.8275447
+    },
+    {
+      "id": "la2d34c",
+      "kind": "domains",
+      "source": "a.example\nb.example",
+      "name": "Proxy",
+      "error": null,
+      "count": 2,
+      "addresses": null,
+      "skipped_v6": 0,
+      "updated": 1794807830.8345797,
+      "checked": 1794807830.83458
+    }
+  ],
+  "clients": {
+    "f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=": {
+      "outbound": "up:u5eae6e",
+      "rules_mode": "custom",
+      "rules": [
+        {
+          "id": "r_b3b887",
+          "lists": [
+            "l170c6c"
+          ],
+          "outbound": "direct",
+          "enabled": true,
+          "comment": "home"
+        }
+      ],
+      "note": "phone",
+      "name": "alice"
+    },
+    "zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=": {
+      "outbound": "block",
+      "rules_mode": "inherit",
+      "rules": [],
+      "note": "",
+      "name": "bob"
+    }
+  },
+  "keys": {
+    "f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=": "JKTnGIreir0KC7gxMId5jpm/1rHqokBQE7+oq2AuTBs=",
+    "zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=": "1mFLFRyIH9ghzhrsH+p7pEdGXHYnI4UVIzzWr42gbsk=",
+    "qFiZDepY6f1syqs0/8cXLn+ecz/iANXmtIttOuKHCv0=": "tvHz8jQuNvzQhYClAQhN4emAooFEGmPShHiwpKus/T8="
+  },
+  "limits": {
+    "f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=": {
+      "quota_done": null,
+      "quota_warned": null,
+      "expires": 1900000000,
+      "quota": 21474836480,
+      "period": "month"
+    },
+    "zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=": {
+      "quota_done": null,
+      "quota_warned": null,
+      "expires": 1800000000,
+      "quota": 1610612736,
+      "period": "total"
+    }
+  },
+  "shares": {
+    "CqkCpZPogerMeiCdddK2SqLu": {
+      "pk": "f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=",
+      "created": 1794807830.8609495
+    },
+    "hlGYVemD9D4V29ixBn5Ugv-H": {
+      "pk": "zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=",
+      "created": 1794807830.8720248
+    }
+  },
+  "cps": {
+    "f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=": {
+      "preset": "amnezia"
+    },
+    "zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=": {
+      "preset": "custom",
+      "values": {
+        "I1": "<b 0x0102030405060708>",
+        "I2": "",
+        "I3": "",
+        "I4": "",
+        "I5": ""
+      }
+    }
+  },
+  "settings": {
+    "list_update_hours": 12,
+    "on_stop": "restore",
+    "telegram": {
+      "enabled": true,
+      "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "chat_id": "-1001234567",
+      "lang": "ru",
+      "events": {
+        "exit": true,
+        "server": true,
+        "clients": true,
+        "login": false,
+        "tls": true,
+        "update": true
+      },
+      "via": "up:u1df08a",
+      "control": true,
+      "backup": "weekly",
+      "backup_pw": "tg-backup-pass",
+      "backup_last": null,
+      "backup_error": null
+    },
+    "client_dns": [
+      "1.1.1.1",
+      "9.9.9.9"
+    ],
+    "client_mtu": 1380,
+    "client_keepalive": "25",
+    "public_host": "vpn.example.com",
+    "client_host": "198.51.100.21"
+  },
+  "await_first": {}
+}

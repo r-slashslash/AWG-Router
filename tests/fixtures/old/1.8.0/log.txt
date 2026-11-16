@@ -1,0 +1,40 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.only_v6", "p": {}}}'
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.list_kind", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/ua463ad
+ok   PUT /api/upstreams/ua463ad
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   GET /api/state
+ok   PUT /api/routing
+ok   PUT /api/clients/dZNgwDAjPX8zlz20/x/VFvNA4AjoCQkTVqQfzumfkOo=
+ok   PUT /api/limits/dZNgwDAjPX8zlz20/x/VFvNA4AjoCQkTVqQfzumfkOo=
+ok   POST /api/shares/dZNgwDAjPX8zlz20/x/VFvNA4AjoCQkTVqQfzumfkOo=
+ok   PUT /api/cps/dZNgwDAjPX8zlz20/x/VFvNA4AjoCQkTVqQfzumfkOo=
+ok   PUT /api/clients/sZ5gaiLAir/JjXocBAJsZuPscl5/vy/WdPrMt4c4BSs=
+ok   PUT /api/limits/sZ5gaiLAir/JjXocBAJsZuPscl5/vy/WdPrMt4c4BSs=
+ok   PUT /api/cps/sZ5gaiLAir/JjXocBAJsZuPscl5/vy/WdPrMt4c4BSs=
+ok   POST /api/shares/sZ5gaiLAir/JjXocBAJsZuPscl5/vy/WdPrMt4c4BSs=
+ok   PUT /api/users/Nee8j9s6IKD4VCZY665t7kK73gDb/0pdJ2feRlpHNtw=
+ok   PUT /api/settings
+ok   PUT /api/telegram
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+FAIL PUT /api/hosts/dZNgwDAjPX8zlz20/x/VFvNA4AjoCQkTVqQfzumfkOo= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   GET /api/backup
+FAIL POST /api/backup/encrypted 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'

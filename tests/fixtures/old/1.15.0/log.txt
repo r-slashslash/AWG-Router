@@ -1,0 +1,42 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.only_v6", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/u397e19
+ok   PUT /api/upstreams/u397e19
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/u652713
+ok   GET /api/state
+FAIL PUT /api/routing 400 b'{"detail": {"$t": "err.domains_need_socks", "p": {}}}'
+ok   PUT /api/routing
+ok   PUT /api/clients/Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg=
+ok   PUT /api/limits/Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg=
+ok   POST /api/shares/Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg=
+FAIL PUT /api/cps/Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg= 400 b'{"detail": {"$t": "err.bad_value", "p": {}}}'
+ok   PUT /api/cps/Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg=
+ok   PUT /api/clients/yRwhB5y1QoSUzZgbqfugctGpXJ0f/6ZjNXO870wIshQ=
+ok   PUT /api/limits/yRwhB5y1QoSUzZgbqfugctGpXJ0f/6ZjNXO870wIshQ=
+ok   PUT /api/cps/yRwhB5y1QoSUzZgbqfugctGpXJ0f/6ZjNXO870wIshQ=
+ok   POST /api/shares/yRwhB5y1QoSUzZgbqfugctGpXJ0f/6ZjNXO870wIshQ=
+ok   PUT /api/users/uPHRFScwU8EUBRnm++DUvbOHK1pDnov/nO5g3gv47qI=
+ok   PUT /api/settings
+ok   PUT /api/telegram
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+FAIL PUT /api/hosts/Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   GET /api/backup
+ok   POST /api/backup/encrypted

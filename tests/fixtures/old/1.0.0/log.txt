@@ -1,0 +1,41 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.no_cidr", "p": {}}}'
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.list_kind", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/uf54d79
+ok   PUT /api/upstreams/uf54d79
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   GET /api/state
+ok   PUT /api/routing
+ok   PUT /api/clients/GxnSTvuX/e4iJrQVOpx/rwtujYirvQeTpkMrtP5rEF4=
+FAIL PUT /api/limits/GxnSTvuX/e4iJrQVOpx/rwtujYirvQeTpkMrtP5rEF4= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL POST /api/shares/GxnSTvuX/e4iJrQVOpx/rwtujYirvQeTpkMrtP5rEF4= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL PUT /api/cps/GxnSTvuX/e4iJrQVOpx/rwtujYirvQeTpkMrtP5rEF4= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL PUT /api/cps/GxnSTvuX/e4iJrQVOpx/rwtujYirvQeTpkMrtP5rEF4= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   PUT /api/clients/8nWxo068ehfjJZror4jqn56sxfEaniIHLxccAOJe5K0=
+FAIL PUT /api/limits/8nWxo068ehfjJZror4jqn56sxfEaniIHLxccAOJe5K0= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL PUT /api/cps/8nWxo068ehfjJZror4jqn56sxfEaniIHLxccAOJe5K0= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL POST /api/shares/8nWxo068ehfjJZror4jqn56sxfEaniIHLxccAOJe5K0= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   PUT /api/users/Bl11py3N89Re0mp5PRp9ljbN1cA6V2cxJqS3gYjQTtg=
+ok   PUT /api/settings
+FAIL PUT /api/telegram 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+FAIL PUT /api/hosts/GxnSTvuX/e4iJrQVOpx/rwtujYirvQeTpkMrtP5rEF4= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL GET /api/backup 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL POST /api/backup/encrypted 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'

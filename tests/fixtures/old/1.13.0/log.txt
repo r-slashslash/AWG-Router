@@ -1,0 +1,41 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.only_v6", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/u1df08a
+ok   PUT /api/upstreams/u1df08a
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/uc0b412
+ok   GET /api/state
+FAIL PUT /api/routing 400 b'{"detail": {"$t": "err.domains_need_socks", "p": {}}}'
+ok   PUT /api/routing
+ok   PUT /api/clients/f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=
+ok   PUT /api/limits/f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=
+ok   POST /api/shares/f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=
+ok   PUT /api/cps/f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo=
+ok   PUT /api/clients/zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=
+ok   PUT /api/limits/zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=
+ok   PUT /api/cps/zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=
+ok   POST /api/shares/zbq+/95sRR++t+ClPq+q+7AEIcTi1akC45q6kx2N0Mc=
+ok   PUT /api/users/qFiZDepY6f1syqs0/8cXLn+ecz/iANXmtIttOuKHCv0=
+ok   PUT /api/settings
+ok   PUT /api/telegram
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+FAIL PUT /api/hosts/f8VkB7eKQuFkQkD4AFTctrO/2cIez7+5qid9YVJSYfo= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   GET /api/backup
+ok   POST /api/backup/encrypted

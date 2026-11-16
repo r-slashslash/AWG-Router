@@ -1,0 +1,1016 @@
+{
+ "backup": {
+  "clean": {
+   "chost": {},
+   "clients": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+     "name": "alice",
+     "note": "phone",
+     "outbound": "up:u193498",
+     "rules": [
+      {
+       "comment": "home",
+       "enabled": true,
+       "id": "r_76c31d",
+       "lists": [
+        "lf56cc0"
+       ],
+       "outbound": "direct"
+      }
+     ],
+     "rules_mode": "custom"
+    },
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+     "name": "bob",
+     "note": "",
+     "outbound": "block",
+     "rules": [],
+     "rules_mode": "inherit"
+    }
+   },
+   "cps": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+     "preset": "icloud"
+    },
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+     "preset": "custom",
+     "values": {
+      "I1": "<b 0x0102030405060708>",
+      "I2": "",
+      "I3": "",
+      "I4": "",
+      "I5": ""
+     }
+    }
+   },
+   "keys": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": "48FxVRMywYyMHmFvykaCT6JZBES/tXaIdvVTMWZn5zM=",
+    "iOZZCDCkDVn8CjKeFVUZMvqXDlGrM722AXGKYyJ/zxU=": "zN7nmsVGIj4wlGDw52oKYxPSUNk6PL012V09AUib7vo=",
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": "l/4FtYDQWiZLsYDnhmOJbdbb/dNdAtDIWjkUvjybIdA="
+   },
+   "limits": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1900000000,
+     "period": "month",
+     "quota": 21474836480,
+     "quota_done": null,
+     "quota_warned": null
+    },
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1800000000,
+     "period": "total",
+     "quota": 1610612736,
+     "quota_done": null,
+     "quota_warned": null
+    }
+   },
+   "lists": [
+    {
+     "id": "ru",
+     "kind": "country",
+     "name": "",
+     "source": "ru"
+    },
+    {
+     "id": "cn",
+     "kind": "country",
+     "name": "",
+     "source": "cn"
+    },
+    {
+     "id": "ir",
+     "kind": "country",
+     "name": "",
+     "source": "ir"
+    },
+    {
+     "id": "lf56cc0",
+     "kind": "manual",
+     "name": "Office",
+     "source": "203.0.113.0/24\n198.51.100.0/25 # склад\n192.0.2.7\n2001:db8::/32"
+    },
+    {
+     "id": "l3d6c19",
+     "kind": "asn",
+     "name": "AS64496 AS64511",
+     "source": "AS64496 AS64511"
+    },
+    {
+     "id": "l3bfbb4",
+     "kind": "url",
+     "name": "Feed",
+     "source": "https://lists.example/nets.txt"
+    },
+    {
+     "id": "de",
+     "kind": "country",
+     "name": "Germany",
+     "source": "de"
+    }
+   ],
+   "routing": {
+    "default": "up:u13620b",
+    "rules": [
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_geo",
+      "lists": [
+       "ru",
+       "cn",
+       "ir"
+      ],
+      "outbound": "direct"
+     },
+     {
+      "comment": "geo",
+      "enabled": true,
+      "id": "r_359dec",
+      "lists": [
+       "ru",
+       "cn"
+      ],
+      "outbound": "direct"
+     },
+     {
+      "comment": "Proxy",
+      "enabled": true,
+      "id": "r_3a4728",
+      "lists": [
+       "lf56cc0"
+      ],
+      "outbound": "up:u193498"
+     },
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_7af55d",
+      "lists": [
+       "l3d6c19",
+       "l3bfbb4",
+       "de"
+      ],
+      "outbound": "direct"
+     }
+    ]
+   },
+   "settings": {
+    "client_dns": [
+     "1.1.1.1",
+     "9.9.9.9"
+    ],
+    "client_keepalive": "25",
+    "client_mtu": 1380,
+    "list_update_hours": 12,
+    "on_stop": "restore",
+    "public_host": "vpn.example.com",
+    "telegram": {
+     "backup": "weekly",
+     "backup_error": null,
+     "backup_last": null,
+     "backup_pw": "tg-backup-pass",
+     "chat_id": "-1001234567",
+     "control": true,
+     "enabled": true,
+     "events": {
+      "clients": true,
+      "exit": true,
+      "login": false,
+      "server": true,
+      "system": true,
+      "tls": true,
+      "update": true
+     },
+     "lang": "ru",
+     "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "via": "up:u13620b"
+    }
+   },
+   "shares": {
+    "AjfQdlFZdLn-_dBesvewO4eH": {
+     "created": 1794807842.8428614,
+     "pk": "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA="
+    },
+    "O6Sv3kLzFzXTLzB_ZDt_7N_B": {
+     "created": 1794807842.8537612,
+     "pk": "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8="
+    }
+   },
+   "upstreams": [
+    {
+     "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+     "created": 1794807842.8195882,
+     "enabled": true,
+     "fallback": "direct",
+     "id": "u13620b",
+     "name": "NL",
+     "num": 1,
+     "quota": 53687091200,
+     "quota_action": "up:u193498",
+     "quota_hit": null,
+     "quota_warned": null
+    },
+    {
+     "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.2:51820\n",
+     "created": 1794807842.824095,
+     "enabled": true,
+     "fallback": "up:u13620b",
+     "id": "u193498",
+     "name": "DE",
+     "num": 2,
+     "quota": 2684354560,
+     "quota_action": "block",
+     "quota_hit": null,
+     "quota_warned": null
+    }
+   ],
+   "version": 1
+  },
+  "restored": {
+   "chost": {},
+   "clients": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+     "name": "alice",
+     "note": "phone",
+     "outbound": "up:u193498",
+     "rules": [
+      {
+       "comment": "home",
+       "enabled": true,
+       "id": "r_76c31d",
+       "lists": [
+        "lf56cc0"
+       ],
+       "outbound": "direct"
+      }
+     ],
+     "rules_mode": "custom"
+    },
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+     "name": "bob",
+     "note": "",
+     "outbound": "block",
+     "rules": [],
+     "rules_mode": "inherit"
+    }
+   },
+   "cps": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+     "preset": "icloud"
+    },
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+     "preset": "custom",
+     "values": {
+      "I1": "<b 0x0102030405060708>",
+      "I2": "",
+      "I3": "",
+      "I4": "",
+      "I5": ""
+     }
+    }
+   },
+   "keys": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": "48FxVRMywYyMHmFvykaCT6JZBES/tXaIdvVTMWZn5zM=",
+    "iOZZCDCkDVn8CjKeFVUZMvqXDlGrM722AXGKYyJ/zxU=": "zN7nmsVGIj4wlGDw52oKYxPSUNk6PL012V09AUib7vo=",
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": "l/4FtYDQWiZLsYDnhmOJbdbb/dNdAtDIWjkUvjybIdA="
+   },
+   "limits": {
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1900000000,
+     "period": "month",
+     "quota": 21474836480,
+     "quota_done": null,
+     "quota_warned": null
+    },
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1800000000,
+     "period": "total",
+     "quota": 1610612736,
+     "quota_done": null,
+     "quota_warned": null
+    }
+   },
+   "lists": [
+    {
+     "id": "ru",
+     "kind": "country",
+     "name": "",
+     "source": "ru"
+    },
+    {
+     "id": "cn",
+     "kind": "country",
+     "name": "",
+     "source": "cn"
+    },
+    {
+     "id": "ir",
+     "kind": "country",
+     "name": "",
+     "source": "ir"
+    },
+    {
+     "id": "lf56cc0",
+     "kind": "manual",
+     "name": "Office",
+     "source": "203.0.113.0/24\n198.51.100.0/25 # склад\n192.0.2.7\n2001:db8::/32"
+    },
+    {
+     "id": "l3d6c19",
+     "kind": "asn",
+     "name": "AS64496 AS64511",
+     "source": "AS64496 AS64511"
+    },
+    {
+     "id": "l3bfbb4",
+     "kind": "url",
+     "name": "Feed",
+     "source": "https://lists.example/nets.txt"
+    },
+    {
+     "id": "de",
+     "kind": "country",
+     "name": "Germany",
+     "source": "de"
+    }
+   ],
+   "routing": {
+    "default": "up:u13620b",
+    "rules": [
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_geo",
+      "lists": [
+       "ru",
+       "cn",
+       "ir"
+      ],
+      "outbound": "direct"
+     },
+     {
+      "comment": "geo",
+      "enabled": true,
+      "id": "r_359dec",
+      "lists": [
+       "ru",
+       "cn"
+      ],
+      "outbound": "direct"
+     },
+     {
+      "comment": "Proxy",
+      "enabled": true,
+      "id": "r_3a4728",
+      "lists": [
+       "lf56cc0"
+      ],
+      "outbound": "up:u193498"
+     },
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_7af55d",
+      "lists": [
+       "l3d6c19",
+       "l3bfbb4",
+       "de"
+      ],
+      "outbound": "direct"
+     }
+    ]
+   },
+   "settings": {
+    "client_dns": [
+     "1.1.1.1",
+     "9.9.9.9"
+    ],
+    "client_keepalive": "25",
+    "client_mtu": 1380,
+    "list_update_hours": 12,
+    "on_stop": "restore",
+    "telegram": {
+     "backup": "weekly",
+     "backup_error": null,
+     "backup_last": null,
+     "backup_pw": "tg-backup-pass",
+     "chat_id": "-1001234567",
+     "control": true,
+     "enabled": true,
+     "events": {
+      "clients": true,
+      "exit": true,
+      "login": false,
+      "server": true,
+      "system": true,
+      "tls": true,
+      "update": true
+     },
+     "lang": "ru",
+     "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "via": "up:u13620b"
+    }
+   },
+   "shares": {
+    "AjfQdlFZdLn-_dBesvewO4eH": {
+     "created": 1794807842.8428614,
+     "pk": "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA="
+    },
+    "O6Sv3kLzFzXTLzB_ZDt_7N_B": {
+     "created": 1794807842.8537612,
+     "pk": "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8="
+    }
+   },
+   "upstreams": [
+    {
+     "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+     "created": 1794807842.8195882,
+     "enabled": true,
+     "fallback": "direct",
+     "id": "u13620b",
+     "name": "NL",
+     "num": 1,
+     "quota": 53687091200,
+     "quota_action": "up:u193498",
+     "quota_hit": null,
+     "quota_warned": null
+    },
+    {
+     "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.2:51820\n",
+     "created": 1794807842.824095,
+     "enabled": true,
+     "fallback": "up:u13620b",
+     "id": "u193498",
+     "name": "DE",
+     "num": 2,
+     "quota": 2684354560,
+     "quota_action": "block",
+     "quota_hit": null,
+     "quota_warned": null
+    }
+   ],
+   "version": 1
+  },
+  "server": {
+   "conf": "[Interface]\nPrivateKey = Fi9j/EVO3KVgAkElCQHzI1RsKJe00uPXLWdniLSwFjw=\nAddress = 10.8.1.0/24\nListenPort = 47823\nJc = 6\nJmin = 10\nJmax = 50\nS1 = 12\nS2 = 12\nS3 = 12\nS4 = 12\nH1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\nHeaderProtectionKey = zVySDNx84HHvzrYd4tqEp1qTcZM6JFJdI2vLdwIy6J0=\nContentPaddingAddition = 10-100\nRekeyAfterTime = 100-120\nRekeyTimeout = 3-7\nRejectAfterTime = 150-180\nKeepaliveTimeout = 5-15\nMaxHandshakeAttempts = 15-20\nRandomTrailers = on\nDisableCookies = on\n# I1 = <r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>\n\n[Peer]\nPublicKey = 8eJek7+nIHGe+NYUG4+2Sp1VX6kh1SARkFR1mGI9s10=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.1/32\n\n[Peer]\nPublicKey = hpKDWjrFr979Sc0G/ZoBtt43fpjPTj+RQxmvpJ4zi3g=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.2/32\n\n[Peer]\nPublicKey = NVhtWACPv2DKMwsh5BmbFDad7zjN4+noMMJewFZ4iF4=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.3/32\n\n[Peer]\nPublicKey = ACc5A4jCo/8tzO5NRFw+OKsD0U2nhsgc0H7uVRVqMo4=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.4/32\n\n[Peer]\nPublicKey = 6FM6/ndJRhzUgFuciDDZdHdFKs7w7MFYFAT6VI7rFQ4=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.5/32\n\n[Peer]\nPublicKey = I1Ok2PBMiZRKhKUP9vZCvBSbo7w8i5hj10IAl/jApns=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.6/32\n\n[Peer]\nPublicKey = T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.7/32\n\n[Peer]\nPublicKey = ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=\nPresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\nAllowedIPs = 10.8.1.8/32\n\n#awgr:disabled\n# [Peer]\n# PublicKey = iOZZCDCkDVn8CjKeFVUZMvqXDlGrM722AXGKYyJ/zxU=\n# PresharedKey = PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\n# AllowedIPs = 10.8.1.9/32\n",
+   "files": {
+    "clientsTable": "[\n    {\n        \"clientId\": \"8eJek7+nIHGe+NYUG4+2Sp1VX6kh1SARkFR1mGI9s10=\",\n        \"userData\": {\n            \"clientName\": \"Anna iPhone\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"hpKDWjrFr979Sc0G/ZoBtt43fpjPTj+RQxmvpJ4zi3g=\",\n        \"userData\": {\n            \"clientName\": \"Anna MacBook\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"NVhtWACPv2DKMwsh5BmbFDad7zjN4+noMMJewFZ4iF4=\",\n        \"userData\": {\n            \"clientName\": \"Dad\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"ACc5A4jCo/8tzO5NRFw+OKsD0U2nhsgc0H7uVRVqMo4=\",\n        \"userData\": {\n            \"clientName\": \"Office router\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"6FM6/ndJRhzUgFuciDDZdHdFKs7w7MFYFAT6VI7rFQ4=\",\n        \"userData\": {\n            \"clientName\": \"Living room TV\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"I1Ok2PBMiZRKhKUP9vZCvBSbo7w8i5hj10IAl/jApns=\",\n        \"userData\": {\n            \"clientName\": \"Guest\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=\",\n        \"userData\": {\n            \"clientName\": \"alice\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=\",\n        \"userData\": {\n            \"clientName\": \"bob\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    },\n    {\n        \"clientId\": \"iOZZCDCkDVn8CjKeFVUZMvqXDlGrM722AXGKYyJ/zxU=\",\n        \"userData\": {\n            \"clientName\": \"carol\",\n            \"creationDate\": \"Mon Nov 16 13:43:59 2026\"\n        }\n    }\n]",
+    "wireguard_psk.key": "PaZEcKe6TSClEZVxrAPWkPMdE8vzmfGz8LDY7RWw+CQ=\n"
+   }
+  },
+  "traffic": {
+   "_v": 2,
+   "clients": {
+    "6FM6/ndJRhzUgFuciDDZdHdFKs7w7MFYFAT6VI7rFQ4=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        300000,
+        2250000
+       ],
+       "u13620b": [
+        120000,
+        900000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       600000,
+       4500000
+      ]
+     },
+     "total": [
+      600000,
+      4500000
+     ]
+    },
+    "8eJek7+nIHGe+NYUG4+2Sp1VX6kh1SARkFR1mGI9s10=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        60000,
+        450000
+       ],
+       "u13620b": [
+        24000,
+        180000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       120000,
+       900000
+      ]
+     },
+     "total": [
+      120000,
+      900000
+     ]
+    },
+    "ACc5A4jCo/8tzO5NRFw+OKsD0U2nhsgc0H7uVRVqMo4=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        240000,
+        1800000
+       ],
+       "u13620b": [
+        96000,
+        720000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       480000,
+       3600000
+      ]
+     },
+     "total": [
+      480000,
+      3600000
+     ]
+    },
+    "I1Ok2PBMiZRKhKUP9vZCvBSbo7w8i5hj10IAl/jApns=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        360000,
+        2700000
+       ],
+       "u13620b": [
+        144000,
+        1080000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       720000,
+       5400000
+      ]
+     },
+     "total": [
+      720000,
+      5400000
+     ]
+    },
+    "NVhtWACPv2DKMwsh5BmbFDad7zjN4+noMMJewFZ4iF4=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        180000,
+        1350000
+       ],
+       "u13620b": [
+        72000,
+        540000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       360000,
+       2700000
+      ]
+     },
+     "total": [
+      360000,
+      2700000
+     ]
+    },
+    "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        420000,
+        3150000
+       ],
+       "u13620b": [
+        168000,
+        1260000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       840000,
+       6300000
+      ]
+     },
+     "total": [
+      840000,
+      6300000
+     ]
+    },
+    "hpKDWjrFr979Sc0G/ZoBtt43fpjPTj+RQxmvpJ4zi3g=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        120000,
+        900000
+       ],
+       "u13620b": [
+        48000,
+        360000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       240000,
+       1800000
+      ]
+     },
+     "total": [
+      240000,
+      1800000
+     ]
+    },
+    "iOZZCDCkDVn8CjKeFVUZMvqXDlGrM722AXGKYyJ/zxU=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        540000,
+        4050000
+       ],
+       "u13620b": [
+        216000,
+        1620000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       1080000,
+       8100000
+      ]
+     },
+     "total": [
+      1080000,
+      8100000
+     ]
+    },
+    "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        480000,
+        3600000
+       ],
+       "u13620b": [
+        192000,
+        1440000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       960000,
+       7200000
+      ]
+     },
+     "total": [
+      960000,
+      7200000
+     ]
+    }
+   },
+   "outs": {
+    "direct": {
+     "months": {
+      "2026-11": [
+       2700000,
+       20250000
+      ]
+     },
+     "total": [
+      2700000,
+      20250000
+     ]
+    },
+    "u13620b": {
+     "months": {
+      "2026-11": [
+       1080000,
+       8100000
+      ]
+     },
+     "total": [
+      1080000,
+      8100000
+     ]
+    }
+   },
+   "server": {
+    "months": {
+     "2026-11": [
+      5400000,
+      40500000
+     ]
+    },
+    "total": [
+     5400000,
+     40500000
+    ]
+   }
+  }
+ },
+ "state": {
+  "await_first": {},
+  "chost": {},
+  "clients": {
+   "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+    "name": "alice",
+    "note": "phone",
+    "outbound": "up:u193498",
+    "rules": [
+     {
+      "comment": "home",
+      "enabled": true,
+      "id": "r_76c31d",
+      "lists": [
+       "lf56cc0"
+      ],
+      "outbound": "direct"
+     }
+    ],
+    "rules_mode": "custom"
+   },
+   "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+    "name": "bob",
+    "note": "",
+    "outbound": "block",
+    "rules": [],
+    "rules_mode": "inherit"
+   }
+  },
+  "cps": {
+   "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+    "preset": "icloud"
+   },
+   "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+    "preset": "custom",
+    "values": {
+     "I1": "<b 0x0102030405060708>",
+     "I2": "",
+     "I3": "",
+     "I4": "",
+     "I5": ""
+    }
+   }
+  },
+  "keys": {
+   "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": "48FxVRMywYyMHmFvykaCT6JZBES/tXaIdvVTMWZn5zM=",
+   "iOZZCDCkDVn8CjKeFVUZMvqXDlGrM722AXGKYyJ/zxU=": "zN7nmsVGIj4wlGDw52oKYxPSUNk6PL012V09AUib7vo=",
+   "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": "l/4FtYDQWiZLsYDnhmOJbdbb/dNdAtDIWjkUvjybIdA="
+  },
+  "limits": {
+   "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA=": {
+    "expires": 1900000000,
+    "period": "month",
+    "quota": 21474836480,
+    "quota_done": null,
+    "quota_warned": null
+   },
+   "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8=": {
+    "expires": 1800000000,
+    "period": "total",
+    "quota": 1610612736,
+    "quota_done": null,
+    "quota_warned": null
+   }
+  },
+  "lists": [
+   {
+    "checked": 1794807842.5732043,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+     }
+    },
+    "id": "ru",
+    "kind": "country",
+    "name": "",
+    "source": "ru"
+   },
+   {
+    "checked": 1794807843.3528225,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+     }
+    },
+    "id": "cn",
+    "kind": "country",
+    "name": "",
+    "source": "cn"
+   },
+   {
+    "checked": 1794807844.106968,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+     }
+    },
+    "id": "ir",
+    "kind": "country",
+    "name": "",
+    "source": "ir"
+   },
+   {
+    "addresses": 385,
+    "checked": 1794807841.3409762,
+    "count": 3,
+    "error": null,
+    "id": "lf56cc0",
+    "kind": "manual",
+    "name": "Office",
+    "skipped_v6": 1,
+    "source": "203.0.113.0/24\n198.51.100.0/25 # склад\n192.0.2.7\n2001:db8::/32",
+    "updated": 1794807841.3409755
+   },
+   {
+    "checked": 1794807841.758794,
+    "error": {
+     "$t": "list.asn_failed",
+     "p": {
+      "asn": 64496,
+      "detail": "ipverse: <urlopen error Tunnel connection failed: 403 Forbidden>; ripestat: <urlopen error Tunnel connection failed: 403 Forbidden>"
+     }
+    },
+    "id": "l3d6c19",
+    "kind": "asn",
+    "name": "AS64496 AS64511",
+    "source": "AS64496 AS64511"
+   },
+   {
+    "checked": 1794807844.407141,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "<urlopen error Tunnel connection failed: 403 Forbidden>"
+     }
+    },
+    "id": "l3bfbb4",
+    "kind": "url",
+    "name": "Feed",
+    "source": "https://lists.example/nets.txt"
+   },
+   {
+    "checked": 1794807842.8163388,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden>"
+     }
+    },
+    "id": "de",
+    "kind": "country",
+    "name": "Germany",
+    "source": "de"
+   }
+  ],
+  "routing": {
+   "default": "up:u13620b",
+   "rules": [
+    {
+     "comment": "",
+     "enabled": true,
+     "id": "r_geo",
+     "lists": [
+      "ru",
+      "cn",
+      "ir"
+     ],
+     "outbound": "direct"
+    },
+    {
+     "comment": "geo",
+     "enabled": true,
+     "id": "r_359dec",
+     "lists": [
+      "ru",
+      "cn"
+     ],
+     "outbound": "direct"
+    },
+    {
+     "comment": "Proxy",
+     "enabled": true,
+     "id": "r_3a4728",
+     "lists": [
+      "lf56cc0"
+     ],
+     "outbound": "up:u193498"
+    },
+    {
+     "comment": "",
+     "enabled": true,
+     "id": "r_7af55d",
+     "lists": [
+      "l3d6c19",
+      "l3bfbb4",
+      "de"
+     ],
+     "outbound": "direct"
+    }
+   ]
+  },
+  "settings": {
+   "client_dns": [
+    "1.1.1.1",
+    "9.9.9.9"
+   ],
+   "client_host": "198.51.100.21",
+   "client_keepalive": "25",
+   "client_mtu": 1380,
+   "list_update_hours": 12,
+   "on_stop": "restore",
+   "public_host": "vpn.example.com",
+   "telegram": {
+    "backup": "weekly",
+    "backup_error": null,
+    "backup_last": null,
+    "backup_pw": "tg-backup-pass",
+    "chat_id": "-1001234567",
+    "control": true,
+    "enabled": true,
+    "events": {
+     "clients": true,
+     "exit": true,
+     "login": false,
+     "server": true,
+     "tls": true,
+     "update": true
+    },
+    "lang": "ru",
+    "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "via": "up:u13620b"
+   }
+  },
+  "shares": {
+   "AjfQdlFZdLn-_dBesvewO4eH": {
+    "created": 1794807842.8428614,
+    "pk": "T2W2EtJbYXYO0h4H3eZtB/aq9fuMxybh0cq9xGaFiOA="
+   },
+   "O6Sv3kLzFzXTLzB_ZDt_7N_B": {
+    "created": 1794807842.8537612,
+    "pk": "ngF5yasg27oNC5d6bEFap4VnJ6RIRsBLWiuZNZBRul8="
+   }
+  },
+  "upstreams": [
+   {
+    "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+    "created": 1794807842.8195882,
+    "enabled": true,
+    "fallback": "up:u193498",
+    "id": "u13620b",
+    "name": "NL",
+    "num": 1,
+    "quota": 53687091200,
+    "quota_action": "up:u193498",
+    "quota_hit": null,
+    "quota_warned": null
+   },
+   {
+    "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.2:51820\n",
+    "created": 1794807842.824095,
+    "enabled": true,
+    "fallback": "up:u13620b",
+    "id": "u193498",
+    "name": "DE",
+    "num": 2,
+    "quota": 2684354560,
+    "quota_action": "block"
+   }
+  ],
+  "version": 1
+ }
+}

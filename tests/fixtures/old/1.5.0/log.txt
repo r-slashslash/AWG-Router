@@ -1,0 +1,40 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.no_cidr", "p": {}}}'
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.list_kind", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/u188328
+ok   PUT /api/upstreams/u188328
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   GET /api/state
+ok   PUT /api/routing
+ok   PUT /api/clients/sl/jMEKXCzIguNxrXend/lHaZ8J/8DoCicVOoMZ6/MI=
+ok   PUT /api/limits/sl/jMEKXCzIguNxrXend/lHaZ8J/8DoCicVOoMZ6/MI=
+ok   POST /api/shares/sl/jMEKXCzIguNxrXend/lHaZ8J/8DoCicVOoMZ6/MI=
+ok   PUT /api/cps/sl/jMEKXCzIguNxrXend/lHaZ8J/8DoCicVOoMZ6/MI=
+ok   PUT /api/clients/Vu+2xxSYjRWg5WRpwk1eccnosOs/mJVjrEaHh0qEuAs=
+ok   PUT /api/limits/Vu+2xxSYjRWg5WRpwk1eccnosOs/mJVjrEaHh0qEuAs=
+ok   PUT /api/cps/Vu+2xxSYjRWg5WRpwk1eccnosOs/mJVjrEaHh0qEuAs=
+ok   POST /api/shares/Vu+2xxSYjRWg5WRpwk1eccnosOs/mJVjrEaHh0qEuAs=
+ok   PUT /api/users/dsr/QY0jdRr4dex7eX86ObqqqA6xBA97RG3DX4Xflzs=
+ok   PUT /api/settings
+ok   PUT /api/telegram
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+FAIL PUT /api/hosts/sl/jMEKXCzIguNxrXend/lHaZ8J/8DoCicVOoMZ6/MI= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   GET /api/backup
+FAIL POST /api/backup/encrypted 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'

@@ -1,0 +1,41 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.no_cidr", "p": {}}}'
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.list_kind", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/u6bed3e
+ok   PUT /api/upstreams/u6bed3e
+FAIL POST /api/upstreams 400 b'{"detail": {"$t": "cfg.unrecognized", "p": {}}}'
+ok   GET /api/state
+ok   PUT /api/routing
+ok   PUT /api/clients/0jGgsYU5EFsU7xGFpp0FHryKKQ8WD4ZDbXt8eW0sFHo=
+ok   PUT /api/limits/0jGgsYU5EFsU7xGFpp0FHryKKQ8WD4ZDbXt8eW0sFHo=
+ok   POST /api/shares/0jGgsYU5EFsU7xGFpp0FHryKKQ8WD4ZDbXt8eW0sFHo=
+FAIL PUT /api/cps/0jGgsYU5EFsU7xGFpp0FHryKKQ8WD4ZDbXt8eW0sFHo= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+FAIL PUT /api/cps/0jGgsYU5EFsU7xGFpp0FHryKKQ8WD4ZDbXt8eW0sFHo= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   PUT /api/clients/CpdcJkOZaL7lLp1CfA95bErpE8JBdiTLnOcMdomJjN4=
+ok   PUT /api/limits/CpdcJkOZaL7lLp1CfA95bErpE8JBdiTLnOcMdomJjN4=
+FAIL PUT /api/cps/CpdcJkOZaL7lLp1CfA95bErpE8JBdiTLnOcMdomJjN4= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   POST /api/shares/CpdcJkOZaL7lLp1CfA95bErpE8JBdiTLnOcMdomJjN4=
+ok   PUT /api/users/9G2+Z3nVzUIYxetvozenxyXWs5EwkFRQpFrt4f2u9yo=
+ok   PUT /api/settings
+ok   PUT /api/telegram
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+FAIL PUT /api/hosts/0jGgsYU5EFsU7xGFpp0FHryKKQ8WD4ZDbXt8eW0sFHo= 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
+ok   GET /api/backup
+FAIL POST /api/backup/encrypted 404 b'{"detail": {"$t": "err.not_found", "p": {}}}'
