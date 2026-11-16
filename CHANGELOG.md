@@ -61,7 +61,9 @@ it grows, so every user-visible change gets a new version.
   "Block cascaded traffic" (also during an update) — the policies with domain rules turn into a block
   (`nftgen.generate(strict=True)`), instead of sending listed sites by the address rules and the main route. The
   header shows it as an error; the event log and Telegram say when it starts and ends (`ev.dom_strict_on` /
-  `ev.dom_strict_off`). Not covered: after a reboot until the panel starts, and a stop with "Send everything direct".
+  `ev.dom_strict_off`). Not covered: a stop with "Send everything direct", and after a reboot until the panel starts
+  with the AWG server in the AmneziaVPN app's container (the panel's own container and a server on the host apply
+  the panel's rules before the server comes up, see below).
 - **SOCKS5 exits start on Intel Xeon with AMX again** (broken since 1.20.0). musl 1.2.6 (Alpine 3.24, the build
   stage of hev-socks5-tunnel since the Dependabot bump) checks `sigaltstack` against `sysconf(_SC_MINSIGSTKSZ)`,
   which is about 13 KB on CPUs with AMX (Xeon 4th generation and newer), while hev-task-system's stack-overflow
@@ -122,10 +124,73 @@ it grows, so every user-visible change gets a new version.
 - **Installer: the ssh command names the right user.** With access through an ssh tunnel the final command used
   `root@`; now it is the user behind sudo, else the one who opened the terminal (`su -`), else the one saved at
   install (`SSH_USER` in `.env`, for `awg-router info` later), else root; and `-p` when ssh is not on 22.
+- **No traffic past the exits while the AWG server restarts.** A restarted container has a new network without the
+  panel's rules, and the panel found it only on its next pass (up to `RECONCILE_INTERVAL`): clients went direct
+  meanwhile. The panel now follows Docker's event stream (`GET /events`, `system.docker_events`) and starts a pass at
+  once, which puts the rules up before the tunnels (`_hold_rules`). On top of that the panel keeps a "before the
+  panel" ruleset next to the server's config (`awgr-hold-<iface>.nft`: the rules left when the panel stops — exits
+  that have no tunnel yet are blocked, Direct stays direct; `Engine._save_hold`), and the server applies it itself
+  before `awg-quick up`: `awg-server/start.sh` (the image now has `nftables`) and, on the host, `ExecStartPre` in the
+  panel's `awg-quick@.service`, there only when the panel's table isn't there (a reboot, not a service restart).
+  With "When the panel is stopped: Send everything direct" (`on_stop = restore`) there is no such file; uninstalling removes it.
+- **The panel's web server can't be tied up by slow clients.** `IDLE_TIMEOUT` was per read, so a byte every 59 s kept
+  a connection forever. Now the TLS handshake, request line and headers have `HEAD_DEADLINE` (30 s) in total and the
+  body `BODY_DEADLINE` (120 s); a watchdog thread shuts the socket down when they run out (`Server.arm`). IPv6
+  connections are also limited per /48 (`MAX_PER_NET`, 48), and addresses that logged in during the last day get
+  `RESERVE` (16) places above `MAX_CONNECTIONS`, so the owner gets in during a flood.
+- **Content-Security-Policy** on the panel's pages and the client's page: scripts, styles and fonts only from the
+  panel itself, no frames, no plugins.
+- **The external IP is checked.** When `PUBLIC_HOST` is empty the panel takes its address from 1.1.1.1, ip-api.com or
+  ifconfig.me; an answer that isn't an IP address is now ignored (`probe.ip_of`), ifconfig.me is asked over HTTPS, and
+  a host or parameter with a line break never gets into a client config or `vpn://` link (`awgserver._one_line`).
+  Before, a spoofed plain-HTTP answer could add lines such as `PostUp` to every client's config.
+- **Telegram control needs a numeric Chat ID.** A `@name` can be freed and taken by someone else, and everyone in a
+  public group with that name can write to the bot: commands are now accepted only from the chat with the numeric
+  ID set in the panel (`Bot.allowed`), and saving control with a `@name` is refused (`err.tg_control_id`). A bot set
+  up that way before keeps sending notifications and answers commands with the chat's number.
+- **Balancing spreads the clients of a failed exit.** `Balancer.plan` counted the loads once, so every client of an
+  exit that went down landed on the same least loaded exit. The projected load of an exit now grows with each
+  client given to it (the client's own recent rate, else its old exit's rate per client, else a typical active one).
+- **Lists.** A country, ASN or URL list that can't be downloaded directly (raw.githubusercontent.com is often closed
+  in China and Iran) is fetched through working exits (`tgreq.py` learned GET with a size limit, `notify.get_via`,
+  at most two exits); a site that answers with an HTTP error isn't retried. A download over 64 MB is an error
+  instead of being cut mid-line, an answer without a length drops its unfinished last line, and downloaded lists
+  ignore networks wider than /8. Saving or refreshing a list that needs the network answers at once; the table
+  shows "Downloading…" until it is done. One list is refreshed by one thread at a time, and its file is written
+  through a temporary file.
+- **DNS on the server answers AAAA with "no records"**: the tunnel carries only IPv4, and apps no longer try IPv6
+  first and wait.
+- **The route check resolves a name the way the client's DNS will**: through the client's main exit, to 1.1.1.1 /
+  8.8.8.8 (`Engine.resolve_name`, `tr.resolved_via`), not through the host's DNS, which may spoof blocked sites;
+  without a way through (demo, block) it falls back as before.
+- **SOCKS5 proxy names are resolved with a time limit** and together with the AWG exits' endpoints
+  (`_prefetch_hosts`): a silent DNS no longer holds the engine's pass, and with it the API, for tens of seconds.
+  A client's config and the client's page are given without waiting for the pass at all.
+- **Limits.** Before turning a client off for its expiry or quota the panel reads the limit again: a term extended
+  or a quota raised during the pass no longer turns the client off by the old values, and a client turned off just
+  before such a change is turned back on by the next pass.
+- **QUIC decisions follow the exits.** The `c_quic` chain takes a decision from conntrack only when its exit is still
+  running (or it is pass, direct or block): a QUIC flow of a removed exit went by the main table, past the exit.
+- **On the host the panel no longer changes `all` / `default` `rp_filter`** (that loosened the check for every
+  interface of the server): only the AWG interface and the exits' tunnels get `rp_filter=2`.
+- **The Server tab asks before leaving with unsaved changes**, like the routing rules do (`srv.leave`), and an
+  older `/api/state` answer can no longer show a client that was just deleted.
+- **Login.** Password checks in progress count together with failed ones, so 24 parallel attempts no longer get
+  around the limit; addresses of old failures are forgotten. The panel password goes to the log only when it is
+  created.
+- **The domain lists hint says** that a browser may send a request for another site over an open HTTP/2 or HTTP/3
+  connection when the sites share an address and certificate, and suggests keeping all domains of one owner in one
+  list plus an address list for what matters.
 - **Smaller fixes.** Restoring a backup whose Telegram backup period isn't a string answers 400 instead of 500;
   switches in the API — `dom_filter` and `panel_dns` in the Server settings, Telegram on/off, control and event kinds,
   turning a client or an exit on and off, balancing — must be `true` or `false` (a string such as `"false"` or `"no"`
-  turned the setting on; the panel itself always sends `true`/`false`).
+  turned the setting on; the panel itself always sends `true`/`false`); the same now for a rule's `enabled`, an exit's
+  `enabled` and Telegram on/off and control in a backup, and `list_update_hours: true` is refused.
+  `PUT /api/server` with `params` that isn't an object answers 400, and a NUL in a static path 404 (both were 500
+  with a traceback in the log). A change in `state.json` takes effect only after it is written to disk
+  (`Store.mutate`). DNS query IDs come from `secrets`. Texts of the bot fill in their parameters in one pass (a client
+  named `{gb}` kept its name). `sniproxy.log` and `dnsproxy.log` are cut when they grow over 5 MB, and a QUIC queue
+  error is logged at most once per 10 s. The backup restore tests no longer go to the network.
 
 ## 1.20.0 — 2026-11-14
 

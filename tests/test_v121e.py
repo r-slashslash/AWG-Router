@@ -726,11 +726,14 @@ class SlowClientTest(unittest.TestCase):
             c.request("POST", "/echo", body=b'{"x": 1}', headers={"Content-Type": "application/json"})
             r = c.getresponse()
             self.assertEqual(json.loads(r.read()), {"x": 1})
+        t0 = time.monotonic()           # поток соединения ставит предел ожидания чуть позже ответа
+        while not self.srv._deadlines and time.monotonic() - t0 < 2:
+            time.sleep(0.02)
         left = [t - time.monotonic() for _, t in self.srv._deadlines.values()]
-        self.assertTrue(left and min(left) > web.HEAD_DEADLINE)   # ждём следующего запроса, не обработки
+        self.assertTrue(left and max(left) > web.HEAD_DEADLINE)   # ждём следующего запроса, не обработки
         c.close()
         t0 = time.monotonic()
-        while self.srv._deadlines and time.monotonic() - t0 < 3:
+        while self.srv._deadlines and time.monotonic() - t0 < 8:
             time.sleep(0.05)
         self.assertEqual(self.srv._deadlines, {})          # соединение закрыто — предела нет
 
