@@ -613,12 +613,15 @@ class Bot:
             # управление не зависит от уведомлений: можно командовать ботом и без них
             if not (c["token"] and c["chat_id"] and c["control"]):
                 self.state, self.error = "off", None
-                self._drop_commands(c)
+                try:
+                    self._drop_commands(c)
+                except Exception:  # noqa: BLE001  — поток бота не должен умирать из-за меню команд
+                    log.exception("telegram bot: commands")
                 self.wake.wait(10)
                 self.wake.clear()
                 continue
             try:
-                self.poll_once(c)
+                self.poll_once(c, fresh=lambda: notify.cfg_of(self.store.snapshot()))
                 if c["chat_id"].startswith("@"):        # настройка до 1.21.0: команды не принимаются
                     self.state, self.error = "error", Msg("err.tg_control_id")
                 else:
@@ -636,19 +639,25 @@ class Bot:
                 self.wake.wait(30)
                 self.wake.clear()
 
-    def poll_once(self, c: dict, timeout: int = POLL) -> None:
+    def poll_once(self, c: dict, timeout: int = POLL, fresh=None) -> None:
+        """fresh — настройки после ожидания getUpdates (поток бота: notify.cfg_of из состояния)."""
         self._set_commands(c)
         self._announce_update(c)
         ups = notify._call(c["token"], "getUpdates",
                            {"offset": int(self._st.get("offset") or 0), "timeout": timeout,
                             "allowed_updates": ["message", "callback_query"]},
                            timeout=timeout + 15, via=c["via"])
+        # пока ждали (до POLL секунд), управление могли выключить или сменить чат: команды — по настройкам сейчас
+        now = fresh() if fresh else c
+        live = now["control"] and now["token"] == c["token"] and now["chat_id"] == c["chat_id"]
         for u in ups if isinstance(ups, list) else []:
             # отметку сохраняем до выполнения: после перезапуска команда не повторится
             self._st["offset"] = int(u.get("update_id", 0)) + 1
             self._save()
+            if not live:
+                continue
             try:
-                self.handle(u, c)
+                self.handle(u, now)
             except Exception:  # noqa: BLE001
                 log.exception("telegram update")
 
@@ -1347,7 +1356,7 @@ class Bot:
         caption = tr(L, "cfg_caption", name=name)
         try:
             notify.send_photo(c["token"], c["chat_id"], qr.png(cfg["conf"]), caption, c["via"], html=True)
-            caption = name
+            caption = html.escape(name, quote=False)    # подпись — разметка HTML: «Мама <3» иначе не отправится
         except qr.QRTooBig:
             caption += "\n" + tr(L, "cfg_qr_big")
         notify.send_document(c["token"], c["chat_id"], cfg.get("filename") or "awg.conf",

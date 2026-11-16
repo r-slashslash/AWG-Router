@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import collections
 import email.utils
+import http.client
 import json
 import logging
 import os
@@ -214,6 +215,8 @@ TEXTS = {
 }
 
 # событие движка → (категория, текст)
+STATE_PAIRS = {k: p for p in (("exit_down", "exit_up"), ("mem_high", "mem_ok"), ("cpu_high", "cpu_ok"),
+                                ("dom_strict_on", "dom_strict_off")) for k in p}
 ENGINE_EVENTS = {
     "ev.upstream_failed": ("exit", "exit_down"),
     "ev.upstream_ok": ("exit", "exit_up"),
@@ -372,8 +375,10 @@ def _post(token: str, method: str, data: bytes, ctype: str, timeout: float, via:
             code, raw = _post_direct(url, data, ctype, timeout)
         else:
             code, raw = _post_via(route, url, data, ctype, timeout)
-    except (urllib.error.URLError, OSError) as e:
-        raise NotifyError(f"api.telegram.org: {getattr(e, 'reason', e)}"[:300], net=True) from None
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        # HTTPException — ответ оборвался (IncompleteRead) или не разобрался: та же сетевая ошибка. Раньше она
+        # проходила мимо и в потоке бота (выключение меню команд) останавливала его до перезапуска панели
+        raise NotifyError(f"api.telegram.org: {getattr(e, 'reason', e)!s}"[:300], net=True) from None
     try:
         res = json.loads(raw.decode(errors="replace") or "{}")
     except ValueError:
@@ -485,6 +490,7 @@ class Notifier:
         self.q: queue.Queue = queue.Queue(maxsize=100)
         self.pending: collections.deque = collections.deque()    # не дошедшее: (…, markup, время события)
         self._sent: dict[str, float] = {}
+        self._state: dict[tuple, str] = {}        # (пара, выход или ресурс) → последнее отправленное состояние
         self.last_error: str | None = None
         self._target_lost = False
         # кнопки под уведомлением (tgbot.notify_buttons): (ключ текста, ссылки, язык) → reply_markup
@@ -500,9 +506,17 @@ class Notifier:
             return
         sig = key + json.dumps(params, sort_keys=True, default=str)
         now = time.time()
-        if now - self._sent.get(sig, 0) < (self.COOLDOWN if cooldown is None else cooldown):
+        # пара состояний («выход лёг» / «снова работает»): смена состояния после последнего отправленного
+        # сообщения уходит всегда, иначе у «мигающего» выхода последним в чате осталось бы «снова работает»
+        pair = STATE_PAIRS.get(key)
+        subj = (pair, (refs or {}).get("uid") or params.get("name")) if pair else None
+        last = self.__dict__.setdefault("_state", {})
+        changed = subj is not None and last.get(subj, key) != key
+        if now - self._sent.get(sig, 0) < (self.COOLDOWN if cooldown is None else cooldown) and not changed:
             return
         self._sent[sig] = now
+        if subj is not None:
+            last[subj] = key
         try:
             host = self.host_fn(st)
         except Exception:  # noqa: BLE001

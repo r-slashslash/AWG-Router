@@ -1,16 +1,18 @@
 """1.21.0, исправления по второй проверке (2026-11-16): утечки мимо выходов (этап 1), безопасность (этап 2),
-правила по доменам, QUIC, DNS и списки (этап 3).
+правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4).
 
 python3 -m unittest discover tests
 """
 import asyncio
+import collections
 import http.client
 import io
 import json
+import os
+import queue
+import shutil
 import socket
 import struct
-import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,7 +28,7 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from app import (awgserver, checks, config, cps, dnsproxy, domains, engine, lists, movehost, nftgen,  # noqa: E402
-                 panel, quic, sniproxy, store, system, totp, users, web)
+                 notify, panel, quic, sniproxy, store, system, tgbot, totp, users, web)
 from app import api  # noqa: E402,F401  — импорт app.api регистрирует все адреса
 from app.api import auth, backup  # noqa: E402
 from app.engine.common import UpRT  # noqa: E402
@@ -687,6 +689,82 @@ class AsciiDigitsTest(unittest.TestCase):
             users.check_keepalive(fa)
         self.assertIsNone(checks.TG_CHAT_RE.match(fa))
         self.assertTrue(checks.TG_CHAT_RE.match("-100123"))
+
+
+# ============================================================ этап 4: бот Telegram
+TG_TOKEN = "123456789:" + "A" * 35
+
+
+def tg_cfg(**kw):
+    return {**notify.defaults(), "enabled": True, "token": TG_TOKEN, "chat_id": "42", "control": True, **kw}
+
+
+class FlappingTest(unittest.TestCase):
+    def test_last_message_is_the_real_state(self):
+        """Н23. Вход: выход лёг, поднялся, лёг, поднялся, лёг — за 4 минуты. Ожидание: последнее сообщение в
+        чате — «лёг» (раньше третье «лёг» глушилось, и в чате оставалось «снова работает»). Повтор того же
+        состояния в пределах 5 минут по-прежнему не уходит."""
+        n = notify.Notifier.__new__(notify.Notifier)
+        n.store = mock.Mock(snapshot=lambda: {"settings": {"telegram": tg_cfg()}})
+        n.host_fn, n.buttons_fn, n._target_lost = (lambda st: "h"), None, False
+        n.q, n.pending, n._sent, n.last_error = queue.Queue(), collections.deque(), {}, None
+        now = [1_000_000.0]
+        with mock.patch.object(notify.time, "time", lambda: now[0]):
+            for t, key in ((0, "ev.upstream_failed"), (60, "ev.upstream_ok"), (120, "ev.upstream_failed"),
+                           (180, "ev.upstream_ok"), (240, "ev.upstream_failed"), (250, "ev.upstream_failed")):
+                now[0] = 1_000_000.0 + t
+                n.engine_event(notify.Msg(key, name="NL", uid="u1"))
+        sent = [n.q.get_nowait()[2] for _ in range(n.q.qsize())]
+        self.assertEqual(len(sent), 5)
+        self.assertEqual(sent[-1], notify.render("en", "exit_down", "h", name="NL"))
+
+
+class BotFixesTest(unittest.TestCase):
+    def setUp(self):
+        tgbot.STATE = os.path.join(tempfile.mkdtemp(), "tgbot.json")
+
+    def test_name_with_bracket_in_caption(self):
+        """Н25. Вход: клиент «Мама <3». Ожидание: подпись к файлу экранирована (иначе Telegram не примет
+        разметку и файл не придёт, а «<a href=…>» в имени стал бы ссылкой)."""
+        ops = mock.Mock()
+        ops.client_config.return_value = {"name": "Мама <3", "conf": "[Interface]\\n", "filename": "m.conf"}
+        b = tgbot.Bot(mock.Mock(), ops)
+        with mock.patch.object(notify, "send_photo"), mock.patch.object(notify, "send_document") as sd:
+            b.send_config(tg_cfg(), "pk")
+        self.assertEqual(sd.call_args.args[4], "Мама &lt;3")
+
+    def test_control_off_while_waiting(self):
+        """Н26. Вход: пока бот ждал команды (до 25 секунд), управление выключили. Ожидание: пришедшие команды
+        не выполняются, но отмечены прочитанными."""
+        b = tgbot.Bot(mock.Mock(), mock.Mock())
+        ups = [{"update_id": 7, "message": {"chat": {"id": 42, "type": "private"}, "date": int(time.time()),
+                                             "text": "/status"}}]
+        with mock.patch.object(notify, "_call", side_effect=lambda tok, m, p=None, **kw: ups if m == "getUpdates" else {}), \
+                mock.patch.object(b, "handle") as h:
+            b.poll_once(tg_cfg(), timeout=0, fresh=lambda: tg_cfg(control=False))
+            h.assert_not_called()
+            self.assertEqual(b._st["offset"], 8)
+            b.poll_once(tg_cfg(), timeout=0, fresh=lambda: tg_cfg())
+            h.assert_called_once()
+
+    def test_cut_answer_is_a_network_error(self):
+        """Н27. Вход: ответ Telegram оборвался (IncompleteRead). Ожидание: обычная сетевая ошибка, а не
+        исключение, которое останавливало поток бота до перезапуска панели."""
+        with mock.patch.object(notify, "_post_direct", side_effect=http.client.IncompleteRead(b"{", 90)):
+            with self.assertRaises(notify.NotifyError) as cm:
+                notify._call(TG_TOKEN, "deleteMyCommands", {})
+        self.assertTrue(cm.exception.net)
+
+    def test_bot_thread_survives(self):
+        b = tgbot.Bot(mock.Mock(snapshot=lambda: {"settings": {"telegram": tg_cfg(control=False)}}), mock.Mock())
+        b._st["cmds"] = "x"
+        with mock.patch.object(notify, "_post_direct", side_effect=RuntimeError("odd")):
+            t = threading.Thread(target=b._loop, daemon=True)
+            t.start()
+            time.sleep(0.3)
+            self.assertTrue(t.is_alive())
+            b.stop_ev.set()
+            b.wake.set()
 
 
 if __name__ == "__main__":
