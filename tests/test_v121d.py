@@ -214,7 +214,8 @@ class ClientHostTest(unittest.TestCase):
             g = main.clean_backup_state(main.store.snapshot())
             g["settings"]["extra_hosts"] = ["203.0.113.250"]          # чужой сервер
             g["chost"] = {self.pk: "198.51.100.20"}
-            main.restore_backup(Req({"backup": {"format": main.BACKUP_FORMAT, "state": g}}))
+            with mock.patch.object(main.engine, "refresh_lists"):       # без сети в юнит-тесте
+                main.restore_backup(Req({"backup": {"format": main.BACKUP_FORMAT, "state": g}}))
             s = main.store.snapshot()
             self.assertEqual(s["settings"]["extra_hosts"], ["198.51.100.20"])
             self.assertEqual(s["chost"], {self.pk: "198.51.100.20"})

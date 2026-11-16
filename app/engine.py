@@ -54,6 +54,25 @@ def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
 
 
+LOG_MAX, LOG_KEEP = 5 * 2**20, 2**20     # журнал помощника больше LOG_MAX — при запуске остаётся его хвост LOG_KEEP
+
+
+def _trim_log(path: str) -> None:
+    """Журналы sniproxy.py и dnsproxy.py дописываются при каждом запуске, и их никто не чистил: на сервере,
+    где помощник часто перезапускается или пишет ошибки, файл рос бы без предела. Последнее остаётся."""
+    try:
+        if os.path.getsize(path) <= LOG_MAX:
+            return
+        with open(path, "rb") as f:
+            f.seek(-LOG_KEEP, os.SEEK_END)
+            tail = f.read()
+        tail = tail[tail.find(b"\n") + 1:]
+        with open(path, "wb") as f:
+            f.write(tail)
+    except OSError:
+        pass
+
+
 UP_PAUSES = (10, 30, 60, 120, 300)      # пауза перед новой попыткой запустить выход, с
 SERVER_GRACE = 30        # с: столько интерфейса сервера в контейнере может не быть, прежде чем панель его поднимет
 SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытками поднять сервер, если не помогает, с
@@ -216,8 +235,10 @@ class Engine:
                 try:
                     r = self.probe("direct")
                     ip = r.get("ip") if r.get("ok") else None
-                except Exception:  # noqa: BLE001
-                    pass
+                    # только IPv4: адрес идёт во «Внешний адрес сервера» и в конфиги клиентов
+                    ip = str(ipaddress.IPv4Address(str(ip).strip())) if ip else None
+                except Exception:  # noqa: BLE001  — в том числе не адрес (ValueError)
+                    ip = None
                 wait = HOST_FAST_WAIT if tries < HOST_FAST_TRIES else HOST_SLOW_WAIT
                 if ip:
                     self.public_v4, self.public_v4_state = ip, "ok"
@@ -1328,6 +1349,7 @@ class Engine:
             except OSError:
                 pass
             logp = os.path.join(LOG_DIR, "sniproxy.log")
+            _trim_log(logp)
             with open(logp, "a") as logf:
                 proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", "python3", SNIPROXY, SNI_CONF],
                                         stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
@@ -1473,6 +1495,7 @@ class Engine:
                 return
             self._dns_retry = time.time()
             logp = os.path.join(LOG_DIR, "dnsproxy.log")
+            _trim_log(logp)
             with open(logp, "a") as logf:
                 proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", "python3", DNSPROXY, DNS_CONF],
                                         stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)

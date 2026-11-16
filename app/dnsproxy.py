@@ -37,7 +37,7 @@ import asyncio
 import ipaddress
 import json
 import os
-import random
+import secrets
 import signal
 import socket
 import ssl
@@ -494,7 +494,7 @@ class Proxy:
         """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ."""
         mode = self.cfg.get("encrypt") or "plain"
         for server in self.cfg.get("upstreams") or []:
-            qid = random.randrange(0, 65536)
+            qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
             out = struct.pack("!H", qid) + query[2:]
             try:
                 if mode in ("dot", "doh"):

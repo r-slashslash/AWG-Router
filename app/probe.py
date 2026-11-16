@@ -2,6 +2,7 @@
     nsenter -t PID -n -- python3 probe.py <fwmark> [--udp] [имя=IP ...]
 Помечает свои сокеты fwmark'ом, поэтому идёт тем же путём, что и трафик клиентов.
 Печатает JSON: внешний IP, страна, задержка, для --udp — проходит ли UDP (QUIC)."""
+import ipaddress
 import json
 import os
 import socket
@@ -81,24 +82,35 @@ def http_get(host, path, tls=False):
     return body.decode(errors="replace")
 
 
+def ip_of(text) -> str:
+    """Адрес из ответа сервиса — только сам IP. Ответ по HTTP можно подменить по дороге, а панель кладёт
+    этот адрес во «Внешний адрес сервера» и в конфиги клиентов: строка с переводом строки дописала бы
+    в каждый конфиг свои строки (например, PostUp, который awg-quick выполняет от root)."""
+    s = str(text if text is not None else "").strip()
+    return str(ipaddress.ip_address(s))         # ValueError — не адрес
+
+
 def whoami():
     """Внешний IP и страна. Сначала HTTPS к 1.1.1.1 (без DNS и по 443: многие прокси пускают
-    только 80/443), затем ip-api.com и ifconfig.me по HTTP."""
+    только 80/443), затем ip-api.com по HTTP (страна и провайдер) и ifconfig.me по HTTPS. Ответ,
+    в котором не IP-адрес, не принимается."""
     errors = []
     try:
         kv = dict(ln.split("=", 1) for ln in http_get("1.1.1.1", "/cdn-cgi/trace", tls=True).splitlines() if "=" in ln)
         if kv.get("ip"):
-            return {"ip": kv["ip"], "cc": kv.get("loc") if kv.get("loc") not in (None, "XX", "T1") else None}
+            return {"ip": ip_of(kv["ip"]), "cc": kv.get("loc") if kv.get("loc") not in (None, "XX", "T1") else None}
     except Exception as e:  # noqa: BLE001
         errors.append(f"1.1.1.1: {e}")
     try:
         d = json.loads(http_get("ip-api.com", "/json/?fields=status,query,countryCode,isp"))
         if d.get("query"):
-            return {"ip": d["query"], "cc": d.get("countryCode"), "isp": d.get("isp")}
+            cc = d.get("countryCode")
+            return {"ip": ip_of(d["query"]), "cc": cc if isinstance(cc, str) and len(cc) == 2 else None,
+                    "isp": str(d.get("isp") or "")[:80] or None}
     except Exception as e:  # noqa: BLE001
         errors.append(f"ip-api.com: {e}")
     try:
-        return {"ip": http_get("ifconfig.me", "/ip").strip()}
+        return {"ip": ip_of(http_get("ifconfig.me", "/ip", tls=True))}
     except Exception as e:  # noqa: BLE001
         errors.append(f"ifconfig.me: {e}")
     raise OSError("; ".join(errors))

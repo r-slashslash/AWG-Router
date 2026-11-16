@@ -276,7 +276,8 @@ class App:
                             return self._static(mount[1], rel)
                     if app.index_file and self.command in ("GET", "HEAD"):
                         if path == app.base + "/" or path == "/" and not app.base:
-                            body = open(app.index_file, "rb").read()
+                            with open(app.index_file, "rb") as f:
+                                body = f.read()
                             return self._send(200, body, "text/html; charset=utf-8",
                                               [("Cache-Control", "no-store")])
                         if app.base and path == app.base:
@@ -317,8 +318,12 @@ class App:
 
             def _static(self, root: str, rel: str):
                 root = os.path.realpath(root)
-                p = os.path.realpath(os.path.join(root, rel))
-                if not p.startswith(root + os.sep) or not os.path.isfile(p):
+                try:
+                    p = os.path.realpath(os.path.join(root, rel))
+                    found = p.startswith(root + os.sep) and os.path.isfile(p)
+                except ValueError:          # NUL в пути (%00): realpath падает — как будто файла нет, а не 500
+                    found = False
+                if not found:
                     raise HTTPError(404, "err.not_found")
                 ctype = mimetypes.guess_type(p)[0] or "application/octet-stream"
                 if ctype.startswith("text/") or ctype in ("application/javascript",):

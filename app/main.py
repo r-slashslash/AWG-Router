@@ -44,7 +44,8 @@ BASE = config.PANEL_BASE_PATH
 def _secret_file(name: str, gen) -> str:
     p = os.path.join(config.DATA_DIR, name)
     if os.path.exists(p):
-        return open(p).read().strip()
+        with open(p) as f:
+            return f.read().strip()
     v = gen()
     fd = os.open(p, os.O_WRONLY | os.O_CREAT, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -57,8 +58,14 @@ SECRET = _secret_file("session.key", lambda: secrets.token_hex(32)).encode()
 if config.PANEL_PASSWORD:
     PASSWORD = config.PANEL_PASSWORD
 else:
+    # сам пароль — в журнал только при первом запуске, когда файл создаётся: журнал контейнера живёт
+    # долго и попадает в отчёты, а пароль и так лежит в data/panel_password
+    _first = not os.path.exists(os.path.join(config.DATA_DIR, "panel_password"))
     PASSWORD = _secret_file("panel_password", lambda: secrets.token_urlsafe(12))
-    log.warning("PANEL_PASSWORD is not set. Panel password: %s (file data/panel_password)", PASSWORD)
+    if _first:
+        log.warning("PANEL_PASSWORD is not set. Panel password: %s (file data/panel_password)", PASSWORD)
+    else:
+        log.warning("PANEL_PASSWORD is not set: the panel password is in data/panel_password")
 
 
 def _tag(material: str) -> str:
@@ -267,7 +274,7 @@ def v_rules(st: dict, rules) -> list[dict]:
         rid = r.get("id") if isinstance(r.get("id"), str) and ID_RE.match(r.get("id", "")) else new_id("r_")
         out.append({"id": rid, "lists": list(dict.fromkeys(ls)),
                     "outbound": outbound,
-                    "enabled": bool(r.get("enabled", True)),
+                    "enabled": v_flag(r.get("enabled"), True),     # "false" строкой — не «включено»
                     "comment": str(r.get("comment") or "")[:80]})
     return out
 
@@ -325,16 +332,41 @@ def v_name(v, maxlen: int = 40) -> str:
 
 
 # --------------------------------------------------------------------- auth
+FAIL_WINDOW, FAIL_MAX = 600, 8      # не больше FAIL_MAX неудачных попыток за FAIL_WINDOW секунд с адреса
+_fails_lock = threading.Lock()
+_inflight: dict[str, int] = {}     # проверки пароля, которые идут сейчас (ещё не засчитаны)
+
+
 def _check_blocked(ip: str) -> None:
+    """Попытка входа с адреса: идущие сейчас проверки считаются вместе с неудачными. Иначе 24 соединения
+    с одного адреса проверяли бы 24 пароля разом, хотя предел — 8 за 10 минут. Старые адреса забываются."""
     now = time.time()
-    _fails[ip] = [t for t in _fails.get(ip, []) if now - t < 600]
-    if len(_fails[ip]) >= 8:
-        bad("err.too_many_attempts", 429)
+    with _fails_lock:
+        for k in [k for k, v in _fails.items() if not v or now - v[-1] >= FAIL_WINDOW]:
+            _fails.pop(k, None)
+        recent = [t for t in _fails.get(ip, []) if now - t < FAIL_WINDOW]
+        if recent:
+            _fails[ip] = recent
+        if len(recent) + _inflight.get(ip, 0) >= FAIL_MAX:
+            bad("err.too_many_attempts", 429)
+        _inflight[ip] = _inflight.get(ip, 0) + 1
+
+
+def _done(ip: str) -> None:
+    """Проверка с адреса закончилась (успехом или отказом) — она больше не «идёт»."""
+    with _fails_lock:
+        n = _inflight.get(ip, 0) - 1
+        if n > 0:
+            _inflight[ip] = n
+        else:
+            _inflight.pop(ip, None)
 
 
 def _failed(ip: str, msg: str) -> None:
-    _fails.setdefault(ip, []).append(time.time())
-    if len(_fails[ip]) == 8:
+    with _fails_lock:
+        _fails.setdefault(ip, []).append(time.time())
+        n = len(_fails[ip])
+    if n == FAIL_MAX:
         notifier.event("login", "login_blocked", cooldown=600, ip=ip)
     time.sleep(1)
     bad(msg, 403)
@@ -349,6 +381,13 @@ def _set_session(req) -> None:
 def login(req):
     ip = req.client_ip
     _check_blocked(ip)
+    try:
+        return _login(req, ip)
+    finally:
+        _done(ip)
+
+
+def _login(req, ip: str):
     body = req.json()
     if not check_password(str(body.get("password", ""))):
         _failed(ip, "err.wrong_password")
@@ -405,6 +444,13 @@ def totp_enable(req):
 def totp_disable(req):
     ip = req.client_ip
     _check_blocked(ip)
+    try:
+        return _totp_disable(req, ip)
+    finally:
+        _done(ip)
+
+
+def _totp_disable(req, ip: str):
     body = req.json()
     if not totp.load():
         return {"ok": True}
@@ -552,6 +598,13 @@ def update_status(req):
 def change_password(req):
     ip = req.client_ip
     _check_blocked(ip)
+    try:
+        return _change_password(req, ip)
+    finally:
+        _done(ip)
+
+
+def _change_password(req, ip: str):
     body = req.json()
     if not check_password(str(body.get("current", ""))):
         _failed(ip, "err.wrong_password")
@@ -769,7 +822,8 @@ def clean_backup_state(new: dict) -> dict:
         flags = {k: u.get(k) if isinstance(u.get(k), str) and MONTH_RE.match(u[k]) else None
                  for k in ("quota_hit", "quota_warned")}
         st["upstreams"].append({"id": u["id"], "name": check(f + ".name", lambda: v_name(u.get("name"))),
-                                "num": num, "config": pc.raw, "enabled": bool(u.get("enabled", True)),
+                                "num": num, "config": pc.raw,
+                                "enabled": check(f + ".enabled", lambda: v_flag(u.get("enabled"), True)),
                                 "fallback": "direct", "created": u.get("created") if _num(u.get("created")) else None,
                                 "quota": _int_or_none(u.get("quota")), "quota_action": "notify", **flags})
         for k in ("rate_down", "rate_up"):
@@ -935,10 +989,10 @@ def clean_backup_state(new: dict) -> dict:
         if (tok and not TG_TOKEN_RE.match(tok)) or (chat and not TG_CHAT_RE.match(chat)):
             fail("settings.telegram")
         c.update(token=tok, chat_id=chat, lang=tg.get("lang") if tg.get("lang") in notify.LANGS else "en",
-                 enabled=bool(tg.get("enabled")) and bool(tok and chat))
+                 enabled=tg.get("enabled") is True and bool(tok and chat))
         ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
         c["events"] = {k: ev[k] if isinstance(ev.get(k), bool) else True for k in notify.KINDS}
-        c["control"] = bool(tg.get("control")) and bool(tok and chat)
+        c["control"] = tg.get("control") is True and bool(tok and chat)
         if isinstance(tg.get("backup"), str) and tg["backup"] in notify.BACKUP_PERIODS:   # список в dict — TypeError
             c["backup"] = tg["backup"]
         if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:
@@ -1860,8 +1914,11 @@ def put_settings(req):
     def fn(st):
         s = st["settings"]
         if "list_update_hours" in body:
+            v = body["list_update_hours"]
+            if isinstance(v, bool):                       # true — не «1 час»
+                bad("err.hours")
             try:
-                s["list_update_hours"] = max(1, min(int(body["list_update_hours"]), 24 * 30))
+                s["list_update_hours"] = max(1, min(int(v), 24 * 30))
             except (TypeError, ValueError, OverflowError):
                 bad("err.hours")
         if "on_stop" in body:

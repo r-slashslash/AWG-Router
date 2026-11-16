@@ -410,10 +410,22 @@ class ClientProfile:
     keepalive: str = "25"
 
 
+def _one_line(prof: ClientProfile, peer: Peer, priv: str, params: dict[str, str]) -> None:
+    """Каждое значение конфига клиента — одна строка. Перевод строки в адресе сервера (или в другом
+    поле) дописал бы в конфиг свои строки, например `[Interface]` + `PostUp = …`, а awg-quick и
+    wg-quick выполняют PostUp от root на устройстве клиента. Такой конфиг не выдаём."""
+    if any(c in prof.host for c in "\r\n"):
+        raise ServerConfError(Msg("srv.bad_host"))
+    vals = [priv, prof.server_pub, peer.psk, peer.allowed_ips, prof.keepalive, *prof.dns, *params.values()]
+    if any(isinstance(v, str) and ("\n" in v or "\r" in v) for v in vals):
+        raise ServerConfError(Msg("err.bad_value"))
+
+
 def client_conf(sc: ServerConf, prof: ClientProfile, peer: Peer, priv: str,
                 override: dict[str, str] | None = None) -> str:
     """override — свои параметры клиента поверх серверных (I1–I5; пустое значение — убрать)."""
     params = {**sc.params(), **(override or {})}
+    _one_line(prof, peer, priv, params)
     lines = ["[Interface]", f"Address = {peer.ip}/32"]
     if prof.dns:
         lines.append("DNS = " + ", ".join(prof.dns))
@@ -440,6 +452,7 @@ def vpn_link(sc: ServerConf, prof: ClientProfile, peer: Peer, priv: str, conf: s
              description: str, override: dict[str, str] | None = None) -> str:
     """Ссылка vpn:// для импорта в приложение AmneziaVPN."""
     params = {k: v for k, v in {**sc.params(), **(override or {})}.items() if v}
+    _one_line(prof, peer, priv, params)
     net = sc.network
     client = {
         "config": conf, "hostName": prof.host, "port": prof.port, "client_ip": peer.ip,

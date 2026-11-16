@@ -774,7 +774,9 @@ class ReviewFixesTest(unittest.TestCase):
         main.store.mutate(lambda st: st["settings"].update(local) or
                           [st["settings"].pop(k, None) for k in ("public_host", "client_host") if k not in local])
         b = {"format": main.BACKUP_FORMAT, "state": g}
-        main.restore_backup(type("R", (), {"json": lambda self: {"backup": b}})())
+        # фоновое обновление списков после восстановления не должно ходить в сеть из юнит-теста
+        with mock.patch.object(main.engine, "refresh_lists"):
+            main.restore_backup(type("R", (), {"json": lambda self: {"backup": b}})())
         return main.store.snapshot()["settings"]
 
     def test_restore_ignores_old_server_address(self):

@@ -124,11 +124,11 @@ class Store:
             os.replace(self.path, self.path + ".broken")
             return state
 
-    def _write(self) -> None:
+    def _write(self, state: dict | None = None) -> None:
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump(self.state, f, ensure_ascii=False, indent=2)
+            json.dump(self.state if state is None else state, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
         # прежняя версия — жёсткой ссылкой рядом (тот же файл, без копирования): её читает _read
@@ -153,13 +153,15 @@ class Store:
             return fn(self.state)
 
     def mutate(self, fn):
-        """fn(state) изменяет состояние; при исключении изменения откатываются."""
+        """fn(state) изменяет состояние; при исключении изменения откатываются. Новое состояние
+        начинает действовать только после записи на диск: если записать не удалось (нет места, ошибка
+        диска), панель не применяет то, что после перезапуска пропало бы."""
         with self.lock:
             draft = copy.deepcopy(self.state)
             result = fn(draft)
+            self._write(draft)
             self.state = draft
             self.rev += 1
-            self._write()
             return result
 
     # --- вспомогательные ---------------------------------------------------

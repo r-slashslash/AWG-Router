@@ -470,6 +470,8 @@ class ServerManager:
                 settings_patch["client_keepalive"] = ka
             # серверный конфиг
             if "params" in body:
+                if body["params"] is not None and not isinstance(body["params"], dict):
+                    raise UserError(Msg("err.bad_value"))      # строка или список — 400, а не 500
                 new = awgserver.validate_params(body["params"] or {})
                 merged = {**{k: sc.get(k) for k in awgserver.PARAM_ORDER}, **new}
                 awgserver.validate_params({k: v for k, v in merged.items()})

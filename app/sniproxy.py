@@ -580,6 +580,7 @@ class Sniffer:
         # снова идут в очередь (повтор Initial — бывает и половиной ClientHello); «пропустить» не
         # записывается в conntrack, поэтому повтор получает то же решение отсюда
         self.qdone: dict[tuple, tuple[int, float]] = {}
+        self._quic_logged = -1e9            # когда последний раз писали ошибку разбора QUIC в журнал
         self.reload()
 
     def reload(self) -> None:
@@ -664,7 +665,11 @@ class Sniffer:
             try:
                 self.on_packet(pid, pkt, block, passm)
             except Exception as e:  # noqa: BLE001 — пакет не должен остаться в очереди навсегда
-                log(f"quic: {e!r}")
+                self._quic_count("quic_errors")
+                now = time.monotonic()
+                if now - self._quic_logged >= ACCEPT_LOG_EVERY:     # ошибка на каждый пакет залила бы журнал
+                    self._quic_logged = now
+                    log(f"quic: {e!r}")
                 self.queue.verdict(pid, True, block)
 
     def on_packet(self, pid: int, pkt: bytes, block: int, passm: int) -> None:

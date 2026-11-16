@@ -5,6 +5,7 @@ import bisect
 import ipaddress
 import os
 import re
+import threading
 import time
 import urllib.request
 
@@ -77,11 +78,7 @@ def path_for(list_id: str) -> str:
 
 
 def save_cidrs(list_id: str, nets: list[ipaddress.IPv4Network]) -> None:
-    os.makedirs(LISTS_DIR, exist_ok=True)
-    tmp = path_for(list_id) + ".tmp"
-    with open(tmp, "w") as f:
-        f.write("\n".join(str(n) for n in nets) + ("\n" if nets else ""))
-    os.replace(tmp, path_for(list_id))
+    domains.write_atomic(path_for(list_id), "\n".join(str(n) for n in nets) + ("\n" if nets else ""))
 
 
 def load_cidrs(list_id: str) -> list[str]:
@@ -209,8 +206,20 @@ class ListError(Exception):
         super().__init__(str(msg))
 
 
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
 def refresh(lst: dict) -> dict:
-    """Обновляет файл списка; возвращает поля для записи в состояние."""
+    """Обновляет файл списка; возвращает поля для записи в состояние. Один список обновляется одним
+    потоком за раз: второй ждёт первого (фон, восстановление копии и кнопка «Обновить» могут совпасть)."""
+    with _locks_guard:
+        lock = _locks.setdefault(str(lst.get("id")), threading.Lock())
+    with lock:
+        return _refresh(lst)
+
+
+def _refresh(lst: dict) -> dict:
     if lst["kind"] == "domains":
         try:
             names = fetch_domains(lst)

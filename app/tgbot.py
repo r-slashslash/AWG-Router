@@ -446,10 +446,14 @@ def tr(lang: str, key: str, html_safe: bool = True, **params) -> str:
     подсказок, там разметки нет)."""
     tx = TEXTS.get(lang) or TEXTS["en"]
     s = tx.get(key) or TEXTS["en"][key]
-    for k, v in params.items():
-        v = str(v)
-        s = s.replace("{" + k + "}", html.escape(v, quote=False) if html_safe else v)
-    return s
+
+    # один проход по шаблону: имя клиента «{gb}» не должно подменяться следующим параметром
+    def fill(m):
+        if m.group(1) not in params:
+            return m.group(0)
+        v = str(params[m.group(1)])
+        return html.escape(v, quote=False) if html_safe else v
+    return re.sub(r"\{(\w+)\}", fill, s)
 
 
 def fmt_size(n: int | float, lang: str) -> str:

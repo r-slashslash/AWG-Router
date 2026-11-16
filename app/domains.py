@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 
 from . import config
 
@@ -119,12 +120,26 @@ def path_for(list_id: str) -> str:
     return os.path.join(LISTS_DIR, f"{list_id}.domains")
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Файл списка целиком или никак: временный файл со своим именем (два обновления одного списка
+    одновременно — фон, восстановление копии, кнопка — писали бы в один .tmp вперемешку) и os.replace."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def save(list_id: str, names: list[str]) -> None:
-    os.makedirs(LISTS_DIR, exist_ok=True)
-    tmp = path_for(list_id) + ".tmp"
-    with open(tmp, "w") as f:
-        f.write("\n".join(names) + ("\n" if names else ""))
-    os.replace(tmp, path_for(list_id))
+    write_atomic(path_for(list_id), "\n".join(names) + ("\n" if names else ""))
 
 
 def load(list_id: str) -> list[str]:
