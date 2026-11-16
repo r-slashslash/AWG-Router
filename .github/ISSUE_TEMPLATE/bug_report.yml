@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: Panel version
-      description: Shown on the System tab, or run `awg-router info`.
+      description: Shown on the System tab, or run `grep VERSION /opt/awg-router/app/version.py` on the server.
       placeholder: "1.19.0"
     validations:
       required: true

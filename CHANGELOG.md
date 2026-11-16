@@ -49,7 +49,7 @@ it grows, so every user-visible change gets a new version.
 - **Exit check: honest latency, and the reason when the IP isn't found.** Latency is the time to the first byte
   of a TLS answer from 1.1.1.1 (or 8.8.8.8), not `connect()`: through SOCKS5 the connection is accepted by
   hev-socks5-tunnel on this server, which showed 0 ms. The external IP is asked from `https://1.1.1.1/cdn-cgi/trace`
-  first (no DNS, port 443 — many proxies let only 80/443 through), then ip-api.com and ifconfig.me; when none
+  first (no DNS, port 443 — many proxies let only 80/443 through), then ipinfo.io and ifconfig.me; when none
   answers, "external IP is unknown" now says why.
 - **The domain handler is watched every second.** `sniproxy.py` touches a heartbeat file every second; the panel
   looks at it and at the process every second (`Engine._watch_sni`) and restarts a handler that exited or whose
@@ -83,7 +83,7 @@ it grows, so every user-visible change gets a new version.
   client connects to changes; what websites see stays the server's main address or the exit's. An address removed
   from the list is taken off its clients (they are back to the common one). Backups don't carry this server's
   additional addresses, and a client keeps its address after a restore only if this server has it too
-  (`main.restore_state`). Thanks to @MacSergey.
+  (`api/backup.restore_state`). Thanks to @MacSergey.
 - **Clear error when the kernel module refuses an exit's config (#24).** The message no longer shows a piece of
   the `nsenter` command and the temporary config file inside the panel's container (people went looking for a
   file that isn't on the host): "The kernel module didn't accept the config of exit awgr3 (Invalid argument),
@@ -101,8 +101,9 @@ it grows, so every user-visible change gets a new version.
   their `first` domain), `Office (12 networks)`, countries and ASNs by name; more than two lists collapse to `+N`,
   opened by a tap — and the exit on the right. A rule's own name shows small and grey above it only when it is not
   the exit's or the list's name: the exit window no longer signs the rules it creates, and the names it wrote
-  before are removed (`Store.drop_auto_comments`, also on restore). A rule that is off stays numbered, grey and
-  struck through. The rule editor shows the same list labels.
+  before are removed once (`Store.drop_auto_comments_once`: at the first start of 1.21.0 and when restoring a backup
+  of an earlier version, marked in `state.upgraded`); a name given to a rule after that stays, even the exit's. A rule
+  that is off stays numbered, grey and struck through. The rule editor shows the same list labels.
 - **Exact AWG version on exit cards.** `AWG 3.1`, `2.0`, `1.5` or `1.0` from the config's keys
   (`awgconf.protocol_version`: H1–H4 as ranges or S3/S4 mean 2.0, I1–I5 1.5); the card no longer shows `awgrN`.
 - **The header says what the panel is doing.** Besides **Running** and **Error**: **Starting…** until the first
@@ -153,7 +154,7 @@ it grows, so every user-visible change gets a new version.
 - **Telegram control needs a numeric Chat ID.** A `@name` can be freed and taken by someone else, and everyone in a
   public group with that name can write to the bot: commands are now accepted only from the chat with the numeric
   ID set in the panel (`Bot.allowed`), and saving control with a `@name` is refused (`err.tg_control_id`). A bot set
-  up that way before keeps sending notifications and answers commands with the chat's number.
+  up that way before keeps sending notifications and, in a private chat, answers commands with the chat's number.
 - **Balancing spreads the clients of a failed exit.** `Balancer.plan` counted the loads once, so every client of an
   exit that went down landed on the same least loaded exit. The projected load of an exit now grows with each
   client given to it (the client's own recent rate, else its old exit's rate per client, else a typical active one).
@@ -198,7 +199,7 @@ it grows, so every user-visible change gets a new version.
   changed rows (`patchClients`); search, sorting and clicks keep working. 1000 clients in Chrome: a poll without
   changes ~25 ms instead of ~130 ms (a phone with a 4× slower CPU: ~45 instead of ~420 ms), with changes 22 instead of
   76 ms (116 instead of 310).
-- **The field with an error is outlined.** A validation error names its field (`HTTPError.field`, `main.field()`,
+- **The field with an error is outlined.** A validation error names its field (`HTTPError.field`, `checks.field()`,
   `SERVER_FIELDS`, `params.<key>` for AWG parameters); in the exit, Server and Telegram forms the field gets a red
   frame, the cursor and a scroll to it (`markField`), and the frame goes away once the field is edited.
 - **A window keeps the state it was opened with.** While a window is open, a background poll no longer replaces the
@@ -211,7 +212,8 @@ it grows, so every user-visible change gets a new version.
 - **The domain lists hint says** that a browser may send a request for another site over an open HTTP/2 or HTTP/3
   connection when the sites share an address and certificate, and suggests keeping all domains of one owner in one
   list plus an address list for what matters.
-- **Smaller fixes.** Restoring a backup whose Telegram backup period isn't a string answers 400 instead of 500;
+- **Smaller fixes.** A Telegram backup period that isn't a string no longer gives 500: the settings answer 400, and a
+  backup with one is restored with the current period;
   switches in the API — `dom_filter` and `panel_dns` in the Server settings, Telegram on/off, control and event kinds,
   turning a client or an exit on and off, balancing — must be `true` or `false` (a string such as `"false"` or `"no"`
   turned the setting on; the panel itself always sends `true`/`false`); the same now for a rule's `enabled`, an exit's
@@ -326,6 +328,13 @@ it grows, so every user-visible change gets a new version.
   with the wrong one, as on the audit branch). Unused functions are gone (`parse_server_conf`, `setconf_resolved`,
   `WARN_PACKET`, `_resolved`, `tgbot._move`), comments name the files after the split, and `docs/ARCHITECTURE.md`
   lists every module.
+- **Documents.** The README section "DNS on the server" says that names from domain rules go through the rule's
+  exit, that AAAA gets "no records", and that with firewalld in host mode port 53 has to be opened by hand; the
+  features list has the additional server addresses and the numeric Chat ID; changing `EXIT_ENGINE` is applied with
+  `docker compose up -d` (`awg-router restart` keeps the old `.env`). The README and the Telegram box say CPU above
+  95%, as the code has it (memory stays 90%). `.env.example` lists the settings the panel reads (without
+  `UPSTREAM_BACKEND`), the bug report form says where to find the version, CONTRIBUTING says that a pull request
+  gets only CodeQL, and two section references in the fa README are links.
 
 ## 1.20.0 — 2026-11-14
 

@@ -17,6 +17,9 @@ from .i18n import Msg, MsgError
 log = logging.getLogger("awgr.store")
 
 STATE_PATH = os.path.join(config.DATA_DIR, "state.json")
+# однократные исправления состояния прежних выпусков: сделанные записаны в state["upgraded"]
+RULE_NAMES = "rule_names"       # подписи правил именем выхода из окна выхода до 1.21.0 (drop_auto_comments)
+UPGRADES = (RULE_NAMES,)
 
 DEFAULT_STATE = {
     "version": 1,
@@ -86,6 +89,7 @@ class Store:
                 self._write()
         else:
             self.state = copy.deepcopy(DEFAULT_STATE)
+            self.state["upgraded"] = [RULE_NAMES]
             self._write()
 
     def _upgrade(self) -> bool:
@@ -97,7 +101,7 @@ class Store:
             if isinstance(e, dict) and e.get("preset") in RENAMED:
                 e["preset"] = RENAMED[e["preset"]]
                 changed = True
-        if Store.drop_auto_comments(self.state):
+        if Store.drop_auto_comments_once(self.state):
             changed = True
         if any(isinstance(l, dict) and l.get("kind") in TEXT_KINDS and l.get("source")
                for l in self.state.get("lists") or []):
@@ -109,6 +113,22 @@ class Store:
             s["panel_dns_enc"] = "plain"
             changed = True
         return changed
+
+    @staticmethod
+    def drop_auto_comments_once(state: dict, source: dict | None = None) -> bool:
+        """drop_auto_comments один раз: при первом запуске 1.21.0 и для копии прежнего выпуска.
+        Потом имя правила, совпадающее с именем выхода, — уже своё название, и его не трогаем.
+        source — откуда взято состояние (копия), если не оно само. True — что-то поменялось."""
+        done = (source if source is not None else state).get("upgraded")
+        done = [x for x in done if x in UPGRADES] if isinstance(done, list) else []    # из копии — только известные
+        if RULE_NAMES in done:
+            if state.get("upgraded") != done:
+                state["upgraded"] = done
+                return True
+            return False
+        Store.drop_auto_comments(state)
+        state["upgraded"] = done + [RULE_NAMES]
+        return True
 
     @staticmethod
     def drop_auto_comments(state: dict) -> bool:

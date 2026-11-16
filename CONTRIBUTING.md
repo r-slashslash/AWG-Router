@@ -31,7 +31,9 @@ New to the code? Start with the [architecture overview](docs/ARCHITECTURE.md).
 python3 -m unittest discover tests
 ```
 
-These run without root and must pass, and so do `ruff check .` and `eslint app/static` (CI runs them too).
+These run without root and must pass, and so do `ruff check .` and `eslint app/static`. Please run them
+yourself: on a pull request GitHub runs only CodeQL, and the maintainer runs these checks and the network tests
+before merging and before every release.
 `tests/test_rules.py` checks many of the rules above (translations, saved fields, exit references, pinned
 actions, nothing loaded from third-party hosts), so a failure there tells you what was missed.
 Network tests (`tests/*_e2e.py`) need root and are listed in the README, "Development".

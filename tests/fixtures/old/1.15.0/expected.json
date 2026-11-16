@@ -242,6 +242,9 @@
      "pk": "Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg="
     }
    },
+   "upgraded": [
+    "rule_names"
+   ],
    "upstreams": [
     {
      "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
@@ -528,6 +531,9 @@
      "pk": "Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg="
     }
    },
+   "upgraded": [
+    "rule_names"
+   ],
    "upstreams": [
     {
      "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
@@ -1192,6 +1198,9 @@
     "pk": "Az9j2CSV57BzwkKdv3bsPqX1EZQD8YM2j9X2Ooga9eg="
    }
   },
+  "upgraded": [
+   "rule_names"
+  ],
   "upstreams": [
    {
     "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",

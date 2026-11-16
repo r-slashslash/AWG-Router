@@ -1021,5 +1021,55 @@ class DeadCodeTest(unittest.TestCase):
                     self.assertIsNone(re.search(r"\b(main\.py|app\.js)\b", txt), n)
 
 
+
+# ------------------------------------------------------------------ этап 9: документы и имя правила
+from app.store import Store  # noqa: E402
+
+
+class RuleNameKeptTest(unittest.TestCase):
+    """Н45: имя правила, совпадающее с именем выхода, стиралось при каждом запуске панели. Теперь
+    подписи прежних выпусков убираются один раз; своё такое имя потом остаётся."""
+
+    def state(self, upgraded=None):
+        st = {"upstreams": [{"id": "u1", "name": "mobile"}],
+              "routing": {"rules": [{"lists": ["l1"], "outbound": "up:u1", "comment": "mobile"}]}, "clients": {}}
+        if upgraded is not None:
+            st["upgraded"] = upgraded
+        return st
+
+    def test_store_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.json")
+            with open(path, "w") as f:
+                json.dump(self.state(), f)                         # state.json 1.20.0: отметки нет
+            s = Store(path)
+            self.assertEqual(s.state["routing"]["rules"][0]["comment"], "")
+            self.assertEqual(s.state["upgraded"], ["rule_names"])
+            s.state["routing"]["rules"][0]["comment"] = "mobile"   # своё название, как у выхода
+            s._write()
+            s = Store(path)                                        # следующий запуск
+            self.assertEqual(s.state["routing"]["rules"][0]["comment"], "mobile")
+
+    def test_new_install(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(Store(os.path.join(d, "state.json")).state["upgraded"], ["rule_names"])
+
+    def test_backup(self):
+        old = self.state()
+        st = json.loads(json.dumps(old))
+        self.assertTrue(Store.drop_auto_comments_once(st, old))       # копия 1.20.0 — подпись убрана
+        self.assertEqual(st["routing"]["rules"][0]["comment"], "")
+        new = self.state(["rule_names", "<script>", 5])
+        st = json.loads(json.dumps(new))
+        Store.drop_auto_comments_once(st, new)                        # копия 1.21.0 — имя своё
+        self.assertEqual(st["routing"]["rules"][0]["comment"], "mobile")
+        self.assertEqual(st["upgraded"], ["rule_names"])              # из копии — только известные отметки
+        self.assertIn("drop_auto_comments_once(st, new)", read_src("app", "api", "backup.py"))
+
+
+def read_src(*parts):
+    with open(os.path.join(ROOT, *parts), encoding="utf-8") as f:
+        return f.read()
+
 if __name__ == "__main__":
     unittest.main()

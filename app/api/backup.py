@@ -316,7 +316,7 @@ def clean_backup_state(new: dict) -> dict:
             fail("settings.telegram")
         out["telegram"] = at("settings.telegram", lambda: checks.telegram(st, notify.defaults(), tg, backup=True),
                              sub=("via",))
-    Store.drop_auto_comments(st)          # копия до 1.21.0: правила из окна выхода с его именем
+    Store.drop_auto_comments_once(st, new)    # копия до 1.21.0: правила из окна выхода с его именем
     return st
 
 
