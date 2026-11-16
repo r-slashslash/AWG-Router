@@ -154,6 +154,7 @@ def scenario(net, label, params, use_link, amnezia_style=False):
     r = net.ping(NS[1], srv_ip)
     ok = r == "OK" and handshake_ok(net, "awgc", NS[1])
     results.append((f"{label}: клиент {ip} подключается ({'vpn://' if use_link else '.conf'})", ok, r))
+    results.append(all_dump_check(net, label))
 
     # отключение: пир закомментирован, syncconf убирает его с интерфейса
     peer.enabled = False
@@ -186,11 +187,74 @@ def scenario(net, label, params, use_link, amnezia_style=False):
     return results
 
 
+def all_dump_check(net, label):
+    """Панель читает состояние всех туннелей одним `awg show all dump` (system.parse_all_dump): разбор должен
+    совпасть с ответом каждого интерфейса отдельно — у настоящего awg, на модуле и на amneziawg-go."""
+    from app import system
+    bad = []
+    for ns, ifn in ((NS[0], "awg0"), (NS[1], "awgc")):
+        alld = system.parse_all_dump(net.nsrun(ns, "awg", "show", "all", "dump").stdout).get(ifn)
+        one = system._parse_dump(net.nsrun(ns, "awg", "show", ifn, "dump").stdout)
+        strip = lambda d: {k: (v["endpoint"], v["allowed_ips"], bool(v["handshake"])) for k, v in (d or {}).items()}
+        if alld is None or strip(alld) != strip(one):
+            bad.append((ifn, alld, one))
+    return (f"{label}: awg show all dump разбирается так же, как ответ интерфейса", not bad, bad)
+
+
+def rules_check(net):
+    """ip rule и маршруты таблиц выходов одной командой ip -batch (Engine._sync_rules) — на настоящем ip."""
+    os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
+    from app import config, engine as eng_mod
+    with net.NetNS(NS[1]) as ip:
+        ip.link("add", ifname="awgr1", kind="dummy")
+        ip.link("set", index=ip.link_lookup(ifname="awgr1")[0], state="up")
+    calls = []
+
+    class T:
+        key = "e2e"
+
+        def ns(self, cmd, check=True, input=None, **kw):
+            calls.append(cmd)
+            return net.nsrun(NS[1], *cmd, check=check, inp=input)
+
+    e = eng_mod.Engine.__new__(eng_mod.Engine)
+    e.rt = {"u1": eng_mod.UpRT(1, "h", "e2e")}
+    t = T()
+    table = str(config.TABLE_BASE + 1)
+
+    def state():
+        rules = net.nsrun(NS[1], "ip", "rule", "show").stdout
+        routes = net.nsrun(NS[1], "ip", "route", "show", "table", table).stdout
+        return (f"lookup {table}" in rules and "fwmark" in rules, "default dev awgr1" in routes,
+                "unreachable default" in routes)
+
+    out = []
+    e._sync_rules(t)
+    out.append(("ip -batch: правило и оба маршрута выхода на месте", state() == (True, True, True), state()))
+    calls.clear()
+    e._sync_rules(t)
+    out.append(("второй проход без изменений — без ip -batch", not any("-batch" in c for c in calls), calls))
+    with net.NetNS(NS[1]) as ip:                   # туннель перезапущен: маршрут через него пропал
+        ip.link("del", index=ip.link_lookup(ifname="awgr1")[0])
+        ip.link("add", ifname="awgr1", kind="dummy")
+        ip.link("set", index=ip.link_lookup(ifname="awgr1")[0], state="up")
+    e.rt["u1"] = eng_mod.UpRT(1, "h", "e2e")
+    e.rt["u1"].started += 1
+    e._sync_rules(t)
+    out.append(("после перезапуска туннеля маршрут поставлен снова", state() == (True, True, True), state()))
+    e.rt = {}
+    e._sync_rules(t)
+    st = state()
+    out.append(("выход убран — правило и маршруты убраны", not st[0] and not st[1], st))
+    return out
+
+
 def main():
     net = Net()
     results = []
     print(f"движок: {ENGINE}")
     try:
+        results += rules_check(net)
         results += scenario(net, "AWG 3.1", awgserver.generate_params(True), use_link=False)
         results += scenario(net, "AWG 3.1", awgserver.generate_params(True), use_link=True)
         results += scenario(net, "AWG 1.5/2", awgserver.generate_params(False), use_link=False)

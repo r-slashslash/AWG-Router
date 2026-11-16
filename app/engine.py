@@ -43,6 +43,7 @@ SNIPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sniproxy.py
 SNI_CONF = os.path.join(RUN_DIR, "sni.json")
 SNI_STATS = os.path.join(RUN_DIR, "sni-stats.json")
 SNI_BEAT = os.path.join(RUN_DIR, "sni-beat")      # пульс sniproxy.py: mtime обновляется раз в секунду
+ROUTES_EVERY = 60                                # маршруты таблиц выходов ставятся заново не реже, с
 SNI_WATCH_EVERY = 1                               # как часто панель смотрит на sniproxy.py, с
 SNI_HANG = 15                                     # пульса нет дольше — цикл событий стоит
 DNSPROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dnsproxy.py")
@@ -751,8 +752,35 @@ class Engine:
             self.event("error", Msg("ev.upstream_error", name=u["name"], error=err))
         return f
 
+    def _pass_dumps(self, t: system.Target, st: dict) -> tuple[dict | None, dict | None]:
+        """Состояние всех туннелей за проход одним вызовом каждого вида (а не по вызову на выход): `awg show
+        all dump` — рукопожатия и трафик выходов AWG, `ip -j -s link show` — счётчики туннелей SOCKS5.
+        None — не вышло: тогда каждый выход спрашивается отдельно, как раньше."""
+        if config.DRY_RUN or not self.rt:
+            return None, None
+        kinds = set()
+        for u in st["upstreams"]:
+            if u["id"] in self.rt and u.get("enabled", True):
+                try:
+                    kinds.add(self.parsed(u).kind)
+                except Exception:  # noqa: BLE001
+                    kinds.add("awg")
+        awg_on, socks_on = len(kinds - {"socks5"}) > 0, "socks5" in kinds
+        dumps = links = None
+        if awg_on:
+            p = t.ns(["awg", "show", "all", "dump"], check=False, timeout=10)
+            dumps = system.parse_all_dump(p.stdout) if p.stdout else None
+        if socks_on:
+            p = t.ns(["ip", "-j", "-s", "link", "show"], check=False, timeout=10)
+            try:
+                links = {x.get("ifname"): x.get("stats64") or {} for x in json.loads(p.stdout or "[]")}
+            except (ValueError, AttributeError):
+                links = None
+        return dumps, links
+
     def _update_health(self, t: system.Target, st: dict) -> None:
         now = time.time()
+        dumps, links = self._pass_dumps(t, st)
         for u in st["upstreams"]:
             uid = u["id"]
             if not u.get("enabled", True):
@@ -769,13 +797,15 @@ class Engine:
             except Exception:  # noqa: BLE001
                 kind = "awg"
             if kind == "socks5":
-                self._socks_health(t, u, r, now)
+                self._socks_health(t, u, r, now, links)
                 continue
             if config.DRY_RUN and self._fake and r.iface not in self._fake.handshakes:
                 # в демо второй туннель «мёртвый», чтобы было видно резервирование
                 self._fake.handshakes[r.iface] = now - (900 if r.num == 2 else 20)
-            p = t.ns(["awg", "show", r.iface, "dump"], check=False, timeout=10)
-            peers = system._parse_dump(p.stdout) if p.returncode == 0 else {}
+            peers = (dumps or {}).get(r.iface)
+            if peers is None:                   # нет в общем ответе — спросить сам туннель, как раньше
+                p = t.ns(["awg", "show", r.iface, "dump"], check=False, timeout=10)
+                peers = system._parse_dump(p.stdout) if p.returncode == 0 else {}
             peer = next(iter(peers.values()), None)
             try:
                 limit = self.parsed(u).rekey_after + 70
@@ -839,7 +869,7 @@ class Engine:
                 self._rr_busy.discard(uid)
         threading.Thread(target=run, name=f"reresolve-{uid}", daemon=True).start()
 
-    def _socks_health(self, t: system.Target, u: dict, r: UpRT, now: float) -> None:
+    def _socks_health(self, t: system.Target, u: dict, r: UpRT, now: float, links: dict | None = None) -> None:
         """Выход SOCKS5 работает, если жив hev-socks5-tunnel и недавняя проверка прокси прошла.
         Проверка идёт в фоне раз в минуту, чтобы не задерживать цикл."""
         uid = u["id"]
@@ -868,9 +898,12 @@ class Engine:
                        Msg("ev.upstream_ok" if healthy else "ev.upstream_failed", name=u["name"], uid=uid))
         rx = tx = 0
         if not config.DRY_RUN:
-            p = t.ns(["ip", "-j", "-s", "link", "show", "dev", r.iface], check=False, timeout=10)
             try:
-                st64 = (json.loads(p.stdout or "[]") or [{}])[0].get("stats64") or {}
+                if links is not None and r.iface in links:      # из общего ответа прохода (_pass_dumps)
+                    st64 = links[r.iface]
+                else:
+                    p = t.ns(["ip", "-j", "-s", "link", "show", "dev", r.iface], check=False, timeout=10)
+                    st64 = (json.loads(p.stdout or "[]") or [{}])[0].get("stats64") or {}
                 # TUN со стороны ядра: rx — пришло от прокси (к клиентам), tx — ушло в прокси
                 rx, tx = st64.get("rx", {}).get("bytes", 0), st64.get("tx", {}).get("bytes", 0)
             except (ValueError, IndexError, AttributeError):
@@ -1598,14 +1631,14 @@ class Engine:
 
     # -------------------------------------------------------- ip rule/route
     def _sync_rules(self, t: system.Target) -> None:
-        want = {r.num for r in self.rt.values()}
+        """ip rule и маршруты таблиц выходов — одной командой `ip -batch` (раньше — по два процесса на выход
+        каждый проход). Маршруты заново ставятся, когда изменился набор туннелей (новый туннель — новое
+        время запуска) или прошло ROUTES_EVERY: исчезнуть сами они могут только вместе с интерфейсом."""
+        want = {r.num: r for r in self.rt.values()}
         lo, hi = config.RULE_PRIO_BASE + 1, config.RULE_PRIO_BASE + config.MAX_UPSTREAMS
-        p = t.ns(["ip", "-j", "rule", "show"], check=False)
-        try:
-            have = json.loads(p.stdout or "[]")
-        except ValueError:
-            have = []
+        have = self._ip_rules(t)
         present = set()
+        cmds, adds = [], []
         for rule in have:
             prio = rule.get("priority", 0)
             if not lo <= prio <= hi:
@@ -1616,19 +1649,46 @@ class Engine:
             if ok and num not in present:
                 present.add(num)
             else:
-                t.ns(["ip", "rule", "del", "priority", str(prio)], check=False)
+                cmds.append(f"rule del priority {prio}")
                 if num not in want:
-                    t.ns(["ip", "route", "flush", "table", str(config.TABLE_BASE + num)], check=False)
-        for num in want:
-            table = str(config.TABLE_BASE + num)
+                    cmds.append(f"route flush table {config.TABLE_BASE + num}")
+        for num in sorted(want):
             if num not in present:
-                t.ns(["ip", "rule", "add", "fwmark", hex(nftgen.mark_for(num)), "lookup", table,
-                      "priority", str(config.RULE_PRIO_BASE + num)])
-            # Если туннель исчезнет, останется unreachable — трафик не утечёт мимо
-            t.ns(["ip", "route", "replace", "unreachable", "default", "metric", "4096",
-                  "table", table], check=False)
-            t.ns(["ip", "route", "replace", "default", "dev", f"{config.IFACE_PREFIX}{num}",
-                  "table", table], check=False)
+                adds.append((num, ["rule", "add", "fwmark", hex(nftgen.mark_for(num)), "lookup",
+                                   str(config.TABLE_BASE + num), "priority", str(config.RULE_PRIO_BASE + num)]))
+        cmds += [" ".join(a) for _, a in adds]
+        key = (t.key, tuple(sorted((n, r.iface, r.started) for n, r in want.items())))
+        now = time.time()
+        routes = key != getattr(self, "_routes_key", None) or now - getattr(self, "_routes_at", 0) >= ROUTES_EVERY
+        if routes:
+            for num in sorted(want):
+                table = config.TABLE_BASE + num
+                # Если туннель исчезнет, останется unreachable — трафик не утечёт мимо
+                cmds.append(f"route replace unreachable default metric 4096 table {table}")
+                cmds.append(f"route replace default dev {want[num].iface} table {table}")
+        if not cmds:
+            return
+        p = t.ns(["ip", "-force", "-batch", "-"], input="\n".join(cmds) + "\n", check=False)
+        if p.returncode != 0:
+            # Что-то не прошло (интерфейс как раз пропал и т. п.). Маршруты — заново на следующем проходе;
+            # недостающее правило — отдельной командой, и её ошибка видна, как раньше.
+            self._routes_key = None
+            if adds:
+                got = {r.get("priority", 0) - config.RULE_PRIO_BASE for r in self._ip_rules(t)}
+                for num, a in adds:
+                    if num not in got:
+                        t.ns(["ip", *a])
+            return
+        if routes:
+            self._routes_key, self._routes_at = key, now
+
+    @staticmethod
+    def _ip_rules(t: system.Target) -> list[dict]:
+        p = t.ns(["ip", "-j", "rule", "show"], check=False)
+        try:
+            return json.loads(p.stdout or "[]")
+        except ValueError:
+            return []
 
     def _sysctl(self, t: system.Target) -> None:
         kvs = ["net.ipv4.ip_forward=1", "net.ipv4.conf.all.src_valid_mark=1"]

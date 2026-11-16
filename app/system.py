@@ -164,6 +164,29 @@ def _parse_dump(text: str) -> dict:
     return peers
 
 
+def parse_all_dump(text: str) -> dict[str, dict]:
+    """`awg show all dump` → {интерфейс: пиры, как у _parse_dump}. Первое поле каждой строки — имя
+    интерфейса; первая строка интерфейса — его собственная (у AmneziaWG в ней ещё и Jc, S1–S4, H1–H4…,
+    поэтому строки различаются по порядку, а не по числу полей), дальше — его пиры."""
+    out: dict[str, dict] = {}
+    for line in text.strip().split("\n"):
+        f = line.split("\t")
+        if len(f) < 2:
+            continue
+        if f[0] not in out:                 # первая строка интерфейса — его ключи и порт
+            out[f[0]] = {}
+            continue
+        if len(f) < 9:
+            continue
+        _, pk, _psk, endpoint, allowed, hs, rx, tx = f[:8]
+        try:
+            out[f[0]][pk] = {"endpoint": None if endpoint == "(none)" else endpoint, "allowed_ips": allowed,
+                             "handshake": int(hs or 0), "rx": int(rx or 0), "tx": int(tx or 0)}
+        except ValueError:
+            continue
+    return out
+
+
 def local_awg(args: list[str], input: str | None = None) -> str:
     """Утилита awg самой панели (для genkey/pubkey/genpsk)."""
     return run(["awg"] + args, input=input, timeout=10).stdout.strip()
@@ -218,7 +241,6 @@ class Target:
     def native(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
         raise NotImplementedError
 
-    ns_container = native  # старое имя
 
     def read_file(self, p: str) -> str | None:
         try:
@@ -290,7 +312,6 @@ class ContainerTarget(Target):
     def native(self, cmd, **kw):
         return run(["nsenter", "-t", str(self.pid), "-m", "-n", "--"] + cmd, **kw)
 
-    ns_container = native
 
     @property
     def awg_bin(self) -> str:
@@ -325,7 +346,6 @@ class HostTarget(Target):
     def native(self, cmd, **kw):
         return run(["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--"] + cmd, **kw)
 
-    ns_container = native
     sync_tmp = "/run/awgr-sync.conf"
 
     def is_up(self) -> bool:
@@ -520,7 +540,6 @@ class DemoTarget(Target):
     def native(self, cmd, **kw):
         return self._cmd(cmd)
 
-    ns_container = native
 
     def restart(self) -> None:
         self.log.append("docker restart amnezia-awg2")

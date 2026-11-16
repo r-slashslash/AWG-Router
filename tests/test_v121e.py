@@ -923,5 +923,112 @@ class HostRpFilterTest(unittest.TestCase):
         self.assertIn("net.ipv4.conf.all.rp_filter=2", kv)
 
 
+# ============================================================ оптимизация: процессы за проход
+AWG_ALL = ("awgr1\tPRIV\tPUB\t0\t4\t40\t70\t0\t0\t1\t2\t3\t4\toff\n"          # строка интерфейса AmneziaWG: Jc…H4
+           "awgr1\tPEER1\t(none)\t203.0.113.7:51820\t0.0.0.0/0\t1700000000\t11\t22\t25\n"
+           "awgr2\tPRIV2\tPUB2\t0\toff\n"
+           "awgr3\tPRIV3\tPUB3\t0\toff\n"
+           "awgr3\tPEER3\t(none)\t(none)\t0.0.0.0/0\t0\t0\t0\toff\n")
+
+
+class PassProcessesTest(unittest.TestCase):
+    def test_parse_all_dump(self):
+        d = system.parse_all_dump(AWG_ALL)
+        self.assertEqual(sorted(d), ["awgr1", "awgr2", "awgr3"])
+        self.assertEqual(d["awgr1"]["PEER1"], {"endpoint": "203.0.113.7:51820", "allowed_ips": "0.0.0.0/0",
+                                               "handshake": 1700000000, "rx": 11, "tx": 22})
+        self.assertEqual(d["awgr2"], {})
+        self.assertIsNone(d["awgr3"]["PEER3"]["endpoint"])
+
+    def _eng(self, nums):
+        e = engine.Engine.__new__(engine.Engine)
+        e.rt = {f"u{n}": engine.UpRT(n, "h", "k") for n in nums}
+        e.health, e._fake, e.events = {}, None, []
+        e.event = lambda *a, **kw: None
+        e.parsed = lambda u: mock.Mock(kind=u.get("kind", "awg"), rekey_after=120)
+        return e
+
+    def test_one_awg_call_for_all_exits(self):
+        e = self._eng([1, 2, 3])
+        t = mock.Mock()
+        t.ns.return_value = mock.Mock(returncode=0, stdout=AWG_ALL)
+        st = {"upstreams": [{"id": f"u{n}", "num": n, "name": f"x{n}"} for n in (1, 2, 3)]}
+        with mock.patch.object(engine.config, "DRY_RUN", False):
+            e._update_health(t, st)
+        self.assertEqual([c.args[0][:3] for c in t.ns.call_args_list], [["awg", "show", "all"]])
+        self.assertEqual((e.health["u1"]["rx"], e.health["u3"]["rx"]), (11, 0))
+
+    def test_missing_iface_asked_alone(self):
+        e = self._eng([1, 4])
+        calls = []
+
+        def ns(cmd, **kw):
+            calls.append(cmd)
+            if cmd[2] == "all":
+                return mock.Mock(returncode=0, stdout=AWG_ALL)
+            return mock.Mock(returncode=0, stdout="priv\tpub\t0\toff\nP\t(none)\t(none)\t0.0.0.0/0\t5\t6\t7\toff\n")
+        t = mock.Mock(ns=ns)
+        st = {"upstreams": [{"id": "u1", "num": 1, "name": "a"}, {"id": "u4", "num": 4, "name": "b"}]}
+        with mock.patch.object(engine.config, "DRY_RUN", False):
+            e._update_health(t, st)
+        self.assertEqual(calls, [["awg", "show", "all", "dump"], ["awg", "show", "awgr4", "dump"]])
+        self.assertEqual(e.health["u4"]["rx"], 6)
+
+    def _rules_t(self, rules="[]", rc=0):
+        t = mock.Mock(key="k1")
+        calls = []
+
+        def ns(cmd, check=True, input=None, **kw):
+            calls.append((cmd, input))
+            if cmd[:3] == ["ip", "-j", "rule"]:
+                return mock.Mock(returncode=0, stdout=rules)
+            return mock.Mock(returncode=rc, stdout="", stderr="")
+        t.ns = ns
+        return t, calls
+
+    def test_rules_in_one_batch(self):
+        e = self._eng([1, 2])
+        t, calls = self._rules_t()
+        e._sync_rules(t)
+        batch = [c for c in calls if "-batch" in c[0]]
+        self.assertEqual(len(calls), 2)                       # ip rule show + один ip -batch
+        lines = batch[0][1].splitlines()
+        self.assertIn(f"rule add fwmark {hex(nftgen.mark_for(1))} lookup {engine.config.TABLE_BASE + 1} "
+                      f"priority {engine.config.RULE_PRIO_BASE + 1}", lines)
+        self.assertIn(f"route replace default dev awgr2 table {engine.config.TABLE_BASE + 2}", lines)
+        self.assertEqual(sum("unreachable" in ln for ln in lines), 2)
+
+    def test_routes_not_every_pass(self):
+        e = self._eng([1])
+        base = engine.config.RULE_PRIO_BASE
+        ok = json.dumps([{"priority": base + 1, "table": str(engine.config.TABLE_BASE + 1),
+                          "fwmark": hex(nftgen.mark_for(1))}])
+        t, calls = self._rules_t(ok)
+        e._sync_rules(t)
+        e._sync_rules(t)
+        self.assertEqual(sum("-batch" in c[0] for c in calls), 1)    # второй проход — только ip rule show
+        e.rt["u1"].started += 5                                      # туннель перезапущен
+        e._sync_rules(t)
+        self.assertEqual(sum("-batch" in c[0] for c in calls), 2)
+        with mock.patch.object(engine.time, "time", return_value=time.time() + engine.ROUTES_EVERY + 1):
+            e._sync_rules(t)
+        self.assertEqual(sum("-batch" in c[0] for c in calls), 3)    # и раз в ROUTES_EVERY на всякий случай
+
+    def test_batch_failure_adds_rule_alone(self):
+        e = self._eng([1])
+        t, calls = self._rules_t(rc=1)
+        e._sync_rules(t)
+        self.assertEqual(calls[-1][0][:3], ["ip", "rule", "add"])    # недостающее правило — отдельно
+        self.assertIsNone(e._routes_key)                              # маршруты — снова на следующем проходе
+
+    def test_old_rule_removed(self):
+        e = self._eng([])
+        base = engine.config.RULE_PRIO_BASE
+        t, calls = self._rules_t(json.dumps([{"priority": base + 3, "table": "2003", "fwmark": "0x2003"}]))
+        e._sync_rules(t)
+        lines = [c for c in calls if "-batch" in c[0]][0][1].splitlines()
+        self.assertEqual(lines, [f"rule del priority {base + 3}", f"route flush table {engine.config.TABLE_BASE + 3}"])
+
+
 if __name__ == "__main__":
     unittest.main()
