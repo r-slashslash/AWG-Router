@@ -51,6 +51,14 @@ COPY --from=lego /lego /usr/bin/lego
 COPY --from=hev /out/hev-socks5-tunnel /usr/bin/hev-socks5-tunnel
 WORKDIR /opt/awg-router
 COPY app ./app
+# Байткод заранее. В образе Python нет .pyc даже у стандартной библиотеки, а PYTHONDONTWRITEBYTECODE не даёт их
+# записать: каждый запуск панели (и каждая проверка здоровья) компилировал всё заново — на VPS с одним ядром это
+# 3 секунды до того, как панель ставит свои правила (у контейнера приложения AmneziaVPN всё это время клиенты шли
+# мимо выходов). Импорт панели в демо-режиме компилирует ровно то, что ей нужно из стандартной библиотеки.
+RUN python3 -m compileall -q app \
+ && DRY_RUN=1 DATA_DIR=/tmp/awgr-build PANEL_PASSWORD=build \
+    python3 -c "import app.main, app.sniproxy, app.dnsproxy, app.probe, app.tgreq, app.webfront" \
+ && rm -rf /tmp/awgr-build
 ENV DATA_DIR=/data PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 VOLUME ["/data"]
 STOPSIGNAL SIGTERM
