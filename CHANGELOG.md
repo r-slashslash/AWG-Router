@@ -221,6 +221,16 @@ it grows, so every user-visible change gets a new version.
   (`Store.mutate`). DNS query IDs come from `secrets`. Texts of the bot fill in their parameters in one pass (a client
   named `{gb}` kept its name). `sniproxy.log` and `dnsproxy.log` are cut when they grow over 5 MB, and a QUIC queue
   error is logged at most once a minute (`sniproxy.QUIC_ERR_LOG_EVERY`). The backup restore tests no longer go to the network.
+- **One check per kind of input.** Exits, lists, rules, clients, limits, masking, Telegram and the panel settings are
+  checked by one function each in `app/checks.py` (the server's client settings — DNS, MTU, keepalive, address — in
+  `users.py`), used by the API and by backup restore alike; where a backup always got the default instead of an
+  error, it still does (`checks.forgive`). Where the two disagreed, the form's rule now holds for backups too: a quota
+  over 1,000,000 GB means no quota, more than four DNS servers — the first four, numbers written as text and extra
+  spaces are accepted, and a Telegram backup password shorter than 8 or longer than 128 characters refuses the backup
+  (a long one used to be dropped silently, and the backups would have gone out unencrypted). `expires: true` in
+  `PUT /api/limits` is refused (it was saved as 1970 and turned the client off at once). State files and backups made
+  by the real code of releases 1.0.0–1.20.0 are in `tests/fixtures/old` (`tools/fixtures/make_old.py`), and
+  `tests/test_old_files.py` checks that they load as before.
 
 ## 1.20.0 — 2026-11-14
 
