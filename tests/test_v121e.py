@@ -303,5 +303,104 @@ class HelperLogTrimTest(unittest.TestCase):
             self.assertEqual(f.read(), "ok\n")
 
 
+# ============================================================ этап 2: интерфейс (Б 10, 12, 13, 14)
+class CspTest(unittest.TestCase):
+    def test_header_on_pages_only(self):
+        import http.client
+        srv = main.app.serve("127.0.0.1", 0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+            c.request("GET", main.BASE + "/")
+            r = c.getresponse()
+            r.read()
+            csp = r.getheader("Content-Security-Policy") or ""
+            self.assertIn("script-src 'self'", csp)
+            self.assertIn("frame-ancestors 'none'", csp)
+            self.assertNotIn("unsafe-eval", csp)
+            c.request("GET", main.BASE + "/api/state")
+            r = c.getresponse()
+            r.read()
+            self.assertIsNone(r.getheader("Content-Security-Policy"))
+            c.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_no_inline_scripts(self):
+        """CSP без 'unsafe-inline' для скриптов: на страницах нет встроенных скриптов и обработчиков."""
+        import re
+        static = os.path.join(os.path.dirname(__file__), "..", "app", "static")
+        for name in ("index.html", "share.html"):
+            with open(os.path.join(static, name)) as f:
+                html = f.read()
+            self.assertFalse(re.search(r"<script(?![^>]*\bsrc=)", html), name)
+            self.assertFalse(re.search(r"\son[a-z]+\s*=", html), name)
+        for name in ("app.js", "share.js", "i18n.js", "qrcode.js"):
+            with open(os.path.join(static, name)) as f:
+                js = f.read()
+            self.assertNotIn("eval(", js, name)
+            self.assertNotIn("new Function", js, name)
+            self.assertNotIn("javascript:", js, name)
+
+
+class ListsInBackgroundTest(unittest.TestCase):
+    def test_needs_net(self):
+        self.assertTrue(main._needs_net({"kind": "country", "source": "de"}))
+        self.assertTrue(main._needs_net({"kind": "url", "source": "https://x.example/l.txt"}))
+        self.assertTrue(main._needs_net({"kind": "domains", "source": "youtube.com\nhttps://x.example/d.txt"}))
+        self.assertFalse(main._needs_net({"kind": "domains", "source": "youtube.com"}))
+        self.assertFalse(main._needs_net({"kind": "manual", "source": "10.0.0.0/8"}))
+
+    def test_add_country_does_not_wait(self):
+        gate = threading.Event()
+
+        def slow(lst, stats=None):
+            gate.wait(5)
+            raise lists.ListError(main.Msg("list.empty"))
+        st0 = main.store.snapshot()
+        try:
+            with mock.patch.object(lists, "fetch_list", slow):
+                t0 = time.time()
+                r = main.add_list(Req({"kind": "country", "source": "nl"}))
+                self.assertLess(time.time() - t0, 1)
+                self.assertTrue(r["busy"])
+                view = next(x for x in main.get_state(Req({}))["lists"] if x["id"] == "nl")
+                self.assertTrue(view["busy"])
+                gate.set()
+                for _ in range(50):
+                    if "nl" not in main.engine.lists_busy:
+                        break
+                    time.sleep(0.05)
+            l = main.Store.lst(main.store.snapshot(), "nl")
+            self.assertTrue(l.get("error"))
+            self.assertNotIn("nl", main.engine.lists_busy)
+        finally:
+            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+
+    def test_manual_still_immediate(self):
+        st0 = main.store.snapshot()
+        try:
+            r = main.add_list(Req({"kind": "manual", "source": "10.0.0.0/8\n1.2.3.0/24", "name": "m"}))
+            self.assertFalse(r["busy"])
+            self.assertEqual(r["count"], 2)
+        finally:
+            main.store.mutate(lambda st: (st.clear(), st.update(st0)))
+
+
+class UiGuardsTest(unittest.TestCase):
+    """Б 12, 13 — проверка по тексту app.js (браузерная проверка — Playwright, вне юнит-тестов)."""
+    def setUp(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js")) as f:
+            self.js = f.read()
+
+    def test_server_tab_leave_guard(self):
+        self.assertIn('if (tab === "server" && srvDirty()) return confirm(t("srv.leave"));', self.js)
+        self.assertIn('(tab === "server" && srvDirty())', self.js.split('"beforeunload"', 1)[1][:200])
+
+    def test_stale_state_dropped(self):
+        self.assertIn("if (seq < stateShown) return;", self.js)
+
+
 if __name__ == "__main__":
     unittest.main()

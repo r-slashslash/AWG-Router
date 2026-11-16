@@ -32,6 +32,13 @@ KEEP_IDLE = 15             # секунд ожидания следующего 
 GZIP_MIN = 1024            # байт: ответы короче не сжимаются
 GZIP_TYPES = ("text/", "application/json", "application/javascript", "application/manifest+json",
               "image/svg+xml")
+# Страницы панели берут скрипты, стили и шрифты только у самой панели (сторонних хостов нет по правилам
+# проекта). CSP закрепляет это в браузере: даже если где-то забудут экранировать имя клиента, чужой
+# скрипт не выполнится. style 'unsafe-inline' — у разметки есть атрибуты style; data: и blob: —
+# значок страницы, QR-код и скачивание копии.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+       "font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; "
+       "form-action 'self'")
 _gz_cache: dict[str, tuple[str, bytes]] = {}     # путь файла статики → (ETag, сжатое тело)
 _gz_lock = threading.Lock()
 
@@ -218,6 +225,8 @@ class App:
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("X-Frame-Options", "DENY")
+                if ctype.startswith("text/html"):
+                    self.send_header("Content-Security-Policy", CSP)
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
                 for k, v in extra:

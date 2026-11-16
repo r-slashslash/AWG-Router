@@ -294,9 +294,17 @@ document.addEventListener("focusin", (e) => { if (["INPUT", "SELECT", "TEXTAREA"
 // не должен красить шапку в красный
 const OFFLINE_AFTER = 2, STATE_TIMEOUT_MS = 15000;
 let pollFails = 0;
+// Опрос, начатый до действия, может прийти позже refresh() после него: старый ответ вернул бы на экран
+// уже удалённого клиента. Ответ старше применённого отбрасывается.
+let stateSeq = 0, stateShown = 0;
+let listsBusy = false;
 async function refresh(auto = false) {
+  const seq = ++stateSeq;
   try {
-    S = await api("GET", "state", undefined, STATE_TIMEOUT_MS);
+    const data = await api("GET", "state", undefined, STATE_TIMEOUT_MS);
+    if (seq < stateShown) return;
+    stateShown = seq;
+    S = data;
     pollFails = 0;
   } catch (e) {
     if (e instanceof AuthError) return;
@@ -308,6 +316,13 @@ async function refresh(auto = false) {
   }
   if (followUpdate()) return;
   renderStatus();
+  // список скачивается в фоне: на вкладке «Маршрутизация» обновляется только таблица списков
+  const busy = S.lists.some((l) => l.busy);
+  if (auto && tab === "routing" && (busy || listsBusy) && $("#lists-sec") && !$("#modal").open) {
+    $("#lists-sec").innerHTML = listsSection();
+    bindLists();
+  }
+  listsBusy = busy;
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;
   if (auto && $("#modal").open) return;
@@ -337,7 +352,7 @@ async function boot() {
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]");
   if (!b) return;
-  if (tab === "routing" && routingDirty() && !confirm(t("rt.leave"))) return;
+  if (!leaveOk()) return;
   if (tab === "routing") routingDraft = null;
   tab = b.dataset.tab;
   if (tab === "server") { SRV = null; srvDraft = null; }
@@ -740,7 +755,15 @@ bind.clients = () => {
 };
 
 function goTab(name) {
+  if (!leaveOk()) return;
+  if (tab === "server" && name !== "server") { SRV = null; srvDraft = null; }
   tab = name; history.replaceState(null, "", "#" + tab); render(); window.scrollTo(0, 0);
+}
+/** Уход с вкладки с несохранёнными правками: правила маршрутизации и настройки сервера — спросить. */
+function leaveOk() {
+  if (tab === "routing" && routingDirty()) return confirm(t("rt.leave"));
+  if (tab === "server" && srvDirty()) return confirm(t("srv.leave"));
+  return true;
 }
 
 /** Свой адрес сервера в конфиге клиента (#37): «как у всех» и адреса с вкладки «Сервер».
@@ -1544,7 +1567,7 @@ function listsSection() {
     <tr>
       <td>${badge}<b><bdi>${esc(listName(l.id))}</bdi></b><div class="list-row-src">${src}</div></td>
       <td data-m="sub">${size !== null ? size : l.count ? `${esc(t("n.networks", { n: l.count }))}<div class="small muted">${esc(t("n.addresses", { n: l.addresses, nText: fmtCompact(l.addresses) }))}</div>` : `<span class="muted">${esc(t("ls.not_loaded"))}</span>`}${l.skipped_v6 ? `<div class="small warn-text">${esc(t("ls.skipped_v6", { n: l.skipped_v6 }))}</div>` : ""}
-        ${l.error ? `<div class="err small">${esc(tm(l.error))}</div>` : ""}${l.updated ? `<div class="small muted">${esc(t("ls.updated", { time: fmtTime(l.updated) }))}</div>` : ""}</td>
+        ${l.busy ? `<div class="small muted">${esc(t("ls.busy"))}</div>` : `${l.error ? `<div class="err small">${esc(tm(l.error))}</div>` : ""}${l.updated ? `<div class="small muted">${esc(t("ls.updated", { time: fmtTime(l.updated) }))}</div>` : ""}`}</td>
       <td data-m="sub" class="uses">${listUses(l)}</td>
       <td data-m="right" class="nowrap acts">
         ${l.kind !== "manual" ? `<button class="icon-btn" data-refresh="${esc(l.id)}" title="${esc(t("ls.refresh"))}" aria-label="${esc(t("ls.refresh"))}">⟳</button>` : ""}
@@ -1568,7 +1591,8 @@ function bindLists() {
     b.disabled = true;
     try {
       const l = await api("POST", `lists/${b.dataset.refresh}/refresh`);
-      l.error ? toast(tm(l.error), true) : toast(t("ls.refreshed", { name: listName(l.id) }));
+      if (l.busy) toast(t("ls.refresh_busy", { name: listName(l.id) }));
+      else l.error ? toast(tm(l.error), true) : toast(t("ls.refreshed", { name: listName(l.id) }));
     } catch (e) { toast(e.message, true); }
     refresh();
   });
@@ -1625,7 +1649,8 @@ function editList(id, kind, onSaved = null) {
       closeModal();
       await refresh();
       if (onSaved && r && r.id) onSaved(r.id);
-      if (r && r.error) toast(t("ls.saved_failed", { e: tm(r.error) }), true);
+      if (r && r.busy) toast(t("ls.saved_busy", { name: listName(r.id) }));
+      else if (r && r.error) toast(t("ls.saved_failed", { e: tm(r.error) }), true);
       else {
         toast(t("ls.saved", { name: listName(r.id), count: t(kind === "domains" ? "n.domains" : "n.networks", { n: r.count || 0 }) }));
         if (r.skipped_v6) toast(t("ls.skipped_v6", { n: r.skipped_v6 }));
@@ -2771,6 +2796,8 @@ function closeModal() { $("#modal").close(); }
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
 $("#modal").addEventListener("close", () => { if (tab !== "routing") render(); });
 
-window.addEventListener("beforeunload", (e) => { if (routingDirty()) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", (e) => {
+  if (routingDirty() || (tab === "server" && srvDirty())) { e.preventDefault(); e.returnValue = ""; }
+});
 applyStaticTexts();
 boot();

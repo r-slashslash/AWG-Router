@@ -1480,7 +1480,7 @@ def _after_exit_routing(lists_changed: tuple) -> None:
     if drop:
         lists.delete_cidrs(drop)
     if refresh:
-        engine.refresh_lists(False, [refresh])
+        _refresh_now_or_bg(refresh)           # свои сайты выхода со ссылками скачиваются в фоне
 
 
 @app.post("/api/upstreams")
@@ -1787,10 +1787,30 @@ def trace_target(client: str | None, ip: str) -> dict:
 # -------------------------------------------------------------------- lists
 def _list_view(l: dict | None) -> dict | None:
     """Список для браузера. Текст ручного списка (до 2 МБ) не отдаём в /api/state,
-    который опрашивается каждые 5 секунд, — только по /api/lists/<id>."""
-    if l is None or l.get("kind") not in ("manual", "domains"):
-        return l
-    return {**l, "source": None}
+    который опрашивается каждые 5 секунд, — только по /api/lists/<id>. busy — скачивается сейчас."""
+    if l is None:
+        return None
+    v = {**l, "busy": l["id"] in engine.lists_busy}
+    if l.get("kind") in ("manual", "domains"):
+        v["source"] = None
+    return v
+
+
+def _needs_net(l: dict) -> bool:
+    """Списку нужна сеть: страны, ASN, по ссылке и домены со ссылками. Ручной список и домены без ссылок
+    разбираются за доли секунды — их по-прежнему готовим сразу, и ответ уже с числом записей."""
+    if l["kind"] in ("country", "asn", "url"):
+        return True
+    return l["kind"] == "domains" and bool(domains.split_source(l.get("source") or "")[0])
+
+
+def _refresh_now_or_bg(lid: str) -> dict | None:
+    l = Store.lst(store.snapshot(), lid)
+    if l and _needs_net(l):
+        engine.refresh_lists_bg([lid])
+    else:
+        engine.refresh_lists(False, [lid])
+    return _list_view(Store.lst(store.snapshot(), lid))
 
 
 @app.get("/api/lists/{lid}")
@@ -1852,8 +1872,7 @@ def add_list(req):
         st["lists"].append({"id": lid, **d})
         return lid
     lid = store.mutate(fn)
-    engine.refresh_lists(False, [lid])
-    return {"id": lid, **(_list_view(Store.lst(store.snapshot(), lid)) or {})}
+    return {"id": lid, **(_refresh_now_or_bg(lid) or {})}
 
 
 @app.put("/api/lists/{lid}")
@@ -1873,8 +1892,7 @@ def edit_list(req, lid):
             d["source"] = l["source"]  # страну у существующего списка не меняем
         l.update(d)
     store.mutate(fn)
-    engine.refresh_lists(False, [lid])
-    return _list_view(Store.lst(store.snapshot(), lid))
+    return _refresh_now_or_bg(lid)
 
 
 @app.delete("/api/lists/{lid}")
@@ -1896,8 +1914,7 @@ def del_list(req, lid):
 def refresh_list(req, lid):
     if not Store.lst(store.snapshot(), lid):
         bad("err.not_found", 404)
-    engine.refresh_lists(False, [lid])
-    return _list_view(Store.lst(store.snapshot(), lid))
+    return _refresh_now_or_bg(lid)
 
 
 @app.get("/api/lists/{lid}/cidrs")

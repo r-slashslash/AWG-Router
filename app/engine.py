@@ -138,6 +138,7 @@ class Engine:
         self._acct_retry = 0.0
         self.matcher = lists.Matcher()
         self._list_cache: dict[str, tuple[float, list[str]]] = {}
+        self.lists_busy: set[str] = set()          # списки, которые сейчас скачиваются по кнопке (refresh_lists_bg)
         self._parsed: dict[str, awgconf.UpstreamConf] = {}
         self._fake = system.DemoTarget() if config.DRY_RUN else None
         self.public_v4: str | None = None      # внешний IPv4, найденный проверкой «напрямую»
@@ -303,6 +304,23 @@ class Engine:
             self.store.mutate(upd)
         if changed:
             self.trigger()
+
+    def refresh_lists_bg(self, ids: list[str]) -> None:
+        """Скачать списки в фоне (сохранение и кнопка «Обновить» в панели): запрос не ждёт скачивания,
+        которое может идти минуты. Пока идёт, список в /api/state помечен busy."""
+        ids = [i for i in ids if i not in self.lists_busy]
+        if not ids:
+            return
+        self.lists_busy.update(ids)
+
+        def run():
+            try:
+                self.refresh_lists(False, ids)
+            except Exception:  # noqa: BLE001
+                log.exception("lists")
+            finally:
+                self.lists_busy.difference_update(ids)
+        threading.Thread(target=run, name="lists-now", daemon=True).start()
 
     def _cidrs(self, lid: str) -> list[str]:
         p = lists.path_for(lid)
