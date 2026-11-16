@@ -3,7 +3,7 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.21.0 — 2026-11-16
+## 1.21.0 — 2026-11-17
 
 - **Domain rules to any exit.** A domain list can now lead to an AmneziaWG exit, Direct or Block, not only to a
   SOCKS5 exit (`err.domains_need_socks` is gone). `sniproxy.py` already sent a matched site to its original address
