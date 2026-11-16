@@ -393,12 +393,13 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                        + "\n".join(mss) + "\n\t}")
 
     # та же страховка для своих соединений сервера (sniproxy.py, dnsproxy.py, проверки выходов): метка выхода
-    # мимо туннеля — отказ; метка политики sniproxy.py, которой нет в c_output (его настройки и nftables на миг
-    # разошлись, NET-3), — тоже отказ, а не основная таблица
-    out.append("\tchain c_guard_out {\n\t\ttype filter hook output priority filter; policy accept;\n"
+    # мимо туннеля — в никуда; метка политики sniproxy.py, которой нет в c_output (его настройки и nftables на миг
+    # разошлись), — тоже, а не основная таблица. В hook postrouting, а не output: в output имя интерфейса —
+    # прежний путь, до того как c_output (type route) сменил метку и маршрут; reject там нельзя — только drop
+    out.append("\tchain c_guard_post {\n\t\ttype filter hook postrouting priority filter; policy accept;\n"
                f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "lo" '
-               f'oifname != "{config.IFACE_PREFIX}*" reject\n'
-               f"\t\tmeta mark & {EXIT_MASK:#x} == {config.SNIFF_OUT_BASE:#x} reject\n\t}}")
+               f'oifname != "{config.IFACE_PREFIX}*" drop\n'
+               f"\t\tmeta mark & {EXIT_MASK:#x} == {config.SNIFF_OUT_BASE:#x} drop\n\t}}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]

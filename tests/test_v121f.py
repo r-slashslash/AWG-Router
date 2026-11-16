@@ -204,10 +204,11 @@ class GuardTest(unittest.TestCase):
         t = self.ruleset()
         fwd = t.split("chain c_forward {")[1].split("}")[0]
         self.assertIn(f'meta mark & 0xffffff00 == {config.MARK_BASE:#x} oifname != "awgr*" reject', fwd)
-        out = t.split("chain c_guard_out {")[1].split("}")[0]
-        self.assertIn("type filter hook output priority filter", out)
-        self.assertIn(f'meta mark & 0xffffff00 == {config.MARK_BASE:#x} oifname != "lo" oifname != "awgr*" reject', out)
-        self.assertIn(f"meta mark & 0xffffff00 == {config.SNIFF_OUT_BASE:#x} reject", out)
+        # своё соединение: в postrouting — там интерфейс уже после смены метки в c_output (type route)
+        out = t.split("chain c_guard_post {")[1].split("}")[0]
+        self.assertIn("type filter hook postrouting priority filter", out)
+        self.assertIn(f'meta mark & 0xffffff00 == {config.MARK_BASE:#x} oifname != "lo" oifname != "awgr*" drop', out)
+        self.assertIn(f"meta mark & 0xffffff00 == {config.SNIFF_OUT_BASE:#x} drop", out)
 
     def test_masks_cover_all_marks(self):
         """Метки выходов 1…MAX_UPSTREAMS и политик sniproxy.py попадают под маску, другие метки — нет."""
