@@ -271,6 +271,37 @@ it grows, so every user-visible change gets a new version.
   400 instead of 500. The panel's own password and 2FA files are fsynced with their folder. The Telegram control
   hint no longer says nothing can be deleted from the bot (it deletes a client after a confirmation). Release images
   are built without the GitHub Actions cache, and the network tests pin pyroute2.
+- **Domain rules, QUIC, DNS and lists: narrow cases where a site went the wrong way.** A name longer than 253
+  characters (SNI, Host, DNS) matches no list and is checked at once: 32,000 labels froze the domain handler and DNS
+  for seconds and got the handler killed. A ClientHello or HTTP request that starts but doesn't arrive whole in
+  `PEEK_TIMEOUT` closes the connection, like QUIC without a name, instead of going by the address rules; a silent
+  client (server speaks first) is as before. A QUIC Initial with the fixed bit cleared (RFC 9287) is an Initial.
+  `Host: site.test.` in HTTP is `site.test`. A domain list with links keeps its previous file whole when one link
+  fails, shows the error and retries in 15 minutes (it used to drop that link's domains until the next day); the
+  first build uses what it has. A body shorter than its `Content-Length` is an error (`read(n)` returned the cut
+  body silently), also through an exit; a download has an overall `FETCH_DEADLINE` of 5 minutes. Domain lists with
+  links were downloaded every 5 minutes, not once a day: the refresh loop looked for a network list's file. DNS on
+  the server refuses a label with a dot inside (a question `victim.site` + `test` cached "no such name" for the
+  normal `victim.site.test` of every client), caps the cache at 16 MB of answers (`CACHE_BYTES`) and echoes the
+  asking client's question in a cached answer. A long run of spaces in a domain list no longer takes seconds (a
+  backtracking regex), and non-Latin digits are refused in I1–I5, PersistentKeepalive and the Telegram chat ID.
+- **Telegram.** A state pair ("exit down" / "back up", memory, CPU, domain rules) always sends a change of state
+  after the last message sent (`notify.STATE_PAIRS`): an exit that went down, up and down again within 5 minutes
+  left "back up" as the last message. The config file caption is HTML-escaped (a client "Mom <3" got no file). After
+  waiting for commands the bot checks the settings again: control turned off meanwhile — the commands are marked read
+  but not run. A cut Telegram answer (`http.client.HTTPException`) is a network error; it used to stop the bot thread
+  until a panel restart when control was off.
+- **Interface.** Messages show inside an open window (it is in the top layer and hid them). The DNS filter box shows
+  **Save**. On the Server tab the speed limit's **Save** and **Restart the AWG server** ask to save or discard the
+  edits above first instead of dropping them. A failed first request after sign-in is retried instead of leaving an
+  empty page. A `host:port` proxy is SOCKS5 on the server too. On a phone "Direct instead of X" wraps under the exit
+  and doesn't squeeze the client's name. A second Enter in **New client** doesn't create a second client; selecting
+  text past the window's edge doesn't close it; a long name doesn't push the close button out; "No connection to the
+  panel" instead of "Failed to fetch", and the Server tab says so (with **Try again**) instead of "the server isn't
+  created"; the search keeps its caret; the arrow in a list's uses points left in Persian; the list picker fits the
+  screen; the date and time separator follows the language. A port or subnet change says clients need new configs.
+  Texts: "If domain rules don't work, block…", where that box works before the panel starts, "Shared rules" on the
+  Overview as on Routing, "up to AWG 3.1"; zh and fa wording made consistent.
 
 ## 1.20.0 — 2026-11-14
 
