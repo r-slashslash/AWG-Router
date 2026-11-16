@@ -313,6 +313,11 @@ it grows, so every user-visible change gets a new version.
   compiled everything — 3 seconds on a one-core VPS before the panel put its rules up. A typed-in list with a text
   but an empty built file is rebuilt at start (`_rebuild_empty_texts`): 1.20.0's **Refresh now** on 1.21.0's files
   emptied it, and 1.21.0 never rebuilt typed-in lists. The release notes say how to go back and what to avoid there.
+- **Speed.** `/api/state` no longer carries each client's 12-month traffic history (the interface never read it;
+  `Traffic.view(history=False)`), and the panel's and certificate's address are read without copying the whole state
+  (`store.peek`): at 1,000 clients a full answer took 59 ms of server time instead of 71.5, a tagged one 30 instead
+  of 38.5. The interface reuses its `Intl` number and date formatters instead of making one for every value (3,000
+  numbers: 80 ms → 3 ms). `traffic.json` is written only when a client's counters changed, not every minute.
 
 ## 1.20.0 — 2026-11-14
 

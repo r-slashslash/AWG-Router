@@ -245,7 +245,7 @@ function showRestore(b) {
   const nClients = srv ? ((srv.files.clientsTable || "").match(/"clientId"/g) || []).length : 0;
   openModal(t("bk.restore_title"), `
     <div class="kv" style="margin-bottom:14px">
-      <div><span>${esc(t("bk.created"))}</span><b>${esc(b.created ? fmtDay(b.created) + dtSep() + new Date(b.created * 1000).toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" }) : "—")}</b></div>
+      <div><span>${esc(t("bk.created"))}</span><b>${esc(b.created ? fmtDay(b.created) + dtSep() + dateFmt({ hour: "2-digit", minute: "2-digit" }).format(new Date(b.created * 1000)) : "—")}</b></div>
       <div><span>${esc(t("bk.from"))}</span><b><bdi>${esc(b.host || "—")}</bdi></b></div>
       <div><span>${esc(t("tab.exits"))}</span><b>${esc(fmtNum((st.upstreams || []).length))}</b></div>
       <div><span>${esc(t("tab.lists"))}</span><b>${esc(fmtNum((st.lists || []).length))}</b></div>

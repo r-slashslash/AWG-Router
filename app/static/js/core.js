@@ -15,16 +15,27 @@ const BYTE_UNITS = {
   ru: ["Б", "КБ", "МБ", "ГБ", "ТБ"], en: ["B", "KB", "MB", "GB", "TB"],
   zh: ["B", "KB", "MB", "GB", "TB"], fa: ["بایت", "کیلوبایت", "مگابایت", "گیگابایت", "ترابایت"],
 };
+/* Форматировщики Intl — один на язык и набор настроек: новый на каждое число и дату стоил вкладке «Клиенты» с
+   тысячей строк ~100 мс на слабом телефоне при каждой перерисовке */
+const _intl = new Map();
+function intlFmt(kind, opts) {
+  const k = kind + LANG + JSON.stringify(opts);
+  let f = _intl.get(k);
+  if (!f) _intl.set(k, f = new Intl[kind](LANG, opts));
+  return f;
+}
+const numFmt = (opts) => intlFmt("NumberFormat", opts);
+const dateFmt = (opts) => intlFmt("DateTimeFormat", opts);
 function fmtBytes(b) {
   const u = BYTE_UNITS[LANG] || BYTE_UNITS.en;
   if (!b) return `${fmtNum(0)} ${u[0]}`;
   const i = Math.min(Math.floor(Math.log(b) / Math.log(1024)), u.length - 1);
-  return (b / 1024 ** i).toLocaleString(LANG, { maximumFractionDigits: i ? 1 : 0 }) + " " + u[i];
+  return numFmt({ maximumFractionDigits: i ? 1 : 0 }).format(b / 1024 ** i) + " " + u[i];
 }
 function fmtAge(sec) {
   if (sec == null) return t("never");
   sec = Math.max(0, Math.round(sec));
-  const rtf = new Intl.RelativeTimeFormat(LANG, { numeric: "always", style: "short" });
+  const rtf = intlFmt("RelativeTimeFormat", { numeric: "always", style: "short" });
   if (sec < 60) return rtf.format(-sec, "second");
   if (sec < 3600) return rtf.format(-Math.floor(sec / 60), "minute");
   if (sec < 86400) return rtf.format(-Math.floor(sec / 3600), "hour");
@@ -35,17 +46,17 @@ function dtSep() { return LANG === "fa" ? "، " : LANG === "zh" ? " " : ", "; }
 /** когда начнётся следующий месяц учёта (1-е число, 00:00 UTC) по часам браузера — для подсказок */
 function monthResetLocal() {
   const n = new Date(), d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1));
-  return d.toLocaleDateString(LANG, { day: "numeric", month: "short" }) + dtSep()
-    + d.toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" });
+  return dateFmt({ day: "numeric", month: "short" }).format(d) + dtSep()
+    + dateFmt({ hour: "2-digit", minute: "2-digit" }).format(d);
 }
 function fmtTime(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000), now = new Date();
-  const time = d.toLocaleTimeString(LANG, { hour: "2-digit", minute: "2-digit" });
+  const time = dateFmt({ hour: "2-digit", minute: "2-digit" }).format(d);
   return d.toDateString() === now.toDateString() ? time
-    : d.toLocaleDateString(LANG, { day: "numeric", month: "short" }) + dtSep() + time;
+    : dateFmt({ day: "numeric", month: "short" }).format(d) + dtSep() + time;
 }
-function fmtCompact(n) { return Number(n).toLocaleString(LANG, { notation: "compact", maximumSignificantDigits: 3 }); }
+function fmtCompact(n) { return numFmt({ notation: "compact", maximumSignificantDigits: 3 }).format(Number(n)); }
 let _regions = null;
 function countryName(cc) {
   try {
@@ -199,7 +210,7 @@ function balMembers() { return (S.balance && S.balance.members) || []; }
 /** байт/с → Мбит/с для показа */
 function fmtMbps(bps) {
   const m = (bps || 0) * 8 / 1e6;
-  return (m < 0.01 ? 0 : m).toLocaleString(LANG, { maximumSignificantDigits: m < 10 ? 2 : 3 });
+  return numFmt({ maximumSignificantDigits: m < 10 ? 2 : 3 }).format(m < 0.01 ? 0 : m);
 }
 /** части «↓ 12» «↑ 3» — каждая без переноса, числа слева направо (в fa тоже); единица — на языке интерфейса */
 const mbpsHtml = (parts) => parts.map((x) => `<bdi dir="ltr" class="nowrap">${esc(x)}</bdi>`).join(" ") +
@@ -450,7 +461,7 @@ function sysmonHtml() {
   const pct = (v) => `<b class="${v >= 90 ? "hot" : ""}"><bdi>${esc(fmtNum(Math.round(v)))}%</bdi></b>`;
   const out = [];
   if (m.cpu != null) {
-    const load = (m.load || []).map((x) => x.toLocaleString(LANG, { minimumFractionDigits: 2, maximumFractionDigits: 2 })).join(" · ");
+    const load = (m.load || []).map((x) => numFmt({ minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(x)).join(" · ");
     out.push(`<span title="${esc(t("status.cpu_hint", { cores: m.cores ? fmtNum(m.cores) : "?", load: load || "—" }))}">${esc(t("status.cpu"))} ${pct(m.cpu)}</span>`);
   }
   if (m.mem && m.mem[1]) {

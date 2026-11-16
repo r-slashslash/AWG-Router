@@ -34,19 +34,19 @@ def _tls_alt() -> list[str]:
     """Второй адрес сервера для сертификата панели, если IPv6 в ходу: у IPv6 во «Внешнем адресе» — внешний
     IPv4, у IPv4 — IPv6, выбранный в «Адрес в конфигах». Иначе [] — сертификат на один адрес, как раньше:
     лишняя проверка Let's Encrypt по IPv6, до которого порт 80 закрыт, только тратила бы попытки."""
-    st = store.snapshot()
+    # без копии всего состояния (store.peek): на тысяче клиентов копия — десятки миллисекунд на каждый вопрос
+    host, ch = store.peek(lambda s: (engine.srv.public_host(s), s["settings"].get("client_host") or ""))
     try:
-        a = ipaddress.ip_address(engine.srv.public_host(st))
+        a = ipaddress.ip_address(host)
     except ValueError:
         return []                      # домен — сертификат на него
     if a.version == 6:
         v4 = config.PUBLIC_HOST if re.fullmatch(r"[0-9.]+", config.PUBLIC_HOST or "") else engine.public_v4
         return [v4] if v4 else []
-    ch = st["settings"].get("client_host") or ""
     return [ch] if ":" in ch else []
 
 
-tls = TLSManager(lambda: engine.srv.public_host(store.snapshot()), _tls_alt)
+tls = TLSManager(lambda: store.peek(engine.srv.public_host), _tls_alt)
 notifier = notify.Notifier(store, lambda st: tls.host() if tls.enabled else engine.srv.public_host(st))
 notifier.buttons_fn = tgbot.notify_buttons
 engine.notifier = notifier
@@ -122,7 +122,7 @@ def panel_url() -> str:
     if config.PANEL_HOST.startswith("127."):
         host = "127.0.0.1"
     else:
-        host = tls.host() if tls.enabled else (engine.srv.public_host(store.snapshot()) or "SERVER_IP")
+        host = tls.host() if tls.enabled else (store.peek(engine.srv.public_host) or "SERVER_IP")
     if ":" in host:
         host = f"[{host}]"
     scheme = "https" if tls.context() else "http"

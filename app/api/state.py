@@ -92,7 +92,7 @@ def _state_view() -> dict:
         out = engine.default_out(st, c["public_key"], pol)
         rows.append({
             **c,
-            "traffic": engine.traffic.view(c["public_key"]),
+            "traffic": engine.traffic.view(c["public_key"], history=False),
             "limits": limits.view(st.get("limits", {}).get(c["public_key"])),
             "share_url": f"{origin}/s/{share_of[c['public_key']]}" if c["public_key"] in share_of else None,
             "cps": clients.cps_view(st.get("cps", {}).get(c["public_key"])),

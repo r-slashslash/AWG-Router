@@ -144,6 +144,8 @@ class Traffic:
                 cur = [int(live.get("rx") or 0), int(live.get("tx") or 0)]
                 d = self.data.setdefault(pk, _rec())
                 last = d.get("last")
+                if cur == last:
+                    continue            # ничего не изменилось: файл не переписывать (раньше — каждую минуту)
                 d["last"] = cur
                 self._dirty = True
                 if last is None:
@@ -368,15 +370,19 @@ class Traffic:
     def used(self, pk: str, period: str) -> int:
         return sum(self.month(pk) if period == "month" else self.total(pk))
 
-    def view(self, pk: str) -> dict:
+    def view(self, pk: str, history: bool = True) -> dict:
+        """history=False — без помесячной истории за год: /api/state шлёт её каждые 5 секунд на каждого клиента,
+        а интерфейс её не читает (на тысяче клиентов — половина ответа)."""
         with self.lock:
             m, t = self.month(pk), self.total(pk)
             d = self.data.get(pk) or {}
-            hist = sorted((d.get("months") or {}).items())[-12:]
+            hist = sorted((d.get("months") or {}).items())[-12:] if history else None
             by_out = dict((d.get("by_out") or {}).get(month_key()) or {})
-        return {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1],
-                "history": [[k, v[0], v[1]] for k, v in hist],
-                "by_out": {k: list(v) for k, v in by_out.items()}}
+        out = {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1],
+               "by_out": {k: list(v) for k, v in by_out.items()}}
+        if history:
+            out["history"] = [[k, v[0], v[1]] for k, v in hist]
+        return out
 
     def out_month(self, out: str, mk: str | None = None) -> list[int]:
         with self.lock:

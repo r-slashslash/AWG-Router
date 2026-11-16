@@ -2135,7 +2135,8 @@ function _pick(v, n) {
   const pr = _plural[LANG] || (_plural[LANG] = new Intl.PluralRules(LANG));
   return v[pr.select(n)] ?? v.other ?? v.many ?? v.one;
 }
-function fmtNum(n) { return Number(n).toLocaleString(LANG); }
+const _numFmt = {};    // один форматировщик на язык: новый на каждое число дорог на тысяче строк
+function fmtNum(n) { return (_numFmt[LANG] || (_numFmt[LANG] = new Intl.NumberFormat(LANG))).format(Number(n)); }
 
 // управление из Telegram (1.9.0)
 Object.assign(I18N.ru, {

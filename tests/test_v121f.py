@@ -1,5 +1,5 @@
 """1.21.0, исправления по второй проверке (2026-11-16): утечки мимо выходов (этап 1), безопасность (этап 2),
-правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4), интерфейс и тексты (этап 5), установщик, выпуск и возврат на 1.20.0 (этап 6).
+правила по доменам, QUIC, DNS и списки (этап 3), бот Telegram (этап 4), интерфейс и тексты (этап 5), установщик, выпуск и возврат на 1.20.0 (этап 6), скорость (этап 7).
 
 python3 -m unittest discover tests
 """
@@ -28,7 +28,7 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from app import (awgconf, awgserver, checks, config, cps, dnsproxy, domains, engine, lists, movehost, nftgen,  # noqa: E402
-                 notify, panel, quic, sniproxy, store, system, tgbot, totp, users, web)
+                 notify, panel, quic, sniproxy, store, system, tgbot, totp, traffic, users, web)
 from app import api  # noqa: E402,F401  — импорт app.api регистрирует все адреса
 from app.api import auth, backup  # noqa: E402
 from app.engine.common import UpRT  # noqa: E402
@@ -942,6 +942,45 @@ class EmptyTextListTest(unittest.TestCase):
             with mock.patch.object(e, "refresh_lists") as rf:
                 e._rebuild_empty_texts()
         rf.assert_called_once_with(False, ["lm1", "ld1"])
+
+
+# ============================================================ этап 7: скорость
+class SpeedTest(unittest.TestCase):
+    def test_traffic_file_not_rewritten_when_idle(self):
+        """Н50. Счётчики клиентов не изменились — файл учёта не переписывается (раньше — каждую минуту: на
+        тысяче клиентов до 2 ГБ записи в сутки)."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        tr = traffic.Traffic(os.path.join(d, "traffic.json"))
+        cl = [{"public_key": "k1", "enabled": True, "live": {"rx": 10, "tx": 20}}]
+        t0 = time.time()
+        tr.update(cl, now=t0)
+        tr.save()                                   # запоминает время записи по часам
+        with mock.patch.object(tr, "save") as sv:
+            tr.update(cl, now=t0 + traffic.SAVE_EVERY + 1)
+            sv.assert_not_called()
+            self.assertFalse(tr._dirty)
+            tr.update([{**cl[0], "live": {"rx": 11, "tx": 20}}], now=t0 + 2 * traffic.SAVE_EVERY + 2)
+            sv.assert_called_once()
+
+    def test_state_without_history_and_state_copies(self):
+        """Н48. /api/state без помесячной истории трафика клиентов (интерфейс её не читает); адрес панели и
+        сертификата — без копии всего состояния."""
+        tr = traffic.Traffic(os.path.join(tempfile.mkdtemp(), "t.json"))
+        self.assertNotIn("history", tr.view("k1", history=False))
+        self.assertIn("history", tr.view("k1"))
+        with open(os.path.join(ROOT, "app", "api", "state.py"), encoding="utf-8") as f:
+            self.assertIn('engine.traffic.view(c["public_key"], history=False)', f.read())
+        with mock.patch.object(panel.store, "snapshot", side_effect=AssertionError("full copy")):
+            self.assertTrue(panel.panel_url().endswith("/"))
+            panel._tls_alt()
+
+    def test_formatters_reused(self):
+        """Н49. Числа и даты — через общие форматировщики Intl, а не новый на каждое значение."""
+        js = panel_js.source() + i18n_text()
+        for old in ("toLocaleString(LANG", "toLocaleDateString(LANG", "toLocaleTimeString(LANG",
+                    "new Intl.RelativeTimeFormat(LANG"):
+            self.assertFalse(old in js, old)
 
 
 if __name__ == "__main__":

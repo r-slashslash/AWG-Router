@@ -98,7 +98,7 @@ function isoDay(ts) {
   const d = new Date(ts * 1000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-function fmtDay(ts) { return new Date(ts * 1000).toLocaleDateString(LANG, { day: "numeric", month: "short", year: "numeric" }); }
+function fmtDay(ts) { return dateFmt({ day: "numeric", month: "short", year: "numeric" }).format(new Date(ts * 1000)); }
 function limitTags(c) {
   const L = c.limits || {};
   let h = "";
