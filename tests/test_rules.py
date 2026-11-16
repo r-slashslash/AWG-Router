@@ -114,6 +114,7 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
     # поля, которые восстановление не переносит намеренно
     DROPPED = {"lists[].addresses", "lists[].checked", "lists[].count", "lists[].error", "lists[].skipped_v6",
                "lists[].updated", "lists[].first",      # пересчитываются при обновлении списков
+               "settings.public_host",                  # внешний адрес этого сервера, а не из копии (restore_state)
                "settings.client_host",                  # адрес этого сервера, а не из копии
                "settings.extra_hosts",                  # тоже: дополнительные адреса этого сервера (#37)
                "settings.telegram.backup_last", "settings.telegram.backup_error",

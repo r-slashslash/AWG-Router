@@ -86,6 +86,71 @@ EXTRA_HOSTS_MAX = 16
 _HOSTNAME = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
 
 
+# ---- клиентские настройки сервера: одна проверка для формы «Сервер» (update_server) и для резервной копии
+def check_flag(v) -> bool:
+    """Галочка: только true/false ("no" строкой включила бы настройку)."""
+    if not isinstance(v, bool):
+        raise UserError(Msg("err.bad_value"))
+    return v
+
+
+def check_public_host(v) -> str:
+    """Внешний адрес сервера (адрес панели, сертификата и клиентов): IPv4, IPv6 (можно в []) или домен; "" — нет."""
+    h = str(v or "").strip()
+    if h and not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]{1,253}", h):
+        raise UserError(Msg("srv.bad_host"))
+    return h.strip("[]")
+
+
+def check_client_dns(value, old_v6: bool = False) -> list[str]:
+    """DNS для клиентов: не больше четырёх IPv4 — строкой (через запятую или пробел) или списком. В туннеле только
+    IPv4: IPv6 — ошибка, а в копиях до 1.6.0 (old_v6) такие адреса молча пропускаются."""
+    if isinstance(value, list):
+        items = [str(d).strip() for d in value]
+    elif old_v6:                   # в копии DNS всегда списком
+        raise UserError(Msg("err.bad_value"))
+    else:
+        items = re.split(r"[,\s]+", str(value or ""))
+    out = []
+    for d in filter(None, items):
+        try:
+            a = ipaddress.ip_address(d)
+        except ValueError:
+            raise UserError(Msg("srv.bad_dns", value=d)) from None
+        if a.version != 4:
+            if old_v6:
+                continue
+            raise UserError(Msg("srv.dns_v6", value=d))
+        out.append(d)
+    return out[:4]
+
+
+def check_dns_enc(v) -> str:
+    """Как DNS на сервере спрашивает дальше: doh | dot | plain."""
+    if v not in DNS_ENC:
+        raise UserError(Msg("srv.bad_dns_enc"))
+    return v
+
+
+def check_mtu(v) -> int:
+    """MTU в конфигах клиентов: 1100 … 1500."""
+    try:
+        mtu = int(v)
+    except (TypeError, ValueError, OverflowError):
+        raise UserError(Msg("srv.bad_mtu")) from None
+    if not 1100 <= mtu <= 1500:
+        raise UserError(Msg("srv.bad_mtu"))
+    return mtu
+
+
+def check_keepalive(v) -> str:
+    """PersistentKeepalive клиентов: секунды или диапазон «15-25» (панель выбирает число в нём); "" — сама."""
+    ka = str(v if v is not None else "").strip()
+    if ka and not re.fullmatch(r"\d{1,5}(-\d{1,5})?", ka):
+        raise UserError(Msg("srv.bad_keepalive"))
+    return ka
+
+
 def parse_extra_hosts(value) -> list[str]:
     """Дополнительные внешние адреса сервера (#37): IPv4, IPv6 или домен; строкой (через запятую, пробел,
     перевод строки) или списком строк. Не больше EXTRA_HOSTS_MAX, повторы убираются."""
@@ -418,10 +483,7 @@ class ServerManager:
             # клиентские настройки панели
             settings_patch = {}
             if "public_host" in body:
-                h = str(body["public_host"] or "").strip()
-                if h and not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]{1,253}", h):
-                    raise UserError(Msg("srv.bad_host"))
-                h = h.strip("[]")
+                h = check_public_host(body["public_host"])
                 # пусто или то же, что PUBLIC_HOST в .env, — своей настройки нет: адрес берётся из .env
                 settings_patch["public_host"] = None if not h or h.lower() == config.PUBLIC_HOST.lower() else h
             if "extra_hosts" in body:
@@ -436,40 +498,16 @@ class ServerManager:
                         raise UserError(Msg("srv.bad_client_host")) from None
                 settings_patch["client_host"] = ch
             if "client_dns" in body:
-                dns = [d.strip() for d in re.split(r"[,\s]+", str(body["client_dns"] or "")) if d.strip()]
-                for d in dns:
-                    try:
-                        a = ipaddress.ip_address(d)
-                    except ValueError:
-                        raise UserError(Msg("srv.bad_dns", value=d)) from None
-                    if a.version != 4:
-                        raise UserError(Msg("srv.dns_v6", value=d))
-                settings_patch["client_dns"] = dns[:4]
-            if "panel_dns" in body:
-                if not isinstance(body["panel_dns"], bool):       # "no" строкой включила бы DNS
-                    raise UserError(Msg("err.bad_value"))
-                settings_patch["panel_dns"] = body["panel_dns"]
-            if "dom_filter" in body:
-                if not isinstance(body["dom_filter"], bool):      # "false" строкой включила бы фильтр
-                    raise UserError(Msg("err.bad_value"))
-                settings_patch["dom_filter"] = body["dom_filter"]
+                settings_patch["client_dns"] = check_client_dns(body["client_dns"])
+            for k in ("panel_dns", "dom_filter"):
+                if k in body:
+                    settings_patch[k] = check_flag(body[k])
             if "panel_dns_enc" in body:
-                if body["panel_dns_enc"] not in DNS_ENC:
-                    raise UserError(Msg("srv.bad_dns_enc"))
-                settings_patch["panel_dns_enc"] = body["panel_dns_enc"]
+                settings_patch["panel_dns_enc"] = check_dns_enc(body["panel_dns_enc"])
             if "client_mtu" in body:
-                try:
-                    mtu = int(body["client_mtu"])
-                except (TypeError, ValueError):
-                    raise UserError(Msg("srv.bad_mtu")) from None
-                if not 1100 <= mtu <= 1500:
-                    raise UserError(Msg("srv.bad_mtu")) from None
-                settings_patch["client_mtu"] = mtu
+                settings_patch["client_mtu"] = check_mtu(body["client_mtu"])
             if "client_keepalive" in body:
-                ka = str(body["client_keepalive"] or "").strip()
-                if ka and not re.fullmatch(r"\d{1,5}(-\d{1,5})?", ka):
-                    raise UserError(Msg("srv.bad_keepalive"))
-                settings_patch["client_keepalive"] = ka
+                settings_patch["client_keepalive"] = check_keepalive(body["client_keepalive"])
             # серверный конфиг
             if "params" in body:
                 if body["params"] is not None and not isinstance(body["params"], dict):

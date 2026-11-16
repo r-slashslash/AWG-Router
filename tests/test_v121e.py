@@ -17,7 +17,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import (awgserver, balance, dnsproxy, domains, engine, limits, lists, main, nftgen, notify,  # noqa: E402
+from app import (awgserver, balance, checks, dnsproxy, domains, engine, limits, lists, main, nftgen, notify,  # noqa: E402
                  probe, socks, store, system, tgbot, tgreq, web)
 from app.web import HTTPError  # noqa: E402
 
@@ -176,11 +176,11 @@ class InputTypesTest(unittest.TestCase):
     def test_rule_enabled_string(self):
         st = main.store.snapshot()
         for v in ("false", "no", 0, 1):
-            self.assertEqual(code(lambda: main.v_rules(st, [{"lists": ["ru"], "outbound": "direct",
+            self.assertEqual(code(lambda: checks.rules(st, [{"lists": ["ru"], "outbound": "direct",
                                                               "enabled": v}])), (400, "err.bad_value"), v)
-        r = main.v_rules(st, [{"lists": ["ru"], "outbound": "direct"}])
+        r = checks.rules(st, [{"lists": ["ru"], "outbound": "direct"}])
         self.assertIs(r[0]["enabled"], True)
-        r = main.v_rules(st, [{"lists": ["ru"], "outbound": "direct", "enabled": False}])
+        r = checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "enabled": False}])
         self.assertIs(r[0]["enabled"], False)
 
     def test_list_update_hours_bool(self):

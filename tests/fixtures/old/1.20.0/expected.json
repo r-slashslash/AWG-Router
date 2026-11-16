@@ -219,7 +219,6 @@
     "on_stop": "restore",
     "panel_dns": true,
     "panel_dns_enc": "doh",
-    "public_host": "vpn.example.com",
     "shaping": {
      "down": 200.0,
      "up": 100.0

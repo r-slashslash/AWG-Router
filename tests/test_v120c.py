@@ -24,7 +24,7 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app import config, engine, limits, main, traffic, web  # noqa: E402
+from app import checks, config, engine, limits, main, traffic, web  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -199,7 +199,7 @@ class RestoreLoopTest(unittest.TestCase):
         fbs = {u["id"]: u["fallback"] for u in st["upstreams"]}
         self.assertEqual(sorted(fbs.values()), ["direct", "up:u000001"])
         for u in st["upstreams"]:
-            self.assertFalse(main._fallback_loops(st, u["id"], u["fallback"]))
+            self.assertFalse(checks.fallback_loops(st, u["id"], u["fallback"]))
 
     def test_chain_without_loop_is_kept(self):
         from test_api import good_state

@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import base64
 import binascii
-import contextlib
 import hashlib
 import hmac
 import ipaddress
 import json
 import logging
-import math
 import os
 import re
 import secrets
@@ -19,15 +17,16 @@ import threading
 import time
 from types import SimpleNamespace
 
-from . import (awgconf, awgserver, config, cps, domains, hostnet, kernelmod, limits, lists, notify, selfupdate, shaping,
+from . import (awgconf, awgserver, checks, config, cps, domains, hostnet, kernelmod, limits, lists, notify, selfupdate,
                system, tgbot, tlsconf, tlsmgr, totp, users, webfront)
+from .checks import bad, field
 from .traffic import month_key
 from .updates import UpdateChecker
 from .version import VERSION
 from . import engine as engine_mod
 from .engine import Engine
 from .i18n import Msg, MsgError, msg_of, to_json
-from .store import DEFAULT_STATE, ID_RE, Store, new_id
+from .store import DEFAULT_STATE, Store, new_id
 from .tlsmgr import TLSManager
 from .users import UserError
 from .web import App, HTTPError, Page, content_length
@@ -265,21 +264,6 @@ def auth_mw(req) -> None:
 app.middleware = auth_mw
 
 
-def bad(msg: str, code: int = 400, field: str | None = None):
-    raise HTTPError(code, msg, field)
-
-
-@contextlib.contextmanager
-def field(name: str):
-    """Ошибка проверки внутри блока — об этом поле запроса (браузер выделит его в форме)."""
-    try:
-        yield
-    except HTTPError as e:
-        if e.field is None:
-            e.field = name
-        raise
-
-
 # Ошибки настроек сервера (users.update_server) → поле формы «Сервер»; ошибки параметров AWG — по ключу
 SERVER_FIELDS = {"srv.bad_host": "public_host", "srv.bad_extra_host": "extra_hosts",
                  "srv.bad_client_host": "client_host", "srv.bad_dns": "client_dns", "srv.dns_v6": "client_dns",
@@ -296,95 +280,6 @@ def server_field(m) -> str | None:
     if m.key in PARAM_ERRORS and isinstance(m.p.get("key"), str):
         return "params." + m.p["key"]
     return SERVER_FIELDS.get(m.key)
-
-
-# ---------------------------------------------------------------- валидация
-def v_outbound(st: dict, v, allow_inherit: bool = False) -> str:
-    if not isinstance(v, str):
-        bad("err.bad_outbound")
-    if v in ("direct", "block") or (allow_inherit and v == "inherit"):
-        return v
-    if v.startswith("up:") and Store.upstream(st, v[3:]):
-        return v
-    bad(Msg("err.unknown_outbound", value=v))
-
-
-def v_rules(st: dict, rules) -> list[dict]:
-    if not isinstance(rules, list) or len(rules) > 50:
-        bad("err.bad_rules")
-    out = []
-    for r in rules:
-        if not isinstance(r, dict):
-            bad("err.bad_rules")
-        ls = r.get("lists") or []
-        if not isinstance(ls, list) or not ls:
-            bad("err.rule_no_lists")
-        for lid in ls:
-            if not Store.lst(st, lid):
-                bad(Msg("err.unknown_list", id=lid))
-        outbound = v_outbound(st, r.get("outbound"))
-        # списки доменов и списки сетей в одном правиле не смешиваются: домены sniproxy.py
-        # проверяет раньше правил по адресам (по имени в начале соединения), выход — любой
-        if len({Store.lst(st, lid)["kind"] == "domains" for lid in ls}) > 1:
-            bad("err.rule_mixed_domains")
-        rid = r.get("id") if isinstance(r.get("id"), str) and ID_RE.match(r.get("id", "")) else new_id("r_")
-        out.append({"id": rid, "lists": list(dict.fromkeys(ls)),
-                    "outbound": outbound,
-                    "enabled": v_flag(r.get("enabled"), True),     # "false" строкой — не «включено»
-                    "comment": str(r.get("comment") or "")[:80]})
-    return out
-
-
-def v_rate(v) -> float | None:
-    """Ограничение скорости из формы, Мбит/с ("" / None / 0 — без ограничения)."""
-    if v in (None, "", 0):
-        return None
-    try:
-        v = float(v)
-    except (TypeError, ValueError):
-        bad(Msg("err.rate", min=shaping.MIN_MBIT, max=shaping.MAX_MBIT))
-    if not shaping.MIN_MBIT <= v <= shaping.MAX_MBIT:
-        bad(Msg("err.rate", min=shaping.MIN_MBIT, max=shaping.MAX_MBIT))
-    return round(v, 3)
-
-
-def v_rates(body: dict, prefix: str = "rate_") -> dict:
-    """{rate_down, rate_up} из тела запроса — только те, что в нём есть."""
-    return {k: v_rate(body[prefix + k[5:]]) for k in ("rate_down", "rate_up") if prefix + k[5:] in body}
-
-
-def v_quic(body: dict) -> bool | None:
-    """Галочка «Пропускать QUIC» выхода SOCKS5: True / False, None — в запросе её нет."""
-    if "quic" not in body:
-        return None
-    if not isinstance(body["quic"], bool):
-        bad("err.bad_value")
-    return body["quic"]
-
-
-def v_flag(v, default=None) -> bool:
-    """Галочка: только true/false. Через bool() строка "false" или "no" включила бы настройку (интерфейс шлёт
-    bool, так ломался только запрос, собранный вручную). default — значение, когда поле не прислано (None)."""
-    if v is None and default is not None:
-        return default
-    if not isinstance(v, bool):
-        bad("err.bad_value")
-    return v
-
-
-def v_balance(st: dict, b) -> dict:
-    """Балансировка: {"on": bool, "skip": [id выходов, которые в ней не участвуют]}."""
-    if not isinstance(b, dict) or not isinstance(b.get("skip", []), list):
-        bad("err.bad_value")
-    skip = [x for x in dict.fromkeys(b.get("skip") or []) if isinstance(x, str) and Store.upstream(st, x)]
-    return {"on": v_flag(b.get("on"), False), "skip": skip}
-
-
-def v_name(v, maxlen: int = 40) -> str:
-    v = str(v or "").strip()
-    if not v:
-        bad("err.name_required")
-    return v[:maxlen]
 
 
 # --------------------------------------------------------------------- auth
@@ -519,52 +414,10 @@ def _totp_disable(req, ip: str):
 
 
 # ---------------------------------------------------------------- telegram
-TG_TOKEN_RE = re.compile(r"^\d{5,15}:[A-Za-z0-9_-]{30,60}$")
-TG_CHAT_RE = re.compile(r"^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
-
-
 def _tg_draft(body: dict) -> dict:
     """Настройки из формы поверх сохранённых (пустой токен = оставить прежний)."""
-    c = notify.cfg_of(store.snapshot())
-    tok = str(body.get("token") or "").strip()
-    if tok:
-        if not TG_TOKEN_RE.match(tok):
-            bad("err.tg_token", field="token")
-        c["token"] = tok
-    if "chat_id" in body:
-        chat = str(body.get("chat_id") or "").strip()
-        if chat and not TG_CHAT_RE.match(chat):
-            bad("err.tg_chat", field="chat_id")
-        c["chat_id"] = chat
-    if "lang" in body:
-        if not isinstance(body["lang"], str) or body["lang"] not in notify.LANGS:
-            bad("err.bad_value")
-        c["lang"] = body["lang"]
-    if "via" in body:
-        with field("via"):
-            via = v_outbound(store.snapshot(), body["via"])
-            if via == "block":
-                bad("err.bad_value")
-        c["via"] = via
-    if isinstance(body.get("events"), dict):
-        c["events"] = {k: v_flag(body["events"][k]) if k in body["events"] else c["events"].get(k, True)
-                       for k in notify.KINDS}
-    if "enabled" in body:
-        c["enabled"] = v_flag(body["enabled"])
-    if "control" in body:
-        c["control"] = v_flag(body["control"])
-    if "backup" in body:
-        if not isinstance(body["backup"], str) or body["backup"] not in notify.BACKUP_PERIODS:
-            bad("err.bad_value")
-        c["backup"] = body["backup"]
-    pw = str(body.get("backup_pw") or "")
-    if pw:
-        if not 8 <= len(pw) <= 128:
-            bad("err.backup_pw", field="backup_pw")
-        c["backup_pw"] = pw
-    if body.get("backup_pw_clear"):
-        c["backup_pw"] = ""
-    return c
+    st = store.snapshot()
+    return checks.telegram(st, notify.cfg_of(st), body)
 
 
 @app.put("/api/telegram")
@@ -790,25 +643,6 @@ def decrypt_backup(req):
     return {"backup": b}
 
 
-def _num(v) -> bool:
-    """Конечное число (Infinity и NaN из JSON — нет: int() на них падает)."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
-
-
-def _int_or_none(v):
-    return int(v) if _num(v) and v > 0 else None
-
-
-def _exp_or_none(v):
-    """Дата (unix) из копии: позже limits.EXPIRES_MAX её не перевести в дату — как без срока."""
-    v = _int_or_none(v)
-    return v if v is not None and v <= limits.EXPIRES_MAX else None
-
-
-QUOTA_KEY_RE = re.compile(r"^(\d{4}-\d{2}|total)$")
-MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
-
-
 def restore_state(st: dict, new: dict) -> None:
     """Состояние из копии вместо текущего. Адреса этого сервера важнее адресов из копии (переезд): и свои из
     панели, и отсутствие своих — тогда остаётся PUBLIC_HOST из .env, а не IP старого сервера в конфигах, ссылке
@@ -827,17 +661,15 @@ def restore_state(st: dict, new: dict) -> None:
 def clean_backup_state(new: dict) -> dict:
     """Состояние из резервной копии → проверенное состояние.
 
-    Каждое поле проходит те же проверки, что и при вводе в панели: идентификаторы
-    из файла попадают в имена наборов nftables, интерфейсов и файлов, поэтому
-    ничего не берём «как есть». Неверное поле — ошибка с его именем."""
-    def fail(field: str):
-        bad(Msg("err.backup_field", field=field))
+    Каждое поле проходит те же проверки, что и при вводе в панели (checks.py, для настроек сервера — users.py):
+    идентификаторы из файла попадают в имена наборов nftables, интерфейсов и файлов, поэтому ничего не берём «как
+    есть». Неверное поле — ошибка с его именем (checks.backup_field); где копии прощалось и раньше — значение по
+    умолчанию (checks.forgive). Здесь же чинится то, что прежние выпуски сохраняли иначе: круги резервов, «как
+    резерв» у квоты, прежние имена шаблонов маскировки, IPv6 DNS, подписи правил с именем выхода."""
+    at, soft = checks.backup_field, checks.forgive
 
-    def check(field: str, fn):
-        try:
-            return fn()
-        except HTTPError:
-            fail(field)
+    def fail(path: str):
+        bad(Msg("err.backup_field", field=path))
 
     def arr(key: str) -> list:
         v = new.get(key, [])
@@ -854,217 +686,150 @@ def clean_backup_state(new: dict) -> dict:
     st = json.loads(json.dumps(DEFAULT_STATE))
     st["lists"], st["upstreams"] = [], []
 
-    # списки сетей
+    # списки сетей и доменов
     for i, l in enumerate(arr("lists")):
         f = f"lists[{i}]"
-        if not isinstance(l, dict) or not isinstance(l.get("id"), str) or not ID_RE.match(l["id"]) \
-                or Store.lst(st, l["id"]):
+        if not isinstance(l, dict):
             fail(f)
-        d = check(f, lambda: _list_body(st, {k: l.get(k) for k in ("kind", "source", "name")}))
-        if d["kind"] == "country" and d["source"] != l["id"]:
-            fail(f)
-        st["lists"].append({"id": l["id"], **d})
+        d = at(f, lambda: checks.list_fields({k: l.get(k) for k in ("kind", "source", "name")}))
+        st["lists"].append({"id": at(f, lambda: checks.list_id(st, l.get("id"), d)), **d})
 
     # выходы: сначала все, потом резервные выходы (могут ссылаться друг на друга)
     raw_ups = arr("upstreams")
     for i, u in enumerate(raw_ups):
         f = f"upstreams[{i}]"
-        if not isinstance(u, dict) or not isinstance(u.get("id"), str) or not ID_RE.match(u["id"]) \
-                or Store.upstream(st, u["id"]):
+        if not isinstance(u, dict):
             fail(f)
-        num = u.get("num")
-        if not isinstance(num, int) or isinstance(num, bool) or not 1 <= num <= config.MAX_UPSTREAMS \
-                or any(x["num"] == num for x in st["upstreams"]):
-            fail(f + ".num")
-        try:
-            pc = awgconf.parse_upstream(str(u.get("config") or ""))
-        except awgconf.ConfigError:
-            fail(f + ".config")
-        flags = {k: u.get(k) if isinstance(u.get(k), str) and MONTH_RE.match(u[k]) else None
-                 for k in ("quota_hit", "quota_warned")}
-        st["upstreams"].append({"id": u["id"], "name": check(f + ".name", lambda: v_name(u.get("name"))),
-                                "num": num, "config": pc.raw,
-                                "enabled": check(f + ".enabled", lambda: v_flag(u.get("enabled"), True)),
-                                "fallback": "direct", "created": u.get("created") if _num(u.get("created")) else None,
-                                "quota": _int_or_none(u.get("quota")), "quota_action": "notify", **flags})
+        uid = at(f, lambda: checks.exit_id(st, u.get("id")))
+        num = at(f + ".num", lambda: checks.exit_num(st, u.get("num")))
+        pc = at(f + ".config", lambda: checks.exit_config(u.get("config")))
+        e = {"id": uid, "name": at(f + ".name", lambda: checks.name(u.get("name"))), "num": num, "config": pc.raw,
+             "enabled": at(f + ".enabled", lambda: checks.flag(u.get("enabled"), True)),
+             "fallback": "direct", "created": u.get("created") if checks.number(u.get("created")) else None,
+             "quota": soft(lambda: checks.quota(u.get("quota")), None), "quota_action": "notify",
+             "quota_hit": checks.month(u.get("quota_hit")), "quota_warned": checks.month(u.get("quota_warned"))}
         for k in ("rate_down", "rate_up"):
-            if u.get(k) not in (None, ""):
-                st["upstreams"][-1][k] = check(f"{f}.{k}", lambda: v_rate(u[k]))
-                if not st["upstreams"][-1][k]:
-                    del st["upstreams"][-1][k]
-        if u.get("quic") is True and pc.kind == "socks5":
-            st["upstreams"][-1]["quic"] = True
+            if u.get(k) not in (None, "") and (v := at(f"{f}.{k}", lambda: checks.rate(u[k]))):
+                e[k] = v
+        if "quic" in u and soft(lambda: checks.quic(u["quic"]), False) and pc.kind == "socks5":
+            e["quic"] = True
         # свой список сайтов выхода (окно выхода): только если это список доменов из этой же
         # копии и он ещё не принадлежит другому выходу
         own = u.get("own_list")
         ol = Store.lst(st, own) if isinstance(own, str) else None
         if ol and ol["kind"] == "domains" and not any(x.get("own_list") == own for x in st["upstreams"]):
-            st["upstreams"][-1]["own_list"] = own
+            e["own_list"] = own
+        st["upstreams"].append(e)
     for i, u in enumerate(raw_ups):
-        fb = check(f"upstreams[{i}].fallback", lambda: v_outbound(st, u.get("fallback") or "direct"))
-        if fb == "up:" + u["id"]:
-            fail(f"upstreams[{i}].fallback")
-        st["upstreams"][i]["fallback"] = fb
+        st["upstreams"][i]["fallback"] = at(f"upstreams[{i}].fallback", lambda: checks.fallback(
+            st, u["id"], u.get("fallback") or "direct", loops_ok=True))
     for u in st["upstreams"]:
         # круг резервов (A → B → A) из копии, сделанной до 1.20.0: в панели его теперь не сохранить, а когда
         # все в круге лежат, клиенты остались бы без связи. Разрываем его резервом «напрямую».
-        if _fallback_loops(st, u["id"], u["fallback"]):
+        if checks.fallback_loops(st, u["id"], u["fallback"]):
             u["fallback"] = "direct"
     for i, u in enumerate(raw_ups):
         qa = u.get("quota_action") or "notify"
         if qa == "fallback":          # первые сборки 1.3.0: «как резерв»
             qa = st["upstreams"][i]["fallback"]
-        if qa != "notify":
-            qa = check(f"upstreams[{i}].quota_action", lambda: v_outbound(st, qa))
-            if qa == "up:" + u["id"]:
-                fail(f"upstreams[{i}].quota_action")
-        st["upstreams"][i]["quota_action"] = qa
+        st["upstreams"][i]["quota_action"] = at(f"upstreams[{i}].quota_action",
+                                                lambda: checks.quota_action(st, qa, u["id"]))
 
     # маршрутизация
     r = obj("routing")
-    st["routing"] = {"default": check("routing.default", lambda: v_outbound(st, r.get("default", "direct"))),
-                     "rules": check("routing.rules", lambda: v_rules(st, r.get("rules", [])))}
+    st["routing"] = {"default": at("routing.default", lambda: checks.outbound(st, r.get("default", "direct"))),
+                     "rules": at("routing.rules", lambda: checks.rules(st, r.get("rules", [])))}
     if r.get("balance") is not None:
-        st["routing"]["balance"] = check("routing.balance", lambda: v_balance(st, r["balance"]))
-    if r.get("strict") is True:
+        st["routing"]["balance"] = at("routing.balance", lambda: checks.balance(st, r["balance"]))
+    if soft(lambda: checks.strict(r.get("strict")), None):
         st["routing"]["strict"] = True
 
     # политики клиентов
     for pk, c in obj("clients").items():
         f = f"clients.{pk[:12]}"
-        if not awgconf.KEY_RE.match(pk) or not isinstance(c, dict):
+        at(f, lambda: checks.client_key(pk))
+        if not isinstance(c, dict):
             fail(f)
-        mode = c.get("rules_mode", "inherit")
-        if mode not in ("inherit", "custom"):
-            fail(f)
-        st["clients"][pk] = {
-            "outbound": check(f, lambda: v_outbound(st, c.get("outbound", "inherit"), allow_inherit=True)),
-            "rules_mode": mode,
-            "rules": check(f, lambda: v_rules(st, c.get("rules") or [])) if mode == "custom" else [],
-            "note": str(c.get("note") or "")[:120], "name": str(c.get("name") or "")[:60]}
+        st["clients"][pk] = {**at(f, lambda: checks.client_policy(st, c)), "name": str(c.get("name") or "")[:60]}
 
     # закрытые ключи клиентов
     for pk, priv in obj("keys").items():
-        if not awgconf.KEY_RE.match(pk) or not isinstance(priv, str) or not awgconf.KEY_RE.match(priv):
-            fail(f"keys.{pk[:12]}")
-        st["keys"][pk] = priv
+        st["keys"][pk] = at(f"keys.{pk[:12]}", lambda: checks.client_key(pk) and checks.client_key(priv))
 
     # сроки и лимиты
     for pk, L in obj("limits").items():
-        if not awgconf.KEY_RE.match(pk) or not isinstance(L, dict):
-            fail(f"limits.{pk[:12]}")
+        f = f"limits.{pk[:12]}"
+        at(f, lambda: checks.client_key(pk))
+        if not isinstance(L, dict):
+            fail(f)
         ao = L.get("auto_off")
-        qd, qw = L.get("quota_done"), L.get("quota_warned")
         st["limits"][pk] = {
-            "expires": _exp_or_none(L.get("expires")), "quota": _int_or_none(L.get("quota")),
-            "period": L.get("period") if L.get("period") in ("month", "total") else "month",
+            "expires": soft(lambda: checks.expires(L.get("expires")), None),
+            "quota": soft(lambda: checks.quota(L.get("quota")), None),
+            "period": soft(lambda: checks.period(L.get("period")), "month"),
             "auto_off": ao if ao == "exp" or (isinstance(ao, str) and ao.startswith("quota:")
-                                              and QUOTA_KEY_RE.match(ao[6:])) else None,
-            "exp_done": _exp_or_none(L.get("exp_done")),
-            "quota_done": qd if isinstance(qd, str) and QUOTA_KEY_RE.match(qd) else None,
-            "exp_warned": _exp_or_none(L.get("exp_warned")),
-            "quota_warned": qw if isinstance(qw, str) and QUOTA_KEY_RE.match(qw) else None}
+                                              and checks.quota_key(ao[6:])) else None,
+            "exp_done": soft(lambda: checks.expires(L.get("exp_done")), None),
+            "quota_done": checks.quota_key(L.get("quota_done")),
+            "exp_warned": soft(lambda: checks.expires(L.get("exp_warned")), None),
+            "quota_warned": checks.quota_key(L.get("quota_warned"))}
         for k in ("rate_down", "rate_up"):
-            v = check(f"limits.{pk[:12]}.{k}", lambda: v_rate(L.get(k)))
-            if v:
+            if v := at(f"{f}.{k}", lambda: checks.rate(L.get(k))):
                 st["limits"][pk][k] = v
 
-    # свой адрес сервера в конфиге клиента (#37); чужие адреса снимает restore_backup
+    # свой адрес сервера в конфиге клиента (#37); адреса, которых нет у этого сервера, снимает restore_state
     for pk, h in obj("chost").items():
-        if not awgconf.KEY_RE.match(pk) or not isinstance(h, str) or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", h):
-            fail(f"chost.{pk[:12]}")
-        st["chost"][pk] = h
+        st["chost"][pk] = at(f"chost.{pk[:12]}", lambda: checks.client_key(pk) and checks.host_text(h))
 
     # свои I1–I5 клиентов
     for pk, e in obj("cps").items():
-        if not awgconf.KEY_RE.match(pk) or not isinstance(e, dict):
-            fail(f"cps.{pk[:12]}")
-        p = cps.RENAMED.get(e.get("preset"), e.get("preset"))
-        if p in cps.PRESETS:
-            st["cps"][pk] = {"preset": p}
-        elif e.get("preset") == "custom":
-            try:
-                st["cps"][pk] = {"preset": "custom", "values": cps.validate(e.get("values") or {})}
-            except cps.CPSError:
-                fail(f"cps.{pk[:12]}")
-        else:
-            fail(f"cps.{pk[:12]}")
+        f = f"cps.{pk[:12]}"
+        at(f, lambda: checks.client_key(pk))
+        if not isinstance(e, dict):
+            fail(f)
+        p = e.get("preset")
+        p = cps.RENAMED.get(p, p) if isinstance(p, str) else p      # прежние имена шаблонов
+        entry = at(f, lambda: checks.cps_entry(p, e.get("values")))
+        if entry is None:              # «как на сервере» — это отсутствие записи: в копии её не бывает
+            fail(f)
+        st["cps"][pk] = entry
 
     # личные ссылки
     for tok, sh in obj("shares").items():
-        if not TOKEN_RE.match(tok) or not isinstance(sh, dict) or not awgconf.KEY_RE.match(str(sh.get("pk"))):
+        if not checks.TOKEN_RE.match(tok) or not isinstance(sh, dict):
             fail("shares")
-        st["shares"][tok] = {"pk": sh["pk"], "created": sh.get("created") if _num(sh.get("created")) else None}
+        st["shares"][tok] = {"pk": at("shares", lambda: checks.client_key(sh.get("pk"))),
+                             "created": sh.get("created") if checks.number(sh.get("created")) else None}
 
-    # настройки: только известные поля
+    # настройки: только известные поля. Адрес сервера, второй адрес и адрес для клиентов — этого сервера, а не
+    # из копии (restore_state), поэтому из копии не берутся
     s, out = obj("settings"), st["settings"]
     if "list_update_hours" in s:
-        if not _num(s["list_update_hours"]):
-            fail("settings.list_update_hours")
-        out["list_update_hours"] = max(1, min(int(s["list_update_hours"]), 24 * 30))
-    if s.get("on_stop") in ("keep", "restore"):
-        out["on_stop"] = s["on_stop"]
-    sh = s.get("shaping")
-    if sh is not None:
-        if not isinstance(sh, dict):
-            fail("settings.shaping")
-        v = {k: x for k in ("down", "up") if (x := check("settings.shaping", lambda: v_rate(sh.get(k))))}
-        if v:
-            out["shaping"] = v
-    h = s.get("public_host")
-    if isinstance(h, str) and re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", h):
-        out["public_host"] = h
-    dns = s.get("client_dns")
-    if dns is not None:
-        if not isinstance(dns, list) or len(dns) > 4:
-            fail("settings.client_dns")
-        for d in dns:
-            try:
-                ipaddress.ip_address(str(d))
-            except ValueError:
-                fail("settings.client_dns")
-        # IPv6 DNS из старых копий не берём: в туннеле только IPv4
-        out["client_dns"] = [str(d) for d in dns if ":" not in str(d)]
-    if isinstance(s.get("panel_dns"), bool):
-        out["panel_dns"] = s["panel_dns"]
-    if isinstance(s.get("dom_filter"), bool):
-        out["dom_filter"] = s["dom_filter"]
-    if s.get("panel_dns_enc") in users.DNS_ENC:
-        out["panel_dns_enc"] = s["panel_dns_enc"]
-    mtu = s.get("client_mtu")
-    if mtu not in (None, ""):
-        if not isinstance(mtu, int) or isinstance(mtu, bool) or not 1100 <= mtu <= 1500:
-            fail("settings.client_mtu")
-        out["client_mtu"] = mtu
-    ka = s.get("client_keepalive")
-    if ka not in (None, ""):
-        if not isinstance(ka, str) or not re.fullmatch(r"\d{1,5}(-\d{1,5})?", ka):
-            fail("settings.client_keepalive")
-        out["client_keepalive"] = ka
+        out["list_update_hours"] = at("settings.list_update_hours",
+                                      lambda: checks.list_update_hours(s["list_update_hours"]))
+    if v := soft(lambda: checks.on_stop(s.get("on_stop")), None):
+        out["on_stop"] = v
+    if s.get("shaping") is not None and (v := at("settings.shaping", lambda: checks.shaping_limits(s["shaping"]))):
+        out["shaping"] = v
+    if s.get("client_dns") is not None:
+        # IPv6 DNS из копий до 1.6.0 не берём: в туннеле только IPv4
+        out["client_dns"] = at("settings.client_dns", lambda: users.check_client_dns(s["client_dns"], old_v6=True))
+    for k in ("panel_dns", "dom_filter"):
+        if (v := soft(lambda: users.check_flag(s.get(k)), None)) is not None:
+            out[k] = v
+    if v := soft(lambda: users.check_dns_enc(s.get("panel_dns_enc")), None):
+        out["panel_dns_enc"] = v
+    if s.get("client_mtu") not in (None, ""):
+        out["client_mtu"] = at("settings.client_mtu", lambda: users.check_mtu(s["client_mtu"]))
+    if s.get("client_keepalive") not in (None, "") and \
+            (v := at("settings.client_keepalive", lambda: users.check_keepalive(s["client_keepalive"]))):
+        out["client_keepalive"] = v
     tg = s.get("telegram")
     if tg is not None:
         if not isinstance(tg, dict):
             fail("settings.telegram")
-        c = notify.defaults()
-        tok, chat = str(tg.get("token") or ""), str(tg.get("chat_id") or "")
-        if (tok and not TG_TOKEN_RE.match(tok)) or (chat and not TG_CHAT_RE.match(chat)):
-            fail("settings.telegram")
-        c.update(token=tok, chat_id=chat, lang=tg.get("lang") if tg.get("lang") in notify.LANGS else "en",
-                 enabled=tg.get("enabled") is True and bool(tok and chat))
-        ev = tg.get("events") if isinstance(tg.get("events"), dict) else {}
-        c["events"] = {k: ev[k] if isinstance(ev.get(k), bool) else True for k in notify.KINDS}
-        c["control"] = tg.get("control") is True and bool(tok and chat) and not chat.startswith("@")
-        if isinstance(tg.get("backup"), str) and tg["backup"] in notify.BACKUP_PERIODS:   # список в dict — TypeError
-            c["backup"] = tg["backup"]
-        if isinstance(tg.get("backup_pw"), str) and len(tg["backup_pw"]) <= 128:
-            c["backup_pw"] = tg["backup_pw"]
-        via = tg.get("via") or "direct"
-        if via != "direct":
-            via = check("settings.telegram.via", lambda: v_outbound(st, via))
-            if via == "block":
-                fail("settings.telegram.via")
-        c["via"] = via
-        out["telegram"] = c
+        out["telegram"] = at("settings.telegram", lambda: checks.telegram(st, notify.defaults(), tg, backup=True),
+                             sub=("via",))
     Store.drop_auto_comments(st)          # копия до 1.21.0: правила из окна выхода с его именем
     return st
 
@@ -1096,19 +861,6 @@ def clean_server_files(srv: dict, kind: str) -> tuple[awgserver.ServerConf, dict
         out["clientsTable"] = awgserver.render_clients_table(
             awgserver.parse_clients_table(files["clientsTable"]))
     return sc, out
-
-
-def _fallback_loops(st: dict, uid: str, fb: str) -> bool:
-    """Резерв выхода uid по цепочке резервов возвращается к нему же (A → B → A): когда все в цепочке лежат,
-    клиенты получили бы «блок» (resolve обрывает цепочку), а человек ждал бы «напрямую»."""
-    seen = set()
-    while fb.startswith("up:") and fb not in seen:
-        if fb == "up:" + uid:
-            return True
-        seen.add(fb)
-        u = Store.upstream(st, fb[3:])
-        fb = (u or {}).get("fallback") or "direct"
-    return False
 
 
 @app.post("/api/restore")
@@ -1163,31 +915,10 @@ def restore_backup(req):
 def put_limits(req, pk):
     _pk(pk)
     body = req.json()
-    exp = body.get("expires")
-    if exp is not None:
-        try:
-            exp = int(exp)
-        except (TypeError, ValueError):
-            bad("err.bad_value")
-        if exp <= 0:
-            exp = None
-        elif exp > limits.EXPIRES_MAX:
-            bad("err.bad_value")
-    quota = body.get("quota_gb")
-    if quota not in (None, ""):
-        try:
-            quota = float(quota)
-        except (TypeError, ValueError):
-            bad("err.quota")
-        if not 0 < quota <= 1_000_000:
-            bad("err.quota")
-        quota = int(quota * limits.GB)
-    else:
-        quota = None
-    period = body.get("period") or "month"
-    if period not in ("month", "total"):
-        bad("err.bad_value")
-    return {"ok": True, "enabled": apply_limits(pk, exp, quota, period, v_rates(body))}
+    exp = checks.expires(body.get("expires"))
+    quota = checks.quota_gb(body.get("quota_gb"))
+    period = checks.period(body.get("period"))
+    return {"ok": True, "enabled": apply_limits(pk, exp, quota, period, checks.rates(body))}
 
 
 def apply_limits(pk: str, exp: int | None, quota: int | None, period: str, rates: dict | None = None) -> bool:
@@ -1270,7 +1001,7 @@ def delete_share(req, pk):
 
 
 SHARE_HTML = os.path.join(STATIC, "share.html")
-TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,40}$")
+TOKEN_RE = checks.TOKEN_RE
 
 
 def _share_exists(token: str) -> bool:
@@ -1451,32 +1182,6 @@ def _state_view() -> dict:
 
 
 # ---------------------------------------------------------------- upstreams
-def v_exit_quota(body: dict) -> int | None:
-    """quota_gb из формы выхода ("" / None — без лимита) → байты."""
-    q = body.get("quota_gb")
-    if q in (None, ""):
-        quota = None
-    else:
-        try:
-            q = float(q)
-        except (TypeError, ValueError):
-            bad("err.quota")
-        if not 0 < q <= 1_000_000:
-            bad("err.quota")
-        quota = int(q * limits.GB)
-    return quota
-
-
-def v_quota_action(st: dict, v, uid: str | None) -> str:
-    """Что делать при исчерпании квоты: 'notify' или выход (direct / block / up:<id>, не сам)."""
-    if v in (None, "", "notify"):
-        return "notify"
-    out = v_outbound(st, v)
-    if uid and out == "up:" + uid:
-        bad("err.quota_self")
-    return out
-
-
 def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | None, str | None]:
     """Маршрутизация через выход из его окна: общие правила «списки доменов → выход»
     и «списки сетей → выход» заменяются выбранными; свои домены выхода — его собственный
@@ -1494,11 +1199,7 @@ def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | No
     own = u.get("own_list") if Store.lst(st, u.get("own_list") or "") else None
     refresh = drop = None
     if text:
-        if len(text) > 2_000_000:
-            bad("err.list_too_big")
-        urls, rest = domains.split_source(text)
-        if not urls and not domains.parse(rest):
-            bad("err.no_domains")
+        text = checks.list_fields({"kind": "domains", "source": text, "name": name})["source"]
         if own:
             l = Store.lst(st, own)
             if l["source"] != text or l.get("name") != name:
@@ -1513,7 +1214,7 @@ def apply_exit_routing(st: dict, uid: str, r: dict, name: str) -> tuple[str | No
     elif own:
         dl = [x for x in dl if x != own]
         drop = own
-    st["routing"]["rules"] = v_rules(st, merge_exit_rules(st, out, dl, nl, name))
+    st["routing"]["rules"] = checks.rules(st, merge_exit_rules(st, out, dl, nl, name))
     if r.get("default") is True:
         st["routing"]["default"] = out
     elif r.get("default") is False and st["routing"]["default"] == out:
@@ -1570,22 +1271,19 @@ def _after_exit_routing(lists_changed: tuple) -> None:
 def add_upstream(req):
     body = req.json()
     with field("quota_gb"):
-        quota = v_exit_quota(body)
+        quota = checks.quota_gb(body.get("quota_gb"))
     rates = _exit_rates(body)
     with field("quic"):
-        quic = v_quic(body)
-    try:
-        pc = awgconf.parse_upstream(str(body.get("config", "")))
-    except awgconf.ConfigError as e:
-        bad(e.msg, field="config")
+        quic = checks.quic(body["quic"]) if "quic" in body else None
+    pc = checks.exit_config(body.get("config", ""))
     with field("name"):
-        name = v_name(body.get("name"))
+        name = checks.name(body.get("name"))
 
     def fn(st):
         with field("fallback"):
-            fb = v_outbound(st, body.get("fallback") or "direct")
+            fb = checks.fallback(st, None, body.get("fallback") or "direct")
         with field("quota_action"):
-            action = v_quota_action(st, body.get("quota_action"), None)
+            action = checks.quota_action(st, body.get("quota_action"), None)
         u = {"id": new_id("u"), "name": name, "num": Store.free_num(st), "config": pc.raw,
              "enabled": True, "fallback": fb, "created": time.time(),
              "quota": quota, "quota_action": action}
@@ -1612,25 +1310,25 @@ def get_upstream_config(req, uid):
     return {"config": u["config"]}
 
 
-@app.put("/api/upstreams/{uid}")
 def _exit_rates(body: dict) -> dict:
     """Ограничения скорости выхода — каждое со своим полем формы."""
     out = {}
     for k in ("rate_down", "rate_up"):
         with field(k):
-            out.update(v_rates({k: body[k]}) if k in body else {})
+            out.update(checks.rates({k: body[k]}) if k in body else {})
     return out
 
 
+@app.put("/api/upstreams/{uid}")
 def edit_upstream(req, uid):
     body = req.json()
     quota = None
     if "quota_gb" in body:
         with field("quota_gb"):
-            quota = v_exit_quota(body)
+            quota = checks.quota_gb(body.get("quota_gb"))
     rates = _exit_rates(body)
     with field("quic"):
-        quic = v_quic(body)
+        quic = checks.quic(body["quic"]) if "quic" in body else None
 
     def fn(st):
         u = Store.upstream(st, uid)
@@ -1638,25 +1336,17 @@ def edit_upstream(req, uid):
             bad("err.not_found", 404)
         if "name" in body:
             with field("name"):
-                u["name"] = v_name(body["name"])
+                u["name"] = checks.name(body["name"])
             own = Store.lst(st, u.get("own_list") or "")
             if own:
                 own["name"] = u["name"]          # свой список сайтов выхода называется как выход
         if "enabled" in body:
-            u["enabled"] = v_flag(body["enabled"])
+            u["enabled"] = checks.flag(body["enabled"])
         if "fallback" in body:
             with field("fallback"):
-                fb = v_outbound(st, body["fallback"])
-                if fb == "up:" + uid:
-                    bad("err.fallback_self")
-                if _fallback_loops(st, uid, fb):
-                    bad("err.fallback_loop")
-            u["fallback"] = fb
+                u["fallback"] = checks.fallback(st, uid, body["fallback"])
         if body.get("config"):
-            try:
-                pc = awgconf.parse_upstream(str(body["config"]))
-            except awgconf.ConfigError as e:
-                bad(e.msg, field="config")
+            pc = checks.exit_config(body["config"])
             # тип выхода не меняется: у AWG и SOCKS5 разные туннели, проверки и поля — это новый выход
             try:
                 old_kind = engine.parsed(u).kind
@@ -1667,7 +1357,7 @@ def edit_upstream(req, uid):
             u["config"] = pc.raw
         if "quota_gb" in body:
             with field("quota_action"):
-                action = v_quota_action(st, body.get("quota_action"), uid)
+                action = checks.quota_action(st, body.get("quota_action"), uid)
             if quota != u.get("quota") or action != (engine.quota_target(u) or "notify"):
                 u["quota_hit"] = u["quota_warned"] = None   # события квоты — заново
             u["quota"], u["quota_action"] = quota, action
@@ -1709,7 +1399,7 @@ def del_upstream(req, uid):
         if refs and repl is None:
             bad(Msg("err.upstream_in_use", refs=refs[:6]))
         if repl is not None:
-            new = v_outbound(st, repl)
+            new = checks.outbound(st, repl)
             if new == target:
                 bad("err.bad_outbound")
             Store.replace_outbound(st, target, new, u.get("fallback"))
@@ -1750,7 +1440,7 @@ def del_upstream(req, uid):
 def probe(req):
     body = req.json()
     st = store.snapshot()
-    out = v_outbound(st, body.get("outbound"))
+    out = checks.outbound(st, body.get("outbound"))
     try:
         return engine.probe(out)
     except Exception as e:  # noqa: BLE001
@@ -1763,12 +1453,10 @@ def put_routing(req):
     body = req.json()
 
     def fn(st):
-        bal = v_balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
-        strict = body["strict"] if "strict" in body else st["routing"].get("strict")
-        if strict is not None and not isinstance(strict, bool):
-            bad("err.bad_value")
-        st["routing"] = {"default": v_outbound(st, body.get("default")),
-                         "rules": v_rules(st, body.get("rules", []))}
+        bal = checks.balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
+        strict = checks.strict(body["strict"] if "strict" in body else st["routing"].get("strict"))
+        st["routing"] = {"default": checks.outbound(st, body.get("default")),
+                         "rules": checks.rules(st, body.get("rules", []))}
         if bal:
             st["routing"]["balance"] = bal
         if strict:
@@ -1785,16 +1473,9 @@ def put_client(req, pk):
     body = req.json()
 
     def fn(st):
-        mode = body.get("rules_mode", "inherit")
-        if mode not in ("inherit", "custom"):
-            bad("err.bad_value")
-        c = {"outbound": v_outbound(st, body.get("outbound", "inherit"), allow_inherit=True),
-             "rules_mode": mode,
-             "rules": v_rules(st, body.get("rules") or []) if mode == "custom" else [],
-             "note": str(body.get("note") or "")[:120],
-             "name": next((x.get("name") for x in engine.clients
-                           if x["public_key"] == pk), "")}
-        if c["outbound"] == "inherit" and mode == "inherit" and not c["note"]:
+        c = {**checks.client_policy(st, body),
+             "name": next((x.get("name") for x in engine.clients if x["public_key"] == pk), "")}
+        if c["outbound"] == "inherit" and c["rules_mode"] == "inherit" and not c["note"]:
             st["clients"].pop(pk, None)
         else:
             st["clients"][pk] = c
@@ -1831,17 +1512,7 @@ def put_client_cps(req, pk):
     if not any(c["public_key"] == pk for c in engine.clients):
         bad("err.not_found", 404)
     body = req.json()
-    p = body.get("preset") or "server"
-    if p not in (*cps.PRESETS, "custom", "server"):
-        bad("err.bad_value")
-    entry = None
-    if p == "custom":
-        try:
-            entry = {"preset": "custom", "values": cps.validate(body.get("values") or {})}
-        except cps.CPSError as e:
-            bad(e.msg)
-    elif p != "server":
-        entry = {"preset": p}
+    entry = checks.cps_entry(body.get("preset"), body.get("values"))
 
     def fn(st):
         m = st.setdefault("cps", {})
@@ -1938,51 +1609,12 @@ def get_list(req, lid):
     return l
 
 
-def _list_body(st: dict, body: dict, existing: dict | None = None) -> dict:
-    kind = body.get("kind", existing["kind"] if existing else None)
-    if kind not in ("country", "asn", "url", "manual", "domains"):
-        bad("err.list_kind")
-    src = str(body.get("source", existing["source"] if existing else "")).strip()
-    if kind == "country":
-        src = src.lower()
-        if not re.match(r"^[a-z]{2}$", src):
-            bad("err.country_code")
-        return {"kind": kind, "source": src, "name": str(body.get("name") or "")[:40]}
-    elif kind == "asn":
-        asns = lists.parse_asns(src)
-        if not asns:
-            bad("err.asn_format")
-        src = " ".join(f"AS{a}" for a in asns)
-        name = body.get("name") or src
-    elif kind == "domains":
-        if len(src) > 2_000_000:
-            bad("err.list_too_big")
-        urls, text = domains.split_source(src)
-        found = domains.parse(text)
-        if not urls and not found:
-            bad("err.no_domains")
-        # без названия — первый домен (или сайт первой ссылки)
-        name = body.get("name") or (found[0] if found else urls[0].split("/")[2])[:40]
-    elif kind == "url":
-        urls = src.split()
-        if not urls or not all(re.match(r"^https?://\S+$", u) for u in urls):
-            bad("err.urls")
-        name = body.get("name")
-    else:
-        if len(src) > 2_000_000:
-            bad("err.list_too_big")
-        if not lists.parse_cidrs(src):
-            bad("err.only_v6" if lists.count_ipv6(src) else "err.no_cidr")
-        name = body.get("name")
-    return {"kind": kind, "source": src, "name": v_name(name)}
-
-
 @app.post("/api/lists")
 def add_list(req):
     body = req.json()
 
     def fn(st):
-        d = _list_body(st, body)
+        d = checks.list_fields(body)
         lid = d["source"] if d["kind"] == "country" else new_id("l")
         if d["kind"] == "country" and Store.lst(st, lid):
             bad("err.country_exists")
@@ -2004,7 +1636,7 @@ def edit_list(req, lid):
             # вид списка не меняется: от него зависят правила (домены не смешиваются с сетями),
             # а у стран id = код страны
             bad("err.list_kind_change")
-        d = _list_body(st, body, l)
+        d = checks.list_fields(body, l)
         if l["kind"] == "country":
             d["source"] = l["source"]  # страну у существующего списка не меняем
         l.update(d)
@@ -2048,24 +1680,12 @@ def put_settings(req):
     def fn(st):
         s = st["settings"]
         if "list_update_hours" in body:
-            v = body["list_update_hours"]
-            if isinstance(v, bool):                       # true — не «1 час»
-                bad("err.hours")
-            try:
-                s["list_update_hours"] = max(1, min(int(v), 24 * 30))
-            except (TypeError, ValueError, OverflowError):
-                bad("err.hours")
+            s["list_update_hours"] = checks.list_update_hours(body["list_update_hours"])
         if "on_stop" in body:
-            if body["on_stop"] not in ("keep", "restore"):
-                bad("err.bad_value")
-            s["on_stop"] = body["on_stop"]
+            s["on_stop"] = checks.on_stop(body["on_stop"])
         if "shaping" in body:
-            sh = body["shaping"]
-            if not isinstance(sh, dict):
-                bad("err.bad_value")
-            v = {k: v_rate(sh.get(k)) for k in ("down", "up")}
-            if any(v.values()):
-                s["shaping"] = {k: x for k, x in v.items() if x}
+            if v := checks.shaping_limits(body["shaping"]):
+                s["shaping"] = v
             else:
                 s.pop("shaping", None)
     store.mutate(fn)
@@ -2113,9 +1733,7 @@ def debug(req):
 
 # -------------------------------------------------------------------- users
 def _pk(pk: str) -> str:
-    if not awgconf.KEY_RE.match(pk):
-        bad("err.bad_client_key")
-    return pk
+    return checks.client_key(pk)
 
 
 def _client_name(v) -> str:
@@ -2149,9 +1767,7 @@ def _client_host_value(value) -> str:
     """Свой адрес сервера в конфиге клиента: пусто — как у всех, иначе один из host_choices (#37)."""
     if value is None or value == "":
         return ""
-    if not isinstance(value, str) or value not in engine.srv.host_choices(store.snapshot()):
-        bad("err.bad_value")
-    return value
+    return checks.client_host(value, engine.srv.host_choices(store.snapshot()))
 
 
 @app.put("/api/hosts/{pk:path}")
@@ -2180,7 +1796,7 @@ def edit_user(req, pk):
         name = _client_name(body["name"])
         _user_errors(lambda: engine.srv.update_client(pk, name=name))
     if body.get("enabled") is not None:
-        set_client_enabled(pk, v_flag(body["enabled"]))
+        set_client_enabled(pk, checks.flag(body["enabled"]))
     engine.reconcile_soon()
     return {"ok": True}
 
@@ -2437,7 +2053,7 @@ def tls_web_set(req):
 def set_default_outbound(out: str) -> None:
     """«Сделать основным» в боте: выход по умолчанию для всех — балансировка выключается."""
     def fn(st):
-        st["routing"]["default"] = v_outbound(st, out)
+        st["routing"]["default"] = checks.outbound(st, out)
         if (st["routing"].get("balance") or {}).get("on"):
             st["routing"]["balance"]["on"] = False
     store.mutate(fn)

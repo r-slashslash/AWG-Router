@@ -155,7 +155,6 @@
     "client_mtu": 1380,
     "list_update_hours": 12,
     "on_stop": "restore",
-    "public_host": "vpn.example.com",
     "telegram": {
      "backup": "off",
      "backup_error": null,

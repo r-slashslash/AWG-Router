@@ -118,9 +118,12 @@ domain rules become a block.
 ## Panel state
 
 - `state.json` — settings, clients, exits, rules. A new field needs a default in
-  `store.DEFAULT_STATE`, input checks in the API handler in `main.py`, and handling in backup
-  restore (`clean_backup_state` drops unknown fields). It is written with `fsync`; the previous version
-  stays as `state.json.bak`, and the panel starts from it when `state.json` is damaged.
+  `store.DEFAULT_STATE`, an input check in `app/checks.py` (client settings of the server: in `users.py`),
+  used both by the API handler and by backup restore (`clean_backup_state` drops unknown fields; where a
+  backup always got a default instead of an error, it still does — `checks.forgive`). It is written with
+  `fsync`; the previous version stays as `state.json.bak`, and the panel starts from it when `state.json`
+  is damaged. State and backups of earlier releases are kept in `tests/fixtures/old` and must load as
+  before (`tests/test_old_files.py`).
 - `traffic.json` — counters (`traffic.FORMAT` stays 2 so older panels can still read it).
 - `tls.json` — HTTPS settings for this particular server; not part of backups.
 - `/api/state` is polled every few seconds, so keep it small; load big data with separate requests,

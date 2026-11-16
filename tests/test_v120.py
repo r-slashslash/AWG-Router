@@ -21,7 +21,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import awgserver, config, engine, main, system, tlsconf, tlsmgr, web, webfront  # noqa: E402
+from app import awgserver, checks, config, engine, main, system, tlsconf, tlsmgr, web, webfront  # noqa: E402
 
 
 class SelfTestPathTest(unittest.TestCase):
@@ -801,8 +801,8 @@ class ReviewFixesTest(unittest.TestCase):
             with self.assertRaises(web.HTTPError) as cm:
                 req(raw).json()
             self.assertEqual(cm.exception.code, 400)
-        self.assertFalse(main._num(float("inf")))
-        self.assertTrue(main._num(2.5))
+        self.assertFalse(checks.number(float("inf")))
+        self.assertTrue(checks.number(2.5))
 
     def test_tls_loop_survives_error(self):
         from app import tlsmgr

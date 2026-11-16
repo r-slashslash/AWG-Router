@@ -14,7 +14,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import cps, engine, main, system, users  # noqa: E402
+from app import checks, cps, engine, main, system, users  # noqa: E402
 from app.web import HTTPError  # noqa: E402
 
 
@@ -238,10 +238,10 @@ class FlagsTest(unittest.TestCase):
         return cm.exception.code, getattr(cm.exception.detail, "key", None)
 
     def test_flag(self):
-        self.assertIs(main.v_flag(True), True)
-        self.assertIs(main.v_flag(None, False), False)
+        self.assertIs(checks.flag(True), True)
+        self.assertIs(checks.flag(None, False), False)
         for v in self.BAD + (None,):
-            self.assertEqual(self.code(lambda: main.v_flag(v)), (400, "err.bad_value"), v)
+            self.assertEqual(self.code(lambda: checks.flag(v)), (400, "err.bad_value"), v)
 
     def test_panel_dns(self):
         before = main.store.snapshot()["settings"].get("panel_dns")
@@ -258,8 +258,8 @@ class FlagsTest(unittest.TestCase):
                 self.assertEqual(self.code(lambda: main.put_telegram(Req({"events": {"exit": v}}))),
                                  (400, "err.bad_value"))
                 self.assertEqual(self.code(lambda: main.edit_user(Req({"enabled": v}), pk)), (400, "err.bad_value"))
-                self.assertEqual(self.code(lambda: main.v_balance(st, {"on": v})), (400, "err.bad_value"))
-            self.assertEqual(main.v_balance(st, {}), {"on": False, "skip": []})     # не прислано — выключено
+                self.assertEqual(self.code(lambda: checks.balance(st, {"on": v})), (400, "err.bad_value"))
+            self.assertEqual(checks.balance(st, {}), {"on": False, "skip": []})     # не прислано — выключено
         finally:
             main.del_user(None, pk)
 

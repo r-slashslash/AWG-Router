@@ -210,7 +210,6 @@
     "list_update_hours": 12,
     "on_stop": "restore",
     "panel_dns": true,
-    "public_host": "vpn.example.com",
     "telegram": {
      "backup": "weekly",
      "backup_error": null,
