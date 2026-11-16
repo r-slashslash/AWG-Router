@@ -115,12 +115,15 @@ def content_length(headers) -> int:
 
 
 class HTTPError(Exception):
-    def __init__(self, code: int, detail):
+    """field — поле запроса, о котором ошибка: браузер выделяет его в форме (markField в app.js)."""
+
+    def __init__(self, code: int, detail, field: str | None = None):
         if isinstance(detail, str):
             detail = Msg(detail)
         super().__init__(str(detail))
         self.code = code
         self.detail = detail
+        self.field = field
 
 
 class Page:
@@ -341,7 +344,10 @@ class App:
                     if e.code in (411, 413):
                         self.close_connection = True
                         extra = [("Connection", "close")]
-                    self._json(e.code, {"detail": e.detail}, extra)
+                    body = {"detail": e.detail}
+                    if getattr(e, "field", None):
+                        body["field"] = e.field
+                    self._json(e.code, body, extra)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 except Exception as e:  # noqa: BLE001

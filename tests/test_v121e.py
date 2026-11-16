@@ -1064,5 +1064,71 @@ class StateTagTest(unittest.TestCase):
         self.assertIn('id="cl-rows"', js)
 
 
+# ============================================================ интерфейс: поле с ошибкой
+def field_of(fn):
+    try:
+        fn()
+    except HTTPError as e:
+        return e.code, getattr(e.detail, "key", None), e.field
+    return 200, None, None
+
+
+class ErrorFieldTest(unittest.TestCase):
+    def test_exit_form(self):
+        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": "nonsense", "name": "x"})))[2], "config")
+        good = "socks5://198.51.100.9:1080"
+        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "  "})))[2], "name")
+        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "x", "quota_gb": "abc"})))[2],
+                         "quota_gb")
+        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "x", "rate_up": -5})))[2],
+                         "rate_up")
+        self.assertEqual(field_of(lambda: main.add_upstream(Req({"config": good, "name": "x", "fallback": "up:zz"})))[2],
+                         "fallback")
+
+    def test_server_form(self):
+        self.assertEqual(main.server_field(main.Msg("srv.bad_port")), "port")
+        self.assertEqual(main.server_field(main.Msg("srv.bad_int", key="Jc")), "params.Jc")
+        self.assertIsNone(main.server_field(main.Msg("err.internal")))
+        with mock.patch.object(main.engine.srv, "update_server", side_effect=main.UserError(main.Msg("srv.bad_dns", value="x"))):
+            self.assertEqual(field_of(lambda: main.put_server(Req({"client_dns": "x"}))), (400, "srv.bad_dns", "client_dns"))
+
+    def test_telegram_form(self):
+        with mock.patch.object(main.store, "mutate"):
+            self.assertEqual(field_of(lambda: main.put_telegram(Req({"token": "bad"})))[2], "token")
+            self.assertEqual(field_of(lambda: main.put_telegram(Req({"token": "123456:" + "A" * 35, "chat_id": "@chan",
+                                                                    "control": True})))[2], "chat_id")
+            self.assertEqual(field_of(lambda: main.put_telegram(Req({"backup_pw": "short"})))[2], "backup_pw")
+
+    def test_field_in_response(self):
+        import http.client
+        app = web.App()
+
+        @app.post("/x")
+        def x(req):
+            raise HTTPError(400, "err.bad_value", "port")
+
+        @app.post("/y")
+        def y(req):
+            raise HTTPError(400, "err.bad_value")
+        srv = app.serve("127.0.0.1", 0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+        self.addCleanup(c.close)
+        c.request("POST", "/x", body=b"{}")
+        self.assertEqual(json.loads(c.getresponse().read())["field"], "port")
+        c.request("POST", "/y", body=b"{}")
+        self.assertNotIn("field", json.loads(c.getresponse().read()))
+
+    def test_browser_marks_fields(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "app.js"), encoding="utf-8") as f:
+            js = f.read()
+        for fld in ("config", "name", "port", "address", "client_dns", "token", "chat_id", "params.${k}"):
+            self.assertIn(f'data-field="{fld}"', js)
+        self.assertEqual(js.count("markField(e, "), 3)
+        self.assertIn("pendingS = data", js)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -82,8 +82,30 @@ async function api(method, path, body, timeoutMs = 0, headers = null) {
   if (r.status === 401 && path !== "login") { showLogin(); throw new AuthError(t("auth.required")); }
   let data = null;
   try { data = await r.json(); } catch { /* пусто */ }
-  if (!r.ok) throw new Error(data && data.detail ? tm(data.detail) : `HTTP ${r.status}`);
+  if (!r.ok) {
+    const err = new Error(data && data.detail ? tm(data.detail) : `HTTP ${r.status}`);
+    err.field = data && typeof data.field === "string" ? data.field : null;
+    throw err;
+  }
   return data;
+}
+
+/** Поле формы, о котором ошибка сервера (field в ответе; у полей — data-field): рамка, фокус, прокрутка к
+ *  нему. Выделение снимается, как только поле правят. Поле скрыто (другой тип выхода) — только сообщение. */
+function markField(err, root = document) {
+  if (!err || !err.field || !root) return;
+  const els = [...root.querySelectorAll("[data-field]")]
+    .filter((el) => el.dataset.field.split(" ").includes(err.field) && el.getClientRects().length);
+  if (!els.length) return;
+  for (const el of els) {
+    el.classList.add("invalid");
+    el.setAttribute("aria-invalid", "true");
+    const off = () => { el.classList.remove("invalid"); el.removeAttribute("aria-invalid"); };
+    el.addEventListener("input", off, { once: true });
+    el.addEventListener("change", off, { once: true });
+  }
+  els[0].focus({ preventScroll: true });
+  els[0].scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 /* ================================================================ состояние */
@@ -297,6 +319,7 @@ let pollFails = 0;
 // Опрос, начатый до действия, может прийти позже refresh() после него: старый ответ вернул бы на экран
 // уже удалённого клиента. Ответ старше применённого отбрасывается.
 let stateSeq = 0, stateShown = 0;
+let pendingS = null;                              // состояние из опроса, пока открыто окно (см. refresh)
 let listsBusy = false;
 async function refresh(auto = false) {
   const seq = ++stateSeq;
@@ -314,8 +337,13 @@ async function refresh(auto = false) {
       S.now = data.now; S.system = data.system; S.engine.last_reconcile = data.last_reconcile;
     } else if (data.same) {
       return;                                   // отпечаток уже не тот (другой ответ успел раньше) — ждём следующий
+    } else if (auto && S && $("#modal").open) {
+      // Окно открыто: его списки выбора и обработчики живут на состоянии, с которым оно открылось (иначе
+      // список в окне — старый, а обработчик ищет по новому). Новое состояние — после закрытия окна.
+      pendingS = data;
     } else {
       S = data;
+      pendingS = null;
     }
   } catch (e) {
     if (e instanceof AuthError) return;
@@ -323,6 +351,12 @@ async function refresh(auto = false) {
     if (S) renderStatus();
     if (updatingTo) { setUpdLine(t("sy.updating_restart")); return; }   // панель перезапускается
     if (!auto) toast(t("panel.offline", { e: e.message }), true);      // при опросе об этом говорит шапка
+    return;
+  }
+  if (pendingS && $("#modal").open) {           // шапка — по новому состоянию, окно — по своему
+    const keep = S;
+    S = pendingS;
+    try { renderStatus(); } finally { S = keep; }
     return;
   }
   if (followUpdate()) return;
@@ -1472,21 +1506,21 @@ async function editUpstream(id) {
     <div class="field"><span>${esc(t("ex.kind"))}</span>
       <div class="seg" id="u-kind"><button type="button" data-v="awg">AmneziaWG</button><button type="button" data-v="socks5">SOCKS5</button></div>
       ${u ? `<span class="hint">${esc(t("ex.kind_locked"))}</span>` : ""}</div>
-    <label class="field"><span>${esc(t("ex.name"))}</span><input type="text" id="u-name" maxlength="40" value="${esc(u ? u.name : "")}" placeholder="${esc(t("ex.name_ph"))}"></label>
+    <label class="field"><span>${esc(t("ex.name"))}</span><input type="text" data-field="name" id="u-name" maxlength="40" value="${esc(u ? u.name : "")}" placeholder="${esc(t("ex.name_ph"))}"></label>
     <div id="u-sf">
       <div class="row2 row2-port">
-        <label class="field"><span>${esc(t("ex.socks_host"))}</span><input type="text" id="u-sh" dir="ltr" spellcheck="false" autocomplete="off" placeholder="203.0.113.20"></label>
-        <label class="field"><span>${esc(t("ex.socks_port"))}</span><input type="text" id="u-sp" dir="ltr" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="1080"></label>
+        <label class="field"><span>${esc(t("ex.socks_host"))}</span><input type="text" data-field="config" id="u-sh" dir="ltr" spellcheck="false" autocomplete="off" placeholder="203.0.113.20"></label>
+        <label class="field"><span>${esc(t("ex.socks_port"))}</span><input type="text" data-field="config" id="u-sp" dir="ltr" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="1080"></label>
       </div>
       <div class="row2">
-        <label class="field"><span>${esc(t("ex.socks_user"))}</span><input type="text" id="u-su" dir="ltr" spellcheck="false" autocomplete="off" placeholder="${esc(t("ex.socks_opt"))}"></label>
-        <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input type="password" id="u-sw" dir="ltr" autocomplete="new-password" placeholder="${esc(t("ex.socks_opt"))}"></label>
+        <label class="field"><span>${esc(t("ex.socks_user"))}</span><input type="text" data-field="config" id="u-su" dir="ltr" spellcheck="false" autocomplete="off" placeholder="${esc(t("ex.socks_opt"))}"></label>
+        <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input type="password" data-field="config" id="u-sw" dir="ltr" autocomplete="new-password" placeholder="${esc(t("ex.socks_opt"))}"></label>
       </div>
-      <div class="field"><label class="check"><input type="checkbox" id="u-quic" ${u && u.quic === true && u.kind === "socks5" ? "checked" : ""}><span>${esc(t("ex.socks_quic"))}</span></label>
+      <div class="field"><label class="check"><input type="checkbox" data-field="quic" id="u-quic" ${u && u.quic === true && u.kind === "socks5" ? "checked" : ""}><span>${esc(t("ex.socks_quic"))}</span></label>
         <span class="hint">${esc(t("ex.socks_quic_hint"))}</span></div>
     </div>
     <label class="field"><span id="u-conf-l"></span>
-      <textarea id="u-conf" dir="ltr" spellcheck="false"></textarea>
+      <textarea data-field="config" id="u-conf" dir="ltr" spellcheck="false"></textarea>
       <span class="hint" id="u-conf-h"></span>
     </label>
     <div class="field" id="u-filef"><input type="file" id="u-file" accept=".conf,.txt,.vpn" aria-label="${esc(t("ex.file"))}"></div>
@@ -1494,28 +1528,28 @@ async function editUpstream(id) {
       <legend>${esc(t("ex.route_title"))}</legend>
       <p class="small muted" style="margin-top:0">${esc(t("ex.route_hint"))}</p>
       <label class="field"><span>${esc(t("ex.route_sites"))}</span>
-        <textarea id="u-doms" class="short" dir="ltr" spellcheck="false" placeholder="${esc(t("ex.route_sites_ph"))}">${esc(ownText)}</textarea>
+        <textarea data-field="routing" id="u-doms" class="short" dir="ltr" spellcheck="false" placeholder="${esc(t("ex.route_sites_ph"))}">${esc(ownText)}</textarea>
         <span class="hint">${esc(t("ex.route_sites_hint"))}</span></label>
       ${group(t("ex.route_dlists"), dlists)}
       ${group(t("ex.route_nlists"), nlists)}
       <label class="check"><input type="checkbox" id="u-rdef" ${out && S.routing.default === out ? "checked" : ""}><span>${esc(t("ex.route_default"))}</span></label>
     </fieldset>
     <label class="field"><span>${esc(t("ex.fallback"))}</span>
-      <select id="u-fb">${outOptions(u ? u.fallback : "direct", { exclude: out })}</select>
+      <select data-field="fallback" id="u-fb">${outOptions(u ? u.fallback : "direct", { exclude: out })}</select>
       <span class="hint">${esc(t("ex.fallback_hint"))}</span>
     </label>
     <div class="row2">
       <label class="field"><span>${esc(t("ex.quota"))}</span>
-        <input type="number" id="u-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.quota ? +(u.quota / 1024 ** 3).toFixed(3) : ""}"></label>
+        <input type="number" data-field="quota_gb" id="u-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.quota ? +(u.quota / 1024 ** 3).toFixed(3) : ""}"></label>
       <label class="field"><span>${esc(t("ex.quota_action"))}</span>
-        <select id="u-qa">${quotaOptions(u)}</select></label>
+        <select data-field="quota_action" id="u-qa">${quotaOptions(u)}</select></label>
     </div>
     <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.quota_hint", { time: monthResetLocal() }))}</p>
     <div class="row2">
       <label class="field"><span>${esc(t("ex.rate_down"))}</span>
-        <input type="number" id="u-rd" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_down ? u.rate_down : ""}"></label>
+        <input type="number" data-field="rate_down" id="u-rd" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_down ? u.rate_down : ""}"></label>
       <label class="field"><span>${esc(t("ex.rate_up"))}</span>
-        <input type="number" id="u-ru" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_up ? u.rate_up : ""}"></label>
+        <input type="number" data-field="rate_up" id="u-ru" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.rate_up ? u.rate_up : ""}"></label>
     </div>
     <p class="small muted" style="margin:-6px 0 14px">${esc(t("ex.rate_hint"))}</p>
   `, `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="u-save">${esc(t(u ? "btn.save" : "btn.add"))}</button>`,
@@ -1584,7 +1618,7 @@ async function editUpstream(id) {
       else await api("POST", "upstreams", body);
       closeModal(); toast(t(u ? "toast.exit_saved" : "toast.exit_added"));
       refresh();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toast(e.message, true); markField(e, $("#modal")); }
     btn.disabled = false;
   };
 }
@@ -1786,11 +1820,11 @@ function viewServer() {
     const side = `<span class="side side-${meta.side}" title="${esc(t("srv.side_" + meta.side + "_hint"))}">${esc(t("srv.side_" + meta.side))}</span>`;
     let input;
     if (meta.type === "bool") {
-      input = `<select data-p="${k}">${["", "on", "off"].map((v) => `<option value="${v}" ${d[k] === v ? "selected" : ""}>${v ? esc(t("srv.bool_" + v)) : "—"}</option>`).join("")}</select>`;
+      input = `<select data-p="${k}" data-field="params.${k}">${["", "on", "off"].map((v) => `<option value="${v}" ${d[k] === v ? "selected" : ""}>${v ? esc(t("srv.bool_" + v)) : "—"}</option>`).join("")}</select>`;
     } else if (meta.type === "text") {
-      input = `<textarea data-p="${k}" dir="ltr" rows="2" spellcheck="false" placeholder="<b 0x…> <r 16>">${esc(d[k] || "")}</textarea>`;
+      input = `<textarea data-p="${k}" data-field="params.${k}" dir="ltr" rows="2" spellcheck="false" placeholder="<b 0x…> <r 16>">${esc(d[k] || "")}</textarea>`;
     } else {
-      input = `<input type="text" data-p="${k}" dir="ltr" value="${esc(d[k] || "")}" ${meta.type === "key" ? 'class="mono"' : ""}>`;
+      input = `<input type="text" data-p="${k}" data-field="params.${k}" dir="ltr" value="${esc(d[k] || "")}" ${meta.type === "key" ? 'class="mono"' : ""}>`;
     }
     const size = meta.type === "text" ? `<span class="hint" id="sz-${k}">${cpsSizeHtml(d[k])}</span>` : "";
     const hint = t("p." + k) ? `<span class="hint">${esc(t("p." + k))}</span>` : "";
@@ -1806,19 +1840,19 @@ function viewServer() {
           <div><span>${esc(t("sy.iface"))}</span><b>${esc(SRV.iface)}</b></div>
           <div><span>${esc(t("srv.version"))}</span><b>${esc(SRV.version ? "AWG " + SRV.version : "WireGuard")}</b></div>
         </div>
-        <label class="field"><span>${esc(t("srv.public_host"))}</span><input type="text" id="s-host" dir="ltr" value="${esc(SRV.public_host)}" placeholder="203.0.113.10"><span class="hint">${esc(t("srv.public_host_hint"))}</span></label>
+        <label class="field"><span>${esc(t("srv.public_host"))}</span><input type="text" data-field="public_host" id="s-host" dir="ltr" value="${esc(SRV.public_host)}" placeholder="203.0.113.10"><span class="hint">${esc(t("srv.public_host_hint"))}</span></label>
         <div class="row2">
-          <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" id="s-port" min="1" max="65535" value="${SRV.port}" ${SRV.port_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.port_locked ? "srv.port_locked" : "srv.port_hint"))}</span></label>
-          <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
+          <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" data-field="port" id="s-port" min="1" max="65535" value="${SRV.port}" ${SRV.port_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.port_locked ? "srv.port_locked" : "srv.port_hint"))}</span></label>
+          <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" data-field="address" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
         </div>
       </div>
     </section>
     <section class="section">
       <div class="section-head"><h2>${esc(t("srv.clients_title"))}</h2></div>
       <div class="panel panel-pad">
-        <label class="field"><span>${esc(t("srv.client_host"))}</span><select id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
-        <label class="field"><span>${esc(t("srv.extra_hosts"))}</span><input type="text" id="s-extra" dir="ltr" placeholder="203.0.113.20, vpn2.example.com" value="${esc((SRV.extra_hosts || []).join(", "))}"><span class="hint">${esc(t("srv.extra_hosts_hint"))}</span></label>
-        <label class="field"><span>DNS</span><input type="text" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
+        <label class="field"><span>${esc(t("srv.client_host"))}</span><select data-field="client_host" id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
+        <label class="field"><span>${esc(t("srv.extra_hosts"))}</span><input type="text" data-field="extra_hosts" id="s-extra" dir="ltr" placeholder="203.0.113.20, vpn2.example.com" value="${esc((SRV.extra_hosts || []).join(", "))}"><span class="hint">${esc(t("srv.extra_hosts_hint"))}</span></label>
+        <label class="field"><span>DNS</span><input type="text" data-field="client_dns" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
         <div class="field">
           <label class="check"><input type="checkbox" id="s-pdns" ${SRV.panel_dns ? "checked" : ""}><span>${esc(t("srv.panel_dns"))}</span></label>
           <span class="hint">${esc(t("srv.panel_dns_hint", { addr: SRV.panel_dns_addr || "—" }))}</span>
@@ -1829,14 +1863,14 @@ function viewServer() {
           <span class="hint">${esc(t("srv.dom_filter_hint"))}</span>
           ${SRV.dom_filter && !SRV.panel_dns ? `<div class="small warn-text">${esc(t("srv.dom_filter_needs_dns"))}</div>` : ""}
         </div>
-        <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
+        <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select data-field="panel_dns_enc" id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
           `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
         <div class="field">
           <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_how", "srv.panel_dns_why", "srv.panel_dns_privacy", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
         </div>
         <div class="row2">
-          <label class="field"><span>MTU</span><input type="number" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
-          <label class="field"><span>PersistentKeepalive</span><input type="text" id="s-ka" dir="ltr" value="${esc(SRV.client_keepalive)}" placeholder="${esc(t("srv.auto", { v: SRV.keepalive_auto }))}"><span class="hint">${esc(t("srv.ka_hint"))}</span></label>
+          <label class="field"><span>MTU</span><input type="number" data-field="client_mtu" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
+          <label class="field"><span>PersistentKeepalive</span><input type="text" data-field="client_keepalive" id="s-ka" dir="ltr" value="${esc(SRV.client_keepalive)}" placeholder="${esc(t("srv.auto", { v: SRV.keepalive_auto }))}"><span class="hint">${esc(t("srv.ka_hint"))}</span></label>
         </div>
       </div>
     </section>
@@ -2172,7 +2206,7 @@ bind.server = () => {
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
       if (r.server_side_changed || r.host_changed || r.dns_changed) toast(t("toast.reimport"));
       SRV = null; srvDraft = null; await refresh(); loadServer();
-    } catch (e) { toast(e.message, true); $("#s-save").disabled = false; }
+    } catch (e) { toast(e.message, true); markField(e, $("#main")); $("#s-save").disabled = false; }
   };
 };
 
@@ -2525,18 +2559,18 @@ function viewTelegram() {
       <label class="check"><input type="checkbox" id="tg-on" ${c.enabled ? "checked" : ""}><span><b>${esc(t("tg.enable"))}</b></span></label>
       <div class="tg-cols"><div>
       <label class="field"><span>${esc(t("tg.token"))}</span>
-        <input type="text" id="tg-token" autocomplete="off" spellcheck="false" dir="ltr"
+        <input type="text" data-field="token" id="tg-token" autocomplete="off" spellcheck="false" dir="ltr"
           placeholder="${esc(c.token_set ? t("tg.token_saved", { hint: c.token_hint }) : "123456789:AA…")}">
         <span class="hint">${th("tg.token_hint", { bot: "<bdi><b>@BotFather</b></bdi>" })}</span></label>
       <div class="field"><span>${esc(t("tg.chat"))}</span>
-        <div class="input-btn"><input type="text" id="tg-chat" autocomplete="off" spellcheck="false" dir="ltr" value="${esc(c.chat_id || "")}">
+        <div class="input-btn"><input type="text" data-field="chat_id" id="tg-chat" autocomplete="off" spellcheck="false" dir="ltr" value="${esc(c.chat_id || "")}">
           <button type="button" class="btn sm" id="tg-detect">${esc(t("tg.find"))}</button></div>
         <span class="hint">${esc(t("tg.chat_hint"))}</span></div>
       <label class="field"><span>${esc(t("tg.lang"))}</span>
         <select id="tg-lang" style="max-width:220px">${Object.entries(LANGS).map(([k, v]) =>
           `<option value="${k}" ${k === (c.enabled || c.token_set ? c.lang : LANG) ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
       <label class="field"><span>${esc(t("tg.via"))}</span>
-        <select id="tg-via" style="max-width:320px">${[["direct", t("out.direct")],
+        <select data-field="via" id="tg-via" style="max-width:320px">${[["direct", t("out.direct")],
           ...S.upstreams.map((u) => ["up:" + u.id, t("out.via", { name: u.name })])].map(([v, l]) =>
           `<option value="${esc(v)}" ${v === (c.via || "direct") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
         <span class="hint">${esc(t("tg.via_hint"))}</span></label>
@@ -2553,7 +2587,7 @@ function viewTelegram() {
             <select id="tg-bk" style="max-width:220px">${["off", "daily", "weekly"].map((k) =>
               `<option value="${k}" ${(c.backup || "off") === k ? "selected" : ""}>${esc(t("tg.backup_" + k))}</option>`).join("")}</select></label>
           <label class="field"><span>${esc(t("tg.backup_pw"))}</span>
-            <input type="password" id="tg-bk-pw" autocomplete="new-password" maxlength="128" dir="ltr"
+            <input type="password" data-field="backup_pw" id="tg-bk-pw" autocomplete="new-password" maxlength="128" dir="ltr"
               placeholder="${esc(t(c.backup_pw_set ? "tg.backup_pw_set" : "tg.backup_pw_none"))}"></label>
           ${c.backup_pw_set ? `<label class="check"><input type="checkbox" id="tg-bk-clear"><span>${esc(t("tg.backup_pw_clear"))}</span></label>` : ""}
         </div><div>
@@ -2589,7 +2623,7 @@ function bindTelegram() {
   };
   const busy = (id, fn) => async () => {
     const b = $(id); b.disabled = true;
-    try { await fn(); } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+    try { await fn(); } catch (e) { if (!(e instanceof AuthError)) { toast(e.message, true); markField(e, $("#main")); } }
     b.disabled = false;
   };
   $("#tg-save").onclick = busy("#tg-save", async () => {
@@ -2842,7 +2876,10 @@ function openModal(title, body, foot, tag) {
 }
 function closeModal() { $("#modal").close(); }
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
-$("#modal").addEventListener("close", () => { if (tab !== "routing") render(); });
+$("#modal").addEventListener("close", () => {
+  if (pendingS) { S = pendingS; pendingS = null; }
+  if (tab !== "routing") render();
+});
 
 window.addEventListener("beforeunload", (e) => {
   if (routingDirty() || (tab === "server" && srvDirty())) { e.preventDefault(); e.returnValue = ""; }

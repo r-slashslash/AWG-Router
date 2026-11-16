@@ -16,7 +16,7 @@ const BROWSER = [
   "URL", "URLSearchParams", "Blob", "File", "FileReader", "FormData", "AbortSignal", "AbortController",
   "TextEncoder", "TextDecoder", "crypto", "Intl", "Event", "CustomEvent", "KeyboardEvent", "Image",
   "HTMLElement", "Element", "Node", "DOMParser", "atob", "btoa", "structuredClone", "queueMicrotask",
-  "ClipboardItem", "ResizeObserver", "MutationObserver", "IntersectionObserver", "WebSocket",
+  "CSS", "ClipboardItem", "ResizeObserver", "MutationObserver", "IntersectionObserver", "WebSocket",
 ];
 const browser = Object.fromEntries(BROWSER.map((n) => [n, "readonly"]));
 

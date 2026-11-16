@@ -41,7 +41,7 @@ jobs:
       - name: Interface scripts (eslint)
         run: |
           node --version
-          npx --yes eslint@9 app/static
+          npx --yes eslint@10.1.0 app/static
 
   net:
     runs-on: ubuntu-24.04

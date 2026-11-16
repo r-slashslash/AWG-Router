@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import hmac
 import ipaddress
@@ -264,8 +265,37 @@ def auth_mw(req) -> None:
 app.middleware = auth_mw
 
 
-def bad(msg: str, code: int = 400):
-    raise HTTPError(code, msg)
+def bad(msg: str, code: int = 400, field: str | None = None):
+    raise HTTPError(code, msg, field)
+
+
+@contextlib.contextmanager
+def field(name: str):
+    """Ошибка проверки внутри блока — об этом поле запроса (браузер выделит его в форме)."""
+    try:
+        yield
+    except HTTPError as e:
+        if e.field is None:
+            e.field = name
+        raise
+
+
+# Ошибки настроек сервера (users.update_server) → поле формы «Сервер»; ошибки параметров AWG — по ключу
+SERVER_FIELDS = {"srv.bad_host": "public_host", "srv.bad_extra_host": "extra_hosts",
+                 "srv.bad_client_host": "client_host", "srv.bad_dns": "client_dns", "srv.dns_v6": "client_dns",
+                 "srv.bad_mtu": "client_mtu", "srv.bad_keepalive": "client_keepalive",
+                 "srv.bad_dns_enc": "panel_dns_enc", "srv.bad_port": "port", "srv.port_container": "port",
+                 "srv.port_dns": "port", "srv.bad_subnet": "address",
+                 "srv.subnet_locked": "address", "srv.subnet_container": "address"}
+PARAM_ERRORS = ("srv.bad_param", "srv.bad_int", "srv.bad_range", "srv.bad_bool", "srv.bad_key", "srv.bad_junk")
+
+
+def server_field(m) -> str | None:
+    if not isinstance(m, Msg):
+        return None
+    if m.key in PARAM_ERRORS and isinstance(m.p.get("key"), str):
+        return "params." + m.p["key"]
+    return SERVER_FIELDS.get(m.key)
 
 
 # ---------------------------------------------------------------- валидация
@@ -499,21 +529,22 @@ def _tg_draft(body: dict) -> dict:
     tok = str(body.get("token") or "").strip()
     if tok:
         if not TG_TOKEN_RE.match(tok):
-            bad("err.tg_token")
+            bad("err.tg_token", field="token")
         c["token"] = tok
     if "chat_id" in body:
         chat = str(body.get("chat_id") or "").strip()
         if chat and not TG_CHAT_RE.match(chat):
-            bad("err.tg_chat")
+            bad("err.tg_chat", field="chat_id")
         c["chat_id"] = chat
     if "lang" in body:
         if not isinstance(body["lang"], str) or body["lang"] not in notify.LANGS:
             bad("err.bad_value")
         c["lang"] = body["lang"]
     if "via" in body:
-        via = v_outbound(store.snapshot(), body["via"])
-        if via == "block":
-            bad("err.bad_value")
+        with field("via"):
+            via = v_outbound(store.snapshot(), body["via"])
+            if via == "block":
+                bad("err.bad_value")
         c["via"] = via
     if isinstance(body.get("events"), dict):
         c["events"] = {k: v_flag(body["events"][k]) if k in body["events"] else c["events"].get(k, True)
@@ -529,7 +560,7 @@ def _tg_draft(body: dict) -> dict:
     pw = str(body.get("backup_pw") or "")
     if pw:
         if not 8 <= len(pw) <= 128:
-            bad("err.backup_pw")
+            bad("err.backup_pw", field="backup_pw")
         c["backup_pw"] = pw
     if body.get("backup_pw_clear"):
         c["backup_pw"] = ""
@@ -540,11 +571,11 @@ def _tg_draft(body: dict) -> dict:
 def put_telegram(req):
     c = _tg_draft(req.json())
     if (c["enabled"] or c["control"]) and not (c["token"] and c["chat_id"]):
-        bad("err.tg_incomplete")
+        bad("err.tg_incomplete", field="token" if not c["token"] else "chat_id")
     if c["control"] and c["chat_id"].startswith("@"):
         # @имя можно освободить и занять другому человеку, а в публичной группе с этим именем пишут
         # все её участники: команды (выключить клиентов, прислать копию) — только из чата с числовым ID
-        bad("err.tg_control_id")
+        bad("err.tg_control_id", field="chat_id")
     store.mutate(lambda st: st["settings"].__setitem__("telegram", c))
     bot.wake.set()             # бот сразу видит новые настройки, не дожидаясь паузы
     return {"ok": True}
@@ -1538,27 +1569,34 @@ def _after_exit_routing(lists_changed: tuple) -> None:
 @app.post("/api/upstreams")
 def add_upstream(req):
     body = req.json()
-    quota = v_exit_quota(body)
-    rates = v_rates(body)
-    quic = v_quic(body)
+    with field("quota_gb"):
+        quota = v_exit_quota(body)
+    rates = _exit_rates(body)
+    with field("quic"):
+        quic = v_quic(body)
     try:
         pc = awgconf.parse_upstream(str(body.get("config", "")))
     except awgconf.ConfigError as e:
-        bad(e.msg)
-    name = v_name(body.get("name"))
+        bad(e.msg, field="config")
+    with field("name"):
+        name = v_name(body.get("name"))
 
     def fn(st):
-        fb = v_outbound(st, body.get("fallback") or "direct")
+        with field("fallback"):
+            fb = v_outbound(st, body.get("fallback") or "direct")
+        with field("quota_action"):
+            action = v_quota_action(st, body.get("quota_action"), None)
         u = {"id": new_id("u"), "name": name, "num": Store.free_num(st), "config": pc.raw,
              "enabled": True, "fallback": fb, "created": time.time(),
-             "quota": quota, "quota_action": v_quota_action(st, body.get("quota_action"), None)}
+             "quota": quota, "quota_action": action}
         u.update({k: v for k, v in rates.items() if v})
         if quic and pc.kind == "socks5":
             u["quic"] = True
         st["upstreams"].append(u)
         if body.get("make_default") and st["routing"]["default"] in ("direct", "block"):
             st["routing"]["default"] = "up:" + u["id"]
-        ch = apply_exit_routing(st, u["id"], body["routing"], name) if body.get("routing") else (None, None)
+        with field("routing"):
+            ch = apply_exit_routing(st, u["id"], body["routing"], name) if body.get("routing") else (None, None)
         return u["id"], ch
     uid, ch = store.mutate(fn)
     _after_exit_routing(ch)
@@ -1575,47 +1613,61 @@ def get_upstream_config(req, uid):
 
 
 @app.put("/api/upstreams/{uid}")
+def _exit_rates(body: dict) -> dict:
+    """Ограничения скорости выхода — каждое со своим полем формы."""
+    out = {}
+    for k in ("rate_down", "rate_up"):
+        with field(k):
+            out.update(v_rates({k: body[k]}) if k in body else {})
+    return out
+
+
 def edit_upstream(req, uid):
     body = req.json()
     quota = None
     if "quota_gb" in body:
-        quota = v_exit_quota(body)
-    rates = v_rates(body)
-    quic = v_quic(body)
+        with field("quota_gb"):
+            quota = v_exit_quota(body)
+    rates = _exit_rates(body)
+    with field("quic"):
+        quic = v_quic(body)
 
     def fn(st):
         u = Store.upstream(st, uid)
         if not u:
             bad("err.not_found", 404)
         if "name" in body:
-            u["name"] = v_name(body["name"])
+            with field("name"):
+                u["name"] = v_name(body["name"])
             own = Store.lst(st, u.get("own_list") or "")
             if own:
                 own["name"] = u["name"]          # свой список сайтов выхода называется как выход
         if "enabled" in body:
             u["enabled"] = v_flag(body["enabled"])
         if "fallback" in body:
-            fb = v_outbound(st, body["fallback"])
-            if fb == "up:" + uid:
-                bad("err.fallback_self")
-            if _fallback_loops(st, uid, fb):
-                bad("err.fallback_loop")
+            with field("fallback"):
+                fb = v_outbound(st, body["fallback"])
+                if fb == "up:" + uid:
+                    bad("err.fallback_self")
+                if _fallback_loops(st, uid, fb):
+                    bad("err.fallback_loop")
             u["fallback"] = fb
         if body.get("config"):
             try:
                 pc = awgconf.parse_upstream(str(body["config"]))
             except awgconf.ConfigError as e:
-                bad(e.msg)
+                bad(e.msg, field="config")
             # тип выхода не меняется: у AWG и SOCKS5 разные туннели, проверки и поля — это новый выход
             try:
                 old_kind = engine.parsed(u).kind
             except awgconf.ConfigError:
                 old_kind = None
             if old_kind and pc.kind != old_kind:
-                bad("err.exit_kind_change")
+                bad("err.exit_kind_change", field="config")
             u["config"] = pc.raw
         if "quota_gb" in body:
-            action = v_quota_action(st, body.get("quota_action"), uid)
+            with field("quota_action"):
+                action = v_quota_action(st, body.get("quota_action"), uid)
             if quota != u.get("quota") or action != (engine.quota_target(u) or "notify"):
                 u["quota_hit"] = u["quota_warned"] = None   # события квоты — заново
             u["quota"], u["quota_action"] = quota, action
@@ -1634,7 +1686,8 @@ def edit_upstream(req, uid):
             else:
                 u.pop("quic", None)
         if body.get("routing"):
-            return apply_exit_routing(st, uid, body["routing"], u["name"])
+            with field("routing"):
+                return apply_exit_routing(st, uid, body["routing"], u["name"])
         return None, None
     _after_exit_routing(store.mutate(fn))
     engine.trigger()
@@ -2173,7 +2226,10 @@ def get_server(req):
 def put_server(req):
     body = req.json()
     names = tls.names()
-    res = _user_errors(lambda: engine.srv.update_server(body))
+    try:
+        res = engine.srv.update_server(body)
+    except (UserError, MsgError) as e:
+        bad(e.msg, field=server_field(e.msg))
     engine.reconcile_soon()
     if tls.names() != names:
         tls.reconfigure()              # адрес панели или второй адрес сертификата сменился
