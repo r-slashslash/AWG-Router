@@ -3,6 +3,67 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.22.0 — 2026-11-18
+
+- **Clients in the Telegram bot.** Every client gets a personal link as soon as it is created (`users.add_client`
+  writes a `shares` token in the same mutation); clients made before 1.22.0 get a **Create** button. The same token is
+  the client's bot invitation, `https://t.me/<bot>?start=<token>` (`clients.bot_invite`, `bot_url` in the client rows;
+  the bot learns its name with `getMe`). A client who opens it sees in a private chat with the bot what the personal
+  page shows — status, traffic, expiry and quota — and gets the config (QR, file, `vpn://`), nothing else of the panel;
+  the bot never writes first. Chats are bound in `tgbot.json` (`links`: chat → client and token, at most
+  `LINKS_MAX`), not in `state.json` or backups, and the token is checked against `shares` on every message: **Renew**
+  in the client window (`POST /api/shares-renew/<pk>`) replaces both the link and the invitation, and a chat bound to
+  the old one is let go. The texts follow the client's Telegram language (ru, zh, fa, else en). One reply per second
+  and one config per 30 s per chat. Both links now live in the client window's **Connect** pane, under the QR and the
+  `vpn://` button; **Revoke** is gone. The switch is **System → Telegram → Clients can check their access in the bot**
+  (`telegram.clients`, on by default); the bot now polls when it is on even with control off. Installs before 1.22.0
+  that use the bot for notifications only get it off once (`store.CLIENT_BOT`), since that bot may be read by another
+  program. The bot's command menu is set only for the panel's chat (`BotCommandScopeChat`); the menu that 1.9.0–1.21.0
+  set for every private chat is removed once.
+- **Telegram group became a supergroup.** Telegram gives such a chat a new number and refuses the old one with
+  `migrate_to_chat_id`; notifications used to stop silently. `notify.send` and file sends take the new number into
+  the settings (only if the old one was there) and send again; the bot does the same on the service message
+  (`migrate_to_chat_id` / `migrate_from_chat_id`).
+- **Two programs reading one bot.** `getUpdates` 409 "terminated by other getUpdates request" now shows a clear
+  error in the Telegram settings (`err.tg_conflict`: usually a second panel with the same token) instead of
+  Telegram's English text.
+- **The bot speaks in phrases.** Errors from the panel were sent as their keys (`srv.subnet_full`). `app/uitext.py`
+  reads the browser's dictionaries from `i18n.js` (strings and plural forms, reloaded when the file changes) and the
+  bot translates panel messages with their parameters into its language.
+- **Two-factor sign-in.** Wrong codes after a right password are counted from all addresses together
+  (`auth.CODE_MAX` per `CODE_WINDOW`), so a known password no longer lets many addresses guess the six digits in hours;
+  past the limit code sign-in is closed for everyone until the window ends (`err.code_locked`). The owner gets a
+  Telegram notice for every such case (`login_code_wrong`, `login_code_locked`). Turning 2FA on needs the panel
+  password, so a stolen session can't lock the owner out with its own code.
+- **Big network lists by link use a fraction of the memory.** Networks were kept as `IPv4Network` objects and merged
+  with `collapse_addresses`: 300,000 lines took about 300 MB (a million — 1.7 GB), on a 1 GB server enough for the
+  kernel to kill the panel. `lists.Nets` keeps merged ranges as numbers in `array` and gives the same minimal CIDR set
+  (300,000 lines: about 10 MB on top of the downloaded text).
+- **Server name in the browser tab (#38).** The tab shows the server's address, or a name set in **System → Settings →
+  Server name** (`settings.panel_name`, up to 40 characters, checked by `checks.panel_name`). Like the server's
+  addresses, it belongs to this server: a restored backup keeps the current one. Thanks to @MacSergey.
+- **Day/night button in the header.** `static/theme.js` (loaded in `<head>` of the panel and of the personal page)
+  sets `data-theme` from the button's choice (kept in the browser's `localStorage`) or from the system; styles,
+  QR codes and the phone's browser bar follow it. Thanks to @paris19891 for the idea.
+- **Clients' right column on a phone** (exit and "assigned manually") sits at the right edge like the month's traffic,
+  so exit chips no longer jump from row to row.
+- **Third-party code only by fingerprint.** The build fetched amneziawg-go, amneziawg-tools and hev-socks5-tunnel by
+  tag name and took base images by tag: whoever can move a tag (or steals the account) could put other code into the
+  release unnoticed. Sources are now fetched by a 40-character commit hash and checked with `git rev-parse`
+  (hev's submodules are pinned by its own commit), images — by `@sha256`; `ProjectRulesTest.test_foreign_code_pinned`
+  checks both Dockerfiles and that the AmneziaWG versions in them match.
+- **hev-socks5-tunnel stays at 2.9.3**, now pinned by its commit. 2.20.0 was tried: in the network tests a SOCKS5 exit
+  under a speed limit got about 2 Mbit/s alone instead of about 16, so the update waits. The panel already asks hev
+  for `log-file: stderr` (newer versions write no log by default, and the reason of a failed start comes from there).
+- **The panel's own AWG server image is built here and updated with the panel.** It was
+  `amneziavpn/amneziawg-go:latest` (Alpine 3.19, no longer patched) and `awg-router update` never replaced it. It is now
+  Alpine 3.24 with the same amneziawg-go and awg as the panel image. On an update the installer
+  (`refresh_own_server`) re-creates the panel's own container from the new image with the same keys, clients and port
+  (`awg-server/data`), so clients reconnect within seconds and keep their configs; if the new one doesn't bring `awg0`
+  up, the old container is started again. The AmneziaVPN app's container is never touched.
+- **For GitHub's code scanning:** the exit check sets TLS 1.2 as the minimum explicitly (it was the default already),
+  and the state fingerprint for polling is SHA-256 instead of SHA-1.
+
 ## 1.21.0 — 2026-11-17
 
 - **Domain rules to any exit.** A domain list can now lead to an AmneziaWG exit, Direct or Block, not only to a

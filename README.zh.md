@@ -73,7 +73,8 @@ AWG Router 让你的 AmneziaWG 服务器成为级联的入口（中转服务器�
 - 如果 AmneziaWG 服务器的接口消失而容器仍在运行（例如内存不足时内核终止了 `amneziawg-go`），面板会自动重启服务器并通过 Telegram 通知你。也可以在 **服务器 → 重启 AWG 服务器** 中手动重启。
 - 有效期和流量限额（每月或总计）。到期或用完时客户端会自动停用；每月限额在 1 日 00:00 UTC 清零（面板会显示对应的您当地时间），客户端会重新启用。到期前 3 天和用量达到 90% 时会发出提醒，客户端列表中的 **即将到期** 筛选可显示哪些客户端快到期。
 - 速度限制（未设置时关闭）：所有客户端合计的上限、单个客户端的上限和每个出口的上限，下载和上传分开设置。在合计上限内，速度在正在下载的客户端之间平均分配。连接不会断开，只是网速变慢，负载下延迟也不会升高。
-- 个人链接：对方打开链接即可下载配置或扫描二维码，并查看自己的流量和有效期，无需登录面板。
+- 个人链接：对方打开链接即可下载配置或扫描二维码，并查看自己的流量和有效期，无需登录面板。 客户端创建后链接即已存在，同一个密钥也是该客户端的 Telegram 机器人邀请：他在机器人中看到相同的内容并获取自己的配置，看不到面板的其他内容。两者都在客户端窗口的**连接**中；那里的**更新**会同时更换两者。
+- 浅色和深色主题，页眉中有日/夜按钮。浏览器标签页显示服务器地址或你为它取的名称（**系统 → 设置 → 服务器名称**）——同时打开多个服务器时很方便。
 
 <p align="center">
   <img src="docs/screenshots/clients.png" alt="客户端：活动、本月流量、限额和出口" width="860">
@@ -297,6 +298,7 @@ AmneziaWG 可以作为 Linux 内核模块运行，也可以作为 `amneziawg-go`
 - 出口以及在面板中创建的客户端的私钥保存在 `/opt/awg-router/data/state.json` 中，权限为 600。
 - Telegram 控制只认聊天而不认人：如果该聊天是群组，任何成员都能控制面板；在频道中，任何订阅者都能点击通知下方的按钮。请使用与机器人的私聊。
 - 客户端无法访问云平台的服务地址 `169.254.169.254`（服务器数据，在 AWS 上还有云账户的密钥）及整个 link-local 网段。
+- 客户端的个人链接和机器人邀请会把该客户端的配置交给任何打开它们的人：只发给本人。客户端窗口中的**更新**会让旧的失效。
 - 备份中包含服务器和所有客户端的私钥。请为下载的备份和发送到 Telegram 的备份设置密码。
 - 从 1.19.1 起，镜像和归档由 GitHub Actions 构建，带有签名的构建证明，镜像另有 SBOM（组件清单）。下载内容可用 `gh attestation verify oci://ghcr.io/r-slashslash/awg-router:<version> -R r-slashslash/AWG-Router`（镜像）或 `gh attestation verify awg-router.tar.gz -R r-slashslash/AWG-Router`（归档）验证。
 
@@ -337,11 +339,11 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>域名规则在内核中转发 <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>、安装程序检查端口是否被占用 <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>、内核模块引擎 <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>、服务器迁移和卸载 <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a>、子网字段 <a href="https://github.com/r-slashslash/AWG-Router/issues/26">#26</a>、在主机服务器上重新安装 <a href="https://github.com/r-slashslash/AWG-Router/issues/27">#27</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>容器模式下的 IPv6 出口和面板地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>、内核模块引擎 <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>、服务器迁移和卸载 <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a>、子网字段 <a href="https://github.com/r-slashslash/AWG-Router/issues/26">#26</a>、在主机服务器上重新安装 <a href="https://github.com/r-slashslash/AWG-Router/issues/27">#27</a>、日/夜按钮 <a href="https://github.com/r-slashslash/AWG-Router/issues/38">#38</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>通过 80 端口上的 Web 服务器进行 Let's Encrypt 验证 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 <tr>
-<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>客户端配置中的多个服务器地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>客户端配置中的多个服务器地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a>、浏览器标签页中的服务器名称 <a href="https://github.com/r-slashslash/AWG-Router/issues/38">#38</a></sub></td>
 </tr>
 </table>
 

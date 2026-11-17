@@ -31,7 +31,7 @@ namespace, and enters the network of the AWG container with `nsenter`.
 | API by topic | `app/api/`: `auth` (login, sessions, 2FA, `same_origin`), `clients` (clients, limits, masking, the client's page `/s/…`), `exits`, `routing` (rules, lists, route check), `server` (AWG server, engine, HTTPS, updates), `state` (`/api/state`, settings), `backup`, `telegram` (settings and bot control) |
 | Input checks, one per kind of thing | `app/checks.py`; the server's client settings in `users.py` |
 | Engine (`Engine`, one class in parts) | `app/engine/`: `__init__` (the pass, loops, events), `tunnels` (exits' tunnels, health, traffic, quotas), `routes` (routing decisions, nftables, ip rule), `sni` (domain rules, QUIC by name), `dns` (DNS on the server), `server` (AWG server, kernel module, rules "before the panel"), `speed` (`tc`), `diag` (exit check, route check), `common` |
-| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` with lists, `exits`, `server`, `system`, `settings` — Telegram, password, backup), `start.js` last; texts in `i18n.js` |
+| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` with lists, `exits`, `server`, `system`, `settings` — Telegram, password, backup), `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
 
 ## The AWG server ("Target")
 
@@ -153,14 +153,15 @@ domain rules become a block.
 
 The browser UI is plain JavaScript in `app/static` and loads nothing from third-party hosts.
 Every string exists in four languages (ru, en, zh, fa) in `app/static/i18n.js`; the server returns
-`Msg("key", **params)` and the browser translates it. Telegram texts are in `notify.TEXTS` and `tgbot.py`.
+`Msg("key", **params)` and the browser translates it. Telegram texts are in `notify.TEXTS` and `tgbot.py`; when the bot
+has to show a panel message (an error), `app/uitext.py` reads the same dictionaries from `i18n.js`.
 
 ## Other parts
 
 | Module | What it does |
 |---|---|
 | `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego), own certificate, a web server on port 80 |
-| `notify.py`, `tgbot.py` | Telegram notifications and control |
+| `notify.py`, `tgbot.py` | Telegram notifications and control; clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) |
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |
 | `awgconf.py`, `awgserver.py`, `cps.py` | AmneziaWG configs and the I1–I5 masking templates |

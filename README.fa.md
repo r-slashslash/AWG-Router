@@ -86,7 +86,8 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 - اگر رابط سرور AmneziaWG از بین برود ولی کانتینر همچنان کار کند (مثلاً هسته به دلیل کمبود حافظه `amneziawg-go` را ببندد)، پنل خودش سرور را دوباره راه‌اندازی می‌کند و در تلگرام خبر می‌دهد. دستی: **سرور ← راه‌اندازی دوبارهٔ سرور AWG**.
 - تاریخ انقضا و سقف ترافیک (ماهانه یا کل). وقتی تمام شوند، کلاینت خودکار غیرفعال می‌شود؛ سقف ماهانه روز اول ماه ساعت 00:00 UTC صفر می‌شود (پنل نشان می‌دهد این به وقت شما کی است) و کلاینت دوباره فعال می‌شود. سه روز پیش از انقضا و در ۹۰٪ سقف هشدار می‌آید و فیلتر **«به‌زودی تمام می‌شوند»** در فهرست کلاینت‌ها نشان می‌دهد چه کسانی نزدیک‌اند.
 - محدودیت سرعت (تا وقتی تعیین نشود خاموش است): یک سقف برای همهٔ کلاینت‌ها با هم، سقف اختصاصی هر کلاینت و سقف هر خروجی، دانلود و آپلود جداگانه. در سقف مشترک، سرعت به‌طور مساوی بین کسانی که همین الان دانلود می‌کنند تقسیم می‌شود. اتصال‌ها قطع نمی‌شوند، فقط اینترنت کندتر می‌شود و تأخیر زیر بار بالا نمی‌رود.
-- لینک شخصی: فرد آن را باز می‌کند، پیکربندی را دانلود یا کد QR را اسکن می‌کند و ترافیک و تاریخ انقضایش را می‌بیند — بدون ورود به پنل.
+- لینک شخصی: فرد آن را باز می‌کند، پیکربندی را دانلود یا کد QR را اسکن می‌کند و ترافیک و تاریخ انقضایش را می‌بیند — بدون ورود به پنل. این لینک از لحظهٔ ساخت کلاینت وجود دارد و همان کلید، دعوت کلاینت به ربات تلگرام هم هست: آنجا همان را می‌بیند و پیکربندی‌اش را می‌گیرد، نه چیز دیگری از پنل. هر دو در پنجرهٔ کلاینت، بخش **اتصال** هستند؛ **تازه کردن** در آنجا هر دو را عوض می‌کند.
+- پوستهٔ روشن و تیره با دکمهٔ روز/شب در سربرگ. زبانهٔ مرورگر نشانی سرور یا نامی را که به آن داده‌اید نشان می‌دهد (**سیستم ← تنظیمات ← نام سرور**) — وقتی چند سرور باز است، کاربردی است.
 
 <p align="center">
   <img src="docs/screenshots/clients.png" alt="کلاینت‌ها: فعالیت، ترافیک این ماه، سقف‌ها و خروجی‌ها" width="860">
@@ -326,6 +327,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 - کلیدهای خصوصی خروجی‌ها و کلاینت‌هایی که در پنل ساخته شده‌اند در `/opt/awg-router/data/state.json` با مجوز 600 نگه‌داری می‌شوند.
 - کنترل از تلگرام از یک چت فرمان می‌برد، نه از یک شخص: اگر آن چت گروه باشد، هر عضوش می‌تواند پنل را کنترل کند، و در کانال هر مشترکی می‌تواند دکمه‌های زیر اعلان‌ها را بزند. از چت خصوصی با ربات استفاده کنید.
 - نشانی خدماتی ابر <bdi>`169.254.169.254`</bdi> (داده‌های سرور، در AWS کلیدهای حساب ابری هم) و کل شبکهٔ link-local برای کلاینت‌ها بسته است.
+- لینک شخصی و دعوت ربات، پیکربندی کلاینت را به هر کسی که آن‌ها را باز کند می‌دهند: فقط برای خود آن فرد بفرستید. **تازه کردن** در پنجرهٔ کلاینت قبلی‌ها را بی‌اعتبار می‌کند.
 - پشتیبان کلیدهای خصوصی سرور و همهٔ کلاینت‌ها را دارد. برای پشتیبان‌های دانلودی و پشتیبان‌های تلگرام رمز تعیین کنید.
 - از نسخهٔ 1.19.1 ایمیج‌ها و آرشیو را GitHub Actions می‌سازد و گواهی امضاشدهٔ ساخت دارند؛ ایمیج‌ها فهرست اجزا (SBOM) هم دارند. دانلود را می‌توان با `gh attestation verify oci://ghcr.io/r-slashslash/awg-router:<version> -R r-slashslash/AWG-Router` (ایمیج‌ها) یا `gh attestation verify awg-router.tar.gz -R r-slashslash/AWG-Router` (آرشیو) بررسی کرد.
 
@@ -370,11 +372,11 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>قانون‌های دامنه با جابه‌جایی داده درون هسته <a href="https://github.com/r-slashslash/AWG-Router/pull/19">&lrm;#19&lrm;</a>، بررسی درگاه اشغال‌شده در نصب‌کننده <a href="https://github.com/r-slashslash/AWG-Router/pull/17">&lrm;#17&lrm;</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a>، موتور ماژول هسته <a href="https://github.com/r-slashslash/AWG-Router/issues/24">&lrm;#24&lrm;</a>، انتقال سرور و حذف <a href="https://github.com/r-slashslash/AWG-Router/issues/25">&lrm;#25&lrm;</a>، فیلد زیرشبکه <a href="https://github.com/r-slashslash/AWG-Router/issues/26">&lrm;#26&lrm;</a>، نصب دوباره روی سرور میزبان <a href="https://github.com/r-slashslash/AWG-Router/issues/27">&lrm;#27&lrm;</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>خروجی IPv6 و آدرس پنل در حالت کانتینر <a href="https://github.com/r-slashslash/AWG-Router/issues/20">&lrm;#20&lrm;</a>، موتور ماژول هسته <a href="https://github.com/r-slashslash/AWG-Router/issues/24">&lrm;#24&lrm;</a>، انتقال سرور و حذف <a href="https://github.com/r-slashslash/AWG-Router/issues/25">&lrm;#25&lrm;</a>، فیلد زیرشبکه <a href="https://github.com/r-slashslash/AWG-Router/issues/26">&lrm;#26&lrm;</a>، نصب دوباره روی سرور میزبان <a href="https://github.com/r-slashslash/AWG-Router/issues/27">&lrm;#27&lrm;</a>، دکمهٔ روز/شب <a href="https://github.com/r-slashslash/AWG-Router/issues/38">&lrm;#38&lrm;</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>اعتبارسنجی Let's Encrypt از راه وب‌سرور روی درگاه 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">&lrm;#21&lrm;</a></sub></td>
 </tr>
 <tr>
-<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>چند آدرس سرور در پیکربندی کلاینت‌ها <a href="https://github.com/r-slashslash/AWG-Router/issues/37">&lrm;#37&lrm;</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>چند آدرس سرور در پیکربندی کلاینت‌ها <a href="https://github.com/r-slashslash/AWG-Router/issues/37">&lrm;#37&lrm;</a>، نام سرور در زبانهٔ مرورگر <a href="https://github.com/r-slashslash/AWG-Router/issues/38">&lrm;#38&lrm;</a></sub></td>
 </tr>
 </table>
 

@@ -12,8 +12,9 @@ ARG AWG_GO_SHA=b5928efb6ca19f0153958460c3d141f04abc5c2e
 ARG AWG_TOOLS_REF=v3.1.20260812
 ARG AWG_TOOLS_SHA=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 ARG LEGO_IMAGE=goacme/lego:v5.6.0@sha256:6f1583fc026a455ea46a7a5858c576105bb69c2e2de69db391cab7f14750350c
-ARG HEV_REF=2.20.0
-ARG HEV_SHA=75dbc1e9ace6c70d3d1b94df7c283efe1de7effc
+# 2.20.0 в сетевых тестах давал выходу SOCKS5 под пределом скорости ~2 Мбит/с вместо ~16 (1.22.0) — пока 2.9.3
+ARG HEV_REF=2.9.3
+ARG HEV_SHA=b9b9b7b9b0febe32bb5d8cdb9ffa414d94242b75
 
 FROM ${LEGO_IMAGE} AS lego
 

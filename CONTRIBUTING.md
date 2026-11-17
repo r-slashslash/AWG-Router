@@ -24,6 +24,8 @@ New to the code? Start with the [architecture overview](docs/ARCHITECTURE.md).
 - Comments and docstrings in `app/`, `tests/` and `tools/` are written in Russian.
   `install.sh` talks only in English.
 - The browser never loads anything from a third-party host: fonts and scripts are served by the panel.
+- Third-party code goes into the images only by fingerprint: sources by a 40-character commit hash, base images
+  by `@sha256`, and workflow actions by a commit SHA with a `# vN` comment.
 
 ## Tests
 
@@ -35,7 +37,7 @@ These run without root and must pass, and so do `ruff check .` and `eslint app/s
 yourself: on a pull request GitHub runs only CodeQL, and the maintainer runs these checks and the network tests
 before merging and before every release.
 `tests/test_rules.py` checks many of the rules above (translations, saved fields, exit references, pinned
-actions, nothing loaded from third-party hosts), so a failure there tells you what was missed.
+actions and third-party code, nothing loaded from third-party hosts), so a failure there tells you what was missed.
 Network tests (`tests/*_e2e.py`) need root and are listed in the README, "Development".
 
 ## Pull requests

@@ -73,7 +73,8 @@ AWG Router делает ваш сервер AmneziaWG входом каскад�
 - Если у сервера AmneziaWG пропал интерфейс, а контейнер продолжает работать (например, ядро завершило `amneziawg-go` из-за нехватки памяти), панель сама перезапускает сервер и сообщает об этом в Telegram. Вручную — **«Сервер» → «Перезапустить сервер AWG»**.
 - Срок действия и лимит трафика (в месяц или всего). Когда они заканчиваются, клиент отключается сам; месячный лимит обнуляется 1-го числа в 00:00 UTC (панель показывает, когда это по вашему времени), и клиент включается снова. За 3 дня до конца срока и при 90% лимита приходит предупреждение, а фильтр **«Скоро закончатся»** в списке клиентов показывает, у кого срок или лимит на исходе.
 - Ограничение скорости (выключено, пока не задано): общий предел для всех клиентов, личный предел клиента и предел выхода, загрузка и отдача отдельно. Внутри общего предела скорость делится поровну между теми, кто сейчас качает. Соединения не рвутся, интернет просто становится медленнее, а задержка под нагрузкой не растёт.
-- Личная ссылка: человек открывает её, скачивает конфиг или сканирует QR-код и видит свой трафик и срок — без входа в панель.
+- Личная ссылка: человек открывает её, скачивает конфиг или сканирует QR-код и видит свой трафик и срок — без входа в панель. Ссылка есть с момента создания клиента, и тот же ключ — его приглашение в бота Telegram: там он видит то же и получает свой конфиг, больше ничего из панели. Обе — в окне клиента, в разделе **«Подключение»**; **«Обновить»** там меняет обе.
+- Светлая и тёмная тема, кнопка «день/ночь» в шапке. Во вкладке браузера — адрес сервера или название, которое вы ему дали (**«Система» → «Настройки» → «Название сервера»**), — удобно, когда открыто несколько серверов.
 
 <p align="center">
   <img src="docs/screenshots/clients.png" alt="Клиенты: активность, трафик за месяц, лимиты и выходы" width="860">
@@ -297,6 +298,7 @@ AmneziaWG работает либо модулем ядра Linux, либо пр
 - Закрытые ключи выходов и клиентов, созданных в панели, лежат в `/opt/awg-router/data/state.json` с правами 600.
 - Управление из Telegram слушается чата, а не человека: если это группа, панелью может управлять любой её участник, а в канале любой подписчик может нажимать кнопки под уведомлениями. Используйте личный чат с ботом.
 - Клиентам закрыт служебный адрес облака `169.254.169.254` (данные сервера, у AWS — ещё и ключи к облачному аккаунту) и вся сеть link-local.
+- Личная ссылка и приглашение в бота открывают конфиг клиента любому, у кого они есть: отправляйте их только этому человеку. **«Обновить»** в окне клиента делает прежние недействительными.
 - В резервной копии лежат закрытые ключи сервера и всех клиентов. Задайте пароль для скачиваемых копий и для копий в Telegram.
 - Начиная с 1.19.1 образы и архив собирает GitHub Actions, у них есть подписанная аттестация сборки, а у образов ещё и SBOM (список компонентов). Скачанное можно проверить командами `gh attestation verify oci://ghcr.io/r-slashslash/awg-router:<version> -R r-slashslash/AWG-Router` (образы) и `gh attestation verify awg-router.tar.gz -R r-slashslash/AWG-Router` (архив).
 
@@ -337,11 +339,11 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # дем
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/alexeyvolodin"><img src="https://github.com/alexeyvolodin.png?size=128" width="72" alt=""><br><b>alexeyvolodin</b></a><br>💻 🔍<br><sub>правила по доменам с пересылкой внутри ядра <a href="https://github.com/r-slashslash/AWG-Router/pull/19">#19</a>, проверка занятого порта в установщике <a href="https://github.com/r-slashslash/AWG-Router/pull/17">#17</a></sub></td>
-<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, движок на модуле ядра <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>, перенос сервера и удаление <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a>, поле подсети <a href="https://github.com/r-slashslash/AWG-Router/issues/26">#26</a>, переустановка поверх сервера на хосте <a href="https://github.com/r-slashslash/AWG-Router/issues/27">#27</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/paris19891"><img src="https://github.com/paris19891.png?size=128" width="72" alt=""><br><b>paris19891</b></a><br>🐛 💡 🔍<br><sub>выходы по IPv6 и адрес панели в режиме контейнера <a href="https://github.com/r-slashslash/AWG-Router/issues/20">#20</a>, движок на модуле ядра <a href="https://github.com/r-slashslash/AWG-Router/issues/24">#24</a>, перенос сервера и удаление <a href="https://github.com/r-slashslash/AWG-Router/issues/25">#25</a>, поле подсети <a href="https://github.com/r-slashslash/AWG-Router/issues/26">#26</a>, переустановка поверх сервера на хосте <a href="https://github.com/r-slashslash/AWG-Router/issues/27">#27</a>, кнопка «день/ночь» <a href="https://github.com/r-slashslash/AWG-Router/issues/38">#38</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/xiaomiiraqly-alt"><img src="https://github.com/xiaomiiraqly-alt.png?size=128" width="72" alt=""><br><b>xiaomiiraqly-alt</b></a><br>🐛 🔍<br><sub>проверка Let's Encrypt через веб-сервер на порту 80 <a href="https://github.com/r-slashslash/AWG-Router/issues/21">#21</a></sub></td>
 </tr>
 <tr>
-<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>несколько адресов сервера в конфигах клиентов <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>несколько адресов сервера в конфигах клиентов <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a>, название сервера во вкладке браузера <a href="https://github.com/r-slashslash/AWG-Router/issues/38">#38</a></sub></td>
 </tr>
 </table>
 

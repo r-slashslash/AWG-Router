@@ -452,7 +452,7 @@ class HevTest(unittest.TestCase):
     def test_log_to_stderr(self):
         """Новые hev по умолчанию не пишут никуда, а причину отказа панель берёт из его вывода."""
         self.assertIn("  log-file: stderr", socks.hev_config("awgr1", 1, "192.0.2.1", {"port": 1080}))
-        self.assertRegex(read("Dockerfile"), r"ARG HEV_REF=2\.2\d")
+        self.assertRegex(read("Dockerfile"), r"ARG HEV_SHA=[0-9a-f]{40}\n")
 
 
 # ======================================================================== приглашения у старых установок
