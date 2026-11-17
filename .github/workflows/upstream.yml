@@ -1,0 +1,48 @@
+# Раз в неделю: вышли ли новые версии чужих программ в образах, за которыми не следит Dependabot
+# (amneziawg-go, amneziawg-tools, hev-socks5-tunnel, lego) — tools/upstream.py. Ничего не обновляет: держит одно
+# открытое issue с тем, что вышло, и закрывает его, когда всё снова свежее.
+name: Upstream versions
+
+on:
+  schedule:
+    - cron: "37 6 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Compare pinned versions with upstream tags
+        run: python3 tools/upstream.py --out "$RUNNER_TEMP/up"
+
+      - name: Open, update or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUT: ${{ runner.temp }}/up
+        run: |
+          # заголовок и текст — из файлов (-F name=@file), а не через подстановку в командную строку
+          repo="repos/$GITHUB_REPOSITORY/issues"
+          num=$(gh api "$repo?state=open&creator=github-actions%5Bbot%5D&per_page=100" \
+            --jq '[.[] | select(.pull_request == null and (.title | startswith("New upstream versions")))][0].number // empty')
+          if [ -s "$OUT/title" ]; then
+            if [ -n "$num" ]; then
+              gh api -X PATCH "$repo/$num" -F title=@"$OUT/title" -F body=@"$OUT/body.md" --jq .html_url
+            else
+              gh api -X POST "$repo" -F title=@"$OUT/title" -F body=@"$OUT/body.md" --jq .html_url
+            fi
+          elif [ -n "$num" ] && [ ! -e "$OUT/incomplete" ]; then
+            gh api -X POST "$repo/$num/comments" -f body="Everything is up to date now." --jq .html_url
+            gh api -X PATCH "$repo/$num" -f state=closed --jq .html_url
+          else
+            echo "Nothing to report."
+          fi
