@@ -52,9 +52,10 @@ it grows, so every user-visible change gets a new version.
   release unnoticed. Sources are now fetched by a 40-character commit hash and checked with `git rev-parse`
   (hev's submodules are pinned by its own commit), images — by `@sha256`; `ProjectRulesTest.test_foreign_code_pinned`
   checks both Dockerfiles and that the AmneziaWG versions in them match.
-- **hev-socks5-tunnel stays at 2.9.3**, now pinned by its commit. 2.20.0 was tried: in the network tests a SOCKS5 exit
-  under a speed limit got about 2 Mbit/s alone instead of about 16, so the update waits. The panel already asks hev
-  for `log-file: stderr` (newer versions write no log by default, and the reason of a failed start comes from there).
+- **hev-socks5-tunnel 2.19.3** (was 2.9.3), pinned by its commit, with the fixes of ten releases (UDP among them).
+  2.20.0 is held back: in the network tests a SOCKS5 exit under a speed limit got 2–12 Mbit/s instead of about 16. A
+  run over the commits between 2.19.3 and 2.20.0 points at the hev-socks5-core update (`8e3b4cd`). Newer hev writes no
+  log by default, so the panel asks for `log-file: stderr` (the reason of a failed start comes from there).
 - **The panel's own AWG server image is built here and updated with the panel.** It was
   `amneziavpn/amneziawg-go:latest` (Alpine 3.19, no longer patched) and `awg-router update` never replaced it. It is now
   Alpine 3.24 with the same amneziawg-go and awg as the panel image. On an update the installer
