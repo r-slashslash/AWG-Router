@@ -11,6 +11,10 @@
 #   E2E_MODE=container|host  E2E_FROM=previous|latest|vX.Y.Z  E2E_CLEANUP=1  bash tests/e2e/upgrade.sh
 # E2E_FROM=latest — установка последней версии и обновление «на неё же»: путь обновления без сборки,
 # когда у прошлой версии ещё нет готовых образов. E2E_CLEANUP=1 — убрать всё за собой (cleanup.sh).
+# Обновление до кода, который ещё не выпущен: E2E_TO_SRC — адрес архива кода (AWGR_SRC_URL, можно file://;
+# с IMAGES внутри — образы скачиваются, без — собираются здесь), E2E_TO_VERSION — версия этого кода.
+# Свой контейнер сервера AWG (E2E_MODE=container) с 1.22.0 обновляется вместе с панелью: проверяется, что
+# его образ сменился, а порт, интерфейс и клиенты сервера — те же.
 # Журналы — в $E2E_LOGS (по умолчанию /tmp/e2e-logs).
 set -uo pipefail
 
@@ -48,6 +52,8 @@ rels=$(curl -fsSL --retry 3 "${auth[@]}" "https://api.github.com/repos/$REPO/rel
 mapfile -t TAGS < <(python3 -c 'import json,sys; [print(r["tag_name"]) for r in json.load(sys.stdin) if not r["draft"] and not r["prerelease"]]' <<<"$rels")
 LATEST="${TAGS[0]:-}"
 [ -n "$LATEST" ] || fail "no published release"
+TO_SRC="${E2E_TO_SRC:-}"
+[ -n "$TO_SRC" ] && LATEST="v${E2E_TO_VERSION:?E2E_TO_VERSION is needed with E2E_TO_SRC}"
 case "$FROM" in
   latest) FROM="$LATEST" ;;
   previous) FROM="${TAGS[1]:-}"; [ -n "$FROM" ] || fail "no previous release" ;;
@@ -109,19 +115,33 @@ cur=$(jq_py 'd["version"]["current"]' <<<"$s")
 ok "version $cur, server: $(jq_py 'd["target"]["kind"]' <<<"$s")"
 pk=$(api POST users '{"name":"e2e-client"}' | jq_py 'd["public_key"]') || fail "could not add a client"
 ok "client added: $pk"
+srv_box() { # свой контейнер сервера AWG: образ, порт и число клиентов в awg0
+  local c=amnezia-awg2
+  docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' "$c" 2>/dev/null | grep -qx "$DIR/awg-server/data" || return 1
+  printf '%s %s %s\n' "$(docker inspect -f '{{.Image}}' "$c")" \
+    "$(docker inspect -f '{{range $p, $_ := .NetworkSettings.Ports}}{{$p}} {{end}}' "$c" | tr -d ' ')" \
+    "$(docker exec "$c" awg show awg0 peers 2>/dev/null | wc -l)"
+}
+box_before=$(srv_box || true)
+[ -n "$box_before" ] && ok "own AWG container: port $(cut -d' ' -f2 <<<"$box_before"), $(cut -d' ' -f3 <<<"$box_before") clients"
 
 # ---------------------------------------------------------------- обновление
 step "awg-router update"
 build_mtime=$(stat -c %Y "$DIR/data/build.log" 2>/dev/null || echo none)
-awg-router update </dev/null >"$LOGS/update.log" 2>&1
+AWGR_SRC_URL="$TO_SRC" awg-router update </dev/null >"$LOGS/update.log" 2>&1
 rc=$?
+hide_secrets "$DIR"
 tail -n 25 "$LOGS/update.log"
 [ "$rc" = 0 ] || fail "awg-router update exit $rc"
-grep -q "Downloading the panel" "$LOGS/update.log" || fail "the update did not download the ready image"
-grep -q "Building the panel" "$LOGS/update.log" && fail "the update built the panel instead of downloading it"
-grep -q "no ready image" "$LOGS/update.log" && fail "the release archive has no IMAGES"
-[ "$(stat -c %Y "$DIR/data/build.log" 2>/dev/null || echo none)" = "$build_mtime" ] || fail "data/build.log changed: something was built"
-ok "the ready image was downloaded, nothing was built"
+if [ -z "$TO_SRC" ] || [ -f "$DIR/IMAGES" ]; then
+  grep -q "Downloading the panel" "$LOGS/update.log" || fail "the update did not download the ready image"
+  grep -q "Building the panel" "$LOGS/update.log" && fail "the update built the panel instead of downloading it"
+  grep -q "no ready image" "$LOGS/update.log" && fail "the release archive has no IMAGES"
+  [ "$(stat -c %Y "$DIR/data/build.log" 2>/dev/null || echo none)" = "$build_mtime" ] || fail "data/build.log changed: something was built"
+  ok "the ready image was downloaded, nothing was built"
+else
+  ok "code without IMAGES: the images were built here"
+fi
 
 step "Panel $LATEST"
 wait_server || fail "after the update the panel does not see the AmneziaWG server"
@@ -135,6 +155,15 @@ img=$(docker inspect -f '{{.Image}}' awg-router)
 ref=$(grep -E '^PANEL_IMAGE=' "$DIR/IMAGES" | cut -d= -f2-)
 docker image inspect -f '{{join .RepoDigests " "}}' "$img" | grep -qF "${ref#*@}" || fail "the running panel is not the image from IMAGES ($ref)"
 ok "the running panel is $ref"
+if [ -n "$box_before" ] && grep -q "refresh_own_server()" "$DIR/install.sh"; then
+  for _ in $(seq 1 20); do docker exec amnezia-awg2 ip link show awg0 >/dev/null 2>&1 && break; sleep 1; done
+  box_after=$(srv_box) || fail "the own AWG container is gone after the update"
+  [ "$(cut -d' ' -f1 <<<"$box_after")" != "$(cut -d' ' -f1 <<<"$box_before")" ] || fail "the own AWG container kept its old image"
+  [ "$(cut -d' ' -f2 <<<"$box_after")" = "$(cut -d' ' -f2 <<<"$box_before")" ] || fail "the own AWG container has another port"
+  [ "$(cut -d' ' -f3 <<<"$box_after")" = "$(cut -d' ' -f3 <<<"$box_before")" ] || fail "the own AWG container lost clients"
+  grep -q "AmneziaWG runs on the new image" "$LOGS/update.log" || fail "the installer did not report the new AWG image"
+  ok "own AWG container: new image ($(docker exec amnezia-awg2 cat /etc/alpine-release 2>/dev/null | sed 's/^/Alpine /')), same port and clients"
+fi
 err=$(jq_py 'd["engine"]["last_error"]' <<<"$s")
 [ "$err" = None ] || fail "the panel reports: $err"
 ok "no errors"
