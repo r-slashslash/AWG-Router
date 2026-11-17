@@ -62,6 +62,20 @@ it grows, so every user-visible change gets a new version.
   (`refresh_own_server`) re-creates the panel's own container from the new image with the same keys, clients and port
   (`awg-server/data`), so clients reconnect within seconds and keep their configs; if the new one doesn't bring `awg0`
   up, the old container is started again. The AmneziaVPN app's container is never touched.
+- **"Find" for the Chat ID works while the bot is running.** A bot that already reads its messages (control or client
+  invitations) takes them before the button could see them, and "Find" said no messages were found. The bot now
+  remembers the last chat that wrote to it (`Bot.last_chat`, for an hour) and the button uses it (`notify.chat_of`).
+- **The bot keeps quiet in groups.** In a group where it sees all messages it answered every phrase with its menu;
+  now only commands, a mention of `@bot` or a reply to its message get an answer.
+- **A list edit without a name keeps the name.** `PUT /api/lists/<id>` with only the text used to be refused with
+  "name required"; the panel itself always sends the name, so only hand-made requests saw it.
+- **SOCKS5 exit health is checked from the AWG server's network** (`socks.check_in`), where hev-socks5-tunnel connects
+  from, not from the panel's: a proxy on the VPS's own `127.0.0.1` showed as working although the AmneziaVPN container
+  can't reach it, and the other way round. The proxy's name is resolved in the panel, the password goes through stdin.
+  A network test checks both sides.
+- **Many clients switched at once.** Expiry and quota used to turn clients off one by one, each with its own write of
+  the server's files and `awg syncconf` — about 25 s for a thousand clients with one end date, with adding a client
+  blocked meanwhile. A pass now switches them in one write (`Server.set_enabled_many`).
 - **For GitHub's code scanning:** the exit check sets TLS 1.2 as the minimum explicitly (it was the default already),
   and the state fingerprint for polling is SHA-256 instead of SHA-1.
 
