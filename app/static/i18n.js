@@ -3276,3 +3276,19 @@ function th(key, params = {}) {
   const v = I18N[LANG][key] ?? I18N.en[key] ?? key;
   return _fill(esc(_pick(v, params.n ?? 0)), params, (x, isNum) => (isNum ? esc(x) : String(x)));
 }
+
+Object.assign(I18N.ru, {
+  "px.title":"Прокси", "px.subtitle":"Отдельный доступ через выбранный выход", "px.add":"Добавить прокси", "px.edit":"Изменить", "px.login":"Логин", "px.password":"Пароль", "px.password_hint":"Не менее 12 символов", "px.password_keep":"Оставьте пустым, чтобы сохранить пароль", "px.port":"Порт", "px.exit":"Выход", "px.status":"Статус", "px.enabled":"Включён", "px.disabled":"Отключён", "px.empty":"Прокси-клиентов пока нет", "px.delete":"Удалить", "px.save":"Сохранить", "px.confirm_delete":"Удалить прокси-клиента?", "px.protocol":"Тип", "px.http_warning":"HTTP передаёт логин и пароль без шифрования. Используйте VPN или SSH-туннель.", "px.status_on":"включён", "px.status_off":"выключен", "px.username_taken":"Этот логин уже используется", "px.port_taken":"Этот порт уже используется", "px.exit_in_use":"Выход используется прокси-клиентом"
+});
+
+Object.assign(I18N.en, {
+  "px.title":"Proxies", "px.subtitle":"Separate access through the selected exit", "px.add":"Add proxy", "px.edit":"Edit", "px.login":"Username", "px.password":"Password", "px.password_hint":"At least 12 characters", "px.password_keep":"Leave empty to keep the password", "px.port":"Port", "px.exit":"Exit", "px.status":"Status", "px.enabled":"Enabled", "px.disabled":"Disabled", "px.empty":"No proxy clients yet", "px.delete":"Delete", "px.save":"Save", "px.confirm_delete":"Delete this proxy client?", "px.protocol":"Type", "px.http_warning":"HTTP sends the username and password without encryption. Use a VPN or SSH tunnel.", "px.status_on":"enabled", "px.status_off":"disabled", "px.username_taken":"This username is already in use", "px.port_taken":"This port is already in use", "px.exit_in_use":"This exit is used by a proxy client"
+});
+
+Object.assign(I18N.zh, {
+  "px.title":"代理", "px.subtitle":"通过所选出口单独访问", "px.add":"添加代理", "px.edit":"编辑", "px.login":"用户名", "px.password":"密码", "px.password_hint":"至少 12 个字符", "px.password_keep":"留空以保留密码", "px.port":"端口", "px.exit":"出口", "px.status":"状态", "px.enabled":"已启用", "px.disabled":"已禁用", "px.empty":"暂无代理客户端", "px.delete":"删除", "px.save":"保存", "px.confirm_delete":"删除此代理客户端？", "px.protocol":"类型", "px.http_warning":"HTTP 不加密传输用户名和密码。请使用 VPN 或 SSH 隧道。", "px.status_on":"已启用", "px.status_off":"已停用", "px.username_taken":"此用户名已被使用", "px.port_taken":"此端口已被使用", "px.exit_in_use":"此出口正由代理客户端使用"
+});
+
+Object.assign(I18N.fa, {
+  "px.title":"پروکسی‌ها", "px.subtitle":"دسترسی مستقل از خروجی انتخاب‌شده", "px.add":"افزودن پروکسی", "px.edit":"ویرایش", "px.login":"نام کاربری", "px.password":"گذرواژه", "px.password_hint":"حداقل ۱۲ نویسه", "px.password_keep":"برای حفظ گذرواژه خالی بگذارید", "px.port":"درگاه", "px.exit":"خروجی", "px.status":"وضعیت", "px.enabled":"فعال", "px.disabled":"غیرفعال", "px.empty":"هنوز کلاینت پروکسی وجود ندارد", "px.delete":"حذف", "px.save":"ذخیره", "px.confirm_delete":"این کلاینت پروکسی حذف شود؟", "px.protocol":"نوع", "px.http_warning":"HTTP نام کاربری و گذرواژه را بدون رمزگذاری ارسال می‌کند. از VPN یا تونل SSH استفاده کنید.", "px.status_on":"فعال", "px.status_off":"غیرفعال", "px.username_taken":"این نام کاربری قبلاً استفاده شده است", "px.port_taken":"این درگاه قبلاً استفاده شده است", "px.exit_in_use":"این خروجی توسط کلاینت پراکسی استفاده می‌شود"
+});

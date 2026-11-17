@@ -15,7 +15,7 @@ import copy
 import math
 import re
 
-from . import awgconf, config, cps, domains, limits, lists, notify, shaping
+from . import awgconf, config, cps, domains, limits, lists, notify, proxy_auth, shaping
 from .i18n import Msg, MsgError
 from .store import ID_RE, Store, new_id
 from .web import HTTPError
@@ -68,6 +68,35 @@ def flag(v, default=None) -> bool:
     if not isinstance(v, bool):
         bad("err.bad_value")
     return v
+
+
+def proxy_client(st: dict, entry: dict, uid: str | None = None) -> dict:
+    """Единая проверка записи из API и резервной копии."""
+    if not isinstance(entry, dict):
+        bad("err.bad_value")
+    name, port, upstream = entry.get("username"), entry.get("port"), entry.get("upstream")
+    enabled, protocol, pw = entry.get("enabled", False), entry.get("protocol", "https"), entry.get("password")
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", name):
+        bad("err.bad_value", field="username")
+    if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+        bad("err.bad_value", field="port")
+    if not isinstance(enabled, bool) or protocol not in ("http", "https"):
+        bad("err.bad_value")
+    if not isinstance(upstream, str) or not Store.upstream(st, upstream):
+        bad("err.bad_value", field="upstream")
+    if not isinstance(pw, dict) or pw.get("iterations") != proxy_auth.ITERATIONS \
+            or not isinstance(pw.get("salt"), str) or not re.fullmatch(r"[a-f0-9]{32}", pw["salt"]) \
+            or not isinstance(pw.get("hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", pw["hash"]):
+        bad("err.bad_value", field="password")
+    for c in st.get("proxy_clients", []):
+        if c.get("id") == uid:
+            continue
+        if c.get("username") == name:
+            bad("px.username_taken", field="username")
+        if c.get("port") == port:
+            bad("px.port_taken", field="port")
+    return {"username": name, "port": port, "upstream": upstream, "enabled": enabled,
+            "protocol": protocol, "password": dict(pw)}
 
 
 def name(v, maxlen: int = 40) -> str:

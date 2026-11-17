@@ -9,7 +9,7 @@ import os
 import re
 import time
 
-from . import config, lists, notify, tgbot
+from . import config, lists, notify, proxy_manager, tgbot
 from .engine import Engine
 from .i18n import MsgError, to_json
 from .store import Store
@@ -47,6 +47,7 @@ def _tls_alt() -> list[str]:
 
 
 tls = TLSManager(lambda: store.peek(engine.srv.public_host), _tls_alt)
+proxies = proxy_manager.Manager(store, engine, tls)
 notifier = notify.Notifier(store, lambda st: tls.host() if tls.enabled else engine.srv.public_host(st))
 notifier.buttons_fn = tgbot.notify_buttons
 engine.notifier = notifier

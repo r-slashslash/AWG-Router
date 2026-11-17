@@ -6,10 +6,10 @@ import hashlib
 import json
 import time
 
-from .. import (awgconf, checks, config, hostnet, limits, lists, notify,
+from .. import (awgconf, checks, config, hostnet, limits, lists, notify, proxy_clients,
                 selfupdate, totp)
 from ..i18n import Msg
-from ..panel import (app, engine, notifier, panel_origin, panel_url, store, tls, updates)
+from ..panel import (app, engine, notifier, panel_origin, panel_url, proxies, store, tls, updates)
 from ..store import Store
 from ..traffic import month_key
 from . import auth, clients, routing, server, telegram
@@ -139,6 +139,8 @@ def _state_view() -> dict:
         "lists": [{**routing.list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),
         "clients": rows,
+        "proxy_clients": [{**proxy_clients.public(c), "listening": config.DRY_RUN or c["id"] in proxies.listeners,
+                           "error": proxies.errors.get(c["id"])} for c in st.get("proxy_clients", [])],
         "events": engine.events[-40:][::-1],
         "country_codes": lists.COUNTRY_CODES,
     }

@@ -10,7 +10,7 @@ import time
 from . import api, config
 from .api.backup import backup_loop
 from .api.telegram import bot
-from .panel import app, engine, panel_url, tls, updates, write_status
+from .panel import app, engine, panel_url, proxies, tls, updates, write_status
 
 log = logging.getLogger("awgr")
 assert api.ROUTES                      # импорт пакета api регистрирует все адреса в panel.app
@@ -33,6 +33,7 @@ def run():
                 break
             time.sleep(1)
         tls.start()
+    proxies.sync()
     srv = app.serve(config.PANEL_HOST, config.PANEL_PORT, tls=tls.context if tls.enabled else None)
     write_status()
     log.info("Panel: %s", panel_url())
@@ -47,6 +48,7 @@ def run():
         srv.serve_forever(poll_interval=0.5)
     finally:
         tls.stop_ev.set()
+        proxies.stop()
         engine.shutdown()
         log.info("Stopped")
 

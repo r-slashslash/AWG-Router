@@ -33,6 +33,11 @@ function patchClients(html) {
 }
 
 function viewClients() {
+  const vpn = viewVpnClients(), proxy = proxySection();
+  if (clientParts) { clientParts.shell += proxy; clientParts.html += proxy; }
+  return vpn + proxy;
+}
+function viewVpnClients() {
   clientParts = null;
   const head = `
     <div class="section-head">
@@ -182,6 +187,9 @@ bind.clients = () => {
   if (add) add.onclick = addClient;
   $$("[data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
   $$("tr[data-pk]").forEach((tr) => tr.onclick = () => editClient(tr.dataset.pk));
+  const proxyAdd = $("#proxy-add");
+  if (proxyAdd) proxyAdd.onclick = () => editProxy();
+  $$("tr[data-proxy-edit]").forEach((tr) => tr.onclick = () => editProxy(tr.dataset.proxyEdit));
 };
 
 function goTab(name) {
@@ -533,5 +541,59 @@ function editClient(pk, section = null) {
       await api("DELETE", "users/" + encodeURIComponent(pk));
       closeModal(); toast(t("toast.client_deleted")); refresh();
     } catch (e) { toast(e.message, true); }
+  };
+}
+
+function proxySection() {
+  const rows = (S.proxy_clients || []).map((p) => {
+    const status = !p.enabled ? "px.status_off" : p.listening ? "px.status_on" : "st.error";
+    const dot = !p.enabled ? "" : p.listening ? "ok" : "bad";
+    return `<tr class="click ${p.enabled ? "" : "row-off"}" data-proxy-edit="${esc(p.id)}">
+      <td><span class="client-name"><bdi>${esc(p.username)}</bdi></span></td>
+      <td data-m="sub">${esc((p.protocol || "https").toUpperCase())}</td><td data-m="sub">${esc(p.port)}</td>
+      <td data-m="sub"><span class="state"><span class="dot ${dot}"></span>${esc(t(status))}</span>${p.error ? `<div class="small">${esc(p.error)}</div>` : ""}</td>
+      <td data-m="right">${outChip("up:" + p.upstream)}</td></tr>`;
+  }).join("");
+  return `<section class="section"><div class="section-head"><div><h2>${esc(t("px.title"))}</h2>
+    <p class="muted small">${esc(t("px.subtitle"))}</p></div>
+    <button class="btn primary" id="proxy-add">${esc(t("px.add"))}</button></div>
+    <div class="panel"><table class="table responsive"><thead><tr><th>${esc(t("px.login"))}</th>
+    <th>${esc(t("px.protocol"))}</th><th>${esc(t("px.port"))}</th><th>${esc(t("px.status"))}</th><th>${esc(t("px.exit"))}</th></tr></thead>
+    <tbody>${rows}</tbody></table>${rows ? "" : `<p class="muted">${esc(t("px.empty"))}</p>`}</div></section>`;
+}
+
+function editProxy(id) {
+  const p = (S.proxy_clients || []).find((x) => x.id === id);
+  openModal(t(p ? "px.edit" : "px.add"), `
+    <label class="field"><span>${esc(t("px.login"))}</span><input id="px-login" value="${esc(p?.username || "")}" maxlength="64"></label>
+    <label class="field"><span>${esc(t("px.password"))}</span><input id="px-password" type="password" minlength="12" maxlength="256" autocomplete="new-password">
+      <span class="hint">${esc(t(p ? "px.password_keep" : "px.password_hint"))}</span></label>
+    <label class="field"><span>${esc(t("px.protocol"))}</span><select id="px-protocol">
+      <option value="https" ${p?.protocol !== "http" ? "selected" : ""}>HTTPS</option>
+      <option value="http" ${p?.protocol === "http" ? "selected" : ""}>HTTP</option></select>
+      <span class="hint" id="px-http-warning">${esc(t("px.http_warning"))}</span></label>
+    <label class="field"><span>${esc(t("px.port"))}</span><input id="px-port" type="number" min="1024" max="65535" value="${esc(p?.port || 3128)}"></label>
+    <label class="field"><span>${esc(t("px.exit"))}</span><select id="px-exit">${S.upstreams.map((u) =>
+      `<option value="${esc(u.id)}" ${p?.upstream === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></label>
+    <label><input id="px-enabled" type="checkbox" ${p?.enabled ? "checked" : ""}> ${esc(t("px.enabled"))}</label>`,
+  `${p ? `<button class="btn danger" id="px-delete">${esc(t("px.delete"))}</button>` : ""}
+   <button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="px-save">${esc(t("px.save"))}</button>`);
+  const showProxyWarning = () => { $("#px-http-warning").hidden = $("#px-protocol").value !== "http"; };
+  $("#px-protocol").onchange = showProxyWarning;
+  showProxyWarning();
+  $("#px-save").onclick = async () => {
+    const button = $("#px-save"); button.disabled = true;
+    try {
+      const body = { username: $("#px-login").value.trim(), protocol: $("#px-protocol").value, port: Number($("#px-port").value),
+        upstream: $("#px-exit").value, enabled: $("#px-enabled").checked };
+      if ($("#px-password").value) body.password = $("#px-password").value;
+      await api(p ? "PUT" : "POST", "proxy-clients" + (p ? "/" + encodeURIComponent(p.id) : ""), body);
+      $("#modal").close(); await refresh();
+    } catch (e) { toast(e.message, true); button.disabled = false; }
+  };
+  if (p) $("#px-delete").onclick = async () => {
+    if (!confirm(t("px.confirm_delete"))) return;
+    try { await api("DELETE", "proxy-clients/" + encodeURIComponent(p.id)); $("#modal").close(); await refresh(); }
+    catch (e) { toast(e.message, true); }
   };
 }

@@ -226,6 +226,8 @@ def del_upstream(req, uid):
         if not u:
             bad("err.not_found", 404)
         target = "up:" + uid
+        if any(c.get("upstream") == uid for c in st.get("proxy_clients", [])):
+            bad("px.exit_in_use")
         refs = Store.outbound_refs(st, target)
         if refs and repl is None:
             bad(Msg("err.upstream_in_use", refs=refs[:6]))

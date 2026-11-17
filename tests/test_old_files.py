@@ -95,6 +95,26 @@ class OldFilesTest(unittest.TestCase):
             with self.subTest(v=v):
                 self.assertEqual(expected_now(v), read_json(v, "expected.json"))
 
+    def test_backup_preserves_existing_proxy_clients(self):
+        from app import proxy_clients
+        old = read_json("1.20.0", "backup.json")["state"]
+        proxy_clients.save(old, {"username": "migration", "password": "test-password-long",
+                                 "upstream": old["upstreams"][0]["id"], "port": 3128, "enabled": True})
+        saved = copy.deepcopy(old["proxy_clients"])
+        self.assertEqual(backup.clean_backup_state(old)["proxy_clients"], saved)
+        self.assertTrue(saved[0]["enabled"])
+
+    def test_upgrade_preserves_existing_proxy_clients(self):
+        from app import proxy_clients
+        old = read_json("1.20.0", "state.json")
+        proxy_clients.save(old, {"username": "migration", "password": "test-password-long",
+                                 "upstream": old["upstreams"][0]["id"], "port": 3128, "enabled": True})
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "state.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(old, f)
+            self.assertEqual(Store(path).snapshot()["proxy_clients"], old["proxy_clients"])
+
     def test_texts_move_out_of_state(self):
         """Первый запуск 1.21.0 на state.json прежнего выпуска: тексты ручных списков — в своих файлах, в
         state.json их нет, а состояние с текстами (резервная копия) — прежнее."""

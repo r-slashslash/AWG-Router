@@ -11,11 +11,11 @@ import re
 import threading
 import time
 
-from .. import (awgconf, awgserver, checks, cps, notify,
+from .. import (awgconf, awgserver, checks, cps, notify, proxy_clients,
                 system, users)
 from ..checks import bad
 from ..i18n import Msg, msg_of, to_json
-from ..panel import (app, engine, notifier, store)
+from ..panel import (app, engine, notifier, proxies, store)
 from ..store import DEFAULT_STATE, Store
 from ..version import VERSION
 
@@ -221,6 +221,9 @@ def clean_backup_state(new: dict) -> dict:
         st["upstreams"][i]["quota_action"] = at(f"upstreams[{i}].quota_action",
                                                 lambda: checks.quota_action(st, qa, u["id"]))
 
+    if "proxy_clients" in new:
+        at("proxy_clients", lambda: proxy_clients.restore(st, arr("proxy_clients")))
+
     # маршрутизация
     r = obj("routing")
     st["routing"] = {"default": at("routing.default", lambda: checks.outbound(st, r.get("default", "direct"))),
@@ -374,6 +377,7 @@ def restore_backup(req):
         sc, srv_files = clean_server_files(srv, t.kind)
 
     store.mutate(lambda st: restore_state(st, new))
+    proxies.sync()
     engine.traffic.replace(b.get("traffic") or {})
     restarted = False
     if sc is not None:

@@ -212,6 +212,22 @@ class Traffic:
             r, self.recent = self.recent, {}
         return r
 
+    def add_proxy(self, out: str, direction: int, count: int, now: float | None = None) -> None:
+        """Учитывать локальные исходящие соединения прокси, не попадающие в forward."""
+        if not OUT_RE.fullmatch(out) or direction not in (0, 1) or count <= 0:
+            raise ValueError("invalid proxy traffic")
+        now = time.time() if now is None else now
+        mk = month_key(now)
+        delta = [count, 0] if direction == 0 else [0, count]
+        with self.lock:
+            self._add_out(out, None, delta, mk)
+            self.server["total"] = [self.server["total"][i] + delta[i] for i in (0, 1)]
+            _add(self.server["months"], mk, delta)
+            _trim(self.server["months"])
+            self._dirty = True
+        if now - self._saved >= SAVE_EVERY:
+            self.save()
+
     def _add_out(self, out: str, pk: str | None, delta: list[int], mk: str) -> None:
         rc = self.recent.setdefault((out, pk), [0, 0])
         rc[0] += delta[0]
