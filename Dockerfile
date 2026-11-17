@@ -1,46 +1,63 @@
 # AWG Router — панель управления AmneziaWG: клиенты, сервер, каскадная маршрутизация.
 # Собирает amneziawg-go и awg (AWG 3.1) из исходников Amnezia, hev-socks5-tunnel (выходы SOCKS5);
 # lego берётся из официального образа.
+#
+# Чужой код — только по отпечатку (с 1.22.0): исходники — по хешу коммита (название версии на чужой странице
+# можно незаметно переставить на другой код), образы — по sha256. Не совпало — сборка останавливается.
+# Обновляя программу, меняйте и название версии (*_REF, для людей), и отпечаток (*_SHA); версии AmneziaWG — те
+# же, что в awg-server/Dockerfile (это проверяет ProjectRulesTest).
 
 ARG AWG_GO_REF=v3.1.20260828
+ARG AWG_GO_SHA=b5928efb6ca19f0153958460c3d141f04abc5c2e
 ARG AWG_TOOLS_REF=v3.1.20260812
-ARG LEGO_IMAGE=goacme/lego:v5.6.0
-ARG HEV_REF=2.9.3
+ARG AWG_TOOLS_SHA=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
+ARG LEGO_IMAGE=goacme/lego:v5.6.0@sha256:6f1583fc026a455ea46a7a5858c576105bb69c2e2de69db391cab7f14750350c
+ARG HEV_REF=2.20.0
+ARG HEV_SHA=75dbc1e9ace6c70d3d1b94df7c283efe1de7effc
 
 FROM ${LEGO_IMAGE} AS lego
 
-FROM golang:1.27-alpine AS awg-go
-ARG AWG_GO_REF
+FROM golang:1.27-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS awg-go
+ARG AWG_GO_SHA
 RUN apk add --no-cache git
-RUN git clone --depth 1 --branch "${AWG_GO_REF}" https://github.com/amnezia-vpn/amneziawg-go /src
 WORKDIR /src
+RUN git init -q . && git remote add origin https://github.com/amnezia-vpn/amneziawg-go \
+ && git fetch -q --depth 1 origin "${AWG_GO_SHA}" && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "${AWG_GO_SHA}"
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/amneziawg-go .
 
-FROM alpine:3.24 AS awg-tools
-ARG AWG_TOOLS_REF
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS awg-tools
+ARG AWG_TOOLS_SHA
 RUN apk add --no-cache git build-base linux-headers
 # статическая сборка: этот же awg копируется на хост в режиме «AWG на хосте»
-RUN git clone --depth 1 --branch "${AWG_TOOLS_REF}" https://github.com/amnezia-vpn/amneziawg-tools /src \
+WORKDIR /src
+RUN git init -q . && git remote add origin https://github.com/amnezia-vpn/amneziawg-tools \
+ && git fetch -q --depth 1 origin "${AWG_TOOLS_SHA}" && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "${AWG_TOOLS_SHA}" \
  && make -C /src/src -j"$(nproc)" LDFLAGS=-static \
  && install -D -m 0755 /src/src/wg /out/awg \
  && install -D -m 0755 /src/src/wg-quick/linux.bash /out/awg-quick
 
-# hev-socks5-tunnel (MIT): TUN → SOCKS5 для выходов через прокси.
+# hev-socks5-tunnel (MIT): TUN → SOCKS5 для выходов через прокси. Его части (подмодули git) закреплены
+# самим коммитом hev: подменить их, не поменяв его хеш, нельзя.
 # Стек сигналов детектора переполнения — 64 КБ вместо SIGSTKSZ (8 КБ): musl с 1.2.6 (alpine 3.24) сверяет размер
 # с sysconf(_SC_MINSIGSTKSZ), а на процессорах Intel с AMX (Xeon 4-го поколения и новее) это ~13 КБ — sigaltstack
 # отказывал, и hev молча завершался с кодом 254: выходы SOCKS5 не запускались вовсе
-FROM alpine:3.24 AS hev
-ARG HEV_REF
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS hev
+ARG HEV_SHA
 ARG HEV_SIGSTACK=third-part/hev-task-system/src/lib/misc/hev-task-stack-detector.c
 RUN apk add --no-cache git make gcc musl-dev linux-headers
-RUN git clone --depth 1 --branch "${HEV_REF}" --recurse-submodules --shallow-submodules \
-      https://github.com/heiher/hev-socks5-tunnel /src \
+WORKDIR /src
+RUN git init -q . && git remote add origin https://github.com/heiher/hev-socks5-tunnel \
+ && git fetch -q --depth 1 origin "${HEV_SHA}" && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "${HEV_SHA}" \
+ && git submodule -q update --init --recursive --depth 1 \
  && sed -i 's/SIGSTKSZ/(64 * 1024)/g' "/src/${HEV_SIGSTACK}" \
  && test "$(grep -c '(64 \* 1024)' "/src/${HEV_SIGSTACK}")" -eq 2 \
  && make -C /src -j"$(nproc)" ENABLE_STATIC=1 \
  && install -D -m 0755 /src/bin/hev-socks5-tunnel /out/hev-socks5-tunnel
 
-FROM python:3.13-alpine
+FROM python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e
 # по этой метке GHCR связывает готовый образ с репозиторием
 LABEL org.opencontainers.image.source="https://github.com/r-slashslash/AWG-Router"
 RUN apk add --no-cache iproute2 iproute2-tc nftables util-linux-misc procps-ng ca-certificates openssl bash

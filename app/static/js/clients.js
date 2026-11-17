@@ -243,7 +243,6 @@ function addClient() {
 const QR_TARGET_CSS_PX = 300, QR_MIN_MODULE_PX = 3, QR_QUIET_MODULES = 4, QR_QUIET_MODULES_DARK = 6,
   QR_DARK_PAD_CSS_PX = 64;
 const qrCodes = new WeakMap();
-const qrDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 let qrSeq = 0, qrLayoutWidth = 0;
 function qrImage(text) {
   qrcode.stringToBytes = qrcode.stringToBytesFuncs["UTF-8"];
@@ -261,7 +260,7 @@ function qrImage(text) {
 }
 function drawQr(img) {
   const qr = qrCodes.get(img), box = img.parentElement;
-  const dark = !!(qrDark && qrDark.matches);
+  const dark = themeDark();
   const n = qr.getModuleCount(), m = dark ? QR_QUIET_MODULES_DARK : QR_QUIET_MODULES, size = n + 2 * m;
   const dpr = window.devicePixelRatio || 1;
   box.style.padding = "";
@@ -291,7 +290,7 @@ window.addEventListener("resize", () => {
   qrLayoutWidth = w;
   redrawQrs();
 });
-if (qrDark && qrDark.addEventListener) qrDark.addEventListener("change", redrawQrs);
+window.addEventListener("awgr-theme", redrawQrs);     // кнопка «день/ночь» или смена темы системы
 
 // application/octet-stream: с text/plain Chrome на Android дописывает к имени «.txt»,
 // и приложение AmneziaVPN не принимает файл «client.conf.txt»
@@ -326,7 +325,7 @@ function editClient(pk, section = null) {
       <button type="button" data-v="route">${esc(t("cl.v_route"))}</button>
       <button type="button" data-v="manage">${esc(t("cl.v_manage"))}</button>
     </div>
-    <div id="c-pane-connect" class="c-pane">${hostSelect("c-host", c.host || "")}<div id="c-cps-box"></div><div id="c-conn"></div></div>
+    <div id="c-pane-connect" class="c-pane">${hostSelect("c-host", c.host || "")}<div id="c-cps-box"></div><div id="c-conn"></div>${clientLinks(c)}</div>
     <div id="c-pane-route" class="c-pane">
       <label class="field"><span>${esc(t("cl.default_exit"))}</span>
         <select id="c-out">${outOptions(draft.outbound, { inherit: t("out.inherit_now", { exit: exitName(S.routing.default) }) })}</select>
@@ -361,13 +360,6 @@ function editClient(pk, section = null) {
           <input type="number" id="c-ru" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${L.rate_up || ""}"></label>
       </div>
       <p class="small muted" style="margin:-6px 0 14px">${esc(t("cl.rate_hint"))}</p>
-      <div class="manage-row">
-        <div style="min-width:0"><b>${esc(t("cl.share"))}</b><div class="small muted">${esc(t(S.panel && S.panel.access === "ssh" ? "cl.share_ssh" : "cl.share_hint"))}</div>
-          ${c.share_url ? `<div class="mono small share-url" dir="ltr">${esc(c.share_url)}</div>` : ""}</div>
-        <div class="actions" style="flex:none">${c.share_url
-          ? `<button class="btn sm" id="c-share-copy">${esc(t("btn.copy"))}</button><button class="btn sm danger" id="c-share-del">${esc(t("cl.share_revoke"))}</button>`
-          : `<button class="btn sm" id="c-share-new" ${S.panel && S.panel.access === "ssh" ? "disabled" : ""}>${esc(t("cl.share_create"))}</button>`}</div>
-      </div>
       <div class="manage-row">
         <div><b>${esc(t(c.enabled ? "cl.disable" : "cl.enable"))}</b><div class="small muted">${esc(t(c.enabled ? "cl.disable_hint" : "cl.enable_hint"))}</div></div>
         <button class="btn sm" id="c-toggle">${esc(t(c.enabled ? "cl.disable_btn" : "cl.enable_btn"))}</button>
@@ -507,20 +499,8 @@ function editClient(pk, section = null) {
       closeModal(); toast(t("toast.saved_applying")); refresh();
     } catch (e) { toast(e.message, true); }
   };
-  const reopen = async () => { await refresh(); editClient(pk, "manage"); };
-  const shareNew = $("#c-share-new");
-  if (shareNew) shareNew.onclick = async () => {
-    try { const r = await api("POST", "shares/" + encodeURIComponent(pk)); await copyText(r.url); await reopen(); }
-    catch (e) { toast(e.message, true); }
-  };
-  const shareCopy = $("#c-share-copy");
-  if (shareCopy) shareCopy.onclick = () => copyText(c.share_url);
-  const shareDel = $("#c-share-del");
-  if (shareDel) shareDel.onclick = async () => {
-    if (!confirm(t("cl.share_revoke_confirm"))) return;
-    try { await api("DELETE", "shares/" + encodeURIComponent(pk)); toast(t("cl.share_revoked")); await reopen(); }
-    catch (e) { toast(e.message, true); }
-  };
+  const reopen = async () => { await refresh(); editClient(pk, "connect"); };
+  bindClientLinks(c, reopen);
   $("#c-toggle").onclick = async () => {
     try {
       await api("PUT", "users/" + encodeURIComponent(pk), { enabled: !c.enabled });
@@ -533,5 +513,39 @@ function editClient(pk, section = null) {
       await api("DELETE", "users/" + encodeURIComponent(pk));
       closeModal(); toast(t("toast.client_deleted")); refresh();
     } catch (e) { toast(e.message, true); }
+  };
+}
+
+/* Личная ссылка и приглашение в бота — в «Подключении», под QR и кнопками (1.22.0). Обе — по одному ключу:
+   есть с создания клиента, «Обновить» меняет обе сразу (прежние перестают работать); у клиентов до 1.22.0 без
+   ссылки — «Создать». */
+function clientLinks(c) {
+  const ssh = S.panel && S.panel.access === "ssh";
+  const has = !!c.share_url;
+  const row = (title, hint, url, id) => `<div class="manage-row">
+      <div style="min-width:0"><b>${esc(title)}</b><div class="small muted">${esc(hint)}</div>
+        ${url ? `<div class="mono small share-url" dir="ltr">${esc(url)}</div>` : ""}</div>
+      ${url ? `<div class="actions" style="flex:none"><button class="btn sm" id="${id}">${esc(t("btn.copy"))}</button></div>` : ""}
+    </div>`;
+  return `<div class="client-links">
+    ${row(t("cl.share"), t(ssh ? "cl.share_ssh" : "cl.share_hint"), ssh ? null : c.share_url, "c-share-copy")}
+    ${row(t("cl.bot_invite"), t(c.bot_url ? "cl.bot_hint" : "cl.bot_off"), c.bot_url, "c-bot-copy")}
+    <div class="actions"><button class="btn sm" id="c-links-renew">${esc(t(has ? "cl.links_renew" : "cl.share_create"))}</button></div>
+  </div>`;
+}
+function bindClientLinks(c, reopen) {
+  const pk = c.public_key;
+  const share = $("#c-share-copy"), bot = $("#c-bot-copy"), renew = $("#c-links-renew");
+  if (share) share.onclick = () => copyText(c.share_url);
+  if (bot) bot.onclick = () => copyText(c.bot_url);
+  if (!renew) return;
+  renew.onclick = async () => {
+    if (c.share_url && !confirm(t("cl.links_renew_confirm"))) return;
+    renew.disabled = true;
+    try {
+      await api("POST", (c.share_url ? "shares-renew/" : "shares/") + encodeURIComponent(pk));
+      toast(t(c.share_url ? "cl.links_renewed" : "cl.links_created"));
+      await reopen();
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); renew.disabled = false; }
   };
 }

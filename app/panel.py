@@ -95,7 +95,7 @@ updates = UpdateChecker(lambda v: notifier.event("update", "update_available", c
 app = App(BASE)
 app.static = (BASE + "/static", STATIC)
 app.public_static = ("/s/assets", STATIC)   # для личных страниц клиентов (без секретного пути)
-app.public_files = {"share.js", "i18n.js", "qrcode.js", "app.css", "fonts/GolosText.woff",
+app.public_files = {"share.js", "i18n.js", "theme.js", "qrcode.js", "app.css", "fonts/GolosText.woff",
                     "fonts/JetBrainsMono.woff2", "fonts/Vazirmatn.woff2"}
 app.index_file = os.path.join(STATIC, "index.html")
 

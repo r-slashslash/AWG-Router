@@ -161,6 +161,7 @@
      "backup_last": null,
      "backup_pw": "",
      "chat_id": "-1001234567",
+     "clients": false,
      "control": false,
      "enabled": true,
      "events": {
@@ -188,7 +189,8 @@
     }
    },
    "upgraded": [
-    "rule_names"
+    "rule_names",
+    "client_bot"
    ],
    "upstreams": [
     {
@@ -381,6 +383,7 @@
      "backup_last": null,
      "backup_pw": "",
      "chat_id": "-1001234567",
+     "clients": false,
      "control": false,
      "enabled": true,
      "events": {
@@ -408,7 +411,8 @@
     }
    },
    "upgraded": [
-    "rule_names"
+    "rule_names",
+    "client_bot"
    ],
    "upstreams": [
     {
@@ -958,6 +962,7 @@
    "public_host": "vpn.example.com",
    "telegram": {
     "chat_id": "-1001234567",
+    "clients": false,
     "enabled": true,
     "events": {
      "clients": true,
@@ -982,7 +987,8 @@
    }
   },
   "upgraded": [
-   "rule_names"
+   "rule_names",
+   "client_bot"
   ],
   "upstreams": [
    {

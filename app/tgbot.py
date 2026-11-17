@@ -19,7 +19,7 @@ import re
 import threading
 import time
 
-from . import config, notify, qr
+from . import config, notify, qr, uitext
 from .i18n import Msg
 
 log = logging.getLogger("awgr.tgbot")
@@ -137,6 +137,12 @@ TEXTS = {
         "ex_direct": "Напрямую", "eo_default": "⭐ Основной выход",
         "eo_month": "📶 Трафик за месяц: {size}", "eo_direct": "🏠 Через IP этого сервера",
         "b_probe_one": "🔍 Проверить выход", "b_make_default": "⭐ Сделать основным",
+        "me_need_link": "🤖 Это бот VPN-сервера. Чтобы смотреть здесь свой доступ (состояние, трафик, срок и конфиг), откройте приглашение, которое вам прислали.\n\nНомер этого чата: <code>{chat}</code> — он нужен только владельцу сервера.",
+        "me_bad_link": "Приглашение не подошло: оно устарело или скопировано не целиком. Попросите новое у того, кто выдал вам доступ.",
+        "me_gone": "Это приглашение больше не действует: доступ удалили или выдали новое приглашение. Попросите новое у того, кто выдал вам доступ.",
+        "me_hint": "«Обновить» — свежие данные; «QR и файл» — конфиг для приложения.",
+        "me_cfg_wait": "Конфиг только что отправлен — подождите полминуты",
+        "share_bot": "🤖 Приглашение в бота (там клиент сам смотрит свой доступ):\n{url}",
     },
     "en": {
         "help": "🤖 <b>AWG Router remote</b>\n"
@@ -238,6 +244,12 @@ TEXTS = {
         "ex_direct": "Direct", "eo_default": "⭐ Default exit",
         "eo_month": "📶 Traffic this month: {size}", "eo_direct": "🏠 Through this server's IP",
         "b_probe_one": "🔍 Check exit", "b_make_default": "⭐ Make default",
+        "me_need_link": "🤖 This is a VPN server's bot. To see your access here (status, traffic, expiry and config), open the invitation you were sent.\n\nThis chat's number: <code>{chat}</code> — only the server's owner needs it.",
+        "me_bad_link": "This invitation didn't work: it is outdated or wasn't copied whole. Ask the person who gave you access for a new one.",
+        "me_gone": "This invitation no longer works: the access was removed or a new invitation was issued. Ask the person who gave you access for a new one.",
+        "me_hint": "“Refresh” — fresh data; “QR and file” — the config for the app.",
+        "me_cfg_wait": "The config was just sent — wait half a minute",
+        "share_bot": "🤖 Invitation to the bot (the client checks their own access there):\n{url}",
     },
     "zh": {
         "help": "🤖 <b>AWG Router 遥控</b>\n"
@@ -336,6 +348,12 @@ TEXTS = {
         "ex_direct": "直连", "eo_default": "⭐ 默认出口",
         "eo_month": "📶 本月流量：{size}", "eo_direct": "🏠 通过本服务器的 IP",
         "b_probe_one": "🔍 检查出口", "b_make_default": "⭐ 设为默认",
+        "me_need_link": "🤖 这是 VPN 服务器的机器人。要在这里查看你的访问（状态、流量、到期时间和配置），请打开发给你的邀请。\n\n本聊天的编号：<code>{chat}</code> —— 只有服务器所有者需要它。",
+        "me_bad_link": "邀请无效：它已过期或没有完整复制。请向给你访问权限的人索取新的邀请。",
+        "me_gone": "此邀请已失效：访问已被删除或已发出新的邀请。请向给你访问权限的人索取新的邀请。",
+        "me_hint": "“刷新”——最新数据；“二维码和文件”——应用的配置。",
+        "me_cfg_wait": "配置刚刚发送过——请等半分钟",
+        "share_bot": "🤖 机器人邀请（客户端可在其中查看自己的访问）：\n{url}",
     },
     "fa": {
         "help": "🤖 <b>کنترل از راه دور AWG Router</b>\n"
@@ -437,6 +455,12 @@ TEXTS = {
         "ex_direct": "مستقیم", "eo_default": "⭐ خروجی اصلی",
         "eo_month": "📶 ترافیک این ماه: {size}", "eo_direct": "🏠 از طریق IP همین سرور",
         "b_probe_one": "🔍 بررسی خروجی", "b_make_default": "⭐ اصلی کردن",
+        "me_need_link": "🤖 این ربات یک سرور VPN است. برای دیدن دسترسی خود در اینجا (وضعیت، ترافیک، مهلت و پیکربندی) دعوتی را که برایتان فرستاده‌اند باز کنید.\n\nشمارهٔ این چت: <code>{chat}</code> — فقط مالک سرور به آن نیاز دارد.",
+        "me_bad_link": "این دعوت کار نکرد: قدیمی است یا کامل کپی نشده. از کسی که به شما دسترسی داده دعوت تازه بخواهید.",
+        "me_gone": "این دعوت دیگر معتبر نیست: دسترسی حذف شده یا دعوت تازه‌ای صادر شده است. از کسی که به شما دسترسی داده دعوت تازه بخواهید.",
+        "me_hint": "«به‌روزرسانی» — داده‌های تازه؛ «QR و فایل» — پیکربندی برای برنامه.",
+        "me_cfg_wait": "پیکربندی همین الان فرستاده شد — نیم دقیقه صبر کنید",
+        "share_bot": "🤖 دعوت به ربات (کاربر دسترسی خود را آنجا می‌بیند):\n{url}",
     },
 }
 
@@ -499,6 +523,23 @@ MENU = (("b_status", "status"), ("b_clients", "clients"), ("b_exits", "exits"), 
         ("b_panel", "panel"), ("b_backup", "backup"))
 OLD_MENU = (("kbd_menu", "menu"), ("b_route", "route"))
 DENY_EVERY = 600          # «нет доступа» в один и тот же чужой чат — не чаще раза в 10 минут
+# клиенты по приглашению (1.22.0): чат → {pk, tok, lang, t} в tgbot.json (не в state.json и не в копиях: чат
+# подключён к этому боту, а не к панели). Ключ сверяется со «shares» на каждое сообщение.
+LINKS_MAX = 5000
+CLIENT_EVERY = 1.0        # запросов клиента — не чаще раза в секунду на чат
+CFG_EVERY = 30            # конфиг в чат клиента — не чаще раза в 30 с
+CLIENT_LANGS = ("ru", "zh", "fa")   # язык Telegram клиента → язык бота; остальные — английский
+
+
+def client_lang(frm: dict | None) -> str:
+    code = str((frm or {}).get("language_code") or "").lower()
+    return next((L for L in CLIENT_LANGS if code.startswith(L)), "en")
+
+
+def admin_on(c: dict) -> bool:
+    """Управление ботом действует: включено и указан числовой номер чата."""
+    chat = str(c.get("chat_id") or "")
+    return bool(c.get("token") and c.get("control") and chat and not chat.startswith("@"))
 
 
 def menu_action(text: str) -> str | None:
@@ -560,6 +601,8 @@ class Bot:
         self._ask: dict | None = None          # ждём ответа: {"kind": add|route, "msg": id, "t": …}
         self._denied: dict[str, float] = {}       # чужой чат → когда ответили «нет доступа»
         self._webhook_dropped = False
+        self._client_t: dict[str, float] = {}     # чат клиента → время последнего ответа (CLIENT_EVERY)
+        self._cfg_t: dict[str, float] = {}        # чат клиента → когда отправили конфиг (CFG_EVERY)
         self._st = self._load()
         # сообщение-меню (обычно одно): его правим на месте, старые удаляем; переживает перезапуск
         self._panel_msgs: list[int] = [m for m in self._st.get("panel") or [] if isinstance(m, int)]
@@ -585,7 +628,28 @@ class Bot:
         skew = notify.clock_skew
         return {"state": self.state, "error": self.error, "last": self.last_cmd,
                 # часы сервера сбиты: на это стоит обратить внимание (вход по коду тоже от них зависит)
-                "skew": round(skew) if abs(skew) >= 120 else None}
+                "skew": round(skew) if abs(skew) >= 120 else None,
+                "username": self.username(), "linked": len(self._st.get("links") or {})}
+
+    def username(self) -> str | None:
+        """Имя бота для приглашений клиентов — только пока бот работает для клиентов (его опрос идёт)."""
+        me = self._st.get("me") or {}
+        c = notify.cfg_of(self.store.peek(lambda st: {"settings": {"telegram": dict(
+            (st.get("settings") or {}).get("telegram") or {})}}))
+        if not (c["token"] and c.get("clients")) or me.get("bot") != c["token"].split(":", 1)[0]:
+            return None
+        name = me.get("username")
+        return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_]{3,64}", name) else None
+
+    def _learn_name(self, c: dict) -> None:
+        """Имя бота (getMe) — один раз на токен: из него собирается приглашение t.me/<имя>?start=…"""
+        bot_id = c["token"].split(":", 1)[0]
+        if (self._st.get("me") or {}).get("bot") == bot_id:
+            return
+        me = notify._call(c["token"], "getMe", {}, via=c["via"])
+        if isinstance(me, dict) and me.get("username"):
+            self._st["me"] = {"bot": bot_id, "username": str(me["username"])}
+            self._save()
 
     def _foreign(self, chat: dict, c: dict, qid: str = "") -> None:
         """Команда из чата, которого нет в настройках: не выполняем. В личном чате отвечаем
@@ -603,6 +667,130 @@ class Bot:
         except notify.NotifyError as e:
             log.info("telegram: %s", e)
 
+    # ------------------------------------------------------------- клиенты по приглашению
+    def _client_send(self, c: dict, cid: str, text: str, markup: dict | None = None,
+                     msg: dict | None = None) -> None:
+        """Ответ в чат клиента: по кнопке — правкой того же сообщения, иначе новым."""
+        mid = (msg or {}).get("message_id")
+        if mid and not self._is_photo(msg):
+            try:
+                notify._call(c["token"], "editMessageText",
+                             {"chat_id": cid, "message_id": mid, "parse_mode": "HTML", "text": text,
+                              "disable_web_page_preview": True, "reply_markup": markup or {"inline_keyboard": []}},
+                             via=c["via"])
+                return
+            except notify.NotifyError as e:
+                if "not modified" in str(e):
+                    return
+        notify.send(c["token"], cid, text, c["via"], markup, html=True)
+
+    def on_client(self, c: dict, chat: dict, frm: dict | None, text: str | None = None, data: str | None = None,
+                  qid: str = "", msg: dict | None = None) -> None:
+        """Личный чат с клиентом: /start <ключ> из приглашения привязывает чат к клиенту; дальше — его карточка
+        (как личная ссылка: состояние, трафик, срок, лимит, конфиг). Ничего из панели, кроме своего."""
+        cid = str(chat.get("id", ""))
+        L = client_lang(frm)
+        now = time.time()
+        if now - self._client_t.get(cid, 0) < CLIENT_EVERY:
+            if qid:
+                self._toast(c, qid)
+            return
+        self._client_t[cid] = now
+        if len(self._client_t) > LINKS_MAX:
+            self._client_t = {k: v for k, v in self._client_t.items() if now - v < 60}
+        links = self._st.setdefault("links", {})
+        if text is not None:
+            cmd, _, arg = text.partition(" ")
+            if cmd.split("@", 1)[0].lower() == "/start" and arg.strip():
+                tok = arg.strip()
+                pk = self.ops.share_pk(tok)
+                if not pk:
+                    self._client_send(c, cid, tr(L, "me_bad_link"))
+                    return
+                links.pop(cid, None)
+                links[cid] = {"pk": pk, "tok": tok, "lang": L, "t": now}
+                while len(links) > LINKS_MAX:                       # самые давние привязки — первыми
+                    links.pop(min(links, key=lambda k: links[k].get("t") or 0))
+                self._save()
+                name = (self.ops.share_info(tok, False) or {}).get("name") or pk[:8]
+                self.ops.audit(Msg("ev.tg_client_linked", name=name))
+                self.client_card(c, cid, L, tok)
+                return
+        link = links.get(cid)
+        if not link or self.ops.share_pk(link.get("tok")) != link.get("pk"):
+            if link:                    # приглашение обновили или клиента удалили
+                links.pop(cid, None)
+                self._save()
+            if qid:
+                self._toast(c, qid)
+            self._client_send(c, cid, tr(L, "me_gone" if link else "me_need_link", chat=cid))
+            return
+        if qid:
+            self._toast(c, qid)
+        if data == "me:c":
+            if now - self._cfg_t.get(cid, 0) < CFG_EVERY:
+                self._client_send(c, cid, tr(L, "me_cfg_wait"))
+                return
+            self._cfg_t[cid] = now
+            self.client_config(c, cid, L, link["tok"])
+            self.client_card(c, cid, L, link["tok"])
+            return
+        self.client_card(c, cid, L, link["tok"], msg if data == "me:r" else None)
+
+    def client_card(self, c: dict, cid: str, L: str, tok: str, msg: dict | None = None) -> None:
+        d = self.ops.share_info(tok, False)
+        if not d:
+            self._client_send(c, cid, tr(L, "me_gone", chat=cid))
+            return
+        lim = d.get("limits") or {}
+        tv = d.get("traffic") or {}
+        now = time.time()
+        lines = [f"<b>{html.escape(d.get('name') or '—')}</b>"]
+        hs = d.get("handshake") or 0
+        if not d.get("enabled"):
+            ao = lim.get("auto_off") or ""
+            lines.append(tr(L, "cd_off_exp" if ao == "exp" else "cd_off_quota" if ao.startswith("quota:")
+                            else "cd_off"))
+        elif hs and now - hs < ONLINE:
+            lines.append(tr(L, "cd_online"))
+        else:
+            lines.append(tr(L, "cd_seen", ago=fmt_ago(now - hs, L)) if hs else tr(L, "cd_never"))
+        lines.append(tr(L, "cd_traffic", month=fmt_size(tv.get("month_rx", 0) + tv.get("month_tx", 0), L),
+                        total=fmt_size(tv.get("total_rx", 0) + tv.get("total_tx", 0), L)))
+        if lim.get("expires"):
+            lines.append(tr(L, "cd_until", date=fmt_date(lim["expires"])))
+        if lim.get("quota"):
+            period = lim.get("period") or "month"
+            used = (tv.get("month_rx", 0) + tv.get("month_tx", 0)) if period == "month" \
+                else (tv.get("total_rx", 0) + tv.get("total_tx", 0))
+            lines.append(tr(L, "cd_quota_" + period, used=fmt_size(used, L), quota=fmt_size(lim["quota"], L)))
+        if not d.get("has_config"):
+            lines += ["", tr(L, "cd_app")]
+        lines += ["", tr(L, "me_hint")]
+        row = [(tr(L, "b_refresh"), "me:r")]
+        if d.get("has_config"):
+            row.append((tr(L, "b_config"), "me:c"))
+        self._client_send(c, cid, "\n".join(lines), kb(row), msg)
+
+    def client_config(self, c: dict, cid: str, L: str, tok: str) -> None:
+        d = self.ops.share_info(tok, True) or {}
+        cfg = d.get("config")
+        if not cfg or not cfg.get("conf"):
+            self._client_send(c, cid, tr(L, "cd_app"))
+            return
+        name = d.get("name") or "awg"
+        caption = tr(L, "cfg_caption", name=name)
+        try:
+            notify.send_photo(c["token"], cid, qr.png(cfg["conf"]), caption, c["via"], html=True)
+            caption = html.escape(name, quote=False)
+        except qr.QRTooBig:
+            caption += "\n" + tr(L, "cfg_qr_big")
+        notify.send_document(c["token"], cid, cfg.get("filename") or "awg.conf", cfg["conf"].encode(), caption,
+                             c["via"], html=True)
+        if cfg.get("link"):
+            notify.send(c["token"], cid, tr(L, "cfg_link") + "\n<code>" + html.escape(cfg["link"]) + "</code>",
+                        c["via"], html=True)
+
     def start(self) -> None:
         threading.Thread(target=self._loop, name="tgbot", daemon=True).start()
 
@@ -610,8 +798,9 @@ class Bot:
     def _loop(self) -> None:
         while not self.stop_ev.is_set():
             c = notify.cfg_of(self.store.snapshot())
-            # управление не зависит от уведомлений: можно командовать ботом и без них
-            if not (c["token"] and c["chat_id"] and c["control"]):
+            # управление не зависит от уведомлений: можно командовать ботом и без них; клиенты по приглашению —
+            # и без управления (тогда команды панели не принимаются ни из какого чата)
+            if not (c["token"] and ((c["chat_id"] and c["control"]) or c.get("clients"))):
                 self.state, self.error = "off", None
                 try:
                     self._drop_commands(c)
@@ -622,13 +811,17 @@ class Bot:
                 continue
             try:
                 self.poll_once(c, fresh=lambda: notify.cfg_of(self.store.snapshot()))
-                if c["chat_id"].startswith("@"):        # настройка до 1.21.0: команды не принимаются
+                if c["control"] and c["chat_id"].startswith("@"):     # настройка до 1.21.0: команды не принимаются
                     self.state, self.error = "error", Msg("err.tg_control_id")
                 else:
                     self.state, self.error = "ok", None
             except notify.NotifyError as e:
                 if "webhook" in str(e).lower() and self._drop_webhook(c):
                     continue
+                if e.code == 409 and "webhook" not in str(e).lower():
+                    # «terminated by other getUpdates request»: этого же бота читает ещё одна программа —
+                    # обычно вторая панель с тем же токеном. Команды достаются то ей, то этой панели
+                    e.msg = e.msg or Msg("err.tg_conflict")
                 self.state, self.error = "error", e.msg or str(e)
                 log.warning("telegram bot: %s", e)
                 self.wake.wait(30)
@@ -642,14 +835,20 @@ class Bot:
     def poll_once(self, c: dict, timeout: int = POLL, fresh=None) -> None:
         """fresh — настройки после ожидания getUpdates (поток бота: notify.cfg_of из состояния)."""
         self._set_commands(c)
-        self._announce_update(c)
+        if admin_on(c):
+            self._announce_update(c)
+        if c.get("clients"):
+            self._learn_name(c)
         ups = notify._call(c["token"], "getUpdates",
                            {"offset": int(self._st.get("offset") or 0), "timeout": timeout,
                             "allowed_updates": ["message", "callback_query"]},
                            timeout=timeout + 15, via=c["via"])
         # пока ждали (до POLL секунд), управление могли выключить или сменить чат: команды — по настройкам сейчас
         now = fresh() if fresh else c
-        live = now["control"] and now["token"] == c["token"] and now["chat_id"] == c["chat_id"]
+        same = now["token"] == c["token"]
+        now = {**now, "_admin": bool(same and admin_on(now) and now["chat_id"] == c["chat_id"]),
+               "_clients": bool(same and now.get("clients"))}
+        live = now["_admin"] or now["_clients"]
         for u in ups if isinstance(ups, list) else []:
             # отметку сохраняем до выполнения: после перезапуска команда не повторится
             self._st["offset"] = int(u.get("update_id", 0)) + 1
@@ -677,20 +876,42 @@ class Bot:
         return True
 
     def _set_commands(self, c: dict) -> None:
-        sig = f'{c["token"][:12]}|{c["lang"]}'
-        if self._st.get("cmds") == sig:
+        """Меню команд панели — только в чате панели (1.22.0). Раньше оно стояло у всех личных чатов бота, а
+        теперь в бота пишут и клиенты: им команды панели ни к чему."""
+        if not admin_on(c):
+            self._drop_commands(c)
             return
+        sig = f'v2|{c["token"][:12]}|{c["lang"]}|{c["chat_id"]}'
+        old = self._st.get("cmds") or ""
+        if old == sig:
+            return
+        if old and not old.startswith("v2|"):
+            notify._call(c["token"], "deleteMyCommands", {}, via=c["via"])        # меню до 1.22.0 — у всех
+        elif old.startswith("v2|") and old.split("|")[3] != c["chat_id"]:
+            self._drop_chat_commands(c, old.split("|")[3])
         cmds = [{"command": k, "description": tr(c["lang"], "cmd_" + k, False)} for k in COMMANDS]
-        notify._call(c["token"], "setMyCommands", {"commands": cmds}, via=c["via"])
+        notify._call(c["token"], "setMyCommands",
+                     {"commands": cmds, "scope": {"type": "chat", "chat_id": int(c["chat_id"])}}, via=c["via"])
         self._st["cmds"] = sig
         self._save()
+
+    def _drop_chat_commands(self, c: dict, chat: str) -> None:
+        try:
+            notify._call(c["token"], "deleteMyCommands", {"scope": {"type": "chat", "chat_id": int(chat)}},
+                         via=c["via"])
+        except (notify.NotifyError, ValueError) as e:
+            log.info("telegram: %s", e)
 
     def _drop_commands(self, c: dict) -> None:
         """Управление выключили — убираем меню команд и кнопку «Меню», чтобы бот не обещал лишнего."""
         if not (self._st.get("cmds") or self._st.get("kbd")) or not c["token"]:
             return
         try:
-            notify._call(c["token"], "deleteMyCommands", {}, via=c["via"])
+            old = self._st.get("cmds") or ""
+            if old.startswith("v2|"):
+                self._drop_chat_commands(c, old.split("|")[3])
+            else:
+                notify._call(c["token"], "deleteMyCommands", {}, via=c["via"])
             if self._st.get("kbd") and c["chat_id"]:
                 self._send(c, tr(c["lang"], "kbd_off"), {"remove_keyboard": True})
         except notify.NotifyError as e:
@@ -809,21 +1030,32 @@ class Bot:
         return str(chat.get("id")) == want
 
     def handle(self, u: dict, c: dict) -> None:
+        admin = c.get("_admin", bool(c.get("control")))
+        clients = c.get("_clients", bool(c.get("clients")))
         if "callback_query" in u:
             q = u["callback_query"]
             msg = q.get("message") or {}
-            if not self.allowed(msg.get("chat") or {}, c):
-                if msg.get("chat"):
-                    self._foreign(msg["chat"], c, q.get("id", ""))
-                return
-            self.last_cmd = time.time()
-            self.on_button(c, str(q.get("data") or ""), q.get("id", ""), msg)
+            chat = msg.get("chat") or {}
+            data = str(q.get("data") or "")
+            if admin and self.allowed(chat, c):
+                self.last_cmd = time.time()
+                self.on_button(c, data, q.get("id", ""), msg)
+            elif clients and chat.get("type") == "private" and data.startswith("me:"):
+                self.on_client(c, chat, q.get("from"), data=data, qid=q.get("id", ""), msg=msg)
+            elif chat and admin:
+                self._foreign(chat, c, q.get("id", ""))
             return
         m = u.get("message") or {}
+        if self._migration(m, c):
+            return
         if (m.get("from") or {}).get("is_bot") or not m.get("chat"):
             return
-        if not self.allowed(m["chat"], c):
-            if (m.get("text") or "").startswith("/") or menu_action((m.get("text") or "").strip()):
+        if not (admin and self.allowed(m["chat"], c)):
+            text = (m.get("text") or "").strip()
+            if clients and m["chat"].get("type") == "private":
+                if text:
+                    self.on_client(c, m["chat"], m.get("from"), text=text)
+            elif admin and (text.startswith("/") or menu_action(text)):
                 self._foreign(m["chat"], c)
             return
         # возраст — по часам Telegram (Date его ответа), а не сервера: те бывают сбиты
@@ -858,6 +1090,23 @@ class Bot:
             return
         self.on_command(c, "menu", "")
 
+    @staticmethod
+    def _migration(m: dict, c: dict) -> bool:
+        """Служебное сообщение «группа стала супергруппой» — из чата настроек (старый номер) или из новой
+        супергруппы (с указанием старого): новый номер — в настройки, иначе команды и уведомления пропадут."""
+        chat = str((m.get("chat") or {}).get("id", ""))
+        want = str(c.get("chat_id") or "")
+        old = new = None
+        if m.get("migrate_to_chat_id") and chat == want:
+            old, new = want, str(m["migrate_to_chat_id"])
+        elif m.get("migrate_from_chat_id") and str(m["migrate_from_chat_id"]) == want:
+            old, new = want, chat
+        if not (old and new):
+            return False
+        if notify.on_migrate:
+            notify.on_migrate(old, new)
+        return True
+
     def _guard(self, c: dict, fn, *args) -> None:
         try:
             fn(c, *args)
@@ -865,15 +1114,14 @@ class Bot:
             self._send(c, tr(c["lang"], e.key, **e.params))
         except Exception as e:  # noqa: BLE001
             log.warning("telegram action: %s", e)
-            self._send(c, tr(c["lang"], "fail", error=self._err(e)))
+            self._send(c, tr(c["lang"], "fail", error=self._err(e, c["lang"])))
 
     @staticmethod
-    def _err(e) -> str:
-        """Ошибка для человека. Ключи панели переводит браузер, здесь — ключ и подробности."""
+    def _err(e, lang: str = "en") -> str:
+        """Ошибка для человека: фраза панели на языке бота (тексты из i18n.js), а не её ключ."""
         m = e if isinstance(e, Msg) else getattr(e, "detail", None) or getattr(e, "msg", None)
         if isinstance(m, Msg):
-            extra = m.p.get("error") or m.p.get("detail") or ""
-            return f"{m.key} {extra}".strip()[:300]
+            return uitext.text(lang, m)[:300]
         return str(e)[:300]
 
     def on_command(self, c: dict, cmd: str, arg: str) -> None:
@@ -980,9 +1228,9 @@ class Bot:
                 self._send(c, tr(L, e.key, **e.params))
         except Exception as e:  # noqa: BLE001
             log.warning("telegram button %s: %s", op, e)
-            toast = tr(L, "fail", False, error=self._err(e))
+            toast = tr(L, "fail", False, error=self._err(e, L))
             if not qid:
-                self._send(c, tr(L, "fail", error=self._err(e)))
+                self._send(c, tr(L, "fail", error=self._err(e, L)))
         if qid:
             self._toast(c, qid, toast)
 
@@ -1366,7 +1614,9 @@ class Bot:
         x = self._client(pk)
         url = self.ops.share(pk)
         self.ops.audit(Msg("tg.act_share", name=self._name(x)))
-        return tr(c["lang"], "share", name=self._name(x), url=url)
+        text = tr(c["lang"], "share", name=self._name(x), url=url)
+        invite = self.ops.invite(pk)
+        return text + "\n\n" + tr(c["lang"], "share_bot", url=invite) if invite else text
 
     def ask_delete(self, c: dict, pk: str, msg: dict | None) -> None:
         """Удаление — только после подтверждения; «Отмена» возвращает карточку клиента."""
@@ -1407,7 +1657,7 @@ class Bot:
                 text += tr(L, "pr_udp" if r["udp"] else "pr_no_udp", False)
         else:
             err = r.get("error")
-            text = tr(L, "pr_fail", name=name, error=self._err(err) if isinstance(err, Msg) else (err or "?"))
+            text = tr(L, "pr_fail", name=name, error=self._err(err, L) if isinstance(err, Msg) else (err or "?"))
         return text.replace("  ", " ")
 
     def do_default(self, c: dict, out: str) -> str:
@@ -1456,7 +1706,7 @@ class Bot:
         try:
             self.ops.backup(c)
         except Exception as e:  # noqa: BLE001
-            raise BotError("bk_fail", error=self._err(e)) from None
+            raise BotError("bk_fail", error=self._err(e, c["lang"])) from None
         self.ops.audit(Msg("tg.act_backup"))
         self.show_menu(c, None, tr(c["lang"], "bk_done"), move=True)    # меню — под файлом
 

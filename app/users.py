@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import logging
 import re
+import secrets
 import time
 
 from . import awgserver, config, cps, hostnet, system
@@ -319,11 +320,17 @@ class ServerManager:
                 st.setdefault("keys", {})[pub] = priv
                 # сообщить, когда клиент подключится впервые (limits.first_seen)
                 st.setdefault("await_first", {})[pub] = time.time()
+                # личная ссылка (и приглашение в бота по тому же ключу) — сразу у каждого нового клиента (1.22.0)
+                st.setdefault("shares", {})[secrets.token_urlsafe(18)] = {"pk": pub, "created": time.time()}
+
+            def undo(st):
+                st.get("keys", {}).pop(pub, None)
+                st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pub}
             self.e.store.mutate(keep)
             try:
                 self._write(t, sc, rows)
             except Exception:
-                self.e.store.mutate(lambda st: st.get("keys", {}).pop(pub, None))
+                self.e.store.mutate(undo)
                 raise
             self.e.event("info", Msg("ev.user_added", name=name, ip=ip))
             return pub

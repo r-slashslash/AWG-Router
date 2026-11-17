@@ -96,7 +96,8 @@ class FakeTG:
 
 def cfg(**kw):
     c = notify.defaults()
-    c.update(enabled=True, token=TOKEN, chat_id=CHAT, lang="en", control=True)
+    # clients=False: здесь проверяется управление; приглашения клиентов (1.22.0) — в test_v122
+    c.update(enabled=True, token=TOKEN, chat_id=CHAT, lang="en", control=True, clients=False)
     c.update(kw)
     return c
 

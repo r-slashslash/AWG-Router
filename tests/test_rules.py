@@ -286,6 +286,27 @@ class ProjectRulesTest(unittest.TestCase):
                     bad.append(f"{n}:{i}: {line.strip()}")
         self.assertEqual(bad, [])
 
+    def test_foreign_code_pinned(self):
+        """Чужой код в образах — только по отпечатку (1.22.0): FROM — с @sha256, исходники — git fetch по хешу
+        коммита из 40 знаков с проверкой rev-parse, без clone по названию версии (его можно переставить на
+        другой код). Версии AmneziaWG в образе панели и в образе своего сервера — одни и те же."""
+        args = {}
+        for name in ("Dockerfile", os.path.join("awg-server", "Dockerfile")):
+            text = read(name)
+            a = dict(re.findall(r"^ARG (\w+)=(\S+)", text, re.M))
+            args[name] = a
+            for line in re.findall(r"^FROM (\S+)", text, re.M):
+                ref = a.get(line[2:-1], "") if line.startswith("${") else line
+                self.assertRegex(ref, r"@sha256:[0-9a-f]{64}$", f"{name}: FROM {line}")
+            self.assertNotIn("git clone", text, name)
+            for sha_arg in re.findall(r'git fetch -q --depth 1 origin "\$\{(\w+)\}"', text):
+                self.assertRegex(a.get(sha_arg, ""), r"^[0-9a-f]{40}$", f"{name}: {sha_arg}")
+                self.assertIn(f'test "$(git rev-parse HEAD)" = "${{{sha_arg}}}"', text, f"{name}: {sha_arg}")
+            self.assertEqual(text.count("git fetch"), len(re.findall(r'git fetch -q --depth 1 origin "\$\{\w+_SHA\}"', text)))
+        panel, server = args["Dockerfile"], args[os.path.join("awg-server", "Dockerfile")]
+        for k in ("AWG_GO_REF", "AWG_GO_SHA", "AWG_TOOLS_REF", "AWG_TOOLS_SHA"):
+            self.assertEqual(panel[k], server[k], k)
+
     def test_static_loads_nothing_from_other_hosts(self):
         """Браузер не обращается к сторонним хостам: страницы, стили и скрипты панели ничего не грузят с
         чужих адресов (ссылки для перехода по нажатию и адреса в комментариях — можно)."""

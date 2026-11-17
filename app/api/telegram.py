@@ -160,6 +160,10 @@ bot_ops = SimpleNamespace(
                    "host": engine.srv.public_host(store.snapshot())},
     client_config=lambda pk: user_errors(lambda: engine.srv.client_config(pk)),
     share=clients.ensure_share,
+    share_pk=clients.share_pk,
+    share_info=clients.share_info,
+    invite=lambda pk: clients.bot_invite(next(iter(store.peek(lambda st: [
+        k for k, v in st.get("shares", {}).items() if v.get("pk") == pk])), "")),
     set_default=set_default_outbound,
     probe=engine.probe,
     trace=lambda target: routing.trace_target(None, target),

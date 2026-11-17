@@ -1171,6 +1171,14 @@ if [ "${WANT_KERNEL:-0}" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------ AmneziaWG in a container
+run_server_container() { # our own AmneziaWG container from the image $SRV_NAME, port $AWG_PORT
+  docker run -d --name "$SRV_NAME" --restart always --log-driver none \
+      --privileged --cap-add=NET_ADMIN --cap-add=SYS_MODULE \
+      -p "$AWG_PORT:$AWG_PORT/udp" -v /lib/modules:/lib/modules \
+      -v "$SRV_DATA:/opt/amnezia/awg" \
+      --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+      "$SRV_NAME"
+}
 if [ "$INSTALL_AWG" = container ]; then
   step "Installing AmneziaWG into container $SRV_NAME"
   mkdir -p "$SRV_DATA"; chmod 700 "$DIR/awg-server" "$SRV_DATA"
@@ -1192,18 +1200,63 @@ if [ "$INSTALL_AWG" = container ]; then
     docker rename "$SRV_NAME" "$OLD" >/dev/null 2>&1 || die "Could not rename the old container $SRV_NAME"
     warn "The old container was kept as $OLD (stopped)"
   fi
-  docker run -d --name "$SRV_NAME" --restart always --log-driver none \
-      --privileged --cap-add=NET_ADMIN --cap-add=SYS_MODULE \
-      -p "$AWG_PORT:$AWG_PORT/udp" -v /lib/modules:/lib/modules \
-      -v "$SRV_DATA:/opt/amnezia/awg" \
-      --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-      "$SRV_NAME" >"$DIR/data/awg-run.log" 2>&1 \
+  run_server_container >"$DIR/data/awg-run.log" 2>&1 \
     || { cat "$DIR/data/awg-run.log"; die "Failed to start the AmneziaWG container"; }
   sleep 3
   docker ps --format '{{.Names}}' | grep -qx "$SRV_NAME" \
     || { docker logs --tail 20 "$SRV_NAME" 2>&1; die "The AmneziaWG container did not start"; }
   ok "AmneziaWG is running: container $SRV_NAME, UDP port $AWG_PORT"
 fi
+
+# An update brings a new image of our own AmneziaWG container as well: before 1.22.0 it stayed on the image of
+# the day it was installed. Keys, clients and the port live in $SRV_DATA, so the container is created again with
+# them: clients reconnect within seconds, their configs stay the same. If the new one doesn't come up, the old
+# one is started again. The AmneziaVPN app's container (not ours) is never touched.
+refresh_own_server() {
+  [ "$AWG_MODE" = container ] && [ -z "$INSTALL_AWG" ] && [ -n "$AMN" ] || return 0
+  our_container "$AMN" || return 0
+  local ref old_img new_img prev port i
+  ref="$(image_ref SERVER_IMAGE)"
+  if ! pull_image "$ref" "$SRV_NAME" "$DIR/data/awg-pull.log"; then
+    [ -n "$ref" ] && warn "Could not download the ready AmneziaWG image ($(last_line "$DIR/data/awg-pull.log")) — building it here"
+    [ -n "$ref" ] || [ -f "$DIR/IMAGES" ] || no_ready_image "AmneziaWG"
+    build_image "$SRV_NAME" "$DIR/awg-server" "$DIR/data/awg-build.log" \
+      || { warn "Could not build the new AmneziaWG image ($(last_line "$DIR/data/awg-build.log")): the server keeps the old one"; return 0; }
+  fi
+  old_img="$(docker inspect -f '{{.Image}}' "$AMN" 2>/dev/null)"
+  new_img="$(docker image inspect -f '{{.Id}}' "$SRV_NAME" 2>/dev/null)"
+  [ -n "$new_img" ] && [ "$old_img" != "$new_img" ] || return 0
+  port="$(saved_port)"
+  [ -n "$port" ] || { warn "No ListenPort in $SRV_DATA/awg0.conf: the AmneziaWG container keeps its old image"; return 0; }
+  step "Updating the AmneziaWG container $AMN (clients reconnect within seconds)"
+  prev="$AMN-prev-$(date +%Y%m%d-%H%M%S)"
+  docker update --restart no "$AMN" >/dev/null 2>&1
+  docker stop "$AMN" >/dev/null 2>&1
+  if ! docker rename "$AMN" "$prev" >/dev/null 2>&1; then
+    docker update --restart always "$AMN" >/dev/null 2>&1; docker start "$AMN" >/dev/null 2>&1
+    warn "Could not rename the AmneziaWG container: it keeps the old image"; return 0
+  fi
+  AWG_PORT="$port"
+  if run_server_container >"$DIR/data/awg-run.log" 2>&1; then
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 1
+      docker exec "$SRV_NAME" ip link show awg0 >/dev/null 2>&1 && break
+    done
+  fi
+  if docker exec "$SRV_NAME" ip link show awg0 >/dev/null 2>&1; then
+    docker rm -f "$prev" >/dev/null 2>&1
+    [ -n "$old_img" ] && docker image rm "$old_img" >/dev/null 2>&1
+    ok "AmneziaWG runs on the new image: container $SRV_NAME, UDP port $AWG_PORT"
+  else
+    docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} {{.State.Error}}' "$SRV_NAME" >"$DIR/data/awg-new.log" 2>&1
+    docker rm -f "$SRV_NAME" >/dev/null 2>&1
+    docker rename "$prev" "$SRV_NAME" >/dev/null 2>&1
+    docker update --restart always "$SRV_NAME" >/dev/null 2>&1
+    docker start "$SRV_NAME" >/dev/null 2>&1
+    warn "The new AmneziaWG container did not come up (see $DIR/data/awg-new.log): the old one is running again"
+  fi
+}
+refresh_own_server
 
 # Moves the container's server to the host with the same files: keys, port, obfuscation and clients stay,
 # so client configs keep working. The container is only stopped and renamed; any failure puts it back.

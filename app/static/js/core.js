@@ -331,8 +331,21 @@ function bindLang(id) {
   const el = $("#" + id);
   if (el) el.onchange = () => { setLang(el.value, true); applyStaticTexts(); if (S) { renderStatus(); render(); } };
 }
+/* кнопка «день/ночь» в шапке: солнце — включить светлую тему, луна — тёмную */
+function drawThemeBtn() {
+  const b = $("#theme-btn");
+  if (!b) return;
+  const dark = themeDark();
+  b.textContent = dark ? "☀" : "☾";
+  b.title = t(dark ? "theme.light" : "theme.dark");
+  b.setAttribute("aria-label", b.title);
+  b.setAttribute("aria-pressed", String(dark));
+  b.onclick = toggleTheme;
+}
+window.addEventListener("awgr-theme", drawThemeBtn);
 function applyStaticTexts() {
   $$("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  drawThemeBtn();
   $("#lang-login").outerHTML = langSelect("lang-login");
   $("#lang-top").outerHTML = langSelect("lang-top");
   bindLang("lang-login");
@@ -341,6 +354,7 @@ function applyStaticTexts() {
 
 /* ================================================================ вход */
 function showLogin() {
+  document.title = "AWG Router";       // адрес и название сервера — только после входа
   pollOn = false;
   clearTimeout(pollTimer);
   closeModal();
@@ -505,7 +519,14 @@ function sysmonHtml() {
   return `<span class="sysmon">${out.join("")}</span>`;
 }
 
+/* вкладка браузера: название сервера из настроек, без него — адрес сервера (#38: несколько серверов открыты разом) */
+function renderTitle() {
+  const name = (S.settings && S.settings.panel_name) || (S.panel && S.panel.ip) || "";
+  const title = name ? `${name} · AWG Router` : "AWG Router";
+  if (document.title !== title) document.title = title;
+}
 function renderStatus() {
+  renderTitle();
   const tg = S.target;
   const online = S.clients.filter((c) => c.live && c.live.handshake && S.now - c.live.handshake < 180).length;
   renderBrandTraffic();

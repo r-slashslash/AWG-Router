@@ -35,6 +35,12 @@ function viewTelegram() {
         <p class="small muted" style="margin:6px 0 0">${esc(t("tg.control_hint"))}</p>
         ${c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
       </fieldset>
+      <fieldset class="pgroup" style="margin:4px 0 12px"><legend>${esc(t("tg.clients_title"))}</legend>
+        <label class="check"><input type="checkbox" id="tg-clients" ${c.clients !== false ? "checked" : ""}><span><b>${esc(t("tg.clients"))}</b></span></label>
+        <p class="small muted" style="margin:6px 0 0">${esc(t("tg.clients_hint"))}</p>
+        ${c.clients !== false && c.token_set && !c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
+        ${c.clients !== false && S.tg_bot && S.tg_bot.linked ? `<p class="small muted">${esc(t("tg.clients_linked", { n: S.tg_bot.linked }))}</p>` : ""}
+      </fieldset>
       <fieldset class="pgroup" style="margin-top:4px"><legend>${esc(t("tg.backup"))}</legend>
         <div class="tg-cols"><div>
           <label class="field"><span>${esc(t("tg.backup_when"))}</span>
@@ -71,7 +77,7 @@ function bindTelegram() {
     TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });
     return { enabled: $("#tg-on").checked, token: $("#tg-token").value.trim(),
       chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, via: $("#tg-via").value, events,
-      control: $("#tg-control").checked,
+      control: $("#tg-control").checked, clients: $("#tg-clients").checked,
       backup: $("#tg-bk").value, backup_pw: $("#tg-bk-pw").value,
       backup_pw_clear: !!($("#tg-bk-clear") && $("#tg-bk-clear").checked) };
   };
@@ -294,12 +300,16 @@ async function totpEnable() {
         <button type="button" class="btn sm" id="totp-copy">${esc(t("sec.copy_key"))}</button>
         <p style="margin-bottom:6px"><b>2.</b> ${esc(t("sec.step2"))}</p>
         ${codeField("totp-code", t("sec.code"))}
+        <label class="field"><span>${esc(t("pw.current"))}</span><input type="password" id="totp-pw" autocomplete="current-password" maxlength="128"></label>
       </div>
     </div>`,
   `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="totp-ok">${esc(t("sec.enable"))}</button>`);
   $("#totp-copy").onclick = () => copyText(r.secret);
   modalAction("totp-ok", "totp-code", async (code) => {
-    await api("POST", "totp/enable", { code });
+    // включение 2FA — с паролем панели: чужая открытая сессия не должна закрыть владельцу вход своим кодом
+    const password = $("#totp-pw").value;
+    if (!password) { setTimeout(() => $("#totp-pw").focus()); throw new Error(t("sec.need_password")); }
+    await api("POST", "totp/enable", { code, password });
     closeModal();
     toast(t("sec.enabled_toast"));
     refresh();

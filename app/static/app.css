@@ -29,16 +29,15 @@
 }
 :root:lang(fa) { --font: "Vazirmatn", Tahoma, "Segoe UI", system-ui, sans-serif; }
 :root:lang(zh) { --font: "Golos Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif; }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12171d; --surface: #1a2129; --surface-2: #212a34; --ink: #e4e9ef; --ink-2: #c3ccd6;
-    --muted: #8d99a6; --rule: #2a3440; --rule-strong: #3a4654; --primary: #4f8cff;
-    --direct: #7d8896; --block: #f05252; --ok: #34c38f; --warn: #e3a33b; --bad: #f05252;
-    --l1: #5b8fff; --l2: #2fbf8a; --l3: #f0743e; --l4: #a07bff; --l5: #e7bb2a; --l6: #2ab3d1;
-    --l7: #f0629e; --l8: #86b83a;
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3);
-    color-scheme: dark;
-  }
+/* тёмная тема: data-theme ставит theme.js (выбор кнопкой в шапке или тема системы) */
+:root[data-theme="dark"] {
+  --bg: #12171d; --surface: #1a2129; --surface-2: #212a34; --ink: #e4e9ef; --ink-2: #c3ccd6;
+  --muted: #8d99a6; --rule: #2a3440; --rule-strong: #3a4654; --primary: #4f8cff;
+  --direct: #7d8896; --block: #f05252; --ok: #34c38f; --warn: #e3a33b; --bad: #f05252;
+  --l1: #5b8fff; --l2: #2fbf8a; --l3: #f0743e; --l4: #a07bff; --l5: #e7bb2a; --l6: #2ab3d1;
+  --l7: #f0629e; --l8: #86b83a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -85,6 +84,12 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
   padding: 14px max(16px, calc((100vw - 1180px) / 2)) 10px;
 }
 .top-end { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.theme-btn {
+  width: 32px; height: 32px; flex: none; display: inline-grid; place-items: center; padding: 0; cursor: pointer;
+  border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--surface); color: var(--ink-2);
+  font-size: 1rem; line-height: 1;
+}
+.theme-btn:hover { color: var(--ink); border-color: var(--muted); }
 .lang-select { width: auto !important; min-height: 32px !important; padding-block: 4px !important; font-size: .88rem; }
 .login-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 24px; }
 .summary { margin: 0; padding-inline-start: 20px; display: grid; gap: 6px; }
@@ -290,7 +295,9 @@ textarea.short { min-height: 64px; }
   .table.responsive tr:last-child { border-bottom: 0; }
   .table.responsive td { padding: 0; border: 0; }
   .table.responsive td[data-m="hide"] { display: none; }
-  .table.responsive td[data-m="right"] { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+  /* выход и подпись под ним — у правого края, как трафик за месяц: иначе чип стоит у левого края колонки, а её
+     ширина в каждой строке своя (по самой длинной строке), и чипы клиентов «прыгают» */
+  .table.responsive td[data-m="right"] { grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end; text-align: end; }
   .table.responsive td[data-m="sub"] { font-size: .85rem; color: var(--muted); }
   /* трафик клиента за месяц — справа, под выходом, на одной строке с активностью */
   .table.responsive td[data-m="month"] { grid-column: 2; grid-row: 3; justify-self: end; text-align: end; font-size: .85rem; }

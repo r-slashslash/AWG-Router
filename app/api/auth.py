@@ -236,6 +236,32 @@ def login(req):
         _done(ip)
 
 
+# Неверные коды при верном пароле — со всех адресов вместе. Предел по адресу (FAIL_MAX) не спасает от
+# подбора с многих адресов: с паролем на руках код из шести цифр подбирался бы за часы. Здесь — не больше
+# CODE_MAX за CODE_WINDOW секунд на всех, дальше вход по коду закрыт до конца окна (для владельца тоже: раз
+# пароль знает кто-то ещё, его всё равно пора менять), и владелец узнаёт о каждом таком случае.
+CODE_WINDOW, CODE_MAX = 600, 10
+_code_fails: list[float] = []
+
+
+def _code_locked() -> bool:
+    now = time.time()
+    with _fails_lock:
+        _code_fails[:] = [t for t in _code_fails if now - t < CODE_WINDOW]
+        return len(_code_fails) >= CODE_MAX
+
+
+def _code_failed(ip: str) -> None:
+    with _fails_lock:
+        _code_fails.append(time.time())
+        n = len(_code_fails)
+    if n >= CODE_MAX:
+        notifier.event("login", "login_code_locked", cooldown=CODE_WINDOW, ip=ip)
+    else:
+        notifier.event("login", "login_code_wrong", cooldown=CODE_WINDOW, ip=ip)
+    _failed(ip, "err.wrong_code")
+
+
 def _login(req, ip: str):
     body = req.json(limit=LOGIN_BODY)
     if not check_password(str(body.get("password", ""))):
@@ -244,8 +270,10 @@ def _login(req, ip: str):
         # второй шаг: пароль верный, нужен код из приложения
         if not str(body.get("code") or "").strip():
             return {"ok": False, "need_code": True}
+        if _code_locked():
+            bad("err.code_locked", 429)
         if not totp.check_and_use(body.get("code")):
-            _failed(ip, "err.wrong_code")
+            _code_failed(ip)
     _fails.pop(ip, None)
     _set_session(req)
     notifier.event("login", "login_ok", cooldown=60, ip=ip)
@@ -275,7 +303,20 @@ def totp_setup(req):
 
 @app.post("/api/totp/enable")
 def totp_enable(req):
+    ip = req.client_ip
+    _check_blocked(ip)
+    try:
+        return _totp_enable(req, ip)
+    finally:
+        _done(ip)
+
+
+def _totp_enable(req, ip: str):
+    """Включение 2FA — с паролем: иначе чужая открытая сессия (украденная cookie) включила бы свой код,
+    и владелец не смог бы войти."""
     body = req.json()
+    if not check_password(str(body.get("password", ""))):
+        _failed(ip, "err.wrong_password")
     p = dict(_totp_pending)
     if not p or time.time() - p["t"] > 1800:
         bad("err.totp_expired")

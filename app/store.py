@@ -19,7 +19,10 @@ log = logging.getLogger("awgr.store")
 STATE_PATH = os.path.join(config.DATA_DIR, "state.json")
 # однократные исправления состояния прежних выпусков: сделанные записаны в state["upgraded"]
 RULE_NAMES = "rule_names"       # подписи правил именем выхода из окна выхода до 1.21.0 (drop_auto_comments)
-UPGRADES = (RULE_NAMES,)
+# приглашения клиентов в бота (1.22.0): бот начинает читать сообщения и без управления. Где бот был только для
+# уведомлений, его же могла читать другая программа (вторая панель) — там приглашения выключены, пока их не включат
+CLIENT_BOT = "client_bot"
+UPGRADES = (RULE_NAMES, CLIENT_BOT)
 
 DEFAULT_STATE = {
     "version": 1,
@@ -89,7 +92,7 @@ class Store:
                 self._write()
         else:
             self.state = copy.deepcopy(DEFAULT_STATE)
-            self.state["upgraded"] = [RULE_NAMES]
+            self.state["upgraded"] = list(UPGRADES)
             self._write()
 
     def _upgrade(self) -> bool:
@@ -103,6 +106,8 @@ class Store:
                 changed = True
         if Store.drop_auto_comments_once(self.state):
             changed = True
+        if Store.client_bot_once(self.state):
+            changed = True
         if any(isinstance(l, dict) and l.get("kind") in TEXT_KINDS and l.get("source")
                for l in self.state.get("lists") or []):
             changed = True              # state.json до 1.21.0: тексты списков — в свои файлы (_write)
@@ -113,6 +118,27 @@ class Store:
             s["panel_dns_enc"] = "plain"
             changed = True
         return changed
+
+    @staticmethod
+    def client_bot_once(state: dict, source: dict | None = None) -> bool:
+        """Один раз для состояния (или копии) до 1.22.0: бот с токеном, но без управления, продолжает только
+        присылать уведомления — приглашения клиентов выключены. Дальше галочка — решение человека.
+        source — откуда взято состояние (копия), если не оно само. True — что-то поменялось."""
+        done = (source if source is not None else state).get("upgraded")
+        done = [x for x in done if x in UPGRADES] if isinstance(done, list) else []
+        if CLIENT_BOT in done:
+            if state.get("upgraded") != done:
+                state["upgraded"] = done
+                return True
+            return False
+        src = ((source if source is not None else state).get("settings") or {}).get("telegram")
+        tg = (state.get("settings") or {}).get("telegram")
+        if isinstance(src, dict) and isinstance(tg, dict) and src.get("token") and not src.get("control") \
+                and "clients" not in src:
+            tg["clients"] = False
+        state["upgraded"] = [x for x in (state.get("upgraded") if isinstance(state.get("upgraded"), list) else [])
+                             if x in UPGRADES and x != CLIENT_BOT] + [CLIENT_BOT]
+        return True
 
     @staticmethod
     def drop_auto_comments_once(state: dict, source: dict | None = None) -> bool:

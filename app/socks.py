@@ -60,7 +60,8 @@ def hev_config(iface: str, num: int, server_ip: str, s: dict) -> str:
     ]
     if s.get("user"):
         lines += [f"  username: {_yq(s['user'])}", f"  password: {_yq(s.get('password', ''))}"]
-    lines += ["misc:", "  log-level: warn", "  connect-timeout: 10000", "  limit-nofile: 65535"]
+    # log-file — явно: новые версии hev по умолчанию не пишут никуда, а причину отказа панель читает из его вывода
+    lines += ["misc:", "  log-file: stderr", "  log-level: warn", "  connect-timeout: 10000", "  limit-nofile: 65535"]
     return "\n".join(lines) + "\n"
 
 

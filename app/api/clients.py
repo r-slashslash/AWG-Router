@@ -83,12 +83,45 @@ def ensure_share(pk: str) -> str:
     return share_url(store.mutate(fn))
 
 
+@app.post("/api/shares-renew/{pk:path}")   # не «/shares/{pk}/renew»: ключ клиента с «/» — :path
+def renew_share(req, pk):
+    """«Обновить»: новая личная ссылка и новое приглашение в бота; прежние перестают работать (и чат Telegram,
+    подключённый по прежнему приглашению, — тоже: бот сверяет ключ при каждом сообщении)."""
+    _pk(pk)
+    if not any(c["public_key"] == pk for c in engine.clients):
+        bad("err.not_found", 404)
+
+    def fn(st):
+        sh = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
+        tok = secrets.token_urlsafe(18)
+        sh[tok] = {"pk": pk, "created": time.time()}
+        st["shares"] = sh
+        return tok
+    tok = store.mutate(fn)
+    return {"url": share_url(tok), "bot_url": bot_invite(tok)}
+
+
 @app.delete("/api/shares/{pk:path}")
 def delete_share(req, pk):
     def fn(st):
         st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pk}
     store.mutate(fn)
     return {"ok": True}
+
+
+def bot_invite(token: str) -> str | None:
+    """Приглашение клиента в бота: t.me/<бот>?start=<ключ личной ссылки>. Нет, пока бот для клиентов выключен
+    или его имя ещё не известно (бот узнаёт его у Telegram при первом опросе)."""
+    from . import telegram          # telegram импортирует этот модуль: здесь — при вызове
+    name = telegram.bot.username()
+    return f"https://t.me/{name}?start={token}" if name and TOKEN_RE.match(token) else None
+
+
+def share_pk(token: str) -> str | None:
+    """Клиент по ключу личной ссылки — без копии состояния (бот спрашивает это на каждое сообщение клиента)."""
+    if not isinstance(token, str) or not TOKEN_RE.match(token):
+        return None
+    return store.peek(lambda st: (st.get("shares", {}).get(token) or {}).get("pk"))
 
 
 SHARE_HTML = os.path.join(STATIC, "share.html")
@@ -123,13 +156,21 @@ def share_page(req, token):
 
 @app.get("/s/api/{token}", public=True)
 def share_data(req, token):
+    d = share_info(token)
+    if d is None:
+        bad("err.share_gone", 404)
+    return d
+
+
+def share_info(token: str, config: bool = True) -> dict | None:
+    """То, что видит клиент по своей личной ссылке (и в боте по приглашению): None — ссылки нет."""
     spk, has_key, lim = _share_of(token)
     c = next((x for x in engine.clients if x["public_key"] == spk), None) if spk else None
     if not c:
-        bad("err.share_gone", 404)
+        return None
     pk = c["public_key"]
     cfg = None
-    if has_key:
+    if has_key and config:
         try:
             cfg = engine.srv.client_config(pk)
             cfg.pop("warn_host", None)
@@ -140,7 +181,7 @@ def share_data(req, token):
             "handshake": live.get("handshake") or None, "config": cfg,
             # разбивка по выходам — только в панели: на публичной странице она ни к чему
             "traffic": {k: v for k, v in engine.traffic.view(pk).items() if k != "by_out"},
-            "limits": limits.view(lim)}
+            "limits": limits.view(lim), "has_config": has_key}
 
 
 @app.put("/api/clients/{pk:path}")

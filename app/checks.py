@@ -77,6 +77,23 @@ def name(v, maxlen: int = 40) -> str:
     return v[:maxlen]
 
 
+PANEL_NAME_MAX = 40
+
+
+def panel_name(v) -> str:
+    """Название сервера для вкладки браузера (#38): одна строка без управляющих знаков; пусто — адрес сервера."""
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        bad("err.bad_value", field="panel_name")
+    v = " ".join(v.split())
+    if any(ord(c) < 32 or 0x7f <= ord(c) < 0xa0 for c in v):
+        bad("err.bad_value", field="panel_name")
+    if len(v) > PANEL_NAME_MAX:
+        bad(Msg("err.panel_name_long", max=PANEL_NAME_MAX), field="panel_name")
+    return v
+
+
 def rate(v) -> float | None:
     """Ограничение скорости, Мбит/с ("" / None / 0 — без ограничения)."""
     if v in (None, "", 0):
@@ -451,7 +468,7 @@ def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:
     if isinstance(ev, dict):
         one = (lambda k: forgive(lambda: flag(ev[k]), c["events"].get(k, True))) if backup else (lambda k: flag(ev[k]))
         c["events"] = {k: one(k) if k in ev else c["events"].get(k, True) for k in notify.KINDS}
-    for k in ("enabled", "control"):
+    for k in ("enabled", "control", "clients"):
         if k in body:
             c[k] = soft(lambda: flag(body[k]), k)
     if "backup" in body:

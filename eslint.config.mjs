@@ -1,5 +1,5 @@
 // Проверка скриптов интерфейса на GitHub (net-tests.yml, задание lint); на сервер eslint не ставится.
-// Скрипты — обычные, не модули, и видят верхний уровень друг друга: имена i18n.js, qrcode.js и частей панели
+// Скрипты — обычные, не модули, и видят верхний уровень друг друга: имена i18n.js, theme.js, qrcode.js и частей панели
 // (app/static/js, порядок — в index.html) берутся из самих файлов, браузерные — из списка ниже. Главное правило — no-undef: опечатка в имени функции иначе
 // всплыла бы только у пользователя, на той вкладке, где она вызывается.
 import { readdirSync, readFileSync } from "node:fs";
@@ -64,7 +64,7 @@ export default [
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: "script",
-      globals: { ...browser, ...top("app/static/i18n.js"), ...top("app/static/qrcode.js"), ...panel },
+      globals: { ...browser, ...top("app/static/i18n.js"), ...top("app/static/theme.js"), ...top("app/static/qrcode.js"), ...panel },
     },
     linterOptions: { reportUnusedDisableDirectives: "off" },
     rules: {

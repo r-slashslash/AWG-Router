@@ -1,6 +1,7 @@
 """Списки сетей: страны, URL-списки, ручные CIDR; списки доменов (domains.py)."""
 from __future__ import annotations
 
+import array
 import bisect
 import ipaddress
 import os
@@ -42,12 +43,70 @@ LINE_TOKEN = re.compile(r"^\s*([0-9.]+(?:/\d{1,2})?)")
 WIDE_MIN = 8        # в скачанных списках префиксы короче /8 не принимаются (испорченная строка, а не страна)
 
 
-def parse_cidrs(text: str, min_prefix: int = 0) -> list[ipaddress.IPv4Network]:
-    """min_prefix — для скачанных списков (страны, ASN, по ссылке): сеть шире /8 там означает испорченную
-    строку, и правило «список → напрямую» увело бы мимо выхода огромную часть интернета. Ручной список
-    не ограничивается: там это решение человека."""
-    nets = []
-    for line in text.splitlines():
+class Nets:
+    """Набор сетей IPv4 как отрезки адресов [начало, конец] — числа в array, а не объекты IPv4Network.
+    Большой список по ссылке (сотни тысяч строк) объектами занимал сотни мегабайт: на сервере с 1 ГБ памяти
+    панель могло убить ядро. Отрезки уже слиты (пересечения и соседи), как после collapse_addresses; наружу —
+    те же сети CIDR по порядку (итерация даёт IPv4Network по одной, cidrs() — строки)."""
+
+    __slots__ = ("starts", "ends", "_n")
+
+    def __init__(self, packed=()):
+        # packed — числа (начало << 32) | конец; сортировка по началу, потом слияние
+        self.starts, self.ends = array.array("I"), array.array("I")
+        cur_s = cur_e = -1
+        for v in sorted(packed):
+            a, b = v >> 32, v & 0xFFFFFFFF
+            if cur_e >= 0 and a <= cur_e + 1:
+                if b > cur_e:
+                    cur_e = b
+                continue
+            if cur_e >= 0:
+                self.starts.append(cur_s)
+                self.ends.append(cur_e)
+            cur_s, cur_e = a, b
+        if cur_e >= 0:
+            self.starts.append(cur_s)
+            self.ends.append(cur_e)
+        self._n = sum(1 for _ in self._blocks())
+
+    def _blocks(self):
+        """(адрес сети, длина префикса) по порядку: каждый отрезок — наименьшим числом сетей CIDR."""
+        for a, b in zip(self.starts, self.ends):
+            while a <= b:
+                size = (a & -a) if a else 1 << 32
+                while size > b - a + 1:
+                    size >>= 1
+                yield a, 33 - size.bit_length()
+                a += size
+
+    def cidrs(self):
+        for a, plen in self._blocks():
+            yield f"{a >> 24}.{(a >> 16) & 255}.{(a >> 8) & 255}.{a & 255}/{plen}"
+
+    def __iter__(self):
+        for a, plen in self._blocks():
+            yield ipaddress.IPv4Network((a, plen))
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __bool__(self) -> bool:
+        return self._n > 0
+
+    @property
+    def addresses(self) -> int:
+        return sum(b - a + 1 for a, b in zip(self.starts, self.ends))
+
+
+def _lines(text: str):
+    """Строки без списка всех строк (splitlines на 60 МБ текста — ещё сотня мегабайт)."""
+    for m in re.finditer(r"[^\r\n]+", text):
+        yield m.group(0)
+
+
+def _packed(text: str, min_prefix: int, out: array.array) -> None:
+    for line in _lines(text):
         line = line.split("#", 1)[0].split(";", 1)[0].strip()
         if not line or ":" in line.split()[0]:
             continue
@@ -61,15 +120,43 @@ def parse_cidrs(text: str, min_prefix: int = 0) -> list[ipaddress.IPv4Network]:
             except ValueError:
                 continue
             if n.prefixlen >= min_prefix:
-                nets.append(n)
-    return list(ipaddress.collapse_addresses(nets))
+                a = int(n.network_address)
+                out.append((a << 32) | (a + n.num_addresses - 1))
+
+
+def parse_nets(*texts: str, min_prefix: int = 0) -> Nets:
+    """Сети из текстов (несколько ссылок одного списка — вместе) → Nets."""
+    packed = array.array("Q")
+    for text in texts:
+        _packed(text, min_prefix, packed)
+    return Nets(packed)
+
+
+def parse_cidrs(text: str, min_prefix: int = 0) -> Nets:
+    """min_prefix — для скачанных списков (страны, ASN, по ссылке): сеть шире /8 там означает испорченную
+    строку, и правило «список → напрямую» увело бы мимо выхода огромную часть интернета. Ручной список
+    не ограничивается: там это решение человека."""
+    return parse_nets(text, min_prefix=min_prefix)
+
+
+def merge(parts) -> Nets:
+    """Несколько наборов сетей (ASN списка) — в один."""
+    packed = array.array("Q")
+    for n in parts:
+        if isinstance(n, Nets):
+            packed.extend((a << 32) | b for a, b in zip(n.starts, n.ends))
+        else:
+            for x in n:
+                a = int(x.network_address)
+                packed.append((a << 32) | (a + x.num_addresses - 1))
+    return Nets(packed)
 
 
 def count_ipv6(text: str) -> int:
     """Сколько IPv6-адресов и подсетей в тексте: parse_cidrs их пропускает (в туннеле только
     IPv4), а пользователю стоит знать, что часть его списка не используется."""
     n = 0
-    for line in text.splitlines():
+    for line in _lines(text):
         line = line.split("#", 1)[0].split(";", 1)[0]
         for tok in re.split(r"[,\s]+", line):
             if ":" not in tok:
@@ -86,8 +173,9 @@ def path_for(list_id: str) -> str:
     return os.path.join(LISTS_DIR, f"{list_id}.txt")
 
 
-def save_cidrs(list_id: str, nets: list[ipaddress.IPv4Network]) -> None:
-    domains.write_atomic(path_for(list_id), "\n".join(str(n) for n in nets) + ("\n" if nets else ""))
+def save_cidrs(list_id: str, nets) -> None:
+    lines = nets.cidrs() if isinstance(nets, Nets) else (str(n) for n in nets)
+    domains.write_atomic(path_for(list_id), "".join(x + "\n" for x in lines))
 
 
 def load_cidrs(list_id: str) -> list[str]:
@@ -195,7 +283,7 @@ def _fetch_any(url: str, timeout: int) -> tuple[str, bool]:
             raise RuntimeError(f"{e}; via exit: {e2}") from None
 
 
-def fetch_list(lst: dict, stats: dict | None = None) -> list[ipaddress.IPv4Network]:
+def fetch_list(lst: dict, stats: dict | None = None) -> Nets:
     """Скачивает/собирает список. Бросает исключение при неудаче.
     stats["v6"] — сколько IPv6-строк пропущено (для ручных списков и списков по ссылке)."""
     stats = stats if stats is not None else {}
@@ -217,21 +305,20 @@ def fetch_list(lst: dict, stats: dict | None = None) -> list[ipaddress.IPv4Netwo
                 errors.append(f"{url.split('/')[2]}: {e}")
         raise ListError(Msg("list.fetch_failed", detail="; ".join(errors)))
     if kind == "asn":
-        nets = []
-        for asn in parse_asns(lst["source"]):
-            nets.extend(_fetch_asn(asn))
-        nets = list(ipaddress.collapse_addresses(nets))
+        nets = merge(_fetch_asn(asn) for asn in parse_asns(lst["source"]))
         if not nets:
             raise ListError(Msg("list.empty"))
         return nets
     if kind == "url":
-        nets = []
+        packed = array.array("Q")
         stats["v6"] = 0
         for url in [u.strip() for u in lst["source"].split() if u.strip()]:
             text = _fetch(url)
             stats["v6"] += count_ipv6(text)
-            nets.extend(parse_cidrs(text, WIDE_MIN))
-        nets = list(ipaddress.collapse_addresses(nets))
+            _packed(text, WIDE_MIN, packed)
+            del text
+        nets = Nets(packed)
+        del packed
         if not nets:
             raise ListError(Msg("list.empty"))
         return nets
@@ -248,7 +335,7 @@ def parse_asns(text: str) -> list[int]:
     return list(dict.fromkeys(out))
 
 
-def _fetch_asn(asn: int) -> list[ipaddress.IPv4Network]:
+def _fetch_asn(asn: int) -> Nets:
     errors = []
     for tpl in ASN_SOURCES:
         try:
@@ -316,7 +403,7 @@ def _refresh(lst: dict) -> dict:
         return {"error": Msg("list.fetch_failed", detail=str(e)[:300]).to_json(),
                 "checked": time.time()}
     save_cidrs(lst["id"], nets)
-    total = sum(n.num_addresses for n in nets)
+    total = nets.addresses if isinstance(nets, Nets) else sum(n.num_addresses for n in nets)
     return {"error": None, "count": len(nets), "addresses": total, "skipped_v6": stats.get("v6", 0),
             "updated": time.time(), "checked": time.time()}
 

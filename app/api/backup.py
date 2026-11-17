@@ -130,10 +130,10 @@ def decrypt_backup(req):
 
 
 def restore_state(st: dict, new: dict) -> None:
-    """Состояние из копии вместо текущего. Адреса этого сервера важнее адресов из копии (переезд): и свои из
+    """Состояние из копии вместо текущего. Адреса и название этого сервера важнее, чем в копии (переезд): и свои из
     панели, и отсутствие своих — тогда остаётся PUBLIC_HOST из .env, а не IP старого сервера в конфигах, ссылке
     и сертификате. Адрес клиента из копии (#37) остаётся, только если он есть и у этого сервера."""
-    own = {k: st["settings"].get(k) for k in ("public_host", "client_host", "extra_hosts")}
+    own = {k: st["settings"].get(k) for k in ("public_host", "client_host", "extra_hosts", "panel_name")}
     st.clear()
     st.update(new)
     for k, v in own.items():
@@ -287,8 +287,8 @@ def clean_backup_state(new: dict) -> dict:
         st["shares"][tok] = {"pk": at("shares", lambda: checks.client_key(sh.get("pk"))),
                              "created": sh.get("created") if checks.number(sh.get("created")) else None}
 
-    # настройки: только известные поля. Адрес сервера, второй адрес и адрес для клиентов — этого сервера, а не
-    # из копии (restore_state), поэтому из копии не берутся
+    # настройки: только известные поля. Адрес сервера, второй адрес, адрес для клиентов и название сервера во
+    # вкладке — этого сервера, а не из копии (restore_state), поэтому из копии не берутся
     s, out = obj("settings"), st["settings"]
     if "list_update_hours" in s:
         out["list_update_hours"] = at("settings.list_update_hours",
@@ -317,6 +317,7 @@ def clean_backup_state(new: dict) -> dict:
         out["telegram"] = at("settings.telegram", lambda: checks.telegram(st, notify.defaults(), tg, backup=True),
                              sub=("via",))
     Store.drop_auto_comments_once(st, new)    # копия до 1.21.0: правила из окна выхода с его именем
+    Store.client_bot_once(st, new)            # копия до 1.22.0: бот только для уведомлений — без приглашений
     return st
 
 

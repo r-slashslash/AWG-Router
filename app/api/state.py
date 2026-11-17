@@ -51,7 +51,7 @@ def _state_tag(out: dict) -> str:
     каждом запросе и в отпечаток не входят — их браузер получает всегда."""
     def plain(v):
         return v.to_json() if isinstance(v, Msg) else str(v)
-    return hashlib.sha1(json.dumps(out, default=plain).encode()).hexdigest()[:20]
+    return hashlib.sha256(json.dumps(out, default=plain).encode()).hexdigest()[:20]
 
 
 @app.get("/api/state")
@@ -85,6 +85,7 @@ def _state_view() -> dict:
     share_of: dict = {}
     for tok, sh in st.get("shares", {}).items():
         share_of.setdefault(sh.get("pk"), tok)
+    bot_name = telegram.bot.username()      # приглашение клиента в бота — по тому же ключу, что личная ссылка
     rows = []
     for c in engine.clients:
         cp = st["clients"].get(c["public_key"], {})
@@ -95,6 +96,8 @@ def _state_view() -> dict:
             "traffic": engine.traffic.view(c["public_key"], history=False),
             "limits": limits.view(st.get("limits", {}).get(c["public_key"])),
             "share_url": f"{origin}/s/{share_of[c['public_key']]}" if c["public_key"] in share_of else None,
+            "bot_url": f"https://t.me/{bot_name}?start={share_of[c['public_key']]}"
+                       if bot_name and c["public_key"] in share_of else None,
             "cps": clients.cps_view(st.get("cps", {}).get(c["public_key"])),
             "host": (st.get("chost") or {}).get(c["public_key"]),
             "policy": {"outbound": cp.get("outbound", "inherit"),
@@ -155,6 +158,11 @@ def put_settings(req):
             s["list_update_hours"] = checks.list_update_hours(body["list_update_hours"])
         if "on_stop" in body:
             s["on_stop"] = checks.on_stop(body["on_stop"])
+        if "panel_name" in body:
+            if v := checks.panel_name(body["panel_name"]):
+                s["panel_name"] = v
+            else:
+                s.pop("panel_name", None)
         if "shaping" in body:
             if v := checks.shaping_limits(body["shaping"]):
                 s["shaping"] = v

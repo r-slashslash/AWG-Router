@@ -62,7 +62,6 @@ function download(name, text) {
 const QR_TARGET_CSS_PX = 300, QR_MIN_MODULE_PX = 3, QR_QUIET_MODULES = 4, QR_QUIET_MODULES_DARK = 6,
   QR_DARK_PAD_CSS_PX = 64;
 const qrCodes = new WeakMap();
-const qrDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 let qrSeq = 0, qrLayoutWidth = 0;
 function qrImage(text) {
   if (typeof qrcode === "undefined") return "";
@@ -81,7 +80,7 @@ function qrImage(text) {
 }
 function drawQr(img) {
   const qr = qrCodes.get(img), box = img.parentElement;
-  const dark = !!(qrDark && qrDark.matches);
+  const dark = themeDark();
   const n = qr.getModuleCount(), m = dark ? QR_QUIET_MODULES_DARK : QR_QUIET_MODULES, size = n + 2 * m;
   const dpr = window.devicePixelRatio || 1;
   box.style.padding = "";
@@ -111,7 +110,7 @@ window.addEventListener("resize", () => {
   qrLayoutWidth = w;
   redrawQrs();
 });
-if (qrDark && qrDark.addEventListener) qrDark.addEventListener("change", redrawQrs);
+window.addEventListener("awgr-theme", redrawQrs);     // кнопка «день/ночь» или смена темы системы
 
 const TOKEN = location.pathname.split("/").filter(Boolean).pop();
 let D = null, ERR = null;

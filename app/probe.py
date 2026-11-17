@@ -66,7 +66,9 @@ def http_get(host, path, tls=False):
     try:
         if tls:
             # без имени (адрес 1.1.1.1): у сертификата Cloudflare адрес есть среди имён
-            s = ssl.create_default_context().wrap_socket(s, server_hostname=host)
+            ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2     # и так по умолчанию; явно — для проверки кода GitHub
+            s = ctx.wrap_socket(s, server_hostname=host)
         s.sendall(f"GET {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: awg-router\r\n\r\n".encode())
         data = b""
         while len(data) < 65536:

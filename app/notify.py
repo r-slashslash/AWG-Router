@@ -68,6 +68,8 @@ TEXTS = {
         "kernel_disabled_reboot": "⚠️ Сервер AmneziaWG не поднялся на модуле ядра после {n} перезапусков. Панель отключила модуль, но выгрузить его не смогла — перезагрузите сервер, и он поднимется на amneziawg-go.",
         "login_ok": "🔑 Вход в панель с адреса {ip}.",
         "login_blocked": "🚫 Много неверных попыток входа с адреса {ip}. Вход с него заблокирован на 10 минут.",
+        "login_code_wrong": "⚠️ Вход в панель с адреса {ip}: пароль верный, а код из приложения — нет. Если это были не вы, пароль панели знает кто-то ещё — смените его.",
+        "login_code_locked": "🚫 Слишком много неверных кодов при верном пароле (последний — с адреса {ip}). Вход по коду закрыт для всех на 10 минут. Смените пароль панели.",
         "tls_fail": "⚠️ Не удаётся продлить сертификат HTTPS панели. Текущий действует до {date}.",
         "client_expired": "⏰ Клиент «{name}» отключён: истёк срок действия.",
         "client_quota": "📦 Клиент «{name}» отключён: исчерпан лимит трафика {gb} ГБ.",
@@ -112,6 +114,8 @@ TEXTS = {
         "kernel_disabled_reboot": "⚠️ The AmneziaWG server didn't come up on the kernel module after {n} restarts. The panel switched the module off but couldn't unload it — reboot the server, and it comes up on amneziawg-go.",
         "login_ok": "🔑 Panel sign-in from {ip}.",
         "login_blocked": "🚫 Too many failed sign-in attempts from {ip}. It is blocked for 10 minutes.",
+        "login_code_wrong": "⚠️ Panel sign-in from {ip}: the password was right, the app code was not. If it wasn't you, someone else knows the panel password — change it.",
+        "login_code_locked": "🚫 Too many wrong codes with the right password (the last one from {ip}). Sign-in with a code is closed for everyone for 10 minutes. Change the panel password.",
         "tls_fail": "⚠️ The panel's HTTPS certificate can't be renewed. The current one is valid until {date}.",
         "client_expired": "⏰ Client “{name}” was turned off: its access period ended.",
         "client_quota": "📦 Client “{name}” was turned off: the {gb} GB traffic limit is used up.",
@@ -156,6 +160,8 @@ TEXTS = {
         "kernel_disabled_reboot": "⚠️ AmneziaWG 服务器在内核模块上重启 {n} 次后仍未启动。面板已停用该模块，但无法将其卸载——请重启服务器，它将以 amneziawg-go 启动。",
         "login_ok": "🔑 来自 {ip} 的面板登录。",
         "login_blocked": "🚫 来自 {ip} 的错误登录尝试过多，已封锁 10 分钟。",
+        "login_code_wrong": "⚠️ 来自 {ip} 的面板登录：密码正确，但应用验证码错误。如果不是你本人，说明有人知道面板密码——请更改密码。",
+        "login_code_locked": "🚫 密码正确但验证码错误的次数过多（最后一次来自 {ip}）。验证码登录对所有人关闭 10 分钟。请更改面板密码。",
         "tls_fail": "⚠️ 无法续期面板的 HTTPS 证书。当前证书有效期至 {date}。",
         "client_expired": "⏰ 客户端“{name}”已停用：使用期限已到。",
         "client_quota": "📦 客户端“{name}”已停用：{gb} GB 流量限额已用完。",
@@ -200,6 +206,8 @@ TEXTS = {
         "kernel_disabled_reboot": "⚠️ سرور AmneziaWG پس از {n} بار راه‌اندازی دوباره روی ماژول هسته بالا نیامد. پنل ماژول را غیرفعال کرد اما نتوانست آن را بیرون بکشد — سرور را دوباره راه‌اندازی کنید تا با amneziawg-go بالا بیاید.",
         "login_ok": "🔑 ورود به پنل از نشانی {ip}.",
         "login_blocked": "🚫 تلاش‌های ناموفق زیاد برای ورود از نشانی {ip}. ورود از آن ۱۰ دقیقه مسدود شد.",
+        "login_code_wrong": "⚠️ ورود به پنل از نشانی {ip}: گذرواژه درست بود، اما کد برنامه نه. اگر شما نبودید، کس دیگری گذرواژهٔ پنل را می‌داند — آن را عوض کنید.",
+        "login_code_locked": "🚫 کدهای نادرست زیادی با گذرواژهٔ درست وارد شد (آخرین از نشانی {ip}). ورود با کد برای همه ۱۰ دقیقه بسته است. گذرواژهٔ پنل را عوض کنید.",
         "tls_fail": "⚠️ تمدید گواهی HTTPS پنل ممکن نیست. گواهی فعلی تا {date} معتبر است.",
         "client_expired": "⏰ کلاینت «{name}» غیرفعال شد: مدت اعتبارش تمام شد.",
         "client_quota": "📦 کلاینت «{name}» غیرفعال شد: سقف ترافیک {gb} گیگابایت تمام شد.",
@@ -259,10 +267,13 @@ class NotifyError(Exception):
     маршрута, таймаут, 429/5xx): можно пробовать другой путь и повторить позже. Отказ вроде
     неверного токена или чата повтором не лечится."""
 
-    def __init__(self, text: str, msg: Msg | None = None, net: bool = False):
+    def __init__(self, text: str, msg: Msg | None = None, net: bool = False, migrate_to: str | None = None,
+                 code: int = 0):
         super().__init__(text)
+        self.code = code                # error_code ответа Telegram (409 — бота читает кто-то ещё)
         self.msg = msg
         self.net = net
+        self.migrate_to = migrate_to    # группа стала супергруппой: новый номер чата (ответ Telegram)
 
 
 BACKUP_PERIODS = {"off": 0, "daily": 86400, "weekly": 7 * 86400}
@@ -275,6 +286,9 @@ def defaults() -> dict:
             "via": "direct",
             # управление из Telegram: команды и кнопки (только из этого чата), см. tgbot.py
             "control": False,
+            # клиенты открывают приглашение в бота и смотрят там свой доступ (1.22.0); бот читает сообщения и
+            # при выключенном управлении. У установок до 1.22.0 без управления — выключено (store.CLIENT_BOT)
+            "clients": True,
             # резервная копия в чат: off | daily | weekly; пароль — шифровать файл (пусто — нет)
             "backup": "off", "backup_pw": "", "backup_last": None, "backup_error": None}
 
@@ -387,14 +401,34 @@ def _post(token: str, method: str, data: bytes, ctype: str, timeout: float, via:
         raise NotifyError(f"api.telegram.org: HTTP {code}", net=True)
     if not res.get("ok"):
         ec = res.get("error_code") or 0
+        mig = (res.get("parameters") or {}).get("migrate_to_chat_id") if isinstance(res.get("parameters"), dict) else None
         raise NotifyError(str(res.get("description") or "Telegram error")[:300],
-                          net=ec == 429 or (isinstance(ec, int) and ec >= 500))
+                          net=ec == 429 or (isinstance(ec, int) and ec >= 500),
+                          migrate_to=str(mig) if isinstance(mig, int) and not isinstance(mig, bool) else None,
+                          code=ec if isinstance(ec, int) else 0)
     return res.get("result") or {}
 
 
 def _call(token: str, method: str, payload: dict | None = None, timeout: float = 15,
           via: str = "direct") -> dict:
     return _post(token, method, json.dumps(payload or {}).encode(), "application/json", timeout, via)
+
+
+# Группа стала супергруппой — у чата новый номер, и Telegram отвечает на старый ошибкой с этим номером.
+# on_migrate(старый, новый) запоминает новый номер в настройках (его ставит Notifier); отправка повторяется
+# один раз уже на новый. Без этого уведомления молча переставали доходить.
+on_migrate = None
+
+
+def _migrated(chat_id: str, e: NotifyError) -> str | None:
+    if not e.migrate_to or e.migrate_to == str(chat_id):
+        return None
+    if on_migrate:
+        try:
+            on_migrate(str(chat_id), e.migrate_to)
+        except Exception:  # noqa: BLE001
+            log.exception("telegram chat migration")
+    return e.migrate_to
 
 
 def send(token: str, chat_id: str, text: str, via: str = "direct", markup: dict | None = None,
@@ -405,13 +439,30 @@ def send(token: str, chat_id: str, text: str, via: str = "direct", markup: dict 
         p["reply_markup"] = markup
     if html:
         p["parse_mode"] = "HTML"
-    return _call(token, "sendMessage", p, via=via)
+    try:
+        return _call(token, "sendMessage", p, via=via)
+    except NotifyError as e:
+        new = _migrated(chat_id, e)
+        if not new:
+            raise
+        return _call(token, "sendMessage", {**p, "chat_id": new}, via=via)
 
 
 def _send_file(method: str, field: str, token: str, chat_id: str, filename: str, data: bytes,
                caption: str, via: str, markup: dict | None = None, html: bool = False,
                ctype: str = "application/octet-stream") -> dict:
     """Файл multipart/form-data (urllib сам этого не умеет)."""
+    try:
+        return _send_file_once(method, field, token, chat_id, filename, data, caption, via, markup, html, ctype)
+    except NotifyError as e:
+        new = _migrated(chat_id, e)
+        if not new:
+            raise
+        return _send_file_once(method, field, token, new, filename, data, caption, via, markup, html, ctype)
+
+
+def _send_file_once(method: str, field: str, token: str, chat_id: str, filename: str, data: bytes,
+                    caption: str, via: str, markup: dict | None, html: bool, ctype: str) -> dict:
     boundary = "awgr" + uuid.uuid4().hex
     fields = [("chat_id", chat_id), ("caption", caption[:1000])]
     if markup:
@@ -495,7 +546,22 @@ class Notifier:
         self._target_lost = False
         # кнопки под уведомлением (tgbot.notify_buttons): (ключ текста, ссылки, язык) → reply_markup
         self.buttons_fn = None
+        global on_migrate
+        on_migrate = self.migrate
         threading.Thread(target=self._worker, name="notify", daemon=True).start()
+
+    def migrate(self, old: str, new: str) -> bool:
+        """Чат из настроек стал супергруппой: новый номер — в настройки (только если там был старый)."""
+        def fn(st):
+            tg = st.setdefault("settings", {}).setdefault("telegram", {})
+            if str(tg.get("chat_id") or "") != old:
+                return False
+            tg["chat_id"] = new
+            return True
+        done = self.store.mutate(fn)
+        if done:
+            log.warning("telegram: the group became a supergroup, chat %s → %s", old, new)
+        return done
 
     def event(self, kind: str, key: str, cooldown: float | None = None, refs: dict | None = None,
               **params) -> None:

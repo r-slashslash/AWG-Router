@@ -157,7 +157,8 @@ class LoginTest(Isolated):
         auth._totp_pending.clear()
         auth._totp_pending.update(secret=totp.new_secret(), t=time.time() - 1801)
         c = totp.code_at(auth._totp_pending["secret"], int(time.time() // totp.STEP))
-        self.assertEqual(code(lambda: auth.totp_enable(Req({"code": c}))), (400, "err.totp_expired"))
+        self.assertEqual(code(lambda: auth.totp_enable(Req({"code": c, "password": auth.PASSWORD}))),
+                         (400, "err.totp_expired"))
         self.assertIsNone(totp.load())
 
     def test_secure_cookie_behind_https_proxy(self):                        # A22

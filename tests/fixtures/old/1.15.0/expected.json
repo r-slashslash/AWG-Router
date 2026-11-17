@@ -216,6 +216,7 @@
      "backup_last": null,
      "backup_pw": "tg-backup-pass",
      "chat_id": "-1001234567",
+     "clients": true,
      "control": true,
      "enabled": true,
      "events": {
@@ -243,7 +244,8 @@
     }
    },
    "upgraded": [
-    "rule_names"
+    "rule_names",
+    "client_bot"
    ],
    "upstreams": [
     {
@@ -505,6 +507,7 @@
      "backup_last": null,
      "backup_pw": "tg-backup-pass",
      "chat_id": "-1001234567",
+     "clients": true,
      "control": true,
      "enabled": true,
      "events": {
@@ -532,7 +535,8 @@
     }
    },
    "upgraded": [
-    "rule_names"
+    "rule_names",
+    "client_bot"
    ],
    "upstreams": [
     {
@@ -1199,7 +1203,8 @@
    }
   },
   "upgraded": [
-   "rule_names"
+   "rule_names",
+   "client_bot"
   ],
   "upstreams": [
    {
