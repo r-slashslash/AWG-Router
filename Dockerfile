@@ -7,8 +7,8 @@
 # Обновляя программу, меняйте и название версии (*_REF, для людей), и отпечаток (*_SHA); версии AmneziaWG — те
 # же, что в awg-server/Dockerfile (это проверяет ProjectRulesTest).
 
-ARG AWG_GO_REF=v3.1.20260828
-ARG AWG_GO_SHA=b5928efb6ca19f0153958460c3d141f04abc5c2e
+ARG AWG_GO_REF=v3.1.20261116
+ARG AWG_GO_SHA=08fe3d33bbb116be09a6183d02609311b8b0c9e8
 ARG AWG_TOOLS_REF=v3.1.20260812
 ARG AWG_TOOLS_SHA=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 ARG LEGO_IMAGE=goacme/lego:v5.6.0@sha256:6f1583fc026a455ea46a7a5858c576105bb69c2e2de69db391cab7f14750350c

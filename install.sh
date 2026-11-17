@@ -230,13 +230,14 @@ ssh_user() {
   u="$(envget SSH_USER)"
   echo "${u:-root}"
 }
-# The ssh server's port, if it is not 22 (empty for 22 or when it can't be told)
+# The ssh server's port, if it is not 22 (empty for 22); when it can't be told now — the one saved at install
 ssh_port() {
   local p
   p="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
   # the first address:port in the sshd line is the local one (with or without the Netid column)
   [ -n "$p" ] || p="$(ss -Hltnp 2>/dev/null | awk '/"sshd"/ {for (i = 1; i <= NF; i++) if ($i ~ /:[0-9]+$/) {
     n = split($i, a, ":"); print a[n]; exit}}')"
+  [[ "$p" =~ ^[0-9]+$ ]] || p="$(envget SSH_PORT)"
   [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" != 22 ] && echo "$p"
   return 0
 }
@@ -1000,7 +1001,8 @@ fi
 
 # ------------------------------------------------------------------ .env
 HAD_ENV=0
-SSH_USER="$(ssh_user 2>/dev/null)"   # for the ssh tunnel command in --info, which may run without sudo later
+SSH_USER="$(ssh_user 2>/dev/null)"   # for the ssh tunnel command in --info, which may run without sudo later,
+SSH_PORT="$(ssh_port 2>/dev/null)"   # and in the Telegram bot (the panel can't see who logs in over ssh)
 [ -f "$ENV_FILE" ] && cp "$ENV_FILE" "$ENV_FILE.bak" && HAD_ENV=1
 umask 077
 cat > "$ENV_FILE" <<EOF
@@ -1019,6 +1021,7 @@ AWG_MODE=$AWG_MODE
 AWG_INIT_PORT=$AWG_INIT_PORT
 RECONCILE_INTERVAL=$RECONCILE_INTERVAL
 SSH_USER=$SSH_USER
+SSH_PORT=$SSH_PORT
 EOF
 umask 022
 # Everything else the previous .env had (EXIT_ENGINE, AWG_CONTAINER, SNI_PROXY_PORT, ACME_HTTP_PORT …) is

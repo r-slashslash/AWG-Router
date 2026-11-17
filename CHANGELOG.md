@@ -52,6 +52,13 @@ it grows, so every user-visible change gets a new version.
   release unnoticed. Sources are now fetched by a 40-character commit hash and checked with `git rev-parse`
   (hev's submodules are pinned by its own commit), images — by `@sha256`; `ProjectRulesTest.test_foreign_code_pinned`
   checks both Dockerfiles and that the AmneziaWG versions in them match.
+- **amneziawg-go v3.1.20261116** (was v3.1.20260828), in the panel image and in the own AWG server image: fixes
+  only — junk packets with `Jmin` above `Jmax` are refused instead of an underflowing size, a negative length in the
+  `<r>`/`<rc>`/`<rd>`/`<dz>` tags of I1–I5 is refused, I1–I5 and S4 can change while handshakes are sent, a timer race.
+- **A weekly check for new upstream versions** (`.github/workflows/upstream.yml`, `tools/upstream.py`): it compares
+  the pinned amneziawg-go, amneziawg-tools, hev-socks5-tunnel and lego with the tags of their repositories and keeps
+  one issue open with what is new (also a pinned tag moved to other code); nothing is updated by itself. A version
+  held back on purpose is in `upstream.SKIP` (hev 2.20.0).
 - **hev-socks5-tunnel 2.19.3** (was 2.9.3), pinned by its commit, with the fixes of ten releases (UDP among them).
   2.20.0 is held back: in the network tests a SOCKS5 exit under a speed limit got 2–12 Mbit/s instead of about 16. A
   run over the commits between 2.19.3 and 2.20.0 points at the hev-socks5-core update (`8e3b4cd`). Newer hev writes no
@@ -67,6 +74,11 @@ it grows, so every user-visible change gets a new version.
   remembers the last chat that wrote to it (`Bot.last_chat`, for an hour) and the button uses it (`notify.chat_of`).
 - **The bot keeps quiet in groups.** In a group where it sees all messages it answered every phrase with its menu;
   now only commands, a mention of `@bot` or a reply to its message get an answer.
+- **The bot's ssh command names the right user and port.** With access through an ssh tunnel, **Panel** in the bot
+  always said `root@<server>` on port 22, while the installer already printed the user behind sudo and `-p` for
+  another port. The installer now also saves the port (`SSH_PORT` in `.env`, next to `SSH_USER`; when it can't tell
+  the port on an update, the saved one stays), and the bot takes both (`config.SSH_USER`, `config.SSH_PORT`; a value
+  that isn't a user name or a port means root and 22). The bot shows it after the next `awg-router update` or install.
 - **A list edit without a name keeps the name.** `PUT /api/lists/<id>` with only the text used to be refused with
   "name required"; the panel itself always sends the name, so only hand-made requests saw it.
 - **SOCKS5 exit health is checked from the AWG server's network** (`socks.check_in`), where hev-socks5-tunnel connects

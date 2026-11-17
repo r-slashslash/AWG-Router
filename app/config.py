@@ -1,5 +1,6 @@
 """Настройки из переменных окружения."""
 import os
+import re
 
 
 def _bool(name: str, default: bool = False) -> bool:
@@ -54,6 +55,14 @@ PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD", "")
 PANEL_BASE_PATH = "/" + os.environ.get("PANEL_BASE_PATH", "").strip("/")
 if PANEL_BASE_PATH == "/":
     PANEL_BASE_PATH = ""
+
+# Команда SSH-туннеля в боте (панель только через SSH): кто входит и порт сервера SSH, если не 22. Их пишет
+# install.sh (ssh_user, ssh_port) в .env; непохожее на имя пользователя или порт — как без них (root, 22)
+SSH_USER = os.environ.get("SSH_USER", "").strip()
+if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9._-]{0,31}", SSH_USER):
+    SSH_USER = "root"
+SSH_PORT = os.environ.get("SSH_PORT", "").strip()
+SSH_PORT = int(SSH_PORT) if SSH_PORT.isdigit() and 0 < int(SSH_PORT) < 65536 and int(SSH_PORT) != 22 else 0
 
 RECONCILE_INTERVAL = int(os.environ.get("RECONCILE_INTERVAL", "10"))
 

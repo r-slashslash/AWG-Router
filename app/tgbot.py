@@ -110,7 +110,7 @@ TEXTS = {
         "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
         "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
         "pn_ssh": "🖥 Панель открывается только через SSH-туннель. Запустите на своём компьютере\n"
-                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\nи откройте {url}",
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\nи откройте {url}",
         "b_delete": "🗑 Удалить", "b_delete_go": "🗑 Да, удалить",
         "del_ask": "Удалить клиента <b>{name}</b>?\nЕго конфиг перестанет работать, срок, лимиты и личная "
                    "ссылка будут удалены. Отменить это нельзя.",
@@ -217,7 +217,7 @@ TEXTS = {
         "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
         "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
         "pn_ssh": "🖥 The panel opens only through an SSH tunnel. Run on your computer\n"
-                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\nand open {url}",
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\nand open {url}",
         "b_delete": "🗑 Delete", "b_delete_go": "🗑 Yes, delete",
         "del_ask": "Delete client <b>{name}</b>?\nIts config stops working; its end date, limits and personal "
                    "link are removed. This cannot be undone.",
@@ -322,7 +322,7 @@ TEXTS = {
         "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
         "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
         "pn_ssh": "🖥 面板只能通过 SSH 隧道打开。请在您的电脑上运行\n"
-                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\n然后打开 {url}",
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\n然后打开 {url}",
         "b_delete": "🗑 删除", "b_delete_go": "🗑 是的，删除",
         "del_ask": "删除客户端 <b>{name}</b>？\n其配置将失效，有效期、限额和个人链接也会被删除。此操作无法撤销。",
         "ok_deleted": "🗑 “{name}”已删除",
@@ -428,7 +428,7 @@ TEXTS = {
         "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
         "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
         "pn_ssh": "🖥 پنل فقط از طریق تونل SSH باز می‌شود. روی رایانهٔ خود اجرا کنید\n"
-                  "<code>ssh -N -L {port}:127.0.0.1:{port} root@{host}</code>\nو {url} را باز کنید",
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\nو {url} را باز کنید",
         "b_delete": "🗑 حذف", "b_delete_go": "🗑 بله، حذف کن",
         "del_ask": "کلاینت <b>{name}</b> حذف شود؟\nکانفیگ آن دیگر کار نمی‌کند و تاریخ پایان، سقف‌ها و پیوند "
                    "شخصی آن حذف می‌شوند. این کار برگشت‌پذیر نیست.",
@@ -1316,7 +1316,8 @@ class Bot:
         L = c["lang"]
         p = self.ops.panel()
         if p.get("ssh"):
-            self._show(c, tr(L, "pn_ssh", url=p["url"], port=p["port"], host=p.get("host") or "SERVER_IP"),
+            self._show(c, tr(L, "pn_ssh", url=p["url"], port=p["port"], host=p.get("host") or "SERVER_IP",
+                          user=p.get("user") or "root", sport=f' -p {p["sport"]}' if p.get("sport") else ""),
                        kb(self._back(c)), msg)
             return
         text = tr(L, "pn_text", url=p["url"])

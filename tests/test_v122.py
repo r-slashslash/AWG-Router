@@ -24,7 +24,7 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app import checks, lists, notify, socks, tgbot, uitext, web  # noqa: E402
+from app import checks, config, lists, notify, socks, tgbot, uitext, web  # noqa: E402
 from app.i18n import Msg  # noqa: E402
 from app.store import CLIENT_BOT, Store  # noqa: E402
 from app import panel  # noqa: E402
@@ -582,8 +582,38 @@ class RefreshOwnServerTest(unittest.TestCase):
         self.assertLess(self.sh.index("\nrefresh_own_server\n"), self.sh.index('step "Starting"'))
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+class SshCommandTest(unittest.TestCase):
+    """Команда SSH-туннеля в боте — с тем же пользователем и портом, что у установщика (SSH_USER и SSH_PORT в .env),
+    а не всегда root@ без порта."""
+
+    def setUp(self):
+        bot_setup(self)
+
+    def text(self, lang, **conf):
+        with mock.patch.object(config, "PANEL_HOST", "127.0.0.1"), mock.patch.multiple(config, **conf), \
+                mock.patch.object(self.bot, "_show") as show:
+            self.bot.show_panel({"lang": lang}, None)
+        return show.call_args[0][1]
+
+    def test_user_and_port(self):
+        port = config.PANEL_PORT
+        for lang in ("ru", "en", "zh", "fa"):
+            self.assertIn(f"ssh -N -L {port}:127.0.0.1:{port} -p 2222 debian@",
+                          self.text(lang, SSH_USER="debian", SSH_PORT=2222), lang)
+            self.assertIn(f"ssh -N -L {port}:127.0.0.1:{port} root@", self.text(lang, SSH_USER="root", SSH_PORT=0))
+
+    def test_env_checked(self):
+        """Непохожее на имя пользователя или порт в .env — как без них: root и 22."""
+        cases = [({"SSH_USER": "debian", "SSH_PORT": "2222"}, "debian 2222"),
+                 ({"SSH_USER": "x; rm -rf /", "SSH_PORT": "22"}, "root 0"),
+                 ({"SSH_USER": "", "SSH_PORT": "70000"}, "root 0"),
+                 ({"SSH_PORT": "abc"}, "root 0")]
+        for env, want in cases:
+            e = {k: v for k, v in os.environ.items() if k not in ("SSH_USER", "SSH_PORT")}
+            r = subprocess.run([sys.executable, "-c", "from app import config as c; print(c.SSH_USER, c.SSH_PORT)"],
+                               cwd=ROOT, env={**e, **env}, capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.stdout.strip(), want, env)
 
 
 # ======================================================================== вторая часть 1.22.0: 7, 8, 9, 10, 5
@@ -703,3 +733,7 @@ class SocksCheckInTest(unittest.TestCase):
                              timeout=30)
         self.assertEqual(json.loads(out.stdout)["error"], {"$t": "socks.timeout", "p": {}})
         self.assertIn("socks.check_in(t, conf, ip)", read("app", "engine", "tunnels.py"))
+
+
+if __name__ == "__main__":
+    unittest.main()

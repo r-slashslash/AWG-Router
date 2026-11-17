@@ -248,6 +248,18 @@ class InstallerPortsTest(unittest.TestCase):
         text = install_sh()
         self.assertIn("SSH_USER=$SSH_USER\n", text)
         self.assertIn('SSH_USER="$(ssh_user 2>/dev/null)"', text)
+        # 1.22.0: и порт — для команды в боте Telegram
+        self.assertIn("SSH_PORT=$SSH_PORT\n", text)
+        self.assertIn('SSH_PORT="$(ssh_port 2>/dev/null)"', text)
+
+    def test_saved_port_when_unknown(self):
+        """1.22.0: порт не узнать (обновление без sshd -T и ss) — сохранённый при установке; узнали 22 — без -p."""
+        self.stub("logname", "exit 1")
+        self.stub("sshd", "exit 1")
+        self.stub("ss", "exit 1")
+        self.assertEqual(self.info(saved="SSH_PORT=2200\n"), "ssh -N -L 2053:127.0.0.1:2053 -p 2200 root@203.0.113.5")
+        self.stub("sshd", "echo 'port 22'")
+        self.assertEqual(self.info(saved="SSH_PORT=2200\n"), "ssh -N -L 2053:127.0.0.1:2053 root@203.0.113.5")
 
 
 # ------------------------------------------------------------------ строка правила, карточка выхода
