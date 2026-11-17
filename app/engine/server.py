@@ -65,6 +65,7 @@ class ServerMixin:
         try:
             if t.kind == "host":
                 t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
+            self._pre_restart_cleanup(t)
             t.restart()
         except Exception as e:  # noqa: BLE001
             self.event("error", Msg("ev.server_start_failed", error=msg_of(e)))
@@ -228,6 +229,16 @@ class ServerMixin:
             pass
         self._hold_key = None
 
+    def _pre_restart_cleanup(self, t: system.Target) -> None:
+        """Перед перезапуском контейнера останавливаем туннели выходов и сбрасываем правила и очереди в его сети,
+        чтобы ядро не зависало в nf_conntrack_cleanup_net_list при удалении старого netns."""
+        if config.DRY_RUN or t.kind != "container":
+            return
+        self._stop_all()
+        t.ns(["nft", "delete", "table", "ip", "awgr"], check=False, timeout=10)
+        t.ns(["tc", "qdisc", "del", "dev", t.iface, "root"], check=False, timeout=10)
+        t.ns(["tc", "qdisc", "del", "dev", t.iface, "ingress"], check=False, timeout=10)
+
     def restart_server(self) -> None:
         """Кнопка «Перезапустить сервер AWG». Дальше всё применит reconcile: у контейнера сменится Target.key."""
         with self.lock:
@@ -236,6 +247,7 @@ class ServerMixin:
                 raise system.SysError(Msg("srv.no_server"))
             if t.kind == "host" and not config.DRY_RUN:
                 t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
+            self._pre_restart_cleanup(t)
             self.server_restart_at = time.time()
             t.restart()
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
