@@ -419,6 +419,11 @@ class LimitsTest(unittest.TestCase):
                     if c["public_key"] == pk:
                         c["enabled"] = enabled
 
+            def set_enabled_many(s, wanted):        # 1.22.0: проход переключает всех разом
+                for pk, on in wanted.items():
+                    s.update_client(pk, enabled=on)
+                return set(wanted)
+
         class Tr:
             def used(s, pk, period):
                 return used

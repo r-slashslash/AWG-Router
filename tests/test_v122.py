@@ -584,3 +584,122 @@ class RefreshOwnServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ======================================================================== вторая часть 1.22.0: 7, 8, 9, 10, 5
+class DetectSeenChatTest(unittest.TestCase):
+    """«Найти» Chat ID, когда бот уже сам читает сообщения (управление или приглашения клиентов)."""
+
+    def test_chat_the_bot_saw(self):
+        bot_setup(self, clients=True)
+        self.tg.updates = [msg("hi", chat="6006")]
+        self.bot.poll_once(self.c, timeout=0)
+        self.assertEqual(self.bot.last_chat["id"], "6006")
+        self.tg.fail["getUpdates"] = notify.NotifyError("Conflict: terminated by other getUpdates request", code=409)
+        with mock.patch.object(telegram, "bot", self.bot):
+            r = telegram.telegram_detect(Req({"token": TOKEN}))
+        self.assertEqual(r["id"], "6006")
+        with mock.patch.object(telegram, "bot", self.bot):                # другой бот — не его чат
+            self.assertIsNotNone(code(lambda: telegram.telegram_detect(Req({"token": "987654321:" + "B" * 35}))))
+
+    def test_chat_of_update(self):
+        self.assertEqual(notify.chat_of({"channel_post": {"chat": {"id": -5, "title": "News"}}}),
+                         {"id": "-5", "title": "News"})
+        self.assertIsNone(notify.chat_of({"edited_message": {}}))
+
+
+class GroupQuietTest(unittest.TestCase):
+    def setUp(self):
+        bot_setup(self, chat_id="-1001")
+        self.bot._st["me"] = {"bot": TOKEN.split(":")[0], "username": "awgr_test_bot"}
+
+    def group(self, text, uid=1, **extra):
+        m = msg(text, chat="-1001", uid=uid, **extra)
+        m["message"]["chat"]["type"] = "supergroup"
+        return m
+
+    def test_talk_in_group_is_ignored(self):
+        self.tg.updates = [self.group("привет всем")]
+        self.bot.poll_once(self.c, timeout=0)
+        self.assertEqual(self.tg.texts(), [])
+        self.tg.updates = [self.group("@AWGR_test_bot меню", uid=2)]
+        self.bot.poll_once(self.c, timeout=0)
+        self.assertTrue(self.tg.texts())                                       # обращение — меню
+        n = len(self.tg.texts())
+        self.tg.updates = [self.group("/status", uid=3)]
+        self.bot.poll_once(self.c, timeout=0)
+        self.assertGreater(len(self.tg.texts()), n)                           # команды — как раньше
+
+    def test_reply_to_bot(self):
+        self.tg.updates = [self.group("ну?", reply_to_message={"message_id": 5, "from": {"is_bot": True}})]
+        self.bot.poll_once(self.c, timeout=0)
+        self.assertTrue(self.tg.texts())
+
+
+class ListNameKeptTest(unittest.TestCase):
+    def test_text_only_edit(self):
+        old = {"kind": "manual", "source": "10.0.0.0/8", "name": "Office"}
+        self.assertEqual(checks.list_fields({"source": "192.0.2.0/24"}, old)["name"], "Office")
+        self.assertEqual(checks.list_fields({"source": "192.0.2.0/24", "name": "New"}, old)["name"], "New")
+        self.assertEqual(code(lambda: checks.list_fields({"source": "192.0.2.0/24", "name": ""}, old)),
+                         (400, "err.name_required"))                          # явно пустое — по-прежнему отказ
+
+
+class BatchSwitchTest(unittest.TestCase):
+    """Срок кончился у многих клиентов разом — одна запись файлов сервера, а не по клиенту."""
+
+    def test_one_write_for_many(self):
+        panel.engine.reconcile()
+        pks = [clients.add_user(Req({"name": f"batch-{i}"}))["public_key"] for i in range(5)]
+        panel.engine.reconcile()
+        writes = []
+        orig = panel.engine.srv._write
+        with mock.patch.object(panel.engine.srv, "_write", side_effect=lambda *a, **kw: (writes.append(1), orig(*a, **kw))):
+            done = panel.engine.srv.set_enabled_many({pk: False for pk in pks} | {"Z" * 43 + "=": False})
+        self.assertEqual(done, set(pks))
+        self.assertEqual(len(writes), 1)
+        self.assertTrue(all(not c["enabled"] for c in panel.engine.clients if c["public_key"] in pks))
+        with mock.patch.object(panel.engine.srv, "_write") as w:
+            self.assertEqual(panel.engine.srv.set_enabled_many({pk: False for pk in pks}), set(pks))
+            w.assert_not_called()                                              # уже выключены — писать нечего
+        panel.engine.srv.set_enabled_many({pk: True for pk in pks})
+
+    def test_enforce_uses_batch(self):
+        src = read("app", "limits.py")
+        self.assertNotIn("update_client(", src)
+        self.assertIn("set_enabled_many", src)
+
+
+class SocksCheckInTest(unittest.TestCase):
+    """Здоровье выхода SOCKS5 — из сети сервера AWG (как hev), пароль — не в командной строке."""
+
+    def test_runs_in_server_network(self):
+        seen = {}
+
+        class T:
+            def ns(self, cmd, input=None, timeout=30, check=True):
+                seen.update(cmd=cmd, input=input)
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(
+                    {"ok": False, "ms": None, "error": {"$t": "socks.auth_failed", "p": {}}}), "")
+        r = socks.check_in(T(), {"host": "proxy.example", "port": 1080, "user": "u", "password": "s3cret"},
+                           "192.0.2.80")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"].key, "socks.auth_failed")
+        self.assertNotIn("s3cret", " ".join(seen["cmd"]))
+        self.assertEqual(json.loads(seen["input"])["host"], "192.0.2.80")      # адрес, а не имя
+
+    def test_broken_answer_is_down(self):
+        class T:
+            def ns(self, cmd, **kw):
+                return subprocess.CompletedProcess(cmd, 1, "", "Traceback")
+        r = socks.check_in(T(), {"port": 1080}, "192.0.2.80")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"].key, "socks.unreachable")
+
+    def test_main_round_trip(self):
+        out = subprocess.run([sys.executable, "-c", f"import sys;sys.path.insert(0,{ROOT!r});from app import socks;"
+                              "socks.check=lambda c: {'ok': False, 'ms': None, 'error': socks.Msg('socks.timeout'), 'at': 1};"
+                              "socks.main()"], input='{"host": "x", "port": 1}', capture_output=True, text=True,
+                             timeout=30)
+        self.assertEqual(json.loads(out.stdout)["error"], {"$t": "socks.timeout", "p": {}})
+        self.assertIn("socks.check_in(t, conf, ip)", read("app", "engine", "tunnels.py"))

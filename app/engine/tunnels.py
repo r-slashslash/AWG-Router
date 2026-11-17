@@ -561,9 +561,12 @@ class TunnelsMixin:
             conf = self.parsed(u).socks
             self._socks_busy.add(uid)
 
-            def run(uid=uid, conf=conf):
+            ip = r.socks_ip if not config.DRY_RUN else None
+
+            def run(uid=uid, conf=conf, ip=ip):
                 try:
-                    self._socks_res[uid] = socks.check(conf)
+                    # из сети сервера AWG, как hev: из сети панели прокси может быть виден иначе
+                    self._socks_res[uid] = socks.check_in(t, conf, ip) if ip else socks.check(conf)
                 finally:
                     self._socks_busy.discard(uid)
                     ok = bool((self._socks_res.get(uid) or {}).get("ok"))

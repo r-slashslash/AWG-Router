@@ -14,9 +14,11 @@ hev-socks5-tunnel к прокси без метки и идут напрямую
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import struct
+import sys
 import time
 
 from .awgconf import ConfigError, resolve_host
@@ -161,3 +163,33 @@ def check(conf: dict) -> dict:
                              "socks.auth_required", "socks.timeout"):
                 break                       # до второй цели дело не дойдёт: прокси сам не пускает
     return {"ok": False, "ms": None, "error": err, "at": time.time()}
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def check_in(t, conf: dict, ip: str, timeout: int = 30) -> dict:
+    """check() из сети сервера AWG — оттуда, откуда к прокси ходит hev-socks5-tunnel (1.22.0). Из сети панели
+    проверка ошибалась: прокси на 127.0.0.1 самого VPS «работал», хотя из контейнера сервера его не видно, и
+    наоборот. Имя прокси разобрано заранее (ip): в чужой сети может не быть DNS. Пароль — через stdin, не в
+    командной строке (её видят все процессы)."""
+    code = f"import sys;sys.path.insert(0,{ROOT!r});from app import socks;socks.main()"
+    try:
+        p = t.ns([sys.executable, "-c", code], input=json.dumps({**conf, "host": ip}), timeout=timeout,
+                 check=False)
+        d = json.loads(p.stdout or "{}")
+    except Exception as e:  # noqa: BLE001  — нет сети сервера, процесс не ответил: выход не работает
+        return {"ok": False, "ms": None, "error": Msg("socks.unreachable", error=str(e)[:120]), "at": time.time()}
+    err = d.get("error")
+    if isinstance(err, dict) and err.get("$t"):
+        err = Msg(err["$t"], **(err.get("p") or {}))
+    elif not d.get("ok"):
+        err = err or Msg("socks.unreachable", error=(p.stderr or "no answer").strip()[:120])
+    return {"ok": bool(d.get("ok")), "ms": d.get("ms"), "error": None if d.get("ok") else err, "at": time.time()}
+
+
+def main() -> None:
+    """Запуск в сети сервера (check_in): настройки прокси — JSON на stdin, ответ — JSON на stdout."""
+    r = check(json.loads(sys.stdin.read() or "{}"))
+    e = r.get("error")
+    print(json.dumps({**r, "error": e.to_json() if isinstance(e, Msg) else e}))

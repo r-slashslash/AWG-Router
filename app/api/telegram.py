@@ -72,13 +72,23 @@ def telegram_detect(req):
     c = _tg_draft(req.json())
     if not c["token"]:
         bad("err.tg_token")
+    # Бот, который уже читает сообщения (управление или приглашения клиентов), забирает их сам — Telegram
+    # отдаёт их кому-то одному, а второй запрос в это время получает 409. Тогда — чат, который бот видел.
+    seen = bot.last_chat if bot.last_chat and bot.last_chat.get("bot") == c["token"].split(":", 1)[0] \
+        and time.time() - bot.last_chat.get("t", 0) < DETECT_SEEN else None
     try:
         chat = notify.detect_chat(c["token"], c["via"])
     except notify.NotifyError as e:
-        bad(Msg("err.tg_failed", error=msg_of(e)), 502)
+        if not seen:
+            bad(Msg("err.tg_failed", error=msg_of(e)), 502)
+        chat = None
+    chat = chat or (seen and {"id": seen["id"], "title": seen["title"]})
     if not chat:
         bad("err.tg_no_chat", 404)
     return chat
+
+
+DETECT_SEEN = 3600          # чат, который бот видел, годится для «Найти» не дольше часа
 
 
 # --------------------------------------------------- управление из Telegram

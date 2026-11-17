@@ -510,16 +510,24 @@ def decrypt(data: bytes, password: str) -> bytes | None:
     return p.stdout if p.returncode == 0 else None
 
 
+def chat_of(u: dict) -> dict | None:
+    """Чат события getUpdates: {id, title} или None."""
+    m = u.get("message") or u.get("channel_post") or u.get("my_chat_member") \
+        or (u.get("callback_query") or {}).get("message") or {}
+    ch = m.get("chat") if isinstance(m, dict) else None
+    if not (isinstance(ch, dict) and "id" in ch):
+        return None
+    title = ch.get("title") or " ".join(x for x in (ch.get("first_name"), ch.get("last_name")) if x) \
+        or ch.get("username") or ""
+    return {"id": str(ch["id"]), "title": title}
+
+
 def detect_chat(token: str, via: str = "direct") -> dict | None:
     """Чат, из которого боту писали последним (чтобы не искать chat id вручную)."""
     upd = _call(token, "getUpdates", {"limit": 50, "timeout": 0}, via=via)
     for u in reversed(upd if isinstance(upd, list) else []):
-        m = u.get("message") or u.get("channel_post") or u.get("my_chat_member") or {}
-        ch = m.get("chat")
-        if ch and "id" in ch:
-            title = ch.get("title") or " ".join(x for x in (ch.get("first_name"), ch.get("last_name")) if x) \
-                or ch.get("username") or ""
-            return {"id": str(ch["id"]), "title": title}
+        if ch := chat_of(u):
+            return ch
     return None
 
 

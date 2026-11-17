@@ -276,7 +276,10 @@ LIST_TEXT_MAX = 2_000_000
 
 
 def list_fields(body: dict, existing: dict | None = None) -> dict:
-    """Вид, текст и название списка ({kind, source, name}); existing — список, который правят."""
+    """Вид, текст и название списка ({kind, source, name}); existing — список, который правят. Правка без поля
+    «name» (только текст) оставляет прежнее название, а не отказывает «нужно название»."""
+    if existing and "name" not in body and existing.get("name"):
+        body = {**body, "name": existing["name"]}
     kind = body.get("kind", existing["kind"] if existing else None)
     if kind not in LIST_KINDS:
         bad("err.list_kind")

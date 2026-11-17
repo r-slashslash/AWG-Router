@@ -366,6 +366,14 @@ def check(label, got, want):
     RESULTS.append(ok)
 
 
+class AmzTarget:
+    """Цель «сервер AWG» в сети amz — как system.Target.ns для socks.check_in."""
+
+    def ns(self, cmd, input=None, timeout=30, check=False):
+        return subprocess.run(["nsenter", "--net=/var/run/netns/amz", "--", *cmd], input=input,
+                              capture_output=True, text=True, timeout=timeout)
+
+
 def socks_check(pw):
     """socks.check панели (у сервера та же сеть, что у amz)."""
     return sh("amz", sys.executable, "-c",
@@ -386,6 +394,16 @@ def main():
         # ---------------------------------------------------- проверка прокси панелью
         check("socks.check: верный логин", socks_check(PW), "ok")
         check("socks.check: неверный пароль", socks_check("nope"), "socks.auth_failed")
+        # 1.22.0: здоровье выхода — из сети сервера AWG (socks.check_in), как ходит hev; из сети машины прокси
+        # не виден — так проверяла панель раньше и ошибалась, когда сети сервера и панели видят прокси по-разному
+        r = socks.check_in(AmzTarget(), {"host": "proxy.name", "port": 1080, "user": USER, "password": PW},
+                           "172.21.0.2")
+        check("socks.check_in: из сети сервера AWG прокси работает", "ok" if r["ok"] else r["error"].key, "ok")
+        r = socks.check_in(AmzTarget(), {"port": 1080, "user": USER, "password": "nope"}, "172.21.0.2")
+        check("socks.check_in: неверный пароль виден и оттуда", r["error"].key if not r["ok"] else "ok",
+              "socks.auth_failed")
+        r = socks.check({"host": "172.21.0.2", "port": 1080, "user": USER, "password": PW})
+        check("…а из сети самой машины этот прокси не виден", "ok" if r["ok"] else r["error"].key, "socks.")
 
         # ---------------------------------------------------- выход SOCKS5 по адресам
         rules({"rules": [], "default": "direct"}, sniff=False)

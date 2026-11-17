@@ -32,17 +32,34 @@ WARN_EVERY = 600       # с: неудачную попытку включить 
 _warned: dict[str, float] = {}
 
 
-def _set_enabled(engine, pk: str, on: bool) -> bool:
-    try:
-        engine.srv.update_client(pk, enabled=on)
-        _warned.pop(pk, None)
-        return True
-    except Exception as e:  # noqa: BLE001
-        # попытка повторится на следующем проходе (enforce): журнал не засоряем
-        if time.time() - _warned.get(pk, 0) >= WARN_EVERY:
-            _warned[pk] = time.time()
-            log.warning("limits: %s %s: %s", "enable" if on else "disable", pk[:8], e)
-        return False
+class _Batch:
+    """Включения и отключения одного прохода — одной записью сервера в конце (Server.set_enabled_many), а
+    не по клиенту. then(pk, on, fn): fn() — что сделать, когда клиент действительно переключён (отметки,
+    события). Не вышло — попытка повторится на следующем проходе, журнал не засоряем."""
+
+    def __init__(self):
+        self.wanted: dict[str, bool] = {}
+        self.after: dict[str, object] = {}
+
+    def then(self, pk: str, on: bool, fn) -> None:
+        self.wanted[pk] = on
+        self.after[pk] = fn
+
+    def run(self, engine) -> None:
+        if not self.wanted:
+            return
+        try:
+            done = engine.srv.set_enabled_many(self.wanted)
+            err = None
+        except Exception as e:  # noqa: BLE001
+            done, err = set(), e
+        for pk, on in self.wanted.items():
+            if pk in done:
+                _warned.pop(pk, None)
+                self.after[pk]()
+            elif time.time() - _warned.get(pk, 0) >= WARN_EVERY:
+                _warned[pk] = time.time()
+                log.warning("limits: %s %s: %s", "enable" if on else "disable", pk[:8], err or "no such client")
 
 
 def _current(engine, pk: str) -> dict:
@@ -60,6 +77,14 @@ def enforce(engine, now: float | None = None) -> None:
     now = time.time() if now is None else now
     mk = month_key(now)
     patches: dict[str, dict] = {}
+    batch = _Batch()
+
+    def mark(pk, ev=None, **fields):
+        def fn():
+            patches.setdefault(pk, {}).update(fields)
+            if ev:
+                engine.event(*ev)
+        return fn
     for c in list(engine.clients):
         pk = c["public_key"]
         L = lim.get(pk)
@@ -80,10 +105,9 @@ def enforce(engine, now: float | None = None) -> None:
                 p["exp_done"] = exp
             elif _current(engine, pk).get("expires") != exp:
                 pass                            # срок только что изменили — решит следующий проход
-            elif _set_enabled(engine, pk, False):
-                p["exp_done"] = exp
-                p["auto_off"] = "exp"
-                engine.event("warn", Msg("ev.client_expired", name=_name(c), pk=pk))
+            else:
+                batch.then(pk, False, mark(pk, ("warn", Msg("ev.client_expired", name=_name(c), pk=pk)),
+                                           exp_done=exp, auto_off="exp"))
         if exp and not expired and c["enabled"] and exp - now <= WARN_DAYS * 86400 \
                 and L.get("exp_warned") != exp:
             p["exp_warned"] = exp
@@ -102,23 +126,22 @@ def enforce(engine, now: float | None = None) -> None:
                 p["quota_done"] = key
             elif cur.get("quota") != q or (cur.get("period") or "month") != period:
                 pass                            # лимит только что изменили — решит следующий проход
-            elif _set_enabled(engine, pk, False):
-                p["quota_done"] = key
-                p["auto_off"] = "quota:" + key
-                engine.event("warn", Msg("ev.client_quota", name=_name(c), pk=pk, gb=round(q / GB, 2)))
+            else:
+                batch.then(pk, False, mark(pk, ("warn", Msg("ev.client_quota", name=_name(c), pk=pk,
+                                                            gb=round(q / GB, 2))),
+                                           quota_done=key, auto_off="quota:" + key))
         if ao and ao.startswith("quota:") and ao != "quota:" + key and period == "month" \
                 and not expired and not c["enabled"]:
-            if _set_enabled(engine, pk, True):
-                p["auto_off"] = None
-                engine.event("info", Msg("ev.client_quota_reset", name=_name(c), pk=pk))
+            batch.then(pk, True, mark(pk, ("info", Msg("ev.client_quota_reset", name=_name(c), pk=pk)),
+                                      auto_off=None))
         # Срок продлили или лимит подняли в тот момент, когда проход отключал клиента: сохранение лимитов
         # включает такого клиента само, но отметки «отключён по сроку» тогда ещё не было. Включаем здесь.
         elif not c["enabled"] and not expired and (
                 ao == "exp" or (ao == "quota:" + key and (not q or engine.traffic.used(pk, period) < q))):
-            if _set_enabled(engine, pk, True):
-                p["auto_off"] = None
+            batch.then(pk, True, mark(pk, auto_off=None))
         if p:
-            patches[pk] = p
+            patches.setdefault(pk, {}).update(p)
+    batch.run(engine)
     if patches:
         def fn(s):
             for pk, p in patches.items():

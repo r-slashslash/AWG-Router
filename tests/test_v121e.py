@@ -516,6 +516,9 @@ class LimitsRecheckTest(unittest.TestCase):
         e.traffic = mock.Mock(used=lambda pk, period: used)
         e.clients = [{"public_key": "K", "name": "n", "enabled": True}]
         e.srv = mock.Mock()
+        # 1.22.0: проход переключает всех разом — здесь через update_client, чтобы проверки ниже видели вызовы
+        e.srv.set_enabled_many.side_effect = lambda w: [e.srv.update_client(pk, enabled=on)
+                                                        for pk, on in w.items()] and set(w)
         e.event = lambda lvl, m: e.events.append(m.key)
         return e
 

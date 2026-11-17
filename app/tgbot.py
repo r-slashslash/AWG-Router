@@ -601,6 +601,7 @@ class Bot:
         self._ask: dict | None = None          # ждём ответа: {"kind": add|route, "msg": id, "t": …}
         self._denied: dict[str, float] = {}       # чужой чат → когда ответили «нет доступа»
         self._webhook_dropped = False
+        self.last_chat: dict | None = None        # последний чат, написавший боту ({id, title, bot, t})
         self._client_t: dict[str, float] = {}     # чат клиента → время последнего ответа (CLIENT_EVERY)
         self._cfg_t: dict[str, float] = {}        # чат клиента → когда отправили конфиг (CFG_EVERY)
         self._st = self._load()
@@ -853,6 +854,8 @@ class Bot:
             # отметку сохраняем до выполнения: после перезапуска команда не повторится
             self._st["offset"] = int(u.get("update_id", 0)) + 1
             self._save()
+            if ch := notify.chat_of(u):     # для «Найти» Chat ID: бот сам забирает сообщения раньше кнопки
+                self.last_chat = {**ch, "bot": c["token"].split(":", 1)[0], "t": time.time()}
             if not live:
                 continue
             try:
@@ -1088,7 +1091,16 @@ class Bot:
             else:
                 self._guard(c, self.do_route, text)
             return
+        if m["chat"].get("type") != "private" and not self._to_me(m, text):
+            return          # в группе бот видит и разговор людей: меню — только на обращение к нему
         self.on_command(c, "menu", "")
+
+    def _to_me(self, m: dict, text: str) -> bool:
+        """Сообщение в группе обращено к боту: упоминание @имени или ответ на его сообщение."""
+        name = (self._st.get("me") or {}).get("username")
+        if name and ("@" + str(name).lower()) in text.lower():
+            return True
+        return bool(((m.get("reply_to_message") or {}).get("from") or {}).get("is_bot"))
 
     @staticmethod
     def _migration(m: dict, c: dict) -> bool:

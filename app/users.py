@@ -360,6 +360,31 @@ class ServerManager:
                 self.e.event("info", Msg("ev.user_enabled" if p.enabled else "ev.user_disabled",
                                          name=self._name(rows, pk)))
 
+    def set_enabled_many(self, wanted: dict[str, bool]) -> set[str]:
+        """Включить или выключить многих клиентов одной записью файлов сервера и одним awg syncconf (сроки и
+        лимиты, enforce): по одному тысяча клиентов с общим сроком отключалась около 25 с, и всё это время
+        добавить клиента было нельзя. → ключи, которые теперь в нужном состоянии (уже были — тоже)."""
+        if not wanted:
+            return set()
+        with self.e.lock:
+            t = self._target()
+            sc, rows = self.load(t)
+            done, switched = set(), []
+            for pk, on in wanted.items():
+                p = sc.peer(pk)
+                if not p:
+                    continue
+                if p.enabled != bool(on):
+                    p.enabled = bool(on)
+                    switched.append(p)
+                done.add(pk)
+            if switched:
+                self._write(t, sc, rows)
+            for p in switched:     # после записи: о несостоявшемся отключении журнал и Telegram не сообщают
+                self.e.event("info", Msg("ev.user_enabled" if p.enabled else "ev.user_disabled",
+                                         name=self._name(rows, p.public_key)))
+            return done
+
     def delete_client(self, pk: str) -> None:
         with self.e.lock:
             t = self._target()
