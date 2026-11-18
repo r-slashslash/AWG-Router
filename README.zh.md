@@ -19,7 +19,7 @@
 
 **AmneziaWG** 的 Web 管理面板：用户、隧道设置、级联路由以及为每个客户端单独设置的路由，集中在一个地方管理。
 
-它可以管理 AmneziaVPN 应用安装的服务器（Docker 容器 `amnezia-awg2`），也可以安装自己的 AmneziaWG 服务器——在 Docker 容器中或直接在主机上。协议最高支持 **AmneziaWG 3.1**。
+它可以安装自己的 AmneziaWG 服务器——在 Docker 容器中或直接在主机上——也可以接管已在运行的服务器（包括 AmneziaVPN 应用安装的 `amnezia-awg2` 容器）及其全部用户。协议最高支持 **AmneziaWG 3.1**。
 
 **快速开始**——在 Ubuntu 或 Debian 服务器上以 root 身份运行（没有 Docker 时安装程序会自动安装）：
 

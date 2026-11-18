@@ -107,6 +107,9 @@ it grows, so every user-visible change gets a new version.
   right edge: the Routing tab scrolled sideways.
 - The day/night button draws its sun and moon (`THEME_SUN`, `THEME_MOON`) instead of `☀` / `☾`: Android fonts set
   those below the middle of the line. The server name hint is shorter.
+- Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the
+  container mode is "Docker container"; the empty client and exit list hints say what to do in the panel. The README
+  intro starts with the panel's own server. Unused `cl.empty_hint` removed.
 - **For GitHub's code scanning:** the exit check sets TLS 1.2 as the minimum explicitly (it was the default already),
   and the state fingerprint for polling is SHA-256 instead of SHA-1.
 
