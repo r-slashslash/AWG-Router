@@ -16,7 +16,10 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
       const kinds = LIST_KINDS.filter((k) => !r.lists.length || (k === "domains") === dom);
       return `
       <div class="rule ${r.enabled ? "" : "off"}" data-i="${i}">
-        <div class="rule-n">${esc(fmtNum(i + 1))}</div>
+        ${rules.length > 1
+    // место правила: выбрать номер — правило встаёт туда (на телефоне удобнее, чем жать ↑ ↓ много раз)
+    ? `<select class="rule-n rule-pos" data-pos aria-label="${esc(t("re.position"))}" title="${esc(t("re.position"))}">${rules.map((_, j) => `<option value="${j}" ${j === i ? "selected" : ""}>${esc(fmtNum(j + 1))}</option>`).join("")}</select>`
+    : `<div class="rule-n">${esc(fmtNum(i + 1))}</div>`}
         <div>
           <div class="rule-lists">
             ${r.lists.map((l) => `<span class="chip"><span>${listLabel(l)}</span><button type="button" data-rm-list="${esc(l)}" aria-label="${esc(t("re.remove_list"))}">×</button></span>`).join("")}
@@ -58,6 +61,8 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
       };
       $("[data-out]", el).onchange = (e) => { r.outbound = e.target.value; onChange(); };
       $("[data-en]", el).onchange = (e) => { r.enabled = e.target.checked; ch(); };
+      const pos = $("[data-pos]", el);
+      if (pos) pos.onchange = () => { const [r0] = rules.splice(i, 1); rules.splice(+pos.value, 0, r0); ch(); };
       $("[data-up]", el).onclick = () => { [rules[i - 1], rules[i]] = [rules[i], rules[i - 1]]; ch(); };
       $("[data-down]", el).onclick = () => { [rules[i + 1], rules[i]] = [rules[i], rules[i + 1]]; ch(); };
       $("[data-del]", el).onclick = () => { rules.splice(i, 1); ch(); };
@@ -259,13 +264,13 @@ function editList(id, kind, onSaved = null) {
       <datalist id="cc-list">${opts.map(([cc, n]) => `<option value="${cc}">${esc(n)}</option>`).join("")}</datalist>
       <span class="hint">${esc(t("ls.cc_hint"))}</span></label>`;
   } else if (kind === "asn") {
-    body = nameField("Yandex") + `<label class="field"><span>${esc(t("ls.asn"))}</span><textarea id="l-src" dir="ltr" style="min-height:80px" placeholder="AS13238 AS47541">${esc(l ? l.source : "")}</textarea>
+    body = nameField(t("ls.asn_name_ph")) + `<label class="field"><span>${esc(t("ls.asn"))}</span><textarea id="l-src" dir="ltr" style="min-height:80px" placeholder="${esc(t("ls.asn_ph"))}">${esc(l ? l.source : "")}</textarea>
       <span class="hint">${esc(t("ls.asn_hint"))}</span></label>`;
   } else if (kind === "url") {
     body = nameField() + `<label class="field"><span>${esc(t("ls.urls"))}</span><textarea id="l-src" dir="ltr" style="min-height:90px" placeholder="https://example.com/list.txt">${esc(l ? l.source : "")}</textarea>
       <span class="hint">${esc(t("ls.urls_hint"))}</span></label>`;
   } else if (kind === "domains") {
-    body = nameField("YouTube") + `<label class="field"><span>${esc(t("ls.domains"))}</span><textarea id="l-src" dir="ltr" spellcheck="false" placeholder="${esc(t("ls.domains_ph"))}">${esc(l ? l.source || "" : "")}</textarea>
+    body = nameField(t("ls.domains_name_ph")) + `<label class="field"><span>${esc(t("ls.domains"))}</span><textarea id="l-src" dir="ltr" spellcheck="false" placeholder="${esc(t("ls.domains_ph"))}">${esc(l ? l.source || "" : "")}</textarea>
       <span class="hint">${esc(t("ls.domains_hint"))}</span></label>
       <p class="small muted" style="margin:0">${esc(t("ls.domains_how"))}</p>
       ${S.sni && S.sni.quic && S.sni.quic !== "on" ? `<p class="small warn-text" style="margin:6px 0 0">${esc(t("ls.quic_off"))}</p>` : ""}`;

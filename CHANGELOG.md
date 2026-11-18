@@ -132,6 +132,8 @@ it grows, so every user-visible change gets a new version.
 - Domain list window: the hint says a whole zone works (`.ru`, `.cn`, `.net`; a leading dot was always stripped), the
   placeholder shows it, and `ls.domains_how` keeps only what matters (ports, ECH, shared connections, no packet queue).
   The long `rt.strict_hint` under "If domain rules don't work…" is removed.
+- A rule's number in the rule editor is a picker of its place (`re.position`), besides ↑ ↓. Examples in the list windows
+  are per language (`ls.domains_name_ph`, `ls.domains_ph`, `ls.asn_name_ph`, `ls.asn_ph`, `re.dns_ph`).
 - No period right after a command in a hint (`pw.hint` ru, zh): it got copied with the command. *Test:*
   `test_no_period_after_a_command`.
 - Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the
