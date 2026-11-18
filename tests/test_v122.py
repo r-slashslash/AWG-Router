@@ -164,14 +164,15 @@ class ClientBotTest(unittest.TestCase):
         start["message"]["from"]["language_code"] = "ru"
         self.send(start)
         out = self.to("5005")
-        self.assertIn("bot-client", out[-1]["text"])
+        self.assertIn("Ваш доступ", out[-1]["text"])
+        self.assertNotIn("bot-client", out[-1]["text"])
         self.assertIn("Трафик", out[-1]["text"])                         # язык — как у Telegram клиента
         data = [b["callback_data"] for row in out[-1]["reply_markup"]["inline_keyboard"] for b in row]
         self.assertEqual(data, ["me:r", "me:c"])
         self.assertEqual(self.bot._st["links"]["5005"]["pk"], self.pk)
         # обычная фраза — снова карточка; команда панели — тоже только карточка
         self.send(msg("/clients", chat="5005", uid=2))
-        self.assertIn("bot-client", self.to("5005")[-1]["text"])
+        self.assertIn("Your access", self.to("5005")[-1]["text"])
         self.assertFalse(any("👥" in p.get("text", "") for p in self.to("5005")))
 
     def test_bad_and_renewed_invitation(self):
@@ -216,7 +217,8 @@ class ClientBotTest(unittest.TestCase):
         with mock.patch.object(notify, "_post", post), mock.patch.object(self.bot.wake, "wait"):
             self.bot._loop()
         self.assertIn("getUpdates", self.tg.methods())
-        self.assertIn("bot-client", self.to("5011")[-1]["text"])
+        self.assertIn("Your access", self.to("5011")[-1]["text"])
+        self.assertNotIn("bot-client", self.to("5011")[-1]["text"])     # имя клиента в его чате не нужно
         self.assertNotIn("setMyCommands", self.tg.methods())             # без управления — меню панели нет
         self.assertEqual(self.bot.username(), "awgr_test_bot")
 
@@ -786,8 +788,7 @@ class ContainerPortTest(unittest.TestCase):
             return {}
         with mock.patch.object(system, "docker_api", api), mock.patch.object(system, "docker_get",
                                                                              lambda p: info), \
-                mock.patch.object(system, "_wait_iface", lambda n, i: up), mock.patch.object(system.time, "strftime",
-                                                                                         lambda f: "T"):
+                mock.patch.object(system, "_wait_iface", lambda n, i: up), mock.patch.object(system, "_stamp", lambda: "T"):
             try:
                 system.recreate_with_port("amnezia-awg2", "/opt/amnezia/awg", "awg0", 2098, 40000, "OLD CONF")
                 return None, calls

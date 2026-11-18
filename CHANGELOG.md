@@ -110,6 +110,10 @@ it grows, so every user-visible change gets a new version.
 - The bot's menu picture (`static/icons/tg-logo.png`) is on a white background, 1200×780 (was 1200×520 on black).
   The saved Telegram `file_id` is tied to the picture's fingerprint (`tgbot.logo_sum`, `logo_sum` in `tgbot.json`),
   so after an update the bot uploads the new one once instead of showing the old one forever.
+- A client's card in the bot starts with `cd_title` ("Your access"), not the name the owner gave the client; the QR
+  and the file go with `cfg_caption_me` / `cfg_file_me` without the name. Card lines have icons (traffic, end date,
+  limit, app-made client, hint), also in the panel chat's client card. Saving the Telegram settings says "Bot settings
+  saved".
 - Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the
   container mode is "Docker container"; the empty client and exit list hints say what to do in the panel. The README
   intro starts with the panel's own server. Unused `cl.empty_hint` removed.

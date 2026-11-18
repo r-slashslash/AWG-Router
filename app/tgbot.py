@@ -85,10 +85,10 @@ TEXTS = {
         "cd_online": "🟢 В сети", "cd_seen": "⚪ Был в сети {ago} назад", "cd_never": "⚪ Ещё не подключался",
         "cd_off": "⏸ Выключен", "cd_off_exp": "⏸ Выключен: истёк срок",
         "cd_off_quota": "⏸ Выключен: исчерпан лимит трафика",
-        "cd_ip": "Адрес в туннеле: {ip}", "cd_traffic": "Трафик: {month} за месяц, {total} всего",
-        "cd_until": "Действует до {date}", "cd_quota_month": "Лимит: {used} из {quota} за месяц",
-        "cd_quota_total": "Лимит: {used} из {quota} всего", "cd_exit": "Выход: {out}",
-        "cd_app": "Создан в приложении AmneziaVPN: конфиг есть только на устройстве.",
+        "cd_ip": "Адрес в туннеле: {ip}", "cd_traffic": "📊 Трафик: {month} за месяц, {total} всего",
+        "cd_until": "📅 Действует до {date}", "cd_quota_month": "📦 Лимит: {used} из {quota} за месяц",
+        "cd_quota_total": "📦 Лимит: {used} из {quota} всего", "cd_exit": "Выход: {out}",
+        "cd_app": "📱 Создан в приложении AmneziaVPN: конфиг есть только на устройстве.",
         "ago_m": "{n} мин", "ago_h": "{n} ч", "ago_d": "{n} дн.",
         "u_mb": "МБ", "u_gb": "ГБ", "u_tb": "ТБ",
         "ok_on": "▶️ «{name}» включён", "ok_off": "⏸ «{name}» выключен",
@@ -152,8 +152,9 @@ TEXTS = {
         "b_probe_one": "🔍 Проверить выход", "b_make_default": "⭐ Сделать основным",
         "me_need_link": "🤖 Это бот VPN-сервера. Чтобы смотреть здесь свой доступ (состояние, трафик, срок и конфиг), откройте приглашение, которое вам прислали.\n\nНомер этого чата: <code>{chat}</code> — он нужен только владельцу сервера.",
         "me_bad_link": "Приглашение не подошло: оно устарело или скопировано не целиком. Попросите новое у того, кто выдал вам доступ.",
-        "me_gone": "Это приглашение больше не действует: доступ удалили или выдали новое приглашение. Попросите новое у того, кто выдал вам доступ.",
-        "me_hint": "«Обновить» — свежие данные; «QR и файл» — конфиг для приложения.",
+        "me_gone": "🚫 Это приглашение больше не действует: доступ удалили или выдали новое приглашение. Попросите новое у того, кто выдал вам доступ.",
+        "cd_title": "🔐 <b>Ваш доступ</b>", "cfg_caption_me": "📲 Отсканируйте QR в AmneziaWG или AmneziaVPN или импортируйте файл.", "cfg_file_me": "📄 Файл конфига для приложения",
+        "me_hint": "🔄 «Обновить» — свежие данные\n📱 «QR и файл» — конфиг для приложения",
         "me_cfg_wait": "Конфиг только что отправлен — подождите полминуты",
         "share_bot": "🤖 Приглашение в бота (там клиент сам смотрит свой доступ):\n{url}",
     },
@@ -192,10 +193,10 @@ TEXTS = {
         "cd_online": "🟢 Online", "cd_seen": "⚪ Last seen {ago} ago", "cd_never": "⚪ Never connected",
         "cd_off": "⏸ Turned off", "cd_off_exp": "⏸ Turned off: access period ended",
         "cd_off_quota": "⏸ Turned off: traffic limit used up",
-        "cd_ip": "Tunnel address: {ip}", "cd_traffic": "Traffic: {month} this month, {total} in all",
-        "cd_until": "Access until {date}", "cd_quota_month": "Limit: {used} of {quota} this month",
-        "cd_quota_total": "Limit: {used} of {quota} in all", "cd_exit": "Exit: {out}",
-        "cd_app": "Created in the AmneziaVPN app: the config exists only on the device.",
+        "cd_ip": "Tunnel address: {ip}", "cd_traffic": "📊 Traffic: {month} this month, {total} in all",
+        "cd_until": "📅 Access until {date}", "cd_quota_month": "📦 Limit: {used} of {quota} this month",
+        "cd_quota_total": "📦 Limit: {used} of {quota} in all", "cd_exit": "Exit: {out}",
+        "cd_app": "📱 Created in the AmneziaVPN app: the config exists only on the device.",
         "ago_m": "{n} min", "ago_h": "{n} h", "ago_d": "{n} d",
         "u_mb": "MB", "u_gb": "GB", "u_tb": "TB",
         "ok_on": "▶️ “{name}” is on", "ok_off": "⏸ “{name}” is off",
@@ -259,8 +260,9 @@ TEXTS = {
         "b_probe_one": "🔍 Check exit", "b_make_default": "⭐ Make default",
         "me_need_link": "🤖 This is a VPN server's bot. To see your access here (status, traffic, expiry and config), open the invitation you were sent.\n\nThis chat's number: <code>{chat}</code> — only the server's owner needs it.",
         "me_bad_link": "This invitation didn't work: it is outdated or wasn't copied whole. Ask the person who gave you access for a new one.",
-        "me_gone": "This invitation no longer works: the access was removed or a new invitation was issued. Ask the person who gave you access for a new one.",
-        "me_hint": "“Refresh” — fresh data; “QR and file” — the config for the app.",
+        "me_gone": "🚫 This invitation no longer works: the access was removed or a new invitation was issued. Ask the person who gave you access for a new one.",
+        "cd_title": "🔐 <b>Your access</b>", "cfg_caption_me": "📲 Scan the QR code in AmneziaWG or AmneziaVPN, or import the file.", "cfg_file_me": "📄 Config file for the app",
+        "me_hint": "🔄 “Refresh” — fresh data\n📱 “QR and file” — the config for the app",
         "me_cfg_wait": "The config was just sent — wait half a minute",
         "share_bot": "🤖 Invitation to the bot (the client checks their own access there):\n{url}",
     },
@@ -299,10 +301,10 @@ TEXTS = {
         "cd_online": "🟢 在线", "cd_seen": "⚪ {ago}前在线", "cd_never": "⚪ 从未连接",
         "cd_off": "⏸ 已停用", "cd_off_exp": "⏸ 已停用：使用期限已到",
         "cd_off_quota": "⏸ 已停用：流量限额已用完",
-        "cd_ip": "隧道地址：{ip}", "cd_traffic": "流量：本月 {month}，总计 {total}",
-        "cd_until": "有效期至 {date}", "cd_quota_month": "限额：本月已用 {used}，共 {quota}",
-        "cd_quota_total": "限额：总计已用 {used}，共 {quota}", "cd_exit": "出口：{out}",
-        "cd_app": "在 AmneziaVPN 应用中创建：配置只存在于设备上。",
+        "cd_ip": "隧道地址：{ip}", "cd_traffic": "📊 流量：本月 {month}，总计 {total}",
+        "cd_until": "📅 有效期至 {date}", "cd_quota_month": "📦 限额：本月已用 {used}，共 {quota}",
+        "cd_quota_total": "📦 限额：总计已用 {used}，共 {quota}", "cd_exit": "出口：{out}",
+        "cd_app": "📱 在 AmneziaVPN 应用中创建：配置只存在于设备上。",
         "ago_m": "{n} 分钟", "ago_h": "{n} 小时", "ago_d": "{n} 天",
         "u_mb": "MB", "u_gb": "GB", "u_tb": "TB",
         "ok_on": "▶️ “{name}”已启用", "ok_off": "⏸ “{name}”已停用",
@@ -363,8 +365,9 @@ TEXTS = {
         "b_probe_one": "🔍 检查出口", "b_make_default": "⭐ 设为默认",
         "me_need_link": "🤖 这是 VPN 服务器的机器人。要在这里查看你的访问（状态、流量、到期时间和配置），请打开发给你的邀请。\n\n本聊天的编号：<code>{chat}</code> —— 只有服务器所有者需要它。",
         "me_bad_link": "邀请无效：它已过期或没有完整复制。请向给你访问权限的人索取新的邀请。",
-        "me_gone": "此邀请已失效：访问已被删除或已发出新的邀请。请向给你访问权限的人索取新的邀请。",
-        "me_hint": "“刷新”——最新数据；“二维码和文件”——应用的配置。",
+        "me_gone": "🚫 此邀请已失效：访问已被删除或已发出新的邀请。请向给你访问权限的人索取新的邀请。",
+        "cd_title": "🔐 <b>你的访问</b>", "cfg_caption_me": "📲 在 AmneziaWG 或 AmneziaVPN 中扫描二维码，或导入文件。", "cfg_file_me": "📄 应用的配置文件",
+        "me_hint": "🔄 “刷新”——最新数据\n📱 “二维码和文件”——应用的配置",
         "me_cfg_wait": "配置刚刚发送过——请等半分钟",
         "share_bot": "🤖 机器人邀请（客户端可在其中查看自己的访问）：\n{url}",
     },
@@ -403,10 +406,10 @@ TEXTS = {
         "cd_online": "🟢 آنلاین", "cd_seen": "⚪ آخرین اتصال {ago} پیش", "cd_never": "⚪ هنوز وصل نشده",
         "cd_off": "⏸ غیرفعال", "cd_off_exp": "⏸ غیرفعال: مدت اعتبار تمام شد",
         "cd_off_quota": "⏸ غیرفعال: سقف ترافیک تمام شد",
-        "cd_ip": "نشانی در تونل: {ip}", "cd_traffic": "ترافیک: {month} در این ماه، {total} در کل",
-        "cd_until": "معتبر تا {date}", "cd_quota_month": "سقف: {used} از {quota} در این ماه",
-        "cd_quota_total": "سقف: {used} از {quota} در کل", "cd_exit": "خروجی: {out}",
-        "cd_app": "در برنامهٔ AmneziaVPN ساخته شده: پیکربندی فقط روی دستگاه است.",
+        "cd_ip": "نشانی در تونل: {ip}", "cd_traffic": "📊 ترافیک: {month} در این ماه، {total} در کل",
+        "cd_until": "📅 معتبر تا {date}", "cd_quota_month": "📦 سقف: {used} از {quota} در این ماه",
+        "cd_quota_total": "📦 سقف: {used} از {quota} در کل", "cd_exit": "خروجی: {out}",
+        "cd_app": "📱 در برنامهٔ AmneziaVPN ساخته شده: پیکربندی فقط روی دستگاه است.",
         "ago_m": "{n} دقیقه", "ago_h": "{n} ساعت", "ago_d": "{n} روز",
         "u_mb": "مگابایت", "u_gb": "گیگابایت", "u_tb": "ترابایت",
         "ok_on": "▶️ «{name}» فعال شد", "ok_off": "⏸ «{name}» غیرفعال شد",
@@ -470,8 +473,9 @@ TEXTS = {
         "b_probe_one": "🔍 بررسی خروجی", "b_make_default": "⭐ اصلی کردن",
         "me_need_link": "🤖 این ربات یک سرور VPN است. برای دیدن دسترسی خود در اینجا (وضعیت، ترافیک، مهلت و پیکربندی) دعوتی را که برایتان فرستاده‌اند باز کنید.\n\nشمارهٔ این چت: <code>{chat}</code> — فقط مالک سرور به آن نیاز دارد.",
         "me_bad_link": "این دعوت کار نکرد: قدیمی است یا کامل کپی نشده. از کسی که به شما دسترسی داده دعوت تازه بخواهید.",
-        "me_gone": "این دعوت دیگر معتبر نیست: دسترسی حذف شده یا دعوت تازه‌ای صادر شده است. از کسی که به شما دسترسی داده دعوت تازه بخواهید.",
-        "me_hint": "«به‌روزرسانی» — داده‌های تازه؛ «QR و فایل» — پیکربندی برای برنامه.",
+        "me_gone": "🚫 این دعوت دیگر معتبر نیست: دسترسی حذف شده یا دعوت تازه‌ای صادر شده است. از کسی که به شما دسترسی داده دعوت تازه بخواهید.",
+        "cd_title": "🔐 <b>دسترسی شما</b>", "cfg_caption_me": "📲 QR را در AmneziaWG یا AmneziaVPN اسکن کنید یا فایل را وارد کنید.", "cfg_file_me": "📄 فایل پیکربندی برای برنامه",
+        "me_hint": "🔄 «به‌روزرسانی» — داده‌های تازه\n📱 «QR و فایل» — پیکربندی برای برنامه",
         "me_cfg_wait": "پیکربندی همین الان فرستاده شد — نیم دقیقه صبر کنید",
         "share_bot": "🤖 دعوت به ربات (کاربر دسترسی خود را آنجا می‌بیند):\n{url}",
     },
@@ -759,7 +763,7 @@ class Bot:
         lim = d.get("limits") or {}
         tv = d.get("traffic") or {}
         now = time.time()
-        lines = [f"<b>{html.escape(d.get('name') or '—')}</b>"]
+        lines = [tr(L, "cd_title")]                   # без имени: его дал клиенту владелец панели, клиенту оно ни к чему
         hs = d.get("handshake") or 0
         if not d.get("enabled"):
             ao = lim.get("auto_off") or ""
@@ -792,11 +796,10 @@ class Bot:
         if not cfg or not cfg.get("conf"):
             self._client_send(c, cid, tr(L, "cd_app"))
             return
-        name = d.get("name") or "awg"
-        caption = tr(L, "cfg_caption", name=name)
+        caption = tr(L, "cfg_caption_me")
         try:
             notify.send_photo(c["token"], cid, qr.png(cfg["conf"]), caption, c["via"], html=True)
-            caption = html.escape(name, quote=False)
+            caption = tr(L, "cfg_file_me")
         except qr.QRTooBig:
             caption += "\n" + tr(L, "cfg_qr_big")
         notify.send_document(c["token"], cid, cfg.get("filename") or "awg.conf", cfg["conf"].encode(), caption,

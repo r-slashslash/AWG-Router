@@ -504,7 +504,7 @@ def recreate_with_port(name: str, conf_dir: str, iface: str, old_port: int, new_
         raise SysError(Msg("sys.container_missing", name=name))
     policy = (info.get("HostConfig") or {}).get("RestartPolicy") or {"Name": "always"}
     on_disk = any(m.get("Destination") == conf_dir for m in info.get("Mounts") or [])
-    old = f"{name}-old-{time.strftime('%Y%m%d-%H%M%S')}"
+    old = f"{name}-old-{_stamp()}"
     renamed, made = False, None
     try:
         docker_api("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": {"Name": "no"}})
@@ -513,7 +513,7 @@ def recreate_with_port(name: str, conf_dir: str, iface: str, old_port: int, new_
         renamed = True
         image = info.get("Image")
         if not on_disk:
-            tag = time.strftime("%Y%m%d-%H%M%S")
+            tag = _stamp()
             docker_api("POST", f"/commit?container={q(old)}&repo={PORT_IMAGE}&tag={tag}&pause=false", timeout=120)
             image = f"{PORT_IMAGE}:{tag}"
         made = (docker_api("POST", f"/containers/create?name={q(name)}",
@@ -541,6 +541,10 @@ def recreate_with_port(name: str, conf_dir: str, iface: str, old_port: int, new_
     prev = (info.get("Config") or {}).get("Image") or ""
     if not on_disk and prev.startswith(PORT_IMAGE + ":"):
         _quiet("DELETE", f"/images/{q(prev)}", timeout=40)   # образ прошлой смены порта больше не нужен
+
+
+def _stamp() -> str:
+    return time.strftime("%Y%m%d-%H%M%S")
 
 
 def _quiet(method: str, path: str, **kw) -> None:
