@@ -148,10 +148,11 @@ def _share_of(token: str) -> tuple[str | None, bool, dict | None]:
 
 @app.get("/s/{token}", public=True)
 def share_page(req, token):
-    if not _share_exists(token):       # на чужие адреса — как будто страницы нет
-        bad("err.not_found", 404)
+    """Личная страница. На чужой, устаревший (после «Обновить») или удалённый адрес — та же страница с кодом 404:
+    share.js сам пишет «ссылка не действует» на языке человека (раньше тот видел служебный JSON). По ответу не
+    отличить, была ли такая ссылка: страница одна на все неверные адреса."""
     with open(SHARE_HTML, "rb") as f:
-        return Page(f.read())
+        return Page(f.read(), status=200 if _share_exists(token) else 404)
 
 
 @app.get("/s/api/{token}", public=True)

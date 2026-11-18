@@ -243,7 +243,7 @@ class InstallerMoveTest(unittest.TestCase):
         self.container("amnezia-awg2", conf=False)
         out, log = self.run_sh(self.mode_block(), answers="2", RECONF="1")
         self.assertIn("has no AmneziaWG config", out)
-        self.assertNotIn("Found an AmneziaVPN server", out)
+        self.assertNotIn("Found an AmneziaWG server in the Docker container", out)
         self.assertIn("MODE=host MOVE= INSTALL=host", out)          # «на хосте» — уже без занятого порта
         self.assertIn("docker update --restart no amnezia-awg2", log)
         self.assertRegex(log, r"docker rename amnezia-awg2 amnezia-awg2-empty-\d{8}-\d{6}")

@@ -6,7 +6,7 @@ it grows, so every user-visible change gets a new version.
 ## 1.22.0 — 2026-11-18
 
 - **Clients in the Telegram bot.** Every client gets a personal link as soon as it is created (`users.add_client`
-  writes a `shares` token in the same mutation); clients made before 1.22.0 get a **Create** button. The same token is
+  writes a `shares` token in the same mutation); clients made before 1.22.0 get a **Create link** button. The same token is
   the client's bot invitation, `https://t.me/<bot>?start=<token>` (`clients.bot_invite`, `bot_url` in the client rows;
   the bot learns its name with `getMe`). A client who opens it sees in a private chat with the bot what the personal
   page shows — status, traffic, expiry and quota — and gets the config (QR, file, `vpn://`), nothing else of the panel;
@@ -33,7 +33,7 @@ it grows, so every user-visible change gets a new version.
 - **Two-factor sign-in.** Wrong codes after a right password are counted from all addresses together
   (`auth.CODE_MAX` per `CODE_WINDOW`), so a known password no longer lets many addresses guess the six digits in hours;
   past the limit code sign-in is closed for everyone until the window ends (`err.code_locked`). The owner gets a
-  Telegram notice for every such case (`login_code_wrong`, `login_code_locked`). Turning 2FA on needs the panel
+  Telegram notice (`login_code_wrong`, `login_code_locked`; with sign-in notifications on, once in `CODE_WINDOW` per address). Turning 2FA on needs the panel
   password, so a stolen session can't lock the owner out with its own code.
 - **Big network lists by link use a fraction of the memory.** Networks were kept as `IPv4Network` objects and merged
   with `collapse_addresses`: 300,000 lines took about 300 MB (a million — 1.7 GB), on a 1 GB server enough for the
@@ -89,7 +89,7 @@ it grows, so every user-visible change gets a new version.
   A network test checks both sides.
 - **Many clients switched at once.** Expiry and quota used to turn clients off one by one, each with its own write of
   the server's files and `awg syncconf` — about 25 s for a thousand clients with one end date, with adding a client
-  blocked meanwhile. A pass now switches them in one write (`Server.set_enabled_many`).
+  blocked meanwhile. A pass now switches them in one write (`ServerManager.set_enabled_many`).
 - **The port of a server in a container can be changed** (Server → Port (UDP)), for the panel's own container and the
   AmneziaVPN app's. Docker publishes the port when the container is created, so `system.recreate_with_port` stops the
   container, renames it `<name>-old-<time>`, creates a new one from `docker inspect` (`recreate_body`: same config and
@@ -146,6 +146,16 @@ it grows, so every user-visible change gets a new version.
 - Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the
   container mode is "Docker container"; the empty client and exit list hints say what to do in the panel. The README
   intro starts with the panel's own server. Unused `cl.empty_hint` removed.
+- An old (after **Renew**), deleted or mistyped personal link opens the personal page, which says "This link is not
+  valid…" in the visitor's language (still status 404, the same page for every wrong token), instead of the raw JSON
+  `{"detail": {"$t": "err.not_found"}}`; `web.Page` takes a status. An empty or 0 port keeps the port, and a wrong one
+  (or 53) is marked at the field before the restart warnings — they used to end with "clients need new configs" for
+  nothing. **Refresh lists every, h** refuses anything but a whole 1–720 instead of saving 1. The 2FA window keeps the
+  typed code when the password is missing or wrong (the code isn't used up), Enter in the password field turns 2FA on,
+  the key wraps between groups, and its step numbers follow the language. The country, ASN and "sites through this
+  exit" examples follow the language too (`ls.cc_ph`); the Russian ASN example named Yandex is AS13238 only (AS47541 is
+  VK). Persian texts of the client bot say «کلاینت», as the rest of the panel. The installer says "Found an AmneziaWG
+  server in the Docker container" for any container, the panel's own included.
 - **For GitHub's code scanning:** the exit check sets TLS 1.2 as the minimum explicitly (it was the default already),
   and the state fingerprint for polling is SHA-256 instead of SHA-1.
 

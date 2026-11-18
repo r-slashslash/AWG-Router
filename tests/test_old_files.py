@@ -47,6 +47,8 @@ def loaded_state(v: str) -> dict:
     d = tempfile.mkdtemp()
     try:
         shutil.copy(os.path.join(FIX, v, "state.json"), os.path.join(d, "state.json"))
+        if os.path.isdir(os.path.join(FIX, v, "texts")):         # 1.21.0 и новее: тексты уже в своих файлах
+            shutil.copytree(os.path.join(FIX, v, "texts"), os.path.join(d, "texts"))
         return json.loads(json.dumps(Store(os.path.join(d, "state.json")).snapshot(texts=True)))
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -84,7 +86,7 @@ class OldFilesTest(unittest.TestCase):
         """Файлы есть от первого выпуска до последнего опубликованного; копии — с 1.3.0, где они появились."""
         vs = versions()
         self.assertEqual(vs[0], "1.0.0")
-        self.assertIn("1.20.0", vs)
+        self.assertIn("1.21.0", vs)            # выпуск, с которого обновляются на 1.22.0
         for v in vs:
             self.assertTrue(os.path.exists(os.path.join(FIX, v, "expected.json")), v)
             if v != "1.0.0":
@@ -99,6 +101,8 @@ class OldFilesTest(unittest.TestCase):
         """Первый запуск 1.21.0 на state.json прежнего выпуска: тексты ручных списков — в своих файлах, в
         state.json их нет, а состояние с текстами (резервная копия) — прежнее."""
         for v in versions():
+            if os.path.isdir(os.path.join(FIX, v, "texts")):
+                continue                                    # 1.21.0 и новее: переносить уже нечего
             with self.subTest(v=v):
                 d = tempfile.mkdtemp()
                 try:

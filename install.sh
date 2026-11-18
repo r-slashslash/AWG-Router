@@ -765,13 +765,13 @@ ask_install() { # AmneziaWG not found: offer to install it
 [ -n "${AWGR_ACCESS:-}" ] && ACCESS="$AWGR_ACCESS"
 if { [ "$RECONF" = 1 ] && [ -z "${AWGR_MODE:-}" ]; } || [ -z "$AWG_MODE" ]; then
   if [ -n "$AMN" ] && [ -f "$HOSTCONF" ]; then
-    choose "Found an AmneziaVPN server ($AMN). What should the panel manage?" \
-           "This Amnezia container (recommended)" \
+    choose "Found an AmneziaWG server in the Docker container $AMN. What should the panel manage?" \
+           "This container (recommended)" \
            "The AmneziaWG server on the host ($HOSTCONF)"
     [ "$CHOICE" = 1 ] && AWG_MODE=container || AWG_MODE=host
   elif [ -n "$AMN" ]; then
-    choose "Found an AmneziaVPN server ($AMN). What should the panel manage?" \
-           "This Amnezia container (recommended)" \
+    choose "Found an AmneziaWG server in the Docker container $AMN. What should the panel manage?" \
+           "This container (recommended)" \
            "Move this server to the host: same keys, port and clients, client configs keep working; the container is stopped and kept" \
            "A new AmneziaWG server on the host: new keys, clients need new configs"
     case "$CHOICE" in

@@ -5,7 +5,8 @@
 Код выпуска — например, `git archive v1.20.0 | tar -x -C /tmp/v1.20.0`. Скрипт запускает его демо-панель
 (DRY_RUN) в пустой папке данных, через API заводит всё, что этот выпуск умеет (клиенты, списки всех видов,
 выходы AWG и SOCKS5, правила, сроки и лимиты, ссылки, маскировку, Telegram, настройки сервера), и сохраняет
-state.json, резервную копию (backup.json) и, если выпуск умеет, копию с паролем (backup.enc, пароль
+state.json (с 1.21.0 — и папку texts с текстами ручных списков), резервную копию (backup.json) и, если выпуск
+умеет, копию с паролем (backup.enc, пароль
 PASSWORD). Чего выпуск не умеет, он отклоняет — это записывается в log.txt и не мешает остальному.
 Адреса, ключи и пароли — выдуманные (документационные сети RFC 5737)."""
 from __future__ import annotations
@@ -205,6 +206,10 @@ def main() -> None:
         p.stop()
     os.makedirs(out, exist_ok=True)
     shutil.copy(os.path.join(data, "state.json"), os.path.join(out, "state.json"))
+    # с 1.21.0 тексты ручных списков — не в state.json, а в data/texts: без них состояние неполное
+    if os.path.isdir(os.path.join(data, "texts")):
+        shutil.rmtree(os.path.join(out, "texts"), ignore_errors=True)
+        shutil.copytree(os.path.join(data, "texts"), os.path.join(out, "texts"))
     if backup:
         with open(os.path.join(out, "backup.json"), "w") as f:
             json.dump(backup, f, ensure_ascii=False, indent=1)

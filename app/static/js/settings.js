@@ -278,6 +278,7 @@ function modalAction(btnId, inputId, fn) {
     catch (e) {
       if (!(e instanceof AuthError)) toast(e.message, true);
       $("#" + btnId).disabled = false;
+      if (e.keepCode) return;          // ошибка не в коде (пароль): код ещё годен, фокус уже где нужно
       $("#" + inputId).value = ""; $("#" + inputId).focus();
     }
   };
@@ -294,22 +295,26 @@ async function totpEnable() {
     <div class="connect">
       <div class="qr-box">${qrImage(r.uri)}</div>
       <div>
-        <p style="margin-top:0"><b>1.</b> ${esc(t("sec.step1"))}</p>
+        <p style="margin-top:0"><b>${esc(fmtNum(1))}.</b> ${esc(t("sec.step1"))}</p>
         <p class="muted small" style="margin-bottom:4px">${esc(t("sec.manual"))}</p>
-        <p class="mono" dir="ltr" style="margin:0 0 6px;word-break:break-all">${esc(key)}</p>
+        <p class="mono" dir="ltr" style="margin:0 0 6px;overflow-wrap:anywhere">${esc(key)}</p>
         <button type="button" class="btn sm" id="totp-copy">${esc(t("sec.copy_key"))}</button>
-        <p style="margin-bottom:6px"><b>2.</b> ${esc(t("sec.step2"))}</p>
+        <p style="margin-bottom:6px"><b>${esc(fmtNum(2))}.</b> ${esc(t("sec.step2"))}</p>
         ${codeField("totp-code", t("sec.code"))}
         <label class="field"><span>${esc(t("pw.current"))}</span><input type="password" id="totp-pw" autocomplete="current-password" maxlength="128"></label>
       </div>
     </div>`,
   `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="totp-ok">${esc(t("sec.enable"))}</button>`);
   $("#totp-copy").onclick = () => copyText(r.secret);
+  $("#totp-pw").onkeydown = (e) => { if (e.key === "Enter") $("#totp-ok").click(); };
+  // ошибка пароля: введённый код не стирается (сервер его ещё не принял), курсор — в поле пароля
+  const pwError = (e) => { e.keepCode = true; $("#totp-pw").value = ""; setTimeout(() => $("#totp-pw").focus()); return e; };
   modalAction("totp-ok", "totp-code", async (code) => {
     // включение 2FA — с паролем панели: чужая открытая сессия не должна закрыть владельцу вход своим кодом
     const password = $("#totp-pw").value;
-    if (!password) { setTimeout(() => $("#totp-pw").focus()); throw new Error(t("sec.need_password")); }
-    await api("POST", "totp/enable", { code, password });
+    if (!password) throw pwError(new Error(t("sec.need_password")));
+    try { await api("POST", "totp/enable", { code, password }); }
+    catch (e) { throw e.key === "err.wrong_password" ? pwError(e) : e; }
     closeModal();
     toast(t("sec.enabled_toast"));
     refresh();

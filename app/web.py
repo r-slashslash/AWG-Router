@@ -128,9 +128,10 @@ class HTTPError(Exception):
 class Page:
     """Ответ-страница (HTML) вместо JSON."""
 
-    def __init__(self, body: bytes, ctype: str = "text/html; charset=utf-8"):
+    def __init__(self, body: bytes, ctype: str = "text/html; charset=utf-8", status: int = 200):
         self.body = body
         self.ctype = ctype
+        self.status = status
 
 
 def parse_cookies(header: str) -> dict[str, str]:
@@ -352,7 +353,7 @@ class App:
                         if trust and req.authed and not was:     # вход в панель прошёл
                             trust(self.client_address[0])
                         if isinstance(res, Page):
-                            return self._send(200, res.body, res.ctype, [("Cache-Control", "no-store")])
+                            return self._send(res.status, res.body, res.ctype, [("Cache-Control", "no-store")])
                         return self._json(200, res if res is not None else {"ok": True},
                                           [("Set-Cookie", c) for c in req.set_cookies])
                     if allowed:

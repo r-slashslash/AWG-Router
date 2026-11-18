@@ -464,7 +464,12 @@ bind.server = () => {
     const changed = {};
     for (const k of Object.keys(SRV.params)) if ((srvDraft[k] || "") !== (SRV.params[k] || "")) changed[k] = srvDraft[k] || "";
     const serverSide = Object.keys(changed).some((k) => SRV.param_meta[k].side === "server");
-    const port = +$("#s-port").value, addr = $("#s-addr").value.trim();
+    // пустое поле или 0 — порт не меняется; неверный порт — ошибка у поля сразу, а не после двух предупреждений
+    const portText = $("#s-port").value.trim(), addr = $("#s-addr").value.trim();
+    const port = portText === "" || +portText === 0 ? SRV.port : +portText;
+    const portErr = !Number.isInteger(port) || port < 1 || port > 65535 ? t("srv.bad_port")
+      : port !== SRV.port && port === 53 ? t("srv.port_dns", { port }) : null;      // 53 — DNS на сервере
+    if (portErr) { toast(portErr, true); markField({ field: "port" }, $("#main")); return; }
     const restart = serverSide || port !== SRV.port || (!SRV.subnet_locked && addr !== SRV.address);
     if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
     // клиенты из приложения AmneziaVPN: их ключ только на устройстве, новый конфиг с новым портом панель не выдаст

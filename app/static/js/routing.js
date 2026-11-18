@@ -216,7 +216,7 @@ function listsSection() {
     <div class="section-head">
       <div><h2>${esc(t("ls.title"))}</h2><p class="muted small">${esc(t("ls.subtitle"))}</p>
         <div class="ls-hours"><label for="ls-hours">${esc(t("sy.hours"))}</label>
-          <input type="number" id="ls-hours" min="1" max="720" value="${S.settings.list_update_hours}">
+          <input type="number" id="ls-hours" min="1" max="720" step="1" data-field="list_update_hours" value="${S.settings.list_update_hours}">
           <button type="button" class="btn sm primary" id="ls-hours-save" hidden>${esc(t("btn.save"))}</button></div></div>
       <div class="add-row">${LIST_KINDS.map((k) => `<button class="btn" data-add-kind="${k}">${esc(t("ls.add_" + k))}</button>`).join("")}</div>
     </div>
@@ -230,6 +230,9 @@ function bindLists() {
     hrs.oninput = () => { hrsSave.hidden = String(hrs.value) === String(S.settings.list_update_hours); };
     hrs.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); hrsSave.click(); } };
     hrsSave.onclick = async () => {
+      // пусто, 0, дробь или больше 720 сервер молча превратил бы в 1 или 720 — лучше сказать сразу
+      const v = hrs.value.trim();
+      if (!/^\d+$/.test(v) || +v < 1 || +v > 720) { toast(t("err.hours"), true); markField({ field: "list_update_hours" }, $("#main")); return; }
       hrsSave.disabled = true;
       try { await api("PUT", "settings", { list_update_hours: +hrs.value }); toast(t("toast.settings_saved")); refresh(); }
       catch (e) { toast(e.message, true); hrsSave.disabled = false; }
@@ -260,7 +263,7 @@ function editList(id, kind, onSaved = null) {
     const have = new Set(S.lists.map((x) => x.id));
     const opts = S.country_codes.filter((cc) => !have.has(cc)).map((cc) => [cc, countryName(cc)])
       .sort((a, b) => a[1].localeCompare(b[1], LANG));
-    body = `<label class="field"><span>${esc(t("ls.cc"))}</span><input type="text" id="l-src" dir="ltr" list="cc-list" maxlength="2" placeholder="ru" style="text-transform:lowercase">
+    body = `<label class="field"><span>${esc(t("ls.cc"))}</span><input type="text" id="l-src" dir="ltr" list="cc-list" maxlength="2" placeholder="${esc(t("ls.cc_ph"))}" style="text-transform:lowercase">
       <datalist id="cc-list">${opts.map(([cc, n]) => `<option value="${cc}">${esc(n)}</option>`).join("")}</datalist>
       <span class="hint">${esc(t("ls.cc_hint"))}</span></label>`;
   } else if (kind === "asn") {

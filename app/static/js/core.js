@@ -111,6 +111,7 @@ async function api(method, path, body, timeoutMs = 0, headers = null) {
   if (!r.ok) {
     const err = new Error(data && data.detail ? tm(data.detail) : `HTTP ${r.status}`);
     err.field = data && typeof data.field === "string" ? data.field : null;
+    err.key = data && data.detail && typeof data.detail.$t === "string" ? data.detail.$t : null;   // какая ошибка
     throw err;
   }
   return data;

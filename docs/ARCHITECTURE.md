@@ -37,12 +37,15 @@ namespace, and enters the network of the AWG container with `nsenter`.
 
 `app/system.py` describes where the AmneziaWG server lives, as a `Target`:
 
-- `ContainerTarget` — the AmneziaVPN container (`amnezia-awg2`), layout `/opt/amnezia/awg/`;
+- `ContainerTarget` — the AmneziaWG server in a Docker container (`amnezia-awg2`: the panel's own or the AmneziaVPN
+  app's), layout `/opt/amnezia/awg/`;
 - `HostTarget` — AmneziaWG installed on the host (`awg-quick@awg0`);
 - `DemoTarget` — a fake server for `DRY_RUN=1` and for UI work.
 
 Peers are changed with `awg syncconf`. Port, S1–S4, H1–H4 and HeaderProtectionKey need an
-interface restart. A disabled client is kept in the config as a commented block marked
+interface restart; a new port of a server in a container re-creates the container (Docker publishes the port
+when it is created): `Target.change_port` → `system.recreate_with_port`, with the old container brought back
+if the new one doesn't come up. A disabled client is kept in the config as a commented block marked
 `#awgr:disabled`, so its address stays taken.
 
 The server's interface comes from `awg-quick`, which takes the AmneziaWG kernel module when it is loaded

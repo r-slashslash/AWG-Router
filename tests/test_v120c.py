@@ -98,11 +98,12 @@ class ShareNoCopyTest(unittest.TestCase):
 
     def test_unknown_token_without_snapshot(self):
         with mock.patch.object(panel.store, "snapshot", side_effect=AssertionError("копия состояния")):
-            for fn in (clients.share_page, clients.share_data):
-                with self.assertRaises(web.HTTPError) as cm:
-                    fn(None, "x" * 24)
-                self.assertEqual(cm.exception.code, 404)
-            self.assertIsNotNone(clients.share_page(None, "T" * 24))
+            with self.assertRaises(web.HTTPError) as cm:
+                clients.share_data(None, "x" * 24)
+            self.assertEqual(cm.exception.code, 404)
+            # страница — та же, с кодом 404: share.js пишет «ссылка не действует» (проверка 1.22.0, Н10)
+            self.assertEqual(clients.share_page(None, "x" * 24).status, 404)
+            self.assertEqual(clients.share_page(None, "T" * 24).status, 200)
 
     def test_known_token_still_answers(self):
         d = clients.share_data(None, "T" * 24)
