@@ -142,8 +142,11 @@ def mark_for(num: int) -> int:
 
 
 def _policy_key(policy: dict) -> tuple:
-    return (tuple((tuple(l), o) for l, o in policy["rules"]), _okey(policy["default"]),
-            tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()))
+    key = (tuple((tuple(l), o) for l, o in policy["rules"]), _okey(policy["default"]),
+           tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()))
+    if policy.get("dns"):          # без своего DNS ключ прежний: номера политик sniproxy.py не сдвигаются
+        key += (tuple((tuple(l), str(o), tuple(d)) for l, o, d in policy["dns"]),)
+    return key
 
 
 def _set_block(name: str, cidrs: list[str], comment: str = "") -> str:
@@ -204,7 +207,10 @@ def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[i
             default = int(default)
         while rules and rules[-1][1] == default:  # хвостовые правила ничего не меняют
             rules.pop()
-        return {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
+        out = {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
+        if policy.get("dns"):                        # свой DNS правил по сайтам (только dnsproxy.py)
+            out["dns"] = list(policy["dns"])
+        return out
 
     gp = norm(global_policy)
     chains: dict[tuple, str] = {_policy_key(gp): "p_global"}

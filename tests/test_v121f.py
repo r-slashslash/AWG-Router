@@ -651,7 +651,7 @@ class DnsCacheTest(unittest.TestCase):
         p = self.proxy()
         sent = []
 
-        async def forward(query, q, mark, tcp):
+        async def forward(query, q, mark, tcp, servers=()):
             sent.append(q["name"])
             return self.answer(query, 4000)
         p.forward = forward

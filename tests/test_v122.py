@@ -897,6 +897,99 @@ class ClientLabelTest(unittest.TestCase):
         self.assertIn('t("share.title")', js)
 
 
+class RuleDnsTest(unittest.TestCase):
+    """Свой DNS правила по сайтам (1.22.0): проверка, путь до dnsproxy.py и сам запрос к своему серверу."""
+
+    def test_check(self):
+        from app import checks
+        self.assertEqual(checks.rule_dns("77.88.8.8, 77.88.8.1"), ["77.88.8.8", "77.88.8.1"])
+        self.assertEqual(checks.rule_dns(["223.5.5.5", "223.5.5.5"]), ["223.5.5.5"])
+        self.assertEqual(checks.rule_dns(""), [])
+        for bad_v, key in (("2a02:6b8::feed:0ff", "err.rule_dns_v4"), ("1.1.1.1 8.8.8.8 9.9.9.9", "err.rule_dns_many"),
+                           ("yandex", "srv.bad_dns"), ("0.0.0.0", "err.rule_dns_v4")):
+            with self.assertRaises(Exception) as cm:
+                checks.rule_dns(bad_v)
+            self.assertIn(key, str(getattr(cm.exception, "msg", cm.exception)) + repr(cm.exception.__dict__), bad_v)
+
+    def test_rules_keep_dns_only_for_sites(self):
+        from app import checks
+        st = {**panel.store.snapshot(), "lists": [{"id": "l_dom", "kind": "domains", "name": "ru"},
+                                                  {"id": "l_net", "kind": "manual", "name": "nets"}]}
+        dom, net = "l_dom", "l_net"
+        out = checks.rules(st, [{"lists": [dom], "outbound": "direct", "dns": "77.88.8.8"},
+                                {"lists": [net], "outbound": "direct", "dns": "77.88.8.8"},
+                                {"lists": [dom], "outbound": "direct"}])
+        self.assertEqual(out[0]["dns"], ["77.88.8.8"])
+        self.assertNotIn("dns", out[1])                 # у правила по адресам свой DNS не имеет смысла
+        self.assertNotIn("dns", out[2])                 # не задан — поля нет, состояние как до 1.22.0
+
+    def test_policy_key_unchanged_without_dns(self):
+        from app import nftgen
+        p = {"rules": [], "default": "direct", "domain": [(["d1"], "direct")]}
+        base = nftgen._policy_key(p)
+        self.assertEqual(len(base), 3)
+        self.assertEqual(len(nftgen._policy_key({**p, "dns": [(["d1"], "direct", ["77.88.8.8"])]})), 4)
+
+    def test_engine_passes_own_dns(self):
+        """Правило «сайты → напрямую, свой DNS» при «всё остальное — напрямую»: для nftables и sniproxy.py оно
+        ничего не меняет и выбрасывается, а dnsproxy.py получает его со своим DNS и без записи в набор."""
+        from tests.test_v121 import DomainsAnyExitTest
+        from app.api import routing as api_routing
+        t = DomainsAnyExitTest("setUp")
+        t.setUp()
+        self.addCleanup(t.tearDown)
+        api_routing.put_routing(Req({"default": "direct", "rules": [{"lists": [t.lid], "outbound": "direct",
+                                                                      "dns": "77.88.8.8"}]}))
+        st = panel.store.snapshot()
+        self.assertEqual(st["routing"]["rules"][0]["dns"], ["77.88.8.8"])
+        gp, _ = panel.engine._policies(st)
+        self.assertEqual(gp["domain"], [])                       # трафик не перехватывается
+        d = panel.engine.dns_domains(st, with_set=True)
+        self.assertEqual(d["policies"]["p_global"], [[[t.lid], {"mark": 0, "tcp": False}, ["77.88.8.8"], False]])
+
+    def test_proxy_asks_own_server_plain(self):
+        """Общий сервер не отвечает и стоит DoT, а свой DNS правила — обычный и живой: ответ приходит."""
+        import json as _json
+        import socket
+        import subprocess
+        import sys
+        import tempfile
+        import time
+        from app import engine
+        from tests.test_v115 import FakeUpstream, free_port, q_msg
+        up = FakeUpstream()
+        self.addCleanup(up.close)
+        d = tempfile.mkdtemp()
+        lp = os.path.join(d, "ru.domains")
+        with open(lp, "w") as f:
+            f.write("ru\n")
+        port = free_port()
+        cfg = {"listen": "127.0.0.1", "port": port, "clients": "127.0.0.0/8", "stats": os.path.join(d, "s.json"),
+               "upstreams": ["127.0.0.2"], "encrypt": "dot", "upstream_port": up.port,
+               "default": {"mark": 0, "tcp": False}, "routes": {},
+               "dom": {"lists": {"ru": lp}, "clients": {},
+                       "policies": {"p_global": [[["ru"], {"mark": 0, "tcp": False}, ["127.0.0.1"], False]]}}}
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            _json.dump(cfg, f)
+        proc = subprocess.Popen([sys.executable, "-I", engine.dns.DNSPROXY, conf],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.wait, 5)
+        self.addCleanup(proc.terminate)
+        for _ in range(50):
+            try:
+                with socket.create_connection(("127.0.0.1", port), 0.2):
+                    break
+            except OSError:
+                time.sleep(0.1)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(5)
+            s.sendto(q_msg("mail.yandex.ru", qid=0x4242), ("127.0.0.1", port))
+            r = s.recv(65535)
+        self.assertEqual(r[:2], b"\x42\x42")
+        self.assertIn(socket.inet_aton("203.0.113.1"), r)
+
+
 class BotLogoTest(unittest.TestCase):
     """Новая картинка меню бота: file_id прежней (сохранённый до обновления) не берётся."""
 

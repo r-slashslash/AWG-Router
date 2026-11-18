@@ -155,6 +155,41 @@ def rules(st: dict, rules) -> list[dict]:
                     "outbound": to,
                     "enabled": flag(r.get("enabled"), True),     # "false" строкой — не «включено»
                     "comment": str(r.get("comment") or "")[:80]})
+        # свой DNS — только у правила по сайтам (адрес сайта из списка сетей до ответа DNS не известен);
+        # поле пишется, только если задано: состояние и копии без него — как до 1.22.0
+        if Store.lst(st, ls[0])["kind"] == "domains":
+            dns = rule_dns(r.get("dns"))
+            if dns:
+                out[-1]["dns"] = dns
+    return out
+
+
+RULE_DNS_MAX = 2
+
+
+def rule_dns(v) -> list[str]:
+    """Свой DNS правила по сайтам: до двух IPv4 — списком или строкой (через запятую или пробел); пусто — []."""
+    import ipaddress
+    if v in (None, "", []):
+        return []
+    if isinstance(v, list):
+        items = [str(x).strip() for x in v]
+    elif isinstance(v, str):
+        items = re.split(r"[,\s]+", v)
+    else:
+        bad("err.bad_value")
+    out = []
+    for d in filter(None, items):
+        try:
+            a = ipaddress.ip_address(d)
+        except ValueError:
+            bad(Msg("srv.bad_dns", value=d[:60]))
+        if a.version != 4 or a.is_unspecified or a.is_multicast:
+            bad(Msg("err.rule_dns_v4", value=d[:60]))
+        if d not in out:
+            out.append(d)
+    if len(out) > RULE_DNS_MAX:
+        bad(Msg("err.rule_dns_many", n=RULE_DNS_MAX))
     return out
 
 

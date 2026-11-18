@@ -107,10 +107,11 @@ class RoutesMixin:
         dl = self.domain_lists(st)
 
         def conv(pol: dict, pk: str | None) -> dict:
-            ip_rules, dom = [], []
+            ip_rules, dom, dns = [], [], []
             for r in pol["rules"]:
                 if any(lid in dl for lid in r["lists"]):
                     dom.append(([lid for lid in r["lists"] if lid in dl], r["outbound"]))
+                    dns.append((dom[-1][0], r["outbound"], list(r.get("dns") or ())))
                 else:
                     ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
             default = self.resolve(self.default_out(st, pk, pol), st)
@@ -122,7 +123,10 @@ class RoutesMixin:
                 dom = []
             if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
                 default = nftgen.Sticky(default)     # открытые соединения не переезжают
-            return {"rules": ip_rules, "default": default, "domain": dom}
+            # «dns» — все правила по сайтам по порядку со своим DNS (engine/dns.py), только если он у кого-то
+            # задан; не выбрасываются вместе с dom выше: правило, ведущее туда же, нужно ради своего DNS
+            return {"rules": ip_rules, "default": default, "domain": dom,
+                    "dns": dns if any(x[2] for x in dns) else []}
 
         gp = conv(self.policy_for(st, None), None)
         cps = {}

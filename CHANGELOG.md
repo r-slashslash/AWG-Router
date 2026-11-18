@@ -114,6 +114,13 @@ it grows, so every user-visible change gets a new version.
   and the file go with `cfg_caption_me` / `cfg_file_me` without the name. Card lines have icons (traffic, end date,
   limit, app-made client, hint), also in the panel chat's client card. Saving the Telegram settings says "Bot settings
   saved".
+- **Own DNS of a domain rule** (`dns` in a rule: up to two IPv4, `checks.rule_dns`; written only when set, so state
+  and backups without it are as before). `_policies` keeps every domain rule in order with its DNS (`"dns"`, only when
+  one has it — not dropped with `domain` when the rule leads where everything else goes), `nftgen.layout` carries it
+  (the policy key changes only for such policies), `dns_domains` gives dnsproxy.py `[lists, route, servers, to set?]`
+  ("to set" only for rules nftables redirects, or an address would go to sniproxy without a rule), and dnsproxy.py asks
+  those servers by plain DNS on the rule's path; the cache key includes them. Works with DNS on the server. *Tests:*
+  `RuleDnsTest` (check, engine, a real dnsproxy.py process with a dead DoT upstream and a live own server).
 - **The client's name is not shown to the client.** The config file name and the `vpn://` description are
   `users.conf_label(pk)` — 8 digits from the client's key — everywhere (panel, bot, personal page); before, a Latin
   name was the file name and the name was the description. The personal page gets no name (`share_info` without

@@ -637,15 +637,15 @@ class DnsDomainTest(unittest.TestCase):
 
     def test_rule_route(self):
         p = self.proxy()
-        self.assertEqual(p.domain_route("10.8.1.2", "rr3---sn-x.googlevideo.com."), ({"mark": 0x2003, "tcp": False}, True))
+        self.assertEqual(p.domain_route("10.8.1.2", "rr3---sn-x.googlevideo.com."), ({"mark": 0x2003, "tcp": False}, (), True))
         self.assertIsNone(p.domain_route("10.8.1.2", "example.com."))
-        self.assertEqual(p.domain_route("10.8.1.9", "youtube.com."), (None, True))   # блок / выход не работает
+        self.assertEqual(p.domain_route("10.8.1.9", "youtube.com."), (None, (), True))   # блок / выход не работает
 
     def test_resolve_goes_through_rule_exit(self):
         p = self.proxy()
         seen = []
 
-        async def fake(query, q, route):
+        async def fake(query, q, route, servers=()):
             seen.append(route)
             return b"\0\0" + query[2:]
         p._resolve = fake

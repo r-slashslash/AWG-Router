@@ -384,13 +384,16 @@ class Proxy:
             self.live.clear()
 
     def domain_route(self, ip: str, name: str):
-        """Правило по доменам политики клиента, в чей список входит имя: (путь, True) — разбирать
-        через выход правила (путь None — обычным путём клиента: «блок» или выход сейчас не работает);
-        None — имя ни в одном правиле."""
+        """Правило по доменам политики клиента, в чей список входит имя: (путь, серверы, в набор?) — разбирать
+        через выход правила (путь None — обычным путём клиента: «блок» или выход сейчас не работает) у своих
+        серверов DNS правила (пусто — у общих); None — имя ни в одном правиле. Правило — [списки, путь] или
+        [списки, путь, серверы, в набор?] (у политики со своим DNS)."""
         pol = (self.dom.get("clients") or {}).get(ip, "p_global")
-        for lids, route in (self.dom.get("policies") or {}).get(pol) or ():
-            if any(match(name, self.dom_lists.get(lid) or ()) for lid in lids):
-                return route, True
+        for rule in (self.dom.get("policies") or {}).get(pol) or ():
+            if any(match(name, self.dom_lists.get(lid) or ()) for lid in rule[0]):
+                if len(rule) >= 4:
+                    return rule[1], tuple(rule[2] or ()), bool(rule[3])
+                return rule[1], (), True
         return None
 
     def remember(self, reply: bytes) -> None:
@@ -463,6 +466,7 @@ class Proxy:
         self.stats["queries"] += 1
         dom = self.domain_route(ip, q["name"]) if self.dom else None
         route = dom[0] if dom and dom[0] is not None else self.route(ip)
+        servers = dom[1] if dom else ()
         if dom:
             self.stats["by_rule"] = self.stats.get("by_rule", 0) + 1
         if route is None:
@@ -474,14 +478,16 @@ class Proxy:
             # Ответ «записей нет» (NOERROR без записей) — и оно сразу идёт по IPv4.
             self.stats["aaaa"] = self.stats.get("aaaa", 0) + 1
             return error_reply(query, q, 0)
-        reply = await self._resolve(query, q, route)
-        if dom and q["qtype"] == T_A:
+        if servers:
+            self.stats["own_dns"] = self.stats.get("own_dns", 0) + 1
+        reply = await self._resolve(query, q, route, servers)
+        if dom and dom[2] and q["qtype"] == T_A:
             self.remember(reply)
         return reply
 
-    async def _resolve(self, query: bytes, q: dict, route: dict) -> bytes:
+    async def _resolve(self, query: bytes, q: dict, route: dict, servers: tuple = ()) -> bytes:
         mark, tcp = int(route.get("mark") or 0), bool(route.get("tcp"))
-        key = (mark, q["name"], q["qtype"], q["qclass"])
+        key = (mark, servers, q["name"], q["qtype"], q["qclass"])
         hit = self.cache.get(key)
         now = time.monotonic()
         if hit and hit[0] > now:
@@ -496,7 +502,7 @@ class Proxy:
             return error_reply(query, q, RC_SERVFAIL)
         self.inflight += 1
         try:
-            reply = await self.forward(query, q, mark, tcp)
+            reply = await self.forward(query, q, mark, tcp, servers)
         finally:
             self.inflight -= 1
         if reply is None:
@@ -516,10 +522,12 @@ class Proxy:
             self.cache_bytes += len(reply)
         return struct.pack("!H", q["id"]) + reply[2:]
 
-    async def forward(self, query: bytes, q: dict, mark: int, tcp: bool) -> bytes | None:
-        """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ."""
-        mode = self.cfg.get("encrypt") or "plain"
-        for server in self.cfg.get("upstreams") or []:
+    async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = ()) -> bytes | None:
+        """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. servers — свой DNS правила по
+        сайтам: всегда обычный DNS (UDP, при обрезанном ответе — TCP), без шифрования: местные DNS вроде
+        Яндекса, Alibaba или иранских по адресу DoH/DoT часто не отвечают."""
+        mode = "plain" if servers else (self.cfg.get("encrypt") or "plain")
+        for server in servers or self.cfg.get("upstreams") or []:
             qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
             out = struct.pack("!H", qid) + query[2:]
             try:

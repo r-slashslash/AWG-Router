@@ -23,7 +23,8 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
             <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
           </div>
           <input type="text" class="rule-comment" data-comment value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}" maxlength="80">
-          ${dom ? `<div class="small muted" style="margin-top:4px">${esc(t("re.domain_hint"))}</div>` : ""}
+          ${dom ? `<label class="rule-dns"><span>${esc(t("re.dns"))}</span><input type="text" data-dns dir="ltr" value="${esc((r.dns || []).join(", "))}" placeholder="${esc(t("re.dns_ph"))}" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
+          <div class="small muted" style="margin-top:4px">${esc(t("re.domain_hint"))} ${esc(t(S.settings.panel_dns ? "re.dns_hint" : "re.dns_off"))}</div>` : ""}
         </div>
         <div class="rule-then"><label>${esc(t(dom ? "re.then_sites" : "re.then"))}</label><select data-out>${outOptions(r.outbound)}</select></div>
         <div class="rule-ctl">
@@ -48,6 +49,13 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
         ch();
       };
       $("[data-comment]", el).oninput = (e) => { r.comment = e.target.value; onChange(); };
+      // свой DNS: в черновике — списком, как его вернёт сервер (иначе «есть несохранённое» после сохранения)
+      const dnsEl = $("[data-dns]", el);
+      if (dnsEl) dnsEl.oninput = (e) => {
+        const v = e.target.value.split(/[,\s]+/).filter(Boolean);
+        if (v.length) r.dns = v; else delete r.dns;
+        onChange();
+      };
       $("[data-out]", el).onchange = (e) => { r.outbound = e.target.value; onChange(); };
       $("[data-en]", el).onchange = (e) => { r.enabled = e.target.checked; ch(); };
       $("[data-up]", el).onclick = () => { [rules[i - 1], rules[i]] = [rules[i], rules[i - 1]]; ch(); };

@@ -270,6 +270,8 @@ Limits:
 - while the panel is stopped or updating, clients ask the second DNS from their config;
 - in host mode with an nftables-only firewall (for example, firewalld), allow incoming UDP and TCP port 53 on the clients' interface; with iptables or ufw the panel does it itself.
 
+**Own DNS of a domain rule.** A domain rule can have its own DNS server (one or two IPv4 addresses, **Routing → rule → Own DNS for these sites**): names from its lists are asked there — the same way the rule's sites go, as plain DNS — and everything else goes to the usual servers. For example, Russian sites (`ru`, `su`, `xn--p1ai` on the list) go direct and are asked from Yandex DNS (`77.88.8.8`), Chinese ones from Alibaba (`223.5.5.5`), and the rest through the exit to `1.1.1.1` over DoH. The local DNS learns only about local sites. Only domain lists can do this: an address list can't pick a DNS server, because the address is known only from the DNS answer.
+
 **How to use it best.**
 1. Keep **DoH** encryption and servers that support it in the "DNS" field, for example `1.1.1.1, 8.8.8.8`. Your local ISP's servers don't fit: queries to them go through the exit anyway, and they usually can't do encryption.
 2. Turn it on if most clients' main route is through an exit.

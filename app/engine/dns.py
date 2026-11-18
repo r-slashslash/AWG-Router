@@ -70,14 +70,24 @@ class DnsMixin:
         pols = {}
         for n, p in policies.items():
             rules = []
-            for lids, o in p.get("domain") or ():
-                eff = self.resolve(o, st)
-                r = route(eff) if eff != "block" else None
-                if r is not None or with_set:
-                    rules.append([list(lids), r])
+            if p.get("dns"):
+                # со своим DNS — все правила по сайтам по порядку: [списки, путь|None, серверы, в набор?].
+                # «В набор» — только правила, по которым nftables ведёт адреса в sniproxy.py (p["domain"]):
+                # адрес правила, выброшенного там, в наборе увёл бы соединение в обработчик без правила
+                in_dom = {tuple(l) for l, _ in p.get("domain") or ()}
+                for lids, o, servers in p["dns"]:
+                    eff = self.resolve(o, st)
+                    r = route(eff) if eff != "block" else None
+                    rules.append([list(lids), r, list(servers), with_set and tuple(lids) in in_dom])
+            else:
+                for lids, o in p.get("domain") or ():
+                    eff = self.resolve(o, st)
+                    r = route(eff) if eff != "block" else None
+                    if r is not None or with_set:
+                        rules.append([list(lids), r])
             if rules:
                 pols[n] = rules
-        lids = sorted({lid for rules in pols.values() for ls, _ in rules for lid in ls})
+        lids = sorted({lid for rules in pols.values() for rule in rules for lid in rule[0]})
         # все клиенты со своей политикой, а не только с правилами по доменам: клиента, которого здесь
         # нет, dnsproxy.py считает клиентом общей политики и разбирал бы имена через её выходы
         return {"lists": {lid: domains.path_for(lid) for lid in lids}, "policies": pols,
