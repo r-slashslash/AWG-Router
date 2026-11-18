@@ -723,7 +723,8 @@ class Bot:
                 tok = arg.strip()
                 pk = self.ops.share_pk(tok)
                 if not pk:
-                    self._client_send(c, cid, tr(L, "me_bad_link"))
+                    if self._may_tell(cid, now):
+                        self._client_send(c, cid, tr(L, "me_bad_link"))
                     return
                 links.pop(cid, None)
                 links[cid] = {"pk": pk, "tok": tok, "lang": L, "t": now}
@@ -741,7 +742,8 @@ class Bot:
                 self._save()
             if qid:
                 self._toast(c, qid)
-            self._client_send(c, cid, tr(L, "me_gone" if link else "me_need_link", chat=cid))
+            if link or self._may_tell(cid, now):      # «приглашение не действует» — один раз, при отвязке
+                self._client_send(c, cid, tr(L, "me_gone" if link else "me_need_link", chat=cid))
             return
         if qid:
             self._toast(c, qid)
@@ -754,6 +756,16 @@ class Bot:
             self.client_card(c, cid, L, link["tok"])
             return
         self.client_card(c, cid, L, link["tok"], msg if data == "me:r" else None)
+
+    def _may_tell(self, cid: str, now: float) -> bool:
+        """Ответ чату без приглашения (незнакомцу) — не чаще раза в DENY_EVERY, как «нет доступа» до 1.22.0: иначе
+        много таких чатов разом съели бы предел отправки бота, и уведомления владельцу задерживались бы."""
+        if now - self._denied.get(cid, 0) < DENY_EVERY:
+            return False
+        self._denied[cid] = now
+        if len(self._denied) > LINKS_MAX:
+            self._denied = {k: v for k, v in self._denied.items() if now - v < DENY_EVERY}
+        return True
 
     def client_card(self, c: dict, cid: str, L: str, tok: str, msg: dict | None = None) -> None:
         d = self.ops.share_info(tok, False)

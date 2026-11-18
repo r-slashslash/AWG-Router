@@ -14,7 +14,8 @@ it grows, so every user-visible change gets a new version.
   `LINKS_MAX`), not in `state.json` or backups, and the token is checked against `shares` on every message: **Renew**
   in the client window (`POST /api/shares-renew/<pk>`) replaces both the link and the invitation, and a chat bound to
   the old one is let go. The texts follow the client's Telegram language (ru, zh, fa, else en). One reply per second
-  and one config per 30 s per chat. Both links now live in the client window's **Connect** pane, under the QR and the
+  and one config per 30 s per chat; a chat without an invitation gets its hint at most once in `DENY_EVERY` (10 minutes,
+  like "no access" before), so many such chats can't use up the bot's sending limit. Both links now live in the client window's **Connect** pane, under the QR and the
   `vpn://` button; **Revoke** is gone. The switch is **System → Telegram → Clients can check their access in the bot**
   (`telegram.clients`, on by default); the bot now polls when it is on even with control off. Installs before 1.22.0
   that use the bot for notifications only get it off once (`store.CLIENT_BOT`), since that bot may be read by another
@@ -102,7 +103,12 @@ it grows, so every user-visible change gets a new version.
   when clients made in the app (their key only on the device) would stop connecting (`srv.confirm_port_app`).
   `srv.port_locked` / `srv.port_container` are gone; the port hint says the server restarts for a few seconds.
   *Tests:* `ContainerPortTest`, `container_e2e.py` (own container, AmneziaVPN-like container with a second network,
-  busy port → old container back).
+  busy port → old container back). A change cut off midway (panel killed, VPS off) — or an update of the own container
+  by the installer with ssh dropped — left the server stopped as `<name>-old-…` / `<name>-prev-…` with no restart
+  policy, and the VPN was down until fixed by hand: in container mode the panel now renames it back, sets the restart
+  policy and starts it (`system.recover_renamed`: only when no container has the usual name, the installer isn't
+  running and the old one has been stopped for `RECOVER_AFTER` s), with `ev.container_recovered` and a Telegram notice.
+  *Test:* `RecoverRenamedTest`.
 - **Refresh lists every, h** moved from System → Settings to the lists section on Routing (saves with its own
   button, shown when the number changed; Enter saves too). The lists subtitle no longer repeats the hours.
 - On a phone the buttons of a table row (`td.acts`, `width: 1%`) were a 1% wide grid cell and stuck out past the
@@ -139,8 +145,9 @@ it grows, so every user-visible change gets a new version.
   The long `rt.strict_hint` under "If domain rules don't work…" is removed.
 - A rule's number in the rule editor is a picker of its place (`re.position`), besides ↑ ↓. Examples in the list windows
   are per language (`ls.domains_name_ph`, `ls.domains_ph`, `ls.asn_name_ph`, `ls.asn_ph`, `re.dns_ph`).
-- "DNS on the server" explanation: three short paragraphs (why, a cascade needs an own DNS on direct domain rules,
-  setup); `srv.panel_dns_how` and `srv.panel_dns_privacy` are gone (README keeps the details).
+- "DNS on the server" explanation: three short paragraphs (why; for a cascade, sites that go direct by an address list
+  get the exit country's addresses — put them in a domain rule "Direct" with a local own DNS, since Cloudflare and Google
+  are often blocked from the server's country; setup); `srv.panel_dns_how` and `srv.panel_dns_privacy` are gone (README keeps the details).
 - No period right after a command in a hint (`pw.hint` ru, zh): it got copied with the command. *Test:*
   `test_no_period_after_a_command`.
 - Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -569,6 +570,62 @@ def _wait_iface(name: str, iface: str) -> bool:
     return False
 
 
+# Смена порта (`<имя>-old-<время>`, recreate_with_port) и обновление своего контейнера установщиком
+# (`<имя>-prev-<время>`, refresh_own_server) на секунды выключают сервер, отключают ему автозапуск и переименовывают.
+# Прервались посреди (панель упала, VPS выключился, оборвался SSH) — VPN не работал бы, пока контейнер не вернут
+# руками. Возврат — только если контейнера с обычным именем нет, установщик не работает и прежний остановлен дольше
+# RECOVER_AFTER (идущую замену так не спутать с прерванной).
+RECOVER_AFTER = 60
+_RENAMED = re.compile(r"(amnezia-awg2?)-(?:old|prev)-\d{8}-\d{6}")
+recovered: list[str] = []          # что вернули (движок пишет это в журнал событий)
+
+
+def _docker_time(s) -> float:
+    """Время Docker («2026-11-19T04:58:02.123456789Z», UTC) → секунды; пусто или непонятно — 0 (давно)."""
+    import calendar
+    try:
+        return float(calendar.timegm(time.strptime(str(s)[:19], "%Y-%m-%dT%H:%M:%S")))
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+def recover_renamed() -> str | None:
+    """Контейнер сервера, оставшийся переименованным после прерванной смены порта или обновления: вернуть ему
+    имя и автозапуск и запустить. → имя или None."""
+    if config.AWG_MODE != "container" or config.AWG_CONTAINER:
+        return None
+    try:
+        cs = docker_get("/containers/json?all=1") or []
+    except (SysError, OSError):
+        return None
+    names = {n.lstrip("/") for c in cs for n in c.get("Names", [])}
+    if names & {"amnezia-awg2", "amnezia-awg"}:
+        return None                                  # контейнер с обычным именем есть (пусть и выключен)
+    from . import selfupdate          # selfupdate импортирует system: здесь — при вызове
+    if selfupdate.installer_running():
+        return None                                  # установщик сам вернёт прежний контейнер, если надо
+    cands = sorted((n for n in names if _RENAMED.fullmatch(n)), key=lambda n: n[-15:])
+    if not cands:
+        return None
+    old = cands[-1]
+    name = _RENAMED.fullmatch(old).group(1)
+    q = urllib.parse.quote
+    try:
+        st = (docker_get(f"/containers/{q(old)}/json") or {}).get("State") or {}
+        if st.get("Running") or time.time() - _docker_time(st.get("FinishedAt")) < RECOVER_AFTER:
+            return None
+        docker_api("POST", f"/containers/{q(old)}/rename?name={q(name)}")
+        docker_api("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": {"Name": "always"}})
+        docker_api("POST", f"/containers/{q(name)}/start", timeout=40)
+    except (SysError, OSError) as e:
+        log.warning("container %s left renamed, could not bring it back: %s", old, e)
+        return None
+    log.warning("container %s was left renamed by an interrupted port change or update: renamed back to %s and started",
+                old, name)
+    recovered.append(name)
+    return name
+
+
 def find_amnezia_container() -> str | None:
     if config.AWG_CONTAINER:
         return config.AWG_CONTAINER
@@ -583,7 +640,7 @@ def discover() -> Target:
     """Находит сервер AWG согласно AWG_MODE (auto | container | host)."""
     mode = config.AWG_MODE
     if mode in ("auto", "container"):
-        name = find_amnezia_container()
+        name = find_amnezia_container() or recover_renamed()
         if name:
             return _container_target(name)
         if mode == "container":

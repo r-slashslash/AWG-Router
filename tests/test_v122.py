@@ -190,6 +190,20 @@ class ClientBotTest(unittest.TestCase):
         self.assertIn("no longer works", self.to("5008")[-1]["text"])
         self.assertNotIn("5008", self.bot._st["links"])
 
+    def test_stranger_told_once_in_10_minutes(self):
+        """Проверка 1.22.0 (Н8): незнакомцу (чат без приглашения) бот отвечает не чаще раза в 10 минут, как «нет
+        доступа» до 1.22.0, — а не на каждое сообщение. Приглашение, открытое следом, работает сразу."""
+        for uid in range(1, 4):
+            self.send(msg("hello", chat="5010", uid=uid))
+            self.send(msg("/start " + "z" * 24, chat="5010", uid=uid + 10))
+        self.assertEqual(len(self.to("5010")), 1)
+        self.bot._denied["5010"] -= tgbot.DENY_EVERY                          # прошло 10 минут
+        self.send(msg("hello", chat="5010", uid=20))
+        self.assertEqual(len(self.to("5010")), 2)
+        self.send(msg("/start " + self.tok, chat="5010", uid=21))
+        self.assertIn("5010", self.bot._st["links"])
+        self.assertGreater(len(self.to("5010")), 2)                            # карточка — сразу
+
     def test_config_button_throttled(self):
         self.send(msg("/start " + self.tok, chat="5009"))
         q = {"update_id": 2, "callback_query": {"id": "q", "data": "me:c", "from": {"id": 5009},
@@ -1076,6 +1090,73 @@ class RuleDnsTest(unittest.TestCase):
             r = s.recv(65535)
         self.assertEqual(r[:2], b"\x42\x42")
         self.assertIn(socket.inet_aton("203.0.113.1"), r)
+
+
+class RecoverRenamedTest(unittest.TestCase):
+    """Проверка 1.22.0 (Н3): смену порта или обновление своего контейнера прервали (панель упала, VPS выключился,
+    оборвался SSH) — контейнер сервера остался выключенным под именем «-old-» или «-prev-» и без автозапуска, VPN
+    не работал бы. Панель возвращает ему имя и автозапуск и запускает — но не во время работы установщика и не
+    сразу (идущую замену не спутать с прерванной)."""
+
+    def run_recover(self, names, finished_ago=300, running=False, mode="container", installing=False):
+        from app import selfupdate, system
+        calls = []
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S.123456789Z", time.gmtime(time.time() - finished_ago))
+
+        def get(path):
+            if path.startswith("/containers/json"):
+                return [{"Names": ["/" + n]} for n in names]
+            return {"State": {"Running": running, "FinishedAt": stamp}}
+
+        def api(method, path, timeout=10, body=None):
+            calls.append((method, path, body))
+            return {}
+        system.recovered.clear()
+        with mock.patch.object(system, "docker_get", get), mock.patch.object(system, "docker_api", api), \
+                mock.patch.object(config, "AWG_MODE", mode), mock.patch.object(config, "AWG_CONTAINER", ""), \
+                mock.patch.object(selfupdate, "installer_running", lambda: installing):
+            return system.recover_renamed(), calls
+
+    def test_interrupted_port_change_brought_back(self):
+        name, calls = self.run_recover(["awg-router", "amnezia-awg2-old-20261119-045800"])
+        self.assertEqual(name, "amnezia-awg2")
+        self.assertEqual([(m, p.split("?")[0]) for m, p, _ in calls],
+                         [("POST", "/containers/amnezia-awg2-old-20261119-045800/rename"),
+                          ("POST", "/containers/amnezia-awg2/update"), ("POST", "/containers/amnezia-awg2/start")])
+        self.assertIn("name=amnezia-awg2", calls[0][1])
+        self.assertEqual(calls[1][2], {"RestartPolicy": {"Name": "always"}})
+        from app import system
+        self.assertEqual(system.recovered, ["amnezia-awg2"])
+        system.recovered.clear()
+
+    def test_latest_of_two_and_installer_prev(self):
+        name, calls = self.run_recover(["amnezia-awg2-old-20261101-100000", "amnezia-awg2-prev-20261119-050000"])
+        self.assertEqual(name, "amnezia-awg2")
+        self.assertIn("/containers/amnezia-awg2-prev-20261119-050000/rename", calls[0][1])
+
+    def test_left_alone(self):
+        cases = {
+            "контейнер с обычным именем есть": dict(names=["amnezia-awg2", "amnezia-awg2-old-20261119-045800"]),
+            "замена идёт сейчас": dict(names=["amnezia-awg2-old-20261119-045800"], finished_ago=10),
+            "прежний работает": dict(names=["amnezia-awg2-old-20261119-045800"], running=True),
+            "работает установщик": dict(names=["amnezia-awg2-prev-20261119-050000"], installing=True),
+            "сервер на хосте": dict(names=["amnezia-awg2-old-20261119-045800"], mode="auto"),
+            "отложенный установщиком пустой": dict(names=["amnezia-awg2-empty-20261119-045800"]),
+        }
+        for what, kw in cases.items():
+            with self.subTest(what):
+                name, calls = self.run_recover(**kw)
+                self.assertIsNone(name)
+                self.assertEqual(calls, [])
+
+    def test_discover_uses_it(self):
+        from app import system
+        src = read("app", "system.py")
+        self.assertIn("find_amnezia_container() or recover_renamed()", src)
+        self.assertIn('Msg("ev.container_recovered"', read("app", "engine", "__init__.py"))
+        for s in ("0001-01-01T00:00:00Z", "", None, "bad"):       # не останавливался или непонятно — «давно»
+            self.assertLess(system._docker_time(s), time.time() - 3600)
+        self.assertAlmostEqual(system._docker_time("2026-11-19T04:58:02.123456789Z"), 1795064282, delta=1)
 
 
 class BotLogoTest(unittest.TestCase):

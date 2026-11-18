@@ -356,6 +356,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             st = self.store.snapshot()
             try:
                 t = self._fake if config.DRY_RUN else system.discover()
+                while system.recovered:     # прерванная смена порта или обновление: контейнер вернули (system.py)
+                    self.event("warn", Msg("ev.container_recovered", name=system.recovered.pop(0)))
             except Exception as e:  # noqa: BLE001
                 if self.target is not None:
                     self.event("error", Msg("ev.target_lost", error=msg_of(e)))
