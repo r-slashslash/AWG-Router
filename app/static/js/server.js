@@ -104,7 +104,7 @@ function viewServer() {
         </div>
         <label class="field"><span>${esc(t("srv.public_host"))}</span><input type="text" data-field="public_host" id="s-host" dir="ltr" value="${esc(SRV.public_host)}" placeholder="203.0.113.10"><span class="hint">${esc(t("srv.public_host_hint"))}</span></label>
         <div class="row2">
-          <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" data-field="port" id="s-port" min="1" max="65535" value="${SRV.port}" ${SRV.port_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.port_locked ? "srv.port_locked" : "srv.port_hint"))}</span></label>
+          <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" data-field="port" id="s-port" min="1" max="65535" value="${SRV.port}"><span class="hint">${esc(t("srv.port_hint"))}</span></label>
           <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" data-field="address" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
         </div>
       </div>
@@ -465,19 +465,22 @@ bind.server = () => {
     for (const k of Object.keys(SRV.params)) if ((srvDraft[k] || "") !== (SRV.params[k] || "")) changed[k] = srvDraft[k] || "";
     const serverSide = Object.keys(changed).some((k) => SRV.param_meta[k].side === "server");
     const port = +$("#s-port").value, addr = $("#s-addr").value.trim();
-    const restart = serverSide || (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
+    const restart = serverSide || port !== SRV.port || (!SRV.subnet_locked && addr !== SRV.address);
     if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
+    // клиенты из приложения AmneziaVPN: их ключ только на устройстве, новый конфиг с новым портом панель не выдаст
+    const appMade = port !== SRV.port ? S.clients.filter((c) => !c.has_config).length : 0;
+    if (appMade && !confirm(t("srv.confirm_port_app", { n: appMade }))) return;
     const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, extra_hosts: $("#s-extra").value, client_dns: $("#s-dns").value,
       panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
-    if (!SRV.port_locked) body.port = port;
+    body.port = port;
     if (!SRV.subnet_locked) body.address = addr;
     $("#s-save").disabled = true;
     try {
       const r = await api("PUT", "server", body);
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
       // новый порт или подсеть — тоже новые конфиги у всех клиентов (Endpoint, Address)
-      const moved = (!SRV.port_locked && port !== SRV.port) || (!SRV.subnet_locked && addr !== SRV.address);
+      const moved = port !== SRV.port || (!SRV.subnet_locked && addr !== SRV.address);
       if (r.server_side_changed || r.host_changed || r.dns_changed || moved) toast(t("toast.reimport"));
       SRV = null; srvDraft = null; await refresh(); loadServer();
     } catch (e) { toast(e.message, true); markField(e, $("#main")); $("#s-save").disabled = false; }

@@ -78,10 +78,16 @@ class _UnixHTTP(http.client.HTTPConnection):
         self.sock = s
 
 
-def docker_api(method: str, path: str, timeout: int = 10):
+def docker_api(method: str, path: str, timeout: int = 10, body: dict | bytes | None = None):
+    """Запрос к Docker. body: dict — JSON, bytes — архив tar (PUT …/archive)."""
     conn = _UnixHTTP(config.DOCKER_SOCK, timeout)
     try:
-        conn.request(method, path)
+        if body is None:
+            conn.request(method, path)
+        elif isinstance(body, bytes):
+            conn.request(method, path, body, {"Content-Type": "application/x-tar"})
+        else:
+            conn.request(method, path, json.dumps(body).encode(), {"Content-Type": "application/json"})
         r = conn.getresponse()
         body = r.read()
         if r.status == 404:
@@ -295,6 +301,10 @@ class Target:
     def restart(self) -> None:
         raise NotImplementedError
 
+    def change_port(self, old_port: int, new_port: int, old_conf: str | None) -> None:
+        """Запустить сервер на новом порту (ListenPort в конфиге уже новый). На хосте хватает перезапуска."""
+        self.restart()
+
     def stop(self) -> None:
         """Остановить сервер (интерфейс убран) — между stop и start выгружается модуль ядра."""
         raise NotImplementedError
@@ -325,6 +335,11 @@ class ContainerTarget(Target):
 
     def start(self) -> None:
         docker_api("POST", f"/containers/{urllib.parse.quote(self.name)}/start", timeout=40)
+
+    def change_port(self, old_port: int, new_port: int, old_conf: str | None) -> None:
+        """Порт контейнера задан Docker'ом при создании: контейнер пересоздаётся с тем же содержимым и новым
+        портом (recreate_with_port). Не поднялся — прежний контейнер обратно, с прежним конфигом."""
+        recreate_with_port(self.name, self.dir, self.iface, old_port, new_port, old_conf)
 
     def psk_for_new_client(self) -> str:
         # приложение AmneziaVPN использует один общий PSK на всех клиентов
@@ -401,6 +416,153 @@ def _container_target(name: str) -> ContainerTarget:
         conf = confs[0][len(root):]
         iface = os.path.basename(conf)[:-5]
     return ContainerTarget(name, pid, iface, conf, st.get("StartedAt", ""))
+
+
+# ------------------------------------------------- смена порта контейнера
+PORT_IMAGE = "awg-router-port"       # образы, снятые с контейнера без папки сервера на диске хоста (AmneziaVPN)
+PORT_UP_SECS = 15                    # сколько ждать интерфейс сервера в новом контейнере
+
+
+def recreate_body(info: dict, image: str, old_port: int, new_port: int) -> dict:
+    """Тело POST /containers/create: тот же контейнер (настройки из docker inspect), порт old_port/udp
+    заменён на new_port. Сети, кроме первой, подключаются после создания (extra_networks)."""
+    cfg = dict(info.get("Config") or {})
+    host = dict(info.get("HostConfig") or {})
+    short = str(info.get("Id") or "")[:12]
+    if short and cfg.get("Hostname") == short:          # имя машины по Id — у нового контейнера своё
+        cfg.pop("Hostname", None)
+    cfg["Image"] = image
+    old_key, new_key = f"{old_port}/udp", f"{new_port}/udp"
+    exposed = {k: v for k, v in (cfg.get("ExposedPorts") or {}).items() if k != old_key}
+    exposed[new_key] = {}
+    cfg["ExposedPorts"] = exposed
+    binds = {}
+    for k, v in (host.get("PortBindings") or {}).items():
+        if k == old_key:
+            binds[new_key] = [{**b, "HostPort": str(new_port)} for b in (v or [{}])]
+        else:
+            binds[k] = v
+    if new_key not in binds:
+        binds[new_key] = [{"HostIp": "", "HostPort": str(new_port)}]
+    host["PortBindings"] = binds
+    # безымянные тома (VOLUME образа) не записаны в Binds: без них новый контейнер получил бы пустые
+    vols = list(host.get("Binds") or [])
+    taken = {b.split(":")[1] for b in vols if b.count(":") >= 1} | {m.get("Target") for m in host.get("Mounts") or []}
+    for m in info.get("Mounts") or []:
+        if m.get("Type") == "volume" and m.get("Name") and m.get("Destination") not in taken:
+            vols.append(f"{m['Name']}:{m['Destination']}")
+    if vols:
+        host["Binds"] = vols
+    cfg["HostConfig"] = host
+    nets = ((info.get("NetworkSettings") or {}).get("Networks") or {})
+    first = host.get("NetworkMode")
+    if first in nets:
+        cfg["NetworkingConfig"] = {"EndpointsConfig": {first: _endpoint(nets[first], short)}}
+    return cfg
+
+
+def extra_networks(info: dict) -> dict:
+    """Сети контейнера, кроме основной (NetworkMode): старый Docker создаёт контейнер только с одной."""
+    nets = ((info.get("NetworkSettings") or {}).get("Networks") or {})
+    first = (info.get("HostConfig") or {}).get("NetworkMode")
+    short = str(info.get("Id") or "")[:12]
+    return {n: _endpoint(ep, short) for n, ep in nets.items() if n != first}
+
+
+def _endpoint(ep: dict, short: str) -> dict:
+    out = {}
+    if ep.get("IPAMConfig"):
+        out["IPAMConfig"] = ep["IPAMConfig"]
+    aliases = [a for a in (ep.get("Aliases") or []) if a != short]
+    if aliases:
+        out["Aliases"] = aliases
+    return out
+
+
+def _tar_one(name: str, text: str) -> bytes:
+    import io
+    import tarfile
+    data = text.encode()
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        ti = tarfile.TarInfo(name)
+        ti.size, ti.mode, ti.mtime = len(data), 0o600, int(time.time())
+        tf.addfile(ti, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def recreate_with_port(name: str, conf_dir: str, iface: str, old_port: int, new_port: int,
+                       old_conf: str | None) -> None:
+    """Пересоздаёт контейнер сервера с новым портом UDP, сохраняя всё содержимое: ключи, клиентов,
+    clientsTable приложения AmneziaVPN. Папка сервера на диске хоста (свой контейнер панели) переходит в
+    новый контейнер как есть; иначе с остановленного контейнера снимается образ (docker commit). Прежний
+    контейнер удаляется, только когда в новом поднялся интерфейс; иначе он возвращается с прежним конфигом
+    (old_conf) и ошибкой srv.port_failed."""
+    q = urllib.parse.quote
+    info = docker_get(f"/containers/{q(name)}/json")
+    if not info:
+        raise SysError(Msg("sys.container_missing", name=name))
+    policy = (info.get("HostConfig") or {}).get("RestartPolicy") or {"Name": "always"}
+    on_disk = any(m.get("Destination") == conf_dir for m in info.get("Mounts") or [])
+    old = f"{name}-old-{time.strftime('%Y%m%d-%H%M%S')}"
+    renamed, made = False, None
+    try:
+        docker_api("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": {"Name": "no"}})
+        docker_api("POST", f"/containers/{q(name)}/stop?t=3", timeout=40)     # освобождает порт
+        docker_api("POST", f"/containers/{q(name)}/rename?name={q(old)}")
+        renamed = True
+        image = info.get("Image")
+        if not on_disk:
+            tag = time.strftime("%Y%m%d-%H%M%S")
+            docker_api("POST", f"/commit?container={q(old)}&repo={PORT_IMAGE}&tag={tag}&pause=false", timeout=120)
+            image = f"{PORT_IMAGE}:{tag}"
+        made = (docker_api("POST", f"/containers/create?name={q(name)}",
+                           body=recreate_body(info, image, old_port, new_port)) or {}).get("Id")
+        for net, ep in extra_networks(info).items():
+            docker_api("POST", f"/networks/{q(net)}/connect", body={"Container": made, "EndpointConfig": ep})
+        docker_api("POST", f"/containers/{q(name)}/start", timeout=40)
+        if not _wait_iface(name, iface):
+            raise SysError(f"{iface} did not come up in {PORT_UP_SECS} s")
+    except Exception as e:
+        log.warning("new port %s for %s: %s — the old container comes back", new_port, name, e)
+        # каждый шаг возврата — даже если прошлый не удался: прежний контейнер должен запуститься
+        cur = old if renamed else name
+        if made:
+            _quiet("DELETE", f"/containers/{made}?force=1", timeout=40)
+        if old_conf is not None:
+            _quiet("PUT", f"/containers/{q(cur)}/archive?path={q(conf_dir)}",
+                   body=_tar_one(f"{iface}.conf", old_conf), timeout=30)
+        if renamed:
+            _quiet("POST", f"/containers/{q(old)}/rename?name={q(name)}")
+        _quiet("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": policy})
+        _quiet("POST", f"/containers/{q(name)}/restart?t=3", timeout=40)
+        raise SysError(f"new port {new_port}: {e}") from None
+    _quiet("DELETE", f"/containers/{q(old)}?force=1", timeout=40)
+    prev = (info.get("Config") or {}).get("Image") or ""
+    if not on_disk and prev.startswith(PORT_IMAGE + ":"):
+        _quiet("DELETE", f"/images/{q(prev)}", timeout=40)   # образ прошлой смены порта больше не нужен
+
+
+def _quiet(method: str, path: str, **kw) -> None:
+    try:
+        docker_api(method, path, **kw)
+    except (SysError, OSError) as e:
+        log.warning("%s %s: %s", method, path, e)
+
+
+def _wait_iface(name: str, iface: str) -> bool:
+    end = time.monotonic() + PORT_UP_SECS
+    while time.monotonic() < end:
+        time.sleep(1)
+        try:
+            pid = int(((docker_get(f"/containers/{urllib.parse.quote(name)}/json") or {}).get("State") or {})
+                      .get("Pid") or 0)
+            if pid and run(["nsenter", "-t", str(pid), "-n", "--", "ip", "link", "show", iface],
+                           check=False, timeout=5).returncode == 0:
+                return True
+        except (SysError, OSError, subprocess.SubprocessError):
+            pass
+    return False
 
 
 def find_amnezia_container() -> str | None:
@@ -549,6 +711,9 @@ class DemoTarget(Target):
 
     def start(self) -> None:
         self.log.append("docker start amnezia-awg2")
+
+    def change_port(self, old_port: int, new_port: int, old_conf: str | None) -> None:
+        self.log.append(f"recreate amnezia-awg2 with port {new_port}/udp")
 
     def psk_for_new_client(self) -> str:
         return (self.read_file(f"{self.dir}/wireguard_psk.key") or "").strip()

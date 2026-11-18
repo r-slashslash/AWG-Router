@@ -47,7 +47,6 @@ function viewSystem() {
         <label class="field"><span>${esc(t("lang"))}</span>${langSelect("lang-sys")}</label>
         <label class="field"><span>${esc(t("sy.panel_name"))}</span><input type="text" id="s-name" maxlength="40" data-field="panel_name" value="${esc(S.settings.panel_name || "")}" placeholder="${esc(S.panel.ip || "")}" dir="auto">
           <span class="hint">${esc(t("sy.panel_name_hint"))}</span></label>
-        <label class="field"><span>${esc(t("sy.hours"))}</span><input type="number" id="s-hours" min="1" max="720" value="${S.settings.list_update_hours}" style="max-width:120px"></label>
         <div class="field"><span>${esc(t("sy.on_stop"))}</span>
           <div class="seg" id="s-stop"><button type="button" data-v="keep">${esc(t("sy.keep"))}</button><button type="button" data-v="restore">${esc(t("sy.restore"))}</button></div>
           <span class="hint">${esc(t("sy.on_stop_hint"))}</span></div>
@@ -87,7 +86,7 @@ bind.system = () => {
   seg();
   $("#s-save").onclick = async () => {
     try {
-      await api("PUT", "settings", { list_update_hours: +$("#s-hours").value, on_stop: onStop, panel_name: $("#s-name").value.trim() });
+      await api("PUT", "settings", { on_stop: onStop, panel_name: $("#s-name").value.trim() });
       toast(t("toast.settings_saved")); refresh();
     }
     catch (e) { toast(e.message, true); }

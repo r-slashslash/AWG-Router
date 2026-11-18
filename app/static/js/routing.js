@@ -202,13 +202,27 @@ function listsSection() {
   }).join("");
   return `
     <div class="section-head">
-      <div><h2>${esc(t("ls.title"))}</h2><p class="muted small">${esc(t("ls.subtitle", { hours: fmtNum(S.settings.list_update_hours) }))}</p></div>
+      <div><h2>${esc(t("ls.title"))}</h2><p class="muted small">${esc(t("ls.subtitle"))}</p>
+        <div class="ls-hours"><label for="ls-hours">${esc(t("sy.hours"))}</label>
+          <input type="number" id="ls-hours" min="1" max="720" value="${S.settings.list_update_hours}">
+          <button type="button" class="btn sm primary" id="ls-hours-save" hidden>${esc(t("btn.save"))}</button></div></div>
       <div class="add-row">${LIST_KINDS.map((k) => `<button class="btn" data-add-kind="${k}">${esc(t("ls.add_" + k))}</button>`).join("")}</div>
     </div>
     <div class="panel">${S.lists.length ? `<table class="table responsive"><thead><tr><th>${esc(t("ls.col_list"))}</th><th>${esc(t("ls.col_size"))}</th><th>${esc(t("ls.col_used"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
       : `<div class="empty"><p>${esc(t("ls.empty"))}</p></div>`}</div>`;
 }
 function bindLists() {
+  // как часто обновлять списки: «Сохранить» появляется, когда число изменили; Enter — тоже сохранить
+  const hrs = $("#ls-hours"), hrsSave = $("#ls-hours-save");
+  if (hrs) {
+    hrs.oninput = () => { hrsSave.hidden = String(hrs.value) === String(S.settings.list_update_hours); };
+    hrs.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); hrsSave.click(); } };
+    hrsSave.onclick = async () => {
+      hrsSave.disabled = true;
+      try { await api("PUT", "settings", { list_update_hours: +hrs.value }); toast(t("toast.settings_saved")); refresh(); }
+      catch (e) { toast(e.message, true); hrsSave.disabled = false; }
+    };
+  }
   $$("[data-add-kind]").forEach((b) => b.onclick = () => editList(null, b.dataset.addKind));
   $$("[data-edit-list]").forEach((b) => b.onclick = () => editList(b.dataset.editList));
   $$("[data-refresh]").forEach((b) => b.onclick = async () => {

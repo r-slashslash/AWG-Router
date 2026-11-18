@@ -5,7 +5,9 @@
   * start.sh ставит правила до подъёма awg0 — таблица панели есть сразу, без панели;
   * без файла правил таблицы нет (значит, она именно из файла);
   * панель узнаёт о запуске контейнера из потока событий Docker (system.docker_events);
-  * панель видит, что этот контейнер сам ставит правила (метка в /opt/amnezia/start.sh).
+  * панель видит, что этот контейнер сам ставит правила (метка в /opt/amnezia/start.sh);
+  * смена порта (1.22.0, system.recreate_with_port): свой контейнер (папка на диске хоста), контейнер «как у
+    AmneziaVPN» (файлы внутри, вторая сеть) и возврат прежнего, когда новый порт занят.
 
 Только на одноразовой машине (машина GitHub Actions): нужны root, Docker, awg в PATH (для ключей).
 Запуск: sudo env PATH=<bin>:$PATH python3 tests/container_e2e.py
@@ -52,6 +54,107 @@ def wait_awg0(timeout=30) -> bool:
     return False
 
 
+NET = "awgr-e2e-net"
+ROWS = '[{"clientId": "e2e", "userData": {"clientName": "phone"}}]'
+
+
+def listen_port() -> str:
+    return sh("docker", "exec", NAME, "awg", "show", "awg0", "listen-port", check=False).stdout.strip()
+
+
+def bound(port: int) -> bool:
+    """Порт опубликован Docker'ом (docker port) для UDP."""
+    return f"{port}/udp" in sh("docker", "port", NAME, check=False).stdout
+
+
+def leftovers() -> list[str]:
+    return sh("docker", "ps", "-a", "--format", "{{.Names}}", "--filter", f"name={NAME}-old-",
+              check=False).stdout.split()
+
+
+def port_change(results, data, sc) -> None:
+    """Смена порта контейнера: как её делает панель (новый ListenPort в конфиге, потом recreate_with_port)."""
+    conf_dir = "/opt/amnezia/awg"
+    # 1) свой контейнер панели: папка сервера на диске хоста, без снимка образа
+    sh("docker", "rm", "-f", NAME, check=False)
+    with open(os.path.join(data, "clientsTable"), "w") as f:
+        f.write(ROWS)
+    sh("docker", "run", "-d", "--name", NAME, "--privileged", "--cap-add=NET_ADMIN", "--restart", "always",
+       "-p", "47321:47321/udp", "-v", f"{data}:{conf_dir}", IMAGE)
+    wait_awg0()
+    old_conf = open(os.path.join(data, "awg0.conf")).read()
+    sc.set("ListenPort", "47999")
+    with open(os.path.join(data, "awg0.conf"), "w") as f:
+        f.write(sc.render())
+    err = ""
+    try:
+        system.recreate_with_port(NAME, conf_dir, "awg0", 47321, 47999, old_conf)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    pol = sh("docker", "inspect", "-f", "{{.HostConfig.RestartPolicy.Name}}", NAME, check=False).stdout.strip()
+    results.append(("свой контейнер: новый порт опубликован и слушается, папка та же, старого нет",
+                    not err and bound(47999) and not bound(47321) and listen_port() == "47999"
+                    and not leftovers() and pol == "always",
+                    [err, listen_port(), leftovers(), pol, sh("docker", "port", NAME, check=False).stdout]))
+
+    # 2) контейнер «как у AmneziaVPN»: файлы внутри контейнера, вторая сеть с постоянным адресом
+    sh("docker", "rm", "-f", NAME, check=False)
+    sh("docker", "network", "rm", NET, check=False)
+    sh("docker", "network", "create", "--subnet", "172.29.99.0/24", NET)
+    sc.set("ListenPort", "47321")
+    inside = tempfile.mkdtemp()
+    with open(os.path.join(inside, "awg0.conf"), "w") as f:
+        f.write(sc.render())
+    with open(os.path.join(inside, "clientsTable"), "w") as f:
+        f.write(ROWS)
+    sh("docker", "create", "--name", NAME, "--privileged", "--cap-add=NET_ADMIN", "--restart", "always",
+       "-p", "47321:47321/udp", IMAGE)
+    sh("docker", "network", "connect", "--ip", "172.29.99.7", NET, NAME)
+    sh("docker", "cp", f"{inside}/.", f"{NAME}:{conf_dir}/")
+    sh("docker", "start", NAME)
+    wait_awg0()
+    old_conf = sc.render()
+    sc.set("ListenPort", "48111")
+    with open(os.path.join(inside, "awg0.conf"), "w") as f:
+        f.write(sc.render())
+    sh("docker", "cp", os.path.join(inside, "awg0.conf"), f"{NAME}:{conf_dir}/awg0.conf")   # как write_file панели
+    shutil.rmtree(inside, ignore_errors=True)
+    err = ""
+    try:
+        system.recreate_with_port(NAME, conf_dir, "awg0", 47321, 48111, old_conf)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    rows = sh("docker", "exec", NAME, "cat", f"{conf_dir}/clientsTable", check=False).stdout
+    ip = sh("docker", "inspect", "-f", "{{(index .NetworkSettings.Networks \"" + NET + "\").IPAddress}}", NAME,
+            check=False).stdout.strip()
+    image = sh("docker", "inspect", "-f", "{{.Config.Image}}", NAME, check=False).stdout.strip()
+    results.append(("контейнер AmneziaVPN: новый порт, файлы внутри и вторая сеть с адресом на месте",
+                    not err and bound(48111) and listen_port() == "48111" and rows == ROWS
+                    and ip == "172.29.99.7" and image.startswith(system.PORT_IMAGE + ":") and not leftovers(),
+                    [err, listen_port(), rows, ip, image, leftovers()]))
+
+    # 3) новый порт занят на хосте: Docker не запускает контейнер — прежний возвращается с прежним конфигом
+    import socket
+    busy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    busy.bind(("0.0.0.0", 48222))
+    try:
+        old_conf = sc.render()
+        sc.set("ListenPort", "48222")
+        sh("docker", "exec", NAME, "sh", "-c", f"cat > {conf_dir}/awg0.conf", input=sc.render())
+        err = ""
+        try:
+            system.recreate_with_port(NAME, conf_dir, "awg0", 48111, 48222, old_conf)
+        except system.SysError as e:
+            err = str(e)
+        wait_awg0()
+        conf = sh("docker", "exec", NAME, "cat", f"{conf_dir}/awg0.conf", check=False).stdout
+        results.append(("новый порт занят: ошибка, работает прежний контейнер с прежним портом и конфигом",
+                        bool(err) and bound(48111) and listen_port() == "48111" and "ListenPort = 48111" in conf
+                        and not leftovers(), [err, listen_port(), leftovers()]))
+    finally:
+        busy.close()
+
+
 def main():
     results = []
     data = tempfile.mkdtemp()
@@ -92,8 +195,13 @@ def main():
         table = sh("docker", "exec", NAME, "nft", "list", "table", "ip", "awgr", check=False)
         results.append(("без файла правил таблицы нет (она именно из файла), сервер работает",
                         up and table.returncode != 0, table.stdout[-200:]))
+
+        port_change(results, data, sc)
     finally:
         sh("docker", "rm", "-f", NAME, check=False)
+        for n in sh("docker", "ps", "-aq", "--filter", f"name={NAME}-old-", check=False).stdout.split():
+            sh("docker", "rm", "-f", n, check=False)
+        sh("docker", "network", "rm", NET, check=False)
         shutil.rmtree(data, ignore_errors=True)
 
     bad = 0

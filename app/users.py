@@ -270,12 +270,23 @@ class ServerManager:
 
     # ------------------------------------------------------------ применение
     def _write(self, t: system.Target, sc: ServerConf, rows: list[dict] | None = None,
-               restart: bool = False) -> None:
+               restart: bool = False, port: tuple[int, int] | None = None) -> None:
+        """port — (прежний, новый) при смене порта: контейнер для него пересоздаётся (Target.change_port)."""
         old_conf = t.read_file(t.conf_path)
         old_rows = t.read_file(t.clients_table_path) if rows is not None else None
         t.write_file(t.conf_path, sc.render())
         if rows is not None:
             t.write_file(t.clients_table_path, awgserver.render_clients_table(rows), 0o644)
+        if port:
+            try:
+                t.change_port(port[0], port[1], old_conf)
+            except system.SysError:
+                if t.kind != "container":           # контейнер сам вернул прежний конфиг вместе с собой
+                    self._put_back(t, old_conf, None)
+                    t.restart()
+                raise UserError(Msg("srv.port_failed", port=port[1])) from None
+            self.e.trigger()
+            return
         if restart:
             t.restart()
         else:
@@ -456,7 +467,6 @@ class ServerManager:
             "port": sc.port, "address": str(net.network) if net else "",
             "subnet_locked": bool(sc.peers) or not self.subnet_follows_conf(t),
             "subnet_lock": "clients" if sc.peers else (None if self.subnet_follows_conf(t) else "container"),
-            "port_locked": t.kind != "host",
             "params": {k: sc.get(k) for k in awgserver.PARAM_ORDER},
             "param_meta": {k: {"type": v[0], "side": v[1]} for k, v in awgserver.AWG_PARAMS.items()},
             "cps_presets": cps.catalog(),
@@ -555,13 +565,13 @@ class ServerManager:
                 port = int(body.get("port") or sc.port)
             except (TypeError, ValueError):
                 raise UserError(Msg("srv.bad_port")) from None
+            new_port = None
             if port != sc.port:
-                if t.kind != "host":
-                    raise UserError(Msg("srv.port_container"))
                 if not 1 <= port <= 65535:
                     raise UserError(Msg("srv.bad_port")) from None
                 if port in system.AWG_RESERVED:
                     raise UserError(Msg("srv.port_dns", port=port))
+                new_port = (sc.port, port)
                 sc.set("ListenPort", str(port))
                 restart = True
                 if isinstance(t, system.HostTarget):
@@ -603,7 +613,7 @@ class ServerManager:
             dns_changed = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live()) != dns_before
             changed_conf = sc.render() != (t.read_file(t.conf_path) or "")
             if changed_conf:
-                self._write(t, sc, None, restart=restart)
+                self._write(t, sc, None, restart=restart, port=new_port)
                 if drop_nat:
                     t.native(["sh", "-c", awgserver.drop_nat_cmd(drop_nat)], check=False, timeout=30)
                 self.e.event("info" if not restart else "warn",

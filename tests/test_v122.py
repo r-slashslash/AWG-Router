@@ -735,5 +735,128 @@ class SocksCheckInTest(unittest.TestCase):
         self.assertIn("socks.check_in(t, conf, ip)", read("app", "engine", "tunnels.py"))
 
 
+class ContainerPortTest(unittest.TestCase):
+    """Смена порта контейнера сервера: пересоздание с тем же содержимым, возврат прежнего при сбое."""
+    INFO = {
+        "Id": "abcdef1234567890", "Image": "sha256:old",
+        "Config": {"Hostname": "abcdef123456", "Image": "amnezia-awg2", "Cmd": ["sh", "start.sh"],
+                   "ExposedPorts": {"2098/udp": {}}, "Labels": {"x": "1"}},
+        "HostConfig": {"NetworkMode": "bridge", "Privileged": True, "RestartPolicy": {"Name": "always"},
+                       "PortBindings": {"2098/udp": [{"HostIp": "", "HostPort": "2098"},
+                                                     {"HostIp": "::", "HostPort": "2098"}]}},
+        "NetworkSettings": {"Networks": {"bridge": {"Aliases": None},
+                                         "amnezia-dns-net": {"Aliases": ["abcdef123456", "awg"],
+                                                             "IPAMConfig": {"IPv4Address": "172.29.172.3"}}}},
+        "Mounts": [{"Destination": "/lib/modules"}],
+    }
+
+    def test_body_keeps_everything_but_port(self):
+        from app import system
+        b = system.recreate_body(self.INFO, "awg-router-port:1", 2098, 40000)
+        self.assertEqual(b["Image"], "awg-router-port:1")
+        self.assertNotIn("Hostname", b)                          # имя по Id — у нового своё
+        self.assertEqual(b["Cmd"], ["sh", "start.sh"])
+        self.assertEqual(b["Labels"], {"x": "1"})
+        self.assertEqual(b["ExposedPorts"], {"40000/udp": {}})
+        self.assertEqual(b["HostConfig"]["PortBindings"],
+                         {"40000/udp": [{"HostIp": "", "HostPort": "40000"}, {"HostIp": "::", "HostPort": "40000"}]})
+        self.assertTrue(b["HostConfig"]["Privileged"])
+        self.assertEqual(system.extra_networks(self.INFO),
+                         {"amnezia-dns-net": {"Aliases": ["awg"], "IPAMConfig": {"IPv4Address": "172.29.172.3"}}})
+        self.assertEqual(self.INFO["Config"]["ExposedPorts"], {"2098/udp": {}})   # исходник не тронут
+
+    def test_anonymous_volume_carried(self):
+        from app import system
+        info = {**self.INFO, "HostConfig": {**self.INFO["HostConfig"], "Binds": ["/lib/modules:/lib/modules"]},
+                "Mounts": [{"Type": "bind", "Destination": "/lib/modules"},
+                           {"Type": "volume", "Name": "f00d", "Destination": "/opt/amnezia/awg"}]}
+        b = system.recreate_body(info, "x", 2098, 40000)
+        self.assertEqual(b["HostConfig"]["Binds"], ["/lib/modules:/lib/modules", "f00d:/opt/amnezia/awg"])
+
+    def run_change(self, info, up=True):
+        from app import system
+        calls = []
+
+        def api(method, path, timeout=10, body=None):
+            calls.append((method, path.split("?")[0], path, body))
+            if method == "GET":
+                return info
+            if path.startswith("/containers/create"):
+                return {"Id": "new1"}
+            return {}
+        with mock.patch.object(system, "docker_api", api), mock.patch.object(system, "docker_get",
+                                                                             lambda p: info), \
+                mock.patch.object(system, "_wait_iface", lambda n, i: up), mock.patch.object(system.time, "strftime",
+                                                                                         lambda f: "T"):
+            try:
+                system.recreate_with_port("amnezia-awg2", "/opt/amnezia/awg", "awg0", 2098, 40000, "OLD CONF")
+                return None, calls
+            except system.SysError as e:
+                return e, calls
+
+    def test_app_container_committed_and_old_removed(self):
+        err, calls = self.run_change(self.INFO)
+        self.assertIsNone(err)
+        paths = [(m, p) for m, p, _, _ in calls]
+        # остановка до переименования (порт свободен), снимок, создание, вторая сеть, запуск, удаление старого
+        order = [("POST", "/containers/amnezia-awg2/stop"), ("POST", "/containers/amnezia-awg2/rename"),
+                 ("POST", "/commit"), ("POST", "/containers/create"), ("POST", "/networks/amnezia-dns-net/connect"),
+                 ("POST", "/containers/amnezia-awg2/start"), ("DELETE", "/containers/amnezia-awg2-old-T")]
+        self.assertEqual([x for x in paths if x in order], order)
+        create = next(b for m, p, _, b in calls if p == "/containers/create")
+        self.assertEqual(create["Image"], "awg-router-port:T")
+        self.assertNotIn(("PUT", "/containers/amnezia-awg2-old-T/archive"), paths)
+
+    def test_own_container_folder_on_disk_no_commit(self):
+        info = {**self.INFO, "Mounts": [{"Destination": "/opt/amnezia/awg"}]}
+        err, calls = self.run_change(info)
+        self.assertIsNone(err)
+        self.assertNotIn("/commit", [p for _, p, _, _ in calls])
+        create = next(b for m, p, _, b in calls if p == "/containers/create")
+        self.assertEqual(create["Image"], "sha256:old")
+
+    def test_not_up_puts_old_back(self):
+        import tarfile
+        import io
+        err, calls = self.run_change(self.INFO, up=False)
+        self.assertIsNotNone(err)
+        paths = [(m, p) for m, p, _, _ in calls]
+        back = [("DELETE", "/containers/new1"), ("PUT", "/containers/amnezia-awg2-old-T/archive"),
+                ("POST", "/containers/amnezia-awg2-old-T/rename"), ("POST", "/containers/amnezia-awg2/update"),
+                ("POST", "/containers/amnezia-awg2/restart")]
+        tail = paths[paths.index(back[0]):]
+        self.assertEqual([x for x in tail if x in back], back)
+        self.assertNotIn(("DELETE", "/containers/amnezia-awg2-old-T"), paths)
+        tar = next(b for m, p, _, b in calls if p.endswith("/archive"))
+        with tarfile.open(fileobj=io.BytesIO(tar)) as tf:
+            self.assertEqual(tf.extractfile("awg0.conf").read(), b"OLD CONF")
+        policy = [b for m, p, _, b in calls if p == "/containers/amnezia-awg2/update"]
+        self.assertEqual(policy[-1], {"RestartPolicy": {"Name": "always"}})
+
+    def test_settings_failure_is_a_field_error(self):
+        from app import panel, system, users
+        t = system.DemoTarget()
+        t.kind = "container"
+        t.conf_path = "/etc/test1/awg0.conf"
+        t.write_file(t.conf_path, "[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n"
+                                  "Address = 10.8.1.1/24\nListenPort = 2098\n")
+        old, panel.engine.target = panel.engine.target, t
+        try:
+            with mock.patch.object(system.DemoTarget, "change_port", side_effect=system.SysError("no")):
+                with self.assertRaises(users.UserError) as cm:
+                    panel.engine.srv.update_server({"port": 40000})
+            self.assertEqual(cm.exception.msg.key, "srv.port_failed")
+        finally:
+            panel.engine.target = old
+        from app.api import server as api_server
+        self.assertEqual(api_server.SERVER_FIELDS["srv.port_failed"], "port")
+
+    def test_hint_and_icons(self):
+        js = read("app", "static", "js", "core.js")
+        self.assertIn("THEME_SUN", js)
+        self.assertNotIn('"☀"', js)                              # символ шрифта на Android ниже середины
+        self.assertNotIn("port_locked", read("app", "static", "js", "server.js"))
+
+
 if __name__ == "__main__":
     unittest.main()

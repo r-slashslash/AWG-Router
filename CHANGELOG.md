@@ -88,6 +88,25 @@ it grows, so every user-visible change gets a new version.
 - **Many clients switched at once.** Expiry and quota used to turn clients off one by one, each with its own write of
   the server's files and `awg syncconf` — about 25 s for a thousand clients with one end date, with adding a client
   blocked meanwhile. A pass now switches them in one write (`Server.set_enabled_many`).
+- **The port of a server in a container can be changed** (Server → Port (UDP)), for the panel's own container and the
+  AmneziaVPN app's. Docker publishes the port when the container is created, so `system.recreate_with_port` stops the
+  container, renames it `<name>-old-<time>`, creates a new one from `docker inspect` (`recreate_body`: same config and
+  host config, `old/udp` → `new/udp` in `ExposedPorts` and `PortBindings`, unnamed volumes carried as binds, other
+  networks connected after create with their addresses) and waits for the interface (`PORT_UP_SECS`). A container
+  without the server folder on the host's disk (AmneziaVPN) is first committed (`awg-router-port:<time>`), so its
+  files and `clientsTable` stay. The old container is removed only when the new one is up; otherwise the new one is
+  removed and the old one gets its config back (`PUT …/archive`), its name and restart policy, and starts
+  (`srv.port_failed` on the port field). `docker_api` sends a body (JSON or tar). Before the change the browser warns
+  when clients made in the app (their key only on the device) would stop connecting (`srv.confirm_port_app`).
+  `srv.port_locked` / `srv.port_container` are gone; the port hint says the server restarts for a few seconds.
+  *Tests:* `ContainerPortTest`, `container_e2e.py` (own container, AmneziaVPN-like container with a second network,
+  busy port → old container back).
+- **Refresh lists every, h** moved from System → Settings to the lists section on Routing (saves with its own
+  button, shown when the number changed; Enter saves too). The lists subtitle no longer repeats the hours.
+- On a phone the buttons of a table row (`td.acts`, `width: 1%`) were a 1% wide grid cell and stuck out past the
+  right edge: the Routing tab scrolled sideways.
+- The day/night button draws its sun and moon (`THEME_SUN`, `THEME_MOON`) instead of `☀` / `☾`: Android fonts set
+  those below the middle of the line. The server name hint is shorter.
 - **For GitHub's code scanning:** the exit check sets TLS 1.2 as the minimum explicitly (it was the default already),
   and the state fingerprint for polling is SHA-256 instead of SHA-1.
 

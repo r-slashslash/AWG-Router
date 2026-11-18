@@ -332,9 +332,11 @@ class ServerSettingsTest(unittest.TestCase):
         self.assertEqual(key, "srv.port_dns")
         self.assertIn("ListenPort = 51820", t.read_file(t.conf_path))
 
-    def test_container_port_is_dockers(self):                               # U10
+    def test_container_port_recreates(self):                                # U10 (1.22.0: порт меняется и в контейнере)
         key, t = self.run_update("container", {"port": 40000})
-        self.assertEqual(key, "srv.port_container")
+        self.assertIsNone(key)
+        self.assertIn("ListenPort = 40000", t.read_file(t.conf_path))
+        self.assertIn("recreate amnezia-awg2 with port 40000/udp", t.log)
 
     def test_tiny_subnet_refused(self):                                     # U11
         for net in ("10.66.0.1/30", "10.66.0.1/32"):

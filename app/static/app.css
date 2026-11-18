@@ -90,6 +90,7 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
   font-size: 1rem; line-height: 1;
 }
 .theme-btn:hover { color: var(--ink); border-color: var(--muted); }
+.theme-btn svg { display: block; }
 .lang-select { width: auto !important; min-height: 32px !important; padding-block: 4px !important; font-size: .88rem; }
 .login-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 24px; }
 .summary { margin: 0; padding-inline-start: 20px; display: grid; gap: 6px; }
@@ -305,6 +306,8 @@ textarea.short { min-height: 64px; }
   /* «Напрямую вместо X» не сжимает имя клиента до пары букв: подпись переносится под выход */
   .table.responsive td[data-m="right"] { max-width: 48vw; }
   .table.responsive td[data-m="right"] .line.fallback { flex-wrap: wrap; white-space: normal; row-gap: 0; }
+  /* width: 1% таблицы в карточке — 1% колонки (полпикселя): кнопки строки вылезали за правый край экрана */
+  .table.responsive td.acts { width: auto; }
 }
 .uses .use { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: .86rem; }
 .uses .use + .use { margin-top: 4px; }
@@ -364,6 +367,9 @@ textarea.short { min-height: 64px; }
 .list-row-src { font-size: .84rem; color: var(--muted); word-break: break-all; }
 .cc { display: inline-grid; place-items: center; min-width: 30px; height: 22px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--rule); font-weight: 600; font-size: .78rem; margin-inline-end: 8px; }
 .add-row { display: flex; gap: 8px; flex-wrap: wrap; }
+/* «Обновлять списки каждые, ч» под заголовком раздела списков */
+.ls-hours { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: .88rem; color: var(--ink-2); }
+.ls-hours input { width: 80px; min-height: 32px; padding-block: 4px; }
 /* в шапке раздела поиск, сортировка и кнопка — одной строкой; переносится вся группа целиком */
 .section-head > .add-row { flex-wrap: nowrap; }
 .add-row .btn { flex: none; white-space: nowrap; }
