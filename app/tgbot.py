@@ -10,11 +10,13 @@
 """
 from __future__ import annotations
 
+import collections
 import html
 import json
 import logging
 import math
 import os
+import queue
 import re
 import threading
 import time
@@ -157,6 +159,12 @@ TEXTS = {
         "me_hint": "🔄 «Обновить» — свежие данные\n📱 «QR и файл» — конфиг для приложения",
         "me_cfg_wait": "Конфиг только что отправлен — подождите полминуты",
         "share_bot": "🤖 Приглашение в бота (там клиент сам смотрит свой доступ):\n{url}",
+        "rm_expiring": "⏳ Ваш доступ закончится {date} — через {days} дн. Чтобы продлить, напишите тому, кто выдал вам доступ.",
+        "rm_quota_warn": "⚠️ Израсходовано 90% лимита трафика: {used} из {quota}.",
+        "rm_expired": "⏰ Ваш доступ выключен: закончился срок. Чтобы продлить, напишите тому, кто выдал вам доступ.",
+        "rm_quota_month": "📦 Ваш доступ выключен: израсходован лимит трафика {quota} за месяц. Он снова включится в начале следующего месяца.",
+        "rm_quota_total": "📦 Ваш доступ выключен: израсходован лимит трафика {quota}. Чтобы продолжить, напишите тому, кто выдал вам доступ.",
+        "rm_quota_reset": "✅ Ваш доступ снова включён: начался новый месяц.",
     },
     "en": {
         "help": "🤖 <b>AWG Router remote</b>\n"
@@ -265,6 +273,12 @@ TEXTS = {
         "me_hint": "🔄 “Refresh” — fresh data\n📱 “QR and file” — the config for the app",
         "me_cfg_wait": "The config was just sent — wait half a minute",
         "share_bot": "🤖 Invitation to the bot (the client checks their own access there):\n{url}",
+        "rm_expiring": "⏳ Your access ends on {date} — in {days} d. To extend it, message the person who gave you access.",
+        "rm_quota_warn": "⚠️ 90% of the traffic limit is used: {used} of {quota}.",
+        "rm_expired": "⏰ Your access is turned off: its period ended. To extend it, message the person who gave you access.",
+        "rm_quota_month": "📦 Your access is turned off: the monthly traffic limit of {quota} is used up. It turns on again at the start of next month.",
+        "rm_quota_total": "📦 Your access is turned off: the traffic limit of {quota} is used up. To go on, message the person who gave you access.",
+        "rm_quota_reset": "✅ Your access is on again: a new month has started.",
     },
     "zh": {
         "help": "🤖 <b>AWG Router 遥控</b>\n"
@@ -370,6 +384,12 @@ TEXTS = {
         "me_hint": "🔄「刷新」——最新数据\n📱「二维码和文件」——应用的配置",
         "me_cfg_wait": "配置刚刚发送过——请等半分钟",
         "share_bot": "🤖 机器人邀请（客户端可在其中查看自己的访问）：\n{url}",
+        "rm_expiring": "⏳ 你的访问将于 {date} 到期（还剩 {days} 天）。如需延期，请联系给你开通访问的人。",
+        "rm_quota_warn": "⚠️ 流量限额已用掉 90%：{used} / {quota}。",
+        "rm_expired": "⏰ 你的访问已停用：使用期限已到。如需延期，请联系给你开通访问的人。",
+        "rm_quota_month": "📦 你的访问已停用：本月 {quota} 的流量限额已用完。下个月初会自动重新启用。",
+        "rm_quota_total": "📦 你的访问已停用：{quota} 的流量限额已用完。如需继续使用，请联系给你开通访问的人。",
+        "rm_quota_reset": "✅ 你的访问已重新启用：新的一个月开始了。",
     },
     "fa": {
         "help": "🤖 <b>کنترل از راه دور AWG Router</b>\n"
@@ -478,6 +498,12 @@ TEXTS = {
         "me_hint": "🔄 «تازه‌سازی» — داده‌های تازه\n📱 «QR و فایل» — پیکربندی برای برنامه",
         "me_cfg_wait": "پیکربندی همین الان فرستاده شد — نیم دقیقه صبر کنید",
         "share_bot": "🤖 دعوت به ربات (کلاینت دسترسی خود را آنجا می‌بیند):\n{url}",
+        "rm_expiring": "⏳ دسترسی شما {date} تمام می‌شود — {days} روز دیگر. برای تمدید به کسی که دسترسی را به شما داده پیام دهید.",
+        "rm_quota_warn": "⚠️ ۹۰٪ از سقف ترافیک مصرف شده است: {used} از {quota}.",
+        "rm_expired": "⏰ دسترسی شما خاموش شد: مهلت آن تمام شده است. برای تمدید به کسی که دسترسی را به شما داده پیام دهید.",
+        "rm_quota_month": "📦 دسترسی شما خاموش شد: سقف ترافیک ماهانهٔ {quota} مصرف شده است. ابتدای ماه بعد دوباره روشن می‌شود.",
+        "rm_quota_total": "📦 دسترسی شما خاموش شد: سقف ترافیک {quota} مصرف شده است. برای ادامه به کسی که دسترسی را به شما داده پیام دهید.",
+        "rm_quota_reset": "✅ دسترسی شما دوباره روشن شد: ماه تازه‌ای شروع شده است.",
     },
 }
 
@@ -546,6 +572,14 @@ LINKS_MAX = 5000
 CLIENT_EVERY = 1.0        # запросов клиента — не чаще раза в секунду на чат
 CFG_EVERY = 30            # конфиг в чат клиента — не чаще раза в 30 с
 CLIENT_LANGS = ("ru", "zh", "fa")   # язык Telegram клиента → язык бота; остальные — английский
+# Напоминания клиенту в его чат (1.22.0, «Напоминать клиентам»): событие движка → текст бота. Те же события, что
+# и уведомления владельцу о клиенте (limits.py ставит их один раз на срок или лимит), кроме «подключился впервые».
+REMIND = {"ev.client_expiring": "rm_expiring", "ev.client_quota_warn": "rm_quota_warn",
+          "ev.client_expired": "rm_expired", "ev.client_quota": "rm_quota", "ev.client_quota_reset": "rm_quota_reset"}
+REMIND_MAX = 1000                     # напоминаний в очереди (больше — старые выбрасываются)
+REMIND_AGE = 86400                    # не дошедшее за сутки — уже не новость
+REMIND_PAUSES = (30, 60, 120, 300)    # повтор, когда Telegram недоступен
+REMIND_GAP = 0.05                     # между сообщениями: предел Telegram — около 30 в секунду
 
 
 def client_lang(frm: dict | None) -> str:
@@ -621,6 +655,8 @@ class Bot:
         self.last_chat: dict | None = None        # последний чат, написавший боту ({id, title, bot, t})
         self._client_t: dict[str, float] = {}     # чат клиента → время последнего ответа (CLIENT_EVERY)
         self._cfg_t: dict[str, float] = {}        # чат клиента → когда отправили конфиг (CFG_EVERY)
+        self._remind_q: queue.Queue = queue.Queue(maxsize=REMIND_MAX)
+        self._reminders: collections.deque = collections.deque(maxlen=REMIND_MAX)   # не дошедшие напоминания
         self._st = self._load()
         # сообщение-меню (обычно одно): его правим на месте, старые удаляем; переживает перезапуск
         self._panel_msgs: list[int] = [m for m in self._st.get("panel") or [] if isinstance(m, int)]
@@ -820,8 +856,97 @@ class Bot:
             notify.send(c["token"], cid, tr(L, "cfg_link") + "\n<code>" + html.escape(cfg["link"]) + "</code>",
                         c["via"], html=True)
 
+    # ------------------------------------------------------------- напоминания клиентам
+    def remind(self, key: str, pk: str) -> None:
+        """Событие движка о клиенте (Notifier.client_fn) → напоминание в чаты, привязанные к нему приглашением.
+        Только ставит в очередь: событие приходит из прохода движка, а сеть — в потоке tgbot-remind."""
+        rk = REMIND.get(key)
+        if not rk or not pk:
+            return
+        try:
+            self._remind_q.put_nowait((rk, pk, time.time()))
+        except queue.Full:
+            log.warning("telegram: reminders queue is full, a reminder is dropped")
+
+    def _remind_loop(self) -> None:
+        fails = 0
+        while not self.stop_ev.is_set():
+            wait = REMIND_PAUSES[min(fails, len(REMIND_PAUSES) - 1)] if self._reminders else None
+            try:
+                self._reminders.append(list(self._remind_q.get(timeout=wait)) + [set()])
+                while True:
+                    self._reminders.append(list(self._remind_q.get_nowait()) + [set()])
+            except queue.Empty:
+                pass
+            try:
+                fails = 0 if self.remind_flush() else fails + 1
+            except Exception:  # noqa: BLE001  — поток напоминаний не должен умирать
+                log.exception("telegram reminders")
+                fails += 1
+
+    def remind_flush(self, now: float | None = None) -> bool:
+        """Отправить накопленные напоминания. False — Telegram недоступен, остаток ждёт повтора. Каждое — по
+        настройкам и состоянию клиента сейчас: напоминания выключили, срок продлили или клиента снова включили,
+        пока ждали связи, — устаревшее не отправляется."""
+        c = notify.cfg_of(self.store.snapshot())
+        if not (c["token"] and c.get("clients") and c.get("client_notify")):
+            self._reminders.clear()
+            return True
+        while self._reminders:
+            rk, pk, ts, done = self._reminders[0]
+            t = time.time() if now is None else now
+            if t - ts <= REMIND_AGE:
+                for cid, link in list((self._st.get("links") or {}).items()):
+                    if cid in done or link.get("pk") != pk or self.ops.share_pk(link.get("tok")) != pk:
+                        continue
+                    L = link.get("lang") or "en"
+                    text = self._remind_text(rk, L, link["tok"], t)
+                    if text:
+                        try:
+                            notify.send(c["token"], cid, text, c["via"], kb([(tr(L, "b_refresh"), "me:r")]),
+                                        html=True)
+                        except notify.NotifyError as e:
+                            if e.net:
+                                log.warning("telegram reminder: %s", e)
+                                return False
+                            log.info("telegram reminder to chat %s: %s", cid, e)   # клиент удалил чат с ботом
+                        if REMIND_GAP and now is None:
+                            time.sleep(REMIND_GAP)
+                    done.add(cid)
+            self._reminders.popleft()
+        return True
+
+    def _remind_text(self, rk: str, L: str, tok: str, now: float) -> str | None:
+        """Текст напоминания по тому, что у клиента сейчас (как карточка); None — уже не к месту."""
+        d = self.ops.share_info(tok, False)
+        if not d:
+            return None
+        lim = d.get("limits") or {}
+        tv = d.get("traffic") or {}
+        on = bool(d.get("enabled"))
+        period = lim.get("period") or "month"
+        used = (tv.get("month_rx", 0) + tv.get("month_tx", 0)) if period == "month" \
+            else (tv.get("total_rx", 0) + tv.get("total_tx", 0))
+        exp, quota = lim.get("expires"), lim.get("quota")
+        if rk == "rm_expiring":
+            if not (on and exp and exp > now):
+                return None
+            return tr(L, rk, date=fmt_date(exp), days=max(1, math.ceil((exp - now) / DAY)))
+        if rk == "rm_quota_warn":
+            if not (on and quota and used < quota):
+                return None
+            return tr(L, rk, used=fmt_size(used, L), quota=fmt_size(quota, L))
+        if rk == "rm_expired":
+            return None if on else tr(L, rk)
+        if rk == "rm_quota":
+            return None if on or not quota else tr(L, "rm_quota_" + period, quota=fmt_size(quota, L))
+        if rk == "rm_quota_reset":
+            return tr(L, rk) if on else None
+        return None
+
     def start(self) -> None:
         threading.Thread(target=self._loop, name="tgbot", daemon=True).start()
+        threading.Thread(target=self._remind_loop, name="tgbot-remind", daemon=True).start()
 
     # ------------------------------------------------------------- опрос
     def _loop(self) -> None:

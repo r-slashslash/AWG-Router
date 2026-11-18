@@ -88,6 +88,15 @@ function toast(msg, bad = false) {
   setTimeout(() => el.remove(), bad ? 6000 : 3000);
 }
 
+/** Строка «Есть несохранённые изменения» — наверху вкладки, сразу под строкой вкладок (решение владельца
+   2026-11-19: внизу неудобно). Она и так на виду, поэтому «сначала сохраните» не прокручивает к ней, а мигает ею. */
+function flashBar(el) {
+  if (!el) return;
+  el.classList.remove("flash");
+  void el.offsetWidth;            // заново запустить анимацию
+  el.classList.add("flash");
+}
+
 class AuthError extends Error {}
 async function api(method, path, body, timeoutMs = 0, headers = null) {
   const opt = { method, headers: { ...(headers || {}) }, credentials: "same-origin" };
@@ -486,6 +495,12 @@ async function boot(retry = false) {
   $("#app").hidden = false;
   pollOn = true;
   schedulePoll();
+}
+
+// высота строки вкладок (она прилипает к верху и на телефоне бывает выше): под ней прилипает строка сохранения
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => document.documentElement.style.setProperty("--tabs-h", $("#tabs").offsetHeight + "px"))
+    .observe($("#tabs"));
 }
 
 $("#tabs").addEventListener("click", (e) => {

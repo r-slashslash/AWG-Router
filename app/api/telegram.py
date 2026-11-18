@@ -187,3 +187,4 @@ bot_ops = SimpleNamespace(
     audit=lambda msg: engine.event("info", msg),
 )
 bot = tgbot.Bot(store, bot_ops, engine.stop_ev)
+notifier.client_fn = bot.remind         # напоминания клиентам в их чаты с ботом (срок, лимит)

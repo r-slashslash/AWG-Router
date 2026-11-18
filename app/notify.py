@@ -294,6 +294,8 @@ def defaults() -> dict:
             # клиенты открывают приглашение в бота и смотрят там свой доступ (1.22.0); бот читает сообщения и
             # при выключенном управлении. У установок до 1.22.0 без управления — выключено (store.CLIENT_BOT)
             "clients": True,
+            # напоминания клиенту в его чат с ботом: срок скоро, 90% лимита, отключён, снова включён (1.22.0)
+            "client_notify": True,
             # резервная копия в чат: off | daily | weekly; пароль — шифровать файл (пусто — нет)
             "backup": "off", "backup_pw": "", "backup_last": None, "backup_error": None}
 
@@ -559,6 +561,8 @@ class Notifier:
         self._target_lost = False
         # кнопки под уведомлением (tgbot.notify_buttons): (ключ текста, ссылки, язык) → reply_markup
         self.buttons_fn = None
+        # напоминания клиентам (tgbot.Bot.remind): (ключ события, ключ клиента) — бот решает сам, кому и что
+        self.client_fn = None
         global on_migrate
         on_migrate = self.migrate
         threading.Thread(target=self._worker, name="notify", daemon=True).start()
@@ -622,6 +626,12 @@ class Notifier:
         if m:
             self.event(m[0], m[1], refs={k: v for k, v in msg.p.items() if k in ("pk", "uid")},
                        **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min", "version", "error", "n")})
+        fn = getattr(self, "client_fn", None)
+        if fn and msg.p.get("pk"):
+            try:
+                fn(msg.key, msg.p["pk"])
+            except Exception:  # noqa: BLE001  — уведомление владельцу важнее напоминания клиенту
+                log.exception("client reminder")
 
     def target_ok(self) -> None:
         if self._target_lost:

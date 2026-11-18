@@ -497,7 +497,7 @@ function editClient(pk, section = null) {
         outbound: $("#c-out").value, rules_mode: draft.rules_mode,
         rules: draft.rules_mode === "custom" ? draft.rules : [], note: $("#c-note").value.trim() });
       closeModal(); toast(t("toast.saved_applying")); refresh();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toast(e.message, true); markField(e, document.querySelector("dialog[open]")); }
   };
   const reopen = async () => { await refresh(); editClient(pk, "connect"); };
   bindClientLinks(c, reopen);

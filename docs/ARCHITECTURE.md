@@ -164,7 +164,7 @@ has to show a panel message (an error), `app/uitext.py` reads the same dictionar
 | Module | What it does |
 |---|---|
 | `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego), own certificate, a web server on port 80 |
-| `notify.py`, `tgbot.py` | Telegram notifications and control; clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) |
+| `notify.py`, `tgbot.py` | Telegram notifications and control; clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) and, if on, get reminders about the end date and the limit (`Notifier.client_fn` → `Bot.remind`, sent by the `tgbot-remind` thread) |
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |
 | `awgconf.py`, `awgserver.py`, `cps.py` | AmneziaWG configs and the I1–I5 masking templates |

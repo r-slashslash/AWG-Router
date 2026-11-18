@@ -193,7 +193,7 @@ def put_client(req, pk):
     body = req.json()
 
     def fn(st):
-        c = {**checks.client_policy(st, body),
+        c = {**checks.client_policy(st, body, engine.dns_listen()),
              "name": next((x.get("name") for x in engine.clients if x["public_key"] == pk), "")}
         if c["outbound"] == "inherit" and c["rules_mode"] == "inherit" and not c["note"]:
             st["clients"].pop(pk, None)

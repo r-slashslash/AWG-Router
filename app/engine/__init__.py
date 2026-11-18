@@ -78,6 +78,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self._fake = system.DemoTarget() if config.DRY_RUN else None
         self.public_v4: str | None = None      # внешний IPv4, найденный проверкой «напрямую»
         self.public_v4_state = "pending"        # pending — ещё ищем, ok — найден, failed — не нашли
+        self.public_cc: str | None = None       # страна сервера по той же проверке (кнопка «Прямые сайты»)
         self.srv = ServerManager(self)
         self._runtime_checked = False
         self._masking_checked = None     # Target.key, на котором уже проверен старый I1
@@ -177,6 +178,9 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 try:
                     r = self.probe("direct")
                     ip = r.get("ip") if r.get("ok") else None
+                    cc = r.get("cc") if r.get("ok") else None
+                    if isinstance(cc, str) and len(cc) == 2 and cc.isalpha():
+                        self.public_cc = cc.upper()
                     # только IPv4: адрес идёт во «Внешний адрес сервера» и в конфиги клиентов
                     ip = str(ipaddress.IPv4Address(str(ip).strip())) if ip else None
                 except Exception:  # noqa: BLE001  — в том числе не адрес (ValueError)

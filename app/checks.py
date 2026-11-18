@@ -131,12 +131,14 @@ def outbound(st: dict, v, allow_inherit: bool = False) -> str:
     bad(Msg("err.unknown_outbound", value=v))
 
 
-def rules(st: dict, rules) -> list[dict]:
-    """Правила «списки → выход» (общие и клиента)."""
+def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:
+    """Правила «списки → выход» (общие и клиента). self_dns — адрес, на котором слушает DNS на сервере: свой DNS
+    правила с ним бесполезен (DNS на сервере не спрашивает сам себя, имена ушли бы к общим серверам), поэтому
+    при сохранении из панели он не принимается; копии и выходы проверяют без него, как до 1.22.0."""
     if not isinstance(rules, list) or len(rules) > 50:
         bad("err.bad_rules")
     out = []
-    for r in rules:
+    for i, r in enumerate(rules):
         if not isinstance(r, dict):
             bad("err.bad_rules")
         ls = r.get("lists") or []
@@ -158,7 +160,10 @@ def rules(st: dict, rules) -> list[dict]:
         # свой DNS — только у правила по сайтам (адрес сайта из списка сетей до ответа DNS не известен);
         # поле пишется, только если задано: состояние и копии без него — как до 1.22.0
         if Store.lst(st, ls[0])["kind"] == "domains":
-            dns = rule_dns(r.get("dns"))
+            with field(f"rule_dns_{i}"):
+                dns = rule_dns(r.get("dns"))
+                if self_dns and self_dns in dns:
+                    bad(Msg("err.rule_dns_self", value=self_dns))
             if dns:
                 out[-1]["dns"] = dns
     return out
@@ -364,14 +369,14 @@ def list_id(st: dict, lid, fields: dict) -> str:
 
 
 # ------------------------------------------------------------------ клиент
-def client_policy(st: dict, body: dict) -> dict:
+def client_policy(st: dict, body: dict, self_dns: str | None = None) -> dict:
     """Куда идёт клиент: выход («как у всех» — inherit), свои правила или общие, заметка."""
     mode = body.get("rules_mode", "inherit")
     if mode not in ("inherit", "custom"):
         bad("err.bad_value")
     return {"outbound": outbound(st, body.get("outbound", "inherit"), allow_inherit=True),
             "rules_mode": mode,
-            "rules": rules(st, body.get("rules") or []) if mode == "custom" else [],
+            "rules": rules(st, body.get("rules") or [], self_dns) if mode == "custom" else [],
             "note": str(body.get("note") or "")[:120]}
 
 
@@ -506,7 +511,7 @@ def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:
     if isinstance(ev, dict):
         one = (lambda k: forgive(lambda: flag(ev[k]), c["events"].get(k, True))) if backup else (lambda k: flag(ev[k]))
         c["events"] = {k: one(k) if k in ev else c["events"].get(k, True) for k in notify.KINDS}
-    for k in ("enabled", "control", "clients"):
+    for k in ("enabled", "control", "clients", "client_notify"):
         if k in body:
             c[k] = soft(lambda: flag(body[k]), k)
     if "backup" in body:

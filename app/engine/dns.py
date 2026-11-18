@@ -176,6 +176,11 @@ class DnsMixin:
             d.cfg_hash = h
         self.dns_state = {"state": "on", "listen": listen, "encrypt": cfg["encrypt"]}
 
+    def dns_listen(self) -> str | None:
+        """Адрес, на котором сейчас слушает DNS на сервере (None — выключен или не запустился)."""
+        d = self.dns_state or {}
+        return d.get("listen") if d.get("state") == "on" else None
+
     def dns_view(self) -> dict | None:
         """Для интерфейса: состояние и счётчики dnsproxy.py."""
         if not self.dns_state:

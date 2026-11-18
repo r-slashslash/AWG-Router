@@ -26,7 +26,7 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
             <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
           </div>
           <input type="text" class="rule-comment" data-comment value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}" maxlength="80">
-          ${dom ? `<label class="rule-dns"><span>${esc(t("re.dns"))}</span><input type="text" data-dns dir="ltr" value="${esc((r.dns || []).join(", "))}" placeholder="${esc(t("re.dns_ph"))}" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
+          ${dom ? `<label class="rule-dns"><span>${esc(t("re.dns"))}</span><input type="text" data-dns data-field="rule_dns_${i}" dir="ltr" value="${esc((r.dns || []).join(", "))}" placeholder="${esc(t("re.dns_ph"))}" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
           <div class="small muted" style="margin-top:4px">${esc(t("re.domain_hint"))} ${esc(t(S.settings.panel_dns ? "re.dns_hint" : "re.dns_off"))}</div>` : ""}
         </div>
         <div class="rule-then"><label>${esc(t(dom ? "re.then_sites" : "re.then"))}</label><select data-out>${outOptions(r.outbound)}</select></div>
@@ -99,6 +99,8 @@ function balBox(d) {
 function viewRouting() {
   const rd = routingDraft || routingNow();
   return `
+  <div class="savebar" id="savebar" hidden><span>${esc(t("rt.unsaved"))}</span>
+    <span class="actions"><button class="btn sm" id="g-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="g-save">${esc(t("rt.save"))}</button></span></div>
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("rt.title"))}</h2><p class="muted small">${esc(t("rt.subtitle"))}</p></div></div>
     <div id="g-rules"></div>
@@ -117,8 +119,6 @@ function viewRouting() {
     ${S.lists.some((l) => l.kind === "domains") || rd.strict ? `<div class="field" style="margin-top:14px">
       <label class="check"><input type="checkbox" id="g-strict" ${rd.strict ? "checked" : ""}><span>${esc(t("rt.strict"))}</span></label>
       ${S.sni && S.sni.strict ? `<div class="small warn-text">${esc(t("rt.strict_now"))}</div>` : ""}</div>` : ""}
-    <div class="savebar" id="savebar" hidden><span>${esc(t("rt.unsaved"))}</span>
-      <span class="actions"><button class="btn sm" id="g-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="g-save">${esc(t("rt.save"))}</button></span></div>
   </section>
   <section class="section" id="lists-sec">${listsSection()}</section>
   <section class="section">
@@ -162,7 +162,7 @@ bind.routing = () => {
     try {
       await api("PUT", "routing", draft);
       routingDraft = null; toast(t("toast.rules_saved")); await refresh();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toast(e.message, true); markField(e, $("#g-rules")); }
   };
   $("#trace-form").onsubmit = async (e) => {
     e.preventDefault();

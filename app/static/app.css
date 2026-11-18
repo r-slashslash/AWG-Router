@@ -359,9 +359,12 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
   .rule-ctl { grid-column: 2; padding-top: 0; }
 }
 .savebar {
-  position: sticky; bottom: 12px; margin-top: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  position: sticky; top: calc(var(--tabs-h, 43px) + 8px); z-index: 4; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px;
   padding-block: 10px; padding-inline: 16px 12px; border-radius: 10px; background: var(--ink); color: var(--bg); box-shadow: 0 8px 24px rgba(0,0,0,.2); flex-wrap: wrap;
 }
+.savebar.flash { animation: savebar-flash .5s ease-in-out 2; }
+@keyframes savebar-flash { 50% { box-shadow: 0 0 0 4px var(--primary), 0 8px 24px rgba(0,0,0,.2); } }
+@media (prefers-reduced-motion: reduce) { .savebar.flash { animation: none; } }
 .savebar .btn:not(.primary) { background: transparent; color: var(--bg); border-color: color-mix(in srgb, var(--bg) 40%, transparent); }
 
 /* ---------- trace ---------- */

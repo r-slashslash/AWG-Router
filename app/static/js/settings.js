@@ -38,6 +38,8 @@ function viewTelegram() {
       <fieldset class="pgroup" style="margin:4px 0 12px"><legend>${esc(t("tg.clients_title"))}</legend>
         <label class="check"><input type="checkbox" id="tg-clients" ${c.clients !== false ? "checked" : ""}><span><b>${esc(t("tg.clients"))}</b></span></label>
         <p class="small muted" style="margin:6px 0 0">${esc(t("tg.clients_hint"))}</p>
+        <label class="check" style="margin-top:10px"><input type="checkbox" id="tg-cnotify" ${c.client_notify !== false ? "checked" : ""}><span>${esc(t("tg.client_notify"))}</span></label>
+        <p class="small muted" style="margin:6px 0 0">${esc(t("tg.client_notify_hint"))}</p>
         ${c.clients !== false && c.token_set && !c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
         ${c.clients !== false && S.tg_bot && S.tg_bot.linked ? `<p class="small muted">${esc(t("tg.clients_linked", { n: S.tg_bot.linked }))}</p>` : ""}
       </fieldset>
@@ -77,7 +79,7 @@ function bindTelegram() {
     TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });
     return { enabled: $("#tg-on").checked, token: $("#tg-token").value.trim(),
       chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, via: $("#tg-via").value, events,
-      control: $("#tg-control").checked, clients: $("#tg-clients").checked,
+      control: $("#tg-control").checked, clients: $("#tg-clients").checked, client_notify: $("#tg-cnotify").checked,
       backup: $("#tg-bk").value, backup_pw: $("#tg-bk-pw").value,
       backup_pw_clear: !!($("#tg-bk-clear") && $("#tg-bk-clear").checked) };
   };

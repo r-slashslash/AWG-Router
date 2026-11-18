@@ -476,6 +476,102 @@ class HevTest(unittest.TestCase):
 
 
 # ======================================================================== приглашения у старых установок
+class ClientReminderTest(unittest.TestCase):
+    """Напоминания клиенту в его чат с ботом (1.22.0): срок скоро, 90% лимита, отключён, снова включён — по тому,
+    что у клиента сейчас; только в чаты, привязанные приглашением; с галочкой «Напоминать клиентам»."""
+
+    PK, TOK = "PK_remind", "tok_remind"
+
+    def setUp(self):
+        bot_setup(self, clients=True)
+        self.tg_cfg = cfg(clients=True, control=False)
+        self.info = {"enabled": True, "traffic": {"month_rx": 9 * 2 ** 30, "month_tx": 0},
+                     "limits": {"expires": time.time() + 2.5 * 86400, "quota": 10 * 2 ** 30, "period": "month"}}
+        ops = mock.Mock()
+        ops.share_pk = lambda tok: self.PK if tok == self.TOK else None
+        ops.share_info = lambda tok, config=True: dict(self.info) if tok == self.TOK else None
+        self.bot.ops = ops
+        self.bot.store = mock.Mock()
+        self.bot.store.snapshot = lambda: {"settings": {"telegram": self.tg_cfg}}
+        self.bot._st["links"] = {"7001": {"pk": self.PK, "tok": self.TOK, "lang": "ru", "t": 1},
+                                 "7002": {"pk": self.PK, "tok": "old", "lang": "en", "t": 2},     # приглашение обновили
+                                 "7003": {"pk": "PK_other", "tok": "x", "lang": "en", "t": 3}}
+
+    def flush(self, *keys):
+        for k in keys:
+            self.bot.remind(k, self.PK)
+        while not self.bot._remind_q.empty():
+            self.bot._reminders.append(list(self.bot._remind_q.get_nowait()) + [set()])
+        return self.bot.remind_flush(now=time.time())
+
+    def sent(self):
+        return [(str(p["chat_id"]), p["text"]) for m, p in self.tg.calls if m == "sendMessage"]
+
+    def test_expiring_and_quota_go_to_the_clients_chat_only(self):
+        self.assertTrue(self.flush("ev.client_expiring", "ev.client_quota_warn", "ev.client_first", "ev.exit_down"))
+        out = self.sent()
+        self.assertEqual([c for c, _ in out], ["7001", "7001"])
+        self.assertIn("закончится", out[0][1])
+        self.assertIn("через 3 дн.", out[0][1])
+        self.assertIn("9 ГБ из 10 ГБ", out[1][1])
+        markup = [p["reply_markup"] for m, p in self.tg.calls if m == "sendMessage"][0]
+        self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "me:r")
+
+    def test_stale_reminder_not_sent(self):
+        """Пока ждали связи, клиента продлили или снова включили — устаревшее не уходит."""
+        self.assertTrue(self.flush("ev.client_expired", "ev.client_quota"))      # клиент включён: уже не к месту
+        self.assertEqual(self.sent(), [])
+        self.info["enabled"] = False
+        self.info["limits"] = {**self.info["limits"], "period": "total"}
+        self.assertTrue(self.flush("ev.client_quota", "ev.client_quota_reset"))
+        out = self.sent()
+        self.assertEqual(len(out), 1)
+        self.assertIn("напишите тому, кто выдал вам доступ", out[0][1])
+
+    def test_switch_off_or_no_clients_bot(self):
+        for kw in ({"client_notify": False}, {"clients": False}, {"token": ""}):
+            self.tg_cfg = cfg(**{"clients": True, "control": False, **kw})
+            self.assertTrue(self.flush("ev.client_expiring"))
+            self.assertEqual(self.sent(), [], kw)
+            self.assertFalse(self.bot._reminders)
+
+    def test_kept_while_telegram_is_down_and_not_sent_twice(self):
+        self.bot._st["links"]["7004"] = {"pk": self.PK, "tok": self.TOK, "lang": "en", "t": 4}
+        n = {"calls": 0}
+
+        def down(p):
+            n["calls"] += 1
+            return notify.NotifyError("timed out", net=True) if n["calls"] == 2 else None
+        self.tg.fail["sendMessage"] = down
+        self.assertFalse(self.flush("ev.client_expiring"))           # первый чат получил, второй — нет связи
+        self.assertEqual(len(self.bot._reminders), 1)
+        self.assertTrue(self.bot.remind_flush(now=time.time()))
+        chats = [c for c, _ in self.sent()]                              # неудачная попытка тоже в списке
+        self.assertEqual((chats.count("7001"), chats[-1]), (1, "7004"))  # первому — не повторно
+        self.assertFalse(self.bot._reminders)
+        self.tg.calls.clear()                                             # сутки без связи — уже не новость
+        self.bot._reminders.append(["rm_expiring", self.PK, time.time() - tgbot.REMIND_AGE - 1, set()])
+        self.assertTrue(self.bot.remind_flush(now=time.time()))
+        self.assertEqual(self.sent(), [])
+
+    def test_notifier_passes_client_events(self):
+        got = []
+        n = notify.Notifier.__new__(notify.Notifier)
+        n.__dict__.update(_target_lost=False, client_fn=lambda k, pk: got.append((k, pk)), event=lambda *a, **kw: None)
+        n.engine_event(Msg("ev.client_expiring", name="x", pk="PK1", date="2026-11-22", days=3))
+        n.engine_event(Msg("ev.exit_down", name="e", uid="u1"))
+        self.assertEqual(got, [("ev.client_expiring", "PK1")])
+
+    def test_setting_saved_and_on_by_default(self):
+        self.assertTrue(notify.defaults()["client_notify"])
+        st = panel.store.snapshot()
+        c = checks.telegram(st, notify.cfg_of(st), {"client_notify": False})
+        self.assertFalse(c["client_notify"])
+        js = read("app", "static", "js", "settings.js")
+        self.assertIn('client_notify: $("#tg-cnotify").checked', js)
+        self.assertIn("notifier.client_fn = bot.remind", read("app", "api", "telegram.py"))
+
+
 class ClientBotUpgradeTest(unittest.TestCase):
     def state(self, **tg):
         return {"settings": {"telegram": {"token": TOKEN, "chat_id": "1", **tg}}, "upgraded": ["rule_names"]}
@@ -957,6 +1053,29 @@ class RuleDnsTest(unittest.TestCase):
         self.assertNotIn("dns", out[1])                 # у правила по адресам свой DNS не имеет смысла
         self.assertNotIn("dns", out[2])                 # не задан — поля нет, состояние как до 1.22.0
 
+    def test_own_server_address_refused_at_the_field(self):
+        """Адрес самого DNS на сервере в своём DNS правила бесполезен: при сохранении из панели — ошибка у поля
+        этого правила (rule_dns_<номер>); копии и выходы проверяют без адреса — как до 1.22.0."""
+        from app import checks
+        st = {**panel.store.snapshot(), "lists": [{"id": "l_dom", "kind": "domains", "name": "ru"}]}
+        rules = [{"lists": ["l_dom"], "outbound": "direct"},
+                 {"lists": ["l_dom"], "outbound": "direct", "dns": "77.88.8.8, 10.8.1.1"}]
+        with self.assertRaises(Exception) as cm:
+            checks.rules(st, rules, "10.8.1.1")
+        self.assertEqual(cm.exception.field, "rule_dns_1")
+        self.assertIn("err.rule_dns_self", repr(cm.exception.__dict__))
+        self.assertEqual(checks.rules(st, rules)[1]["dns"], ["77.88.8.8", "10.8.1.1"])
+        self.assertEqual(checks.rules(st, rules, "10.8.2.1")[1]["dns"], ["77.88.8.8", "10.8.1.1"])
+        with self.assertRaises(Exception) as cm:                 # и у своих правил клиента
+            checks.client_policy(st, {"rules_mode": "custom", "rules": rules}, "10.8.1.1")
+        self.assertEqual(cm.exception.field, "rule_dns_1")
+        with self.assertRaises(Exception) as cm:                 # прочие ошибки своего DNS — тоже у поля
+            checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "yandex"}])
+        self.assertEqual(cm.exception.field, "rule_dns_0")
+        js = read("app", "static", "js", "routing.js")
+        self.assertIn('data-field="rule_dns_${i}"', js)
+        self.assertIn('markField(e, $("#g-rules"))', js)
+
     def test_zone_with_leading_dot(self):
         """«.cn» в списке — вся зона, как и «cn»: точка в начале не мешает (так подсказывает окно списка)."""
         from app import dnsproxy, domains
@@ -1090,6 +1209,41 @@ class RuleDnsTest(unittest.TestCase):
             r = s.recv(65535)
         self.assertEqual(r[:2], b"\x42\x42")
         self.assertIn(socket.inet_aton("203.0.113.1"), r)
+
+
+class CascadeButtonTest(unittest.TestCase):
+    """«Для каскада» (1.22.0): страна сервера — из проверки «напрямую»; кнопка создаёт список зоны и правило
+    «Напрямую» с местным DNS в черновике вкладки «Маршрутизация» (сохраняет человек сам)."""
+
+    def test_country_from_direct_check(self):
+        import threading
+        e = panel.engine
+        ev = threading.Event()
+        ev.wait = lambda t=None: ev.set()            # один круг поиска адреса
+        old = (e.stop_ev, e.public_v4, e.public_v4_state, e.public_cc)
+        try:
+            e.stop_ev = ev
+            with mock.patch.object(e, "target", mock.Mock(exists=True)), \
+                    mock.patch.object(e.srv, "public_host", return_value="198.51.100.1"), \
+                    mock.patch.object(e, "probe", return_value={"ok": True, "ip": "203.0.113.9", "cc": "ru"}):
+                e._detect_host()
+            self.assertEqual(e.public_cc, "RU")
+            ev.clear()
+            with mock.patch.object(e, "target", mock.Mock(exists=True)), \
+                    mock.patch.object(e.srv, "public_host", return_value="198.51.100.1"), \
+                    mock.patch.object(e, "probe", return_value={"ok": True, "ip": "203.0.113.9", "cc": "<b>"}):
+                e._detect_host()
+            self.assertEqual(e.public_cc, "RU")                    # не код страны — прежний остаётся
+        finally:
+            e.stop_ev, e.public_v4, e.public_v4_state, e.public_cc = old
+
+    def test_button_code(self):
+        js = read("app", "static", "js", "server.js")
+        self.assertIn('const CASCADE_DNS = { RU: "77.88.8.8", CN: "223.5.5.5", IR: "178.22.122.100" };', js)
+        self.assertIn("if (!cc || !S.upstreams.length) return null;", js)   # без выходов каскада нет
+        self.assertIn("d.rules.push(rule);", js)                               # последним: точные правила выше
+        self.assertIn("if (!saveFirst()) cascadeAdd(cb);", js)
+        self.assertIn('"public_cc": getattr(self.e, "public_cc", None)', read("app", "users.py"))
 
 
 class RecoverRenamedTest(unittest.TestCase):

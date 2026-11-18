@@ -10,7 +10,7 @@ it grows, so every user-visible change gets a new version.
   the client's bot invitation, `https://t.me/<bot>?start=<token>` (`clients.bot_invite`, `bot_url` in the client rows;
   the bot learns its name with `getMe`). A client who opens it sees in a private chat with the bot what the personal
   page shows — status, traffic, expiry and quota — and gets the config (QR, file, `vpn://`), nothing else of the panel;
-  the bot never writes first. Chats are bound in `tgbot.json` (`links`: chat → client and token, at most
+  the bot writes first only with reminders (below). Chats are bound in `tgbot.json` (`links`: chat → client and token, at most
   `LINKS_MAX`), not in `state.json` or backups, and the token is checked against `shares` on every message: **Renew**
   in the client window (`POST /api/shares-renew/<pk>`) replaces both the link and the invitation, and a chat bound to
   the old one is let go. The texts follow the client's Telegram language (ru, zh, fa, else en). One reply per second
@@ -21,6 +21,17 @@ it grows, so every user-visible change gets a new version.
   that use the bot for notifications only get it off once (`store.CLIENT_BOT`), since that bot may be read by another
   program. The bot's command menu is set only for the panel's chat (`BotCommandScopeChat`); the menu that 1.9.0–1.21.0
   set for every private chat is removed once.
+- **Reminders to clients in the bot** (System → Telegram → "Remind clients in the bot about the end date and limit",
+  `telegram.client_notify`, on by default). A client bound by an invitation gets in its chat: 3 days before the end
+  date (`rm_expiring`), at 90% of the traffic limit (`rm_quota_warn`), when access is turned off by the end date or the
+  limit (`rm_expired`, `rm_quota_month` / `rm_quota_total`) and when a monthly limit lets it on again
+  (`rm_quota_reset`), each with a Refresh button. The same engine events as the owner's notices about clients
+  (limits.py raises each once): `Notifier.engine_event` hands those with a `pk` to `Notifier.client_fn` =
+  `Bot.remind`, which only queues them; the `tgbot-remind` thread sends to every chat in `links` bound to that client
+  with a live token, in the chat's language. Each reminder is built from what the client has now (`share_info`): one
+  that no longer fits (extended, on again) is not sent. Telegram unreachable — the rest waits (`REMIND_PAUSES`), a chat
+  already sent to is not sent again, older than `REMIND_AGE` (a day) is dropped; a refusal (the client deleted the chat)
+  skips that chat. Off, without the token or with clients in the bot off — nothing is sent. *Test:* `ClientReminderTest`.
 - **Telegram group became a supergroup.** Telegram gives such a chat a new number and refuses the old one with
   `migrate_to_chat_id`; notifications used to stop silently. `notify.send` and file sends take the new number into
   the settings (only if the old one was there) and send again; the bot does the same on the service message
@@ -109,6 +120,9 @@ it grows, so every user-visible change gets a new version.
   policy and starts it (`system.recover_renamed`: only when no container has the usual name, the installer isn't
   running and the old one has been stopped for `RECOVER_AFTER` s), with `ev.container_recovered` and a Telegram notice.
   *Test:* `RecoverRenamedTest`.
+- **"You have unsaved changes" sits at the top** of the Routing and Server tabs, right under the tab row
+  (`position: sticky`, `top` = the tab row's height from `--tabs-h`), for as long as there is something to save; at
+  the bottom it went off the screen with its section. "Save first" now flashes it (`flashBar`) instead of scrolling.
 - **Refresh lists every, h** moved from System → Settings to the lists section on Routing (saves with its own
   button, shown when the number changed; Enter saves too). The lists subtitle no longer repeats the hours.
 - On a phone the buttons of a table row (`td.acts`, `width: 1%`) were a 1% wide grid cell and stuck out past the
@@ -132,6 +146,17 @@ it grows, so every user-visible change gets a new version.
   way, often direct, as plain DNS past the exit — and the shared servers answer as before 1.22.0; an own DNS equal to
   the address this DNS listens on is skipped (it would ask itself). *Tests:* `RuleDnsTest` (check, engine, a real
   dnsproxy.py process with a dead DoT upstream and a live own server, a down exit, the server's own address, the cache).
+  Saving rules from the panel (general and a client's own) refuses an own DNS equal to the address DNS on the server
+  listens on (`engine.dns_listen()` → `checks.rules(…, self_dns)`), with `err.rule_dns_self` at that rule's field
+  (`data-field="rule_dns_<i>"`; the other own DNS errors are marked there too); backups and exits are checked without
+  it, as before. *Test:* `RuleDnsTest.test_own_server_address_refused_at_the_field`.
+- **A cascade in one press.** Under Server → DNS on the server → "Why and how to set it up", the cascade paragraph has a
+  button "Add a rule: .ru — Direct": the zone is the server's country (`engine.public_cc`, from the "Direct" check that
+  finds the public IP; `GB` → `.uk`), the own DNS a local one where known (`CASCADE_DNS`: RU 77.88.8.8, CN 223.5.5.5,
+  IR 178.22.122.100; else the field is left for the owner). It creates the domain list `.<zone>` (or takes the one with
+  that name) and puts a Direct rule with that DNS last in the Routing draft (more exact domain rules stay above it), then
+  opens Routing: the owner checks and saves. Shown only with at least one exit; with such a rule saved it says the rule
+  is there. *Test:* `CascadeButtonTest`.
 - **The client's name is not shown to the client.** The config file name and the `vpn://` description are
   `users.conf_label(pk)` — 8 digits from the client's key — everywhere (panel, bot, personal page); before, a Latin
   name was the file name and the name was the description. The personal page gets no name (`share_info` without
