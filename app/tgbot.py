@@ -870,7 +870,7 @@ class Bot:
             # отметку сохраняем до выполнения: после перезапуска команда не повторится
             self._st["offset"] = int(u.get("update_id", 0)) + 1
             self._save()
-            if ch := notify.chat_of(u):     # для «Найти» Chat ID: бот сам забирает сообщения раньше кнопки
+            if ch := self._seen(u):         # для «Найти» Chat ID: бот сам забирает сообщения раньше кнопки
                 self.last_chat = {**ch, "bot": c["token"].split(":", 1)[0], "t": time.time()}
             if not live:
                 continue
@@ -893,6 +893,20 @@ class Bot:
             return False
         log.warning("telegram: the bot had a webhook set by another service; removed it to receive commands")
         return True
+
+    def _seen(self, u: dict) -> dict | None:
+        """Чат, который годится для «Найти» Chat ID: сообщение, а не нажатие кнопки, и не от клиента по
+        приглашению (ни из привязанного чата, ни само приглашение «/start <ключ>»). Иначе «Найти» могло подставить
+        чат клиента, и уведомления, управление и копии с ключами ушли бы ему."""
+        if "callback_query" in u:
+            return None
+        ch = notify.chat_of(u)
+        if not ch or ch["id"] in (self._st.get("links") or {}):
+            return None
+        cmd, _, arg = str((u.get("message") or {}).get("text") or "").strip().partition(" ")
+        if cmd.split("@", 1)[0].lower() == "/start" and arg.strip():
+            return None
+        return ch
 
     def _set_commands(self, c: dict) -> None:
         """Меню команд панели — только в чате панели (1.22.0). Раньше оно стояло у всех личных чатов бота, а

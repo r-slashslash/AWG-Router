@@ -638,6 +638,26 @@ class DetectSeenChatTest(unittest.TestCase):
         with mock.patch.object(telegram, "bot", self.bot):                # другой бот — не его чат
             self.assertIsNotNone(code(lambda: telegram.telegram_detect(Req({"token": "987654321:" + "B" * 35}))))
 
+    def test_client_chat_not_found(self):
+        """Проверка 1.22.0 (Н1): «Найти» не подставляет чат клиента — ни приглашение «/start <ключ>», ни его
+        кнопки, ни сообщения из привязанного чата. Иначе уведомления, управление и копии с ключами ушли бы ему."""
+        from tests.test_v19 import button
+        panel.engine.reconcile()
+        pk = clients.add_user(Req({"name": "find-client"}))["public_key"]
+        panel.engine.reconcile()
+        tok = next(k for k, v in panel.store.snapshot()["shares"].items() if v["pk"] == pk)
+        bot_setup(self, clients=True)
+        self.tg.updates = [msg("hi", chat="1001", uid=1), msg("/start " + tok, chat="7007", uid=2)]
+        self.bot.poll_once(self.c, timeout=0)
+        self.assertIn("7007", self.bot._st.get("links") or {})               # клиент привязан
+        self.tg.updates = [button("me:r", chat="7007", uid=3), msg("привет", chat="7007", uid=4)]
+        self.bot.poll_once(self.c, timeout=0)
+        with mock.patch.object(telegram, "bot", self.bot):
+            self.assertEqual(telegram.telegram_detect(Req({"token": TOKEN}))["id"], "1001")
+        self.bot.last_chat["t"] -= telegram.DETECT_SEEN                         # давнее сообщение — не годится
+        with mock.patch.object(telegram, "bot", self.bot):
+            self.assertEqual(code(lambda: telegram.telegram_detect(Req({"token": TOKEN}))), (404, "err.tg_no_chat"))
+
     def test_chat_of_update(self):
         self.assertEqual(notify.chat_of({"channel_post": {"chat": {"id": -5, "title": "News"}}}),
                          {"id": "-5", "title": "News"})
@@ -953,6 +973,67 @@ class RuleDnsTest(unittest.TestCase):
         self.assertEqual(gp["domain"], [])                       # трафик не перехватывается
         d = panel.engine.dns_domains(st, with_set=True)
         self.assertEqual(d["policies"]["p_global"], [[[t.lid], {"mark": 0, "tcp": False}, ["77.88.8.8"], False]])
+
+    def _proxy(self, policies, clients=None):
+        import json as _json
+        import tempfile
+        from app import dnsproxy
+        d = tempfile.mkdtemp()
+        lp = os.path.join(d, "ru.domains")
+        with open(lp, "w") as f:
+            f.write("ru\n")
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            _json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"], "encrypt": "doh",
+                        "default": {"mark": 0, "tcp": False}, "routes": {},
+                        "dom": {"lists": {"ru": lp}, "clients": clients or {}, "policies": policies}}, f)
+        return dnsproxy.Proxy(conf)
+
+    def test_down_exit_keeps_names_off_plain_dns(self):
+        """Проверка 1.22.0 (Н2): выход правила подключается или лежит (пути нет) — свой DNS правила не
+        спрашивается. Иначе имена сайтов правила шли бы путём клиента («напрямую») обычным DNS без шифрования —
+        мимо выхода. Как до 1.22.0: общие серверы (DoH) путём клиента."""
+        p = self._proxy({"p_global": [[["ru"], None, ["1.1.1.1"], False]]})
+        self.assertEqual(p.domain_route("10.8.1.5", "mail.yandex.ru."), (None, (), False))
+        up = {"mark": 0x1000, "tcp": False}
+        p = self._proxy({"p_global": [[["ru"], up, ["1.1.1.1"], False]]})
+        self.assertEqual(p.domain_route("10.8.1.5", "mail.yandex.ru."), (up, ("1.1.1.1",), False))
+
+    def test_own_address_not_asked(self):
+        """Проверка 1.22.0 (Н5): свой DNS — адрес, на котором слушает этот DNS (сервер в туннеле): он спрашивал
+        бы сам себя, один запрос клиента порождал 512 внутренних и ошибку. Такой адрес пропускается."""
+        p = self._proxy({"p_global": [[["ru"], {"mark": 0, "tcp": False}, ["10.8.1.1", "77.88.8.8"], False]]})
+        self.assertEqual(p.domain_route("10.8.1.5", "ya.ru.")[1], ("77.88.8.8",))
+        p = self._proxy({"p_global": [[["ru"], {"mark": 0, "tcp": False}, ["10.8.1.1"], False]]})
+        self.assertEqual(p.domain_route("10.8.1.5", "ya.ru.")[1], ())
+
+    def test_cache_keeps_own_dns_apart(self):
+        """Проверка 1.22.0 (Н7): у двух клиентов один путь и одно имя, но у одного свой DNS правила — ответы в
+        кэше не смешиваются (без серверов в ключе кэша второй получил бы ответ первого)."""
+        import asyncio
+        import socket
+        from app import dnsproxy
+        from tests.test_v115 import a_reply, q_msg
+        direct = {"mark": 0, "tcp": False}
+        p = self._proxy({"p_global": [[["ru"], direct, [], False]], "p_1": [[["ru"], direct, ["77.88.8.8"], False]]},
+                        clients={"10.8.1.6": "p_1"})
+        asked = []
+
+        async def forward(query, q, mark, tcp, servers=()):
+            asked.append(servers)
+            return a_reply(query, ["198.51.100.2" if servers else "203.0.113.2"])
+        p.forward = forward
+
+        async def go():
+            out = []
+            for ip in ("10.8.1.5", "10.8.1.6", "10.8.1.5", "10.8.1.6"):
+                query = q_msg("ya.ru")
+                out.append(await p.resolve(query, dnsproxy.parse_query(query), ip))
+            return out
+        replies = asyncio.run(go())
+        self.assertEqual(asked, [(), ("77.88.8.8",)])                           # по разу: дальше — кэш
+        self.assertIn(socket.inet_aton("203.0.113.2"), replies[2])
+        self.assertIn(socket.inet_aton("198.51.100.2"), replies[3])
 
     def test_proxy_asks_own_server_plain(self):
         """Общий сервер не отвечает и стоит DoT, а свой DNS правила — обычный и живой: ответ приходит."""

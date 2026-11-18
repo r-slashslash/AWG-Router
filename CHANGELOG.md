@@ -71,7 +71,9 @@ it grows, so every user-visible change gets a new version.
   up, the old container is started again. The AmneziaVPN app's container is never touched.
 - **"Find" for the Chat ID works while the bot is running.** A bot that already reads its messages (control or client
   invitations) takes them before the button could see them, and "Find" said no messages were found. The bot now
-  remembers the last chat that wrote to it (`Bot.last_chat`, for an hour) and the button uses it (`notify.chat_of`).
+  remembers the last chat that wrote to it (`Bot.last_chat`, for 10 minutes) and the button uses it (`notify.chat_of`).
+  A client's chat is never taken (`Bot._seen`: no button presses, no chat bound by an invitation, no `/start <token>`):
+  saved by mistake, it would get the notifications, the control and the backups with every key.
 - **The bot keeps quiet in groups.** In a group where it sees all messages it answered every phrase with its menu;
   now only commands, a mention of `@bot` or a reply to its message get an answer.
 - **The bot's ssh command names the right user and port.** With access through an ssh tunnel, **Panel** in the bot
@@ -119,8 +121,11 @@ it grows, so every user-visible change gets a new version.
   one has it — not dropped with `domain` when the rule leads where everything else goes), `nftgen.layout` carries it
   (the policy key changes only for such policies), `dns_domains` gives dnsproxy.py `[lists, route, servers, to set?]`
   ("to set" only for rules nftables redirects, or an address would go to sniproxy without a rule), and dnsproxy.py asks
-  those servers by plain DNS on the rule's path; the cache key includes them. Works with DNS on the server. *Tests:*
-  `RuleDnsTest` (check, engine, a real dnsproxy.py process with a dead DoT upstream and a live own server).
+  those servers by plain DNS on the rule's path; the cache key includes them. Works with DNS on the server. While the
+  rule has no path (its exit is connecting, down or "Block") the own DNS is not asked — the names would go the client's
+  way, often direct, as plain DNS past the exit — and the shared servers answer as before 1.22.0; an own DNS equal to
+  the address this DNS listens on is skipped (it would ask itself). *Tests:* `RuleDnsTest` (check, engine, a real
+  dnsproxy.py process with a dead DoT upstream and a live own server, a down exit, the server's own address, the cache).
 - **The client's name is not shown to the client.** The config file name and the `vpn://` description are
   `users.conf_label(pk)` — 8 digits from the client's key — everywhere (panel, bot, personal page); before, a Latin
   name was the file name and the name was the description. The personal page gets no name (`share_info` without

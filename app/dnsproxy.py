@@ -357,6 +357,8 @@ class Proxy:
             cfg = json.load(f)
         self.net = ipaddress.ip_network(cfg["clients"]) if cfg.get("clients") else None
         self.up_port = int(cfg.get("upstream_port") or PORT)     # не 53 — только в тестах
+        # адрес этого DNS: свой DNS правила с ним спрашивал бы сам себя (domain_route его пропускает)
+        self.self_addr = cfg.get("listen") if self.up_port == int(cfg.get("port") or PORT) else None
         old = self.cfg
         self.cfg = cfg
         if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")):
@@ -387,12 +389,16 @@ class Proxy:
         """Правило по доменам политики клиента, в чей список входит имя: (путь, серверы, в набор?) — разбирать
         через выход правила (путь None — обычным путём клиента: «блок» или выход сейчас не работает) у своих
         серверов DNS правила (пусто — у общих); None — имя ни в одном правиле. Правило — [списки, путь] или
-        [списки, путь, серверы, в набор?] (у политики со своим DNS)."""
+        [списки, путь, серверы, в набор?] (у политики со своим DNS).
+        Без пути (выход правила подключается, лежит или «блок») свой DNS не спрашивается: путь клиента часто
+        «напрямую», и имена сайтов правила ушли бы мимо выхода обычным DNS без шифрования — общие серверы, как
+        до 1.22.0. Свой DNS с адресом, на котором слушает этот DNS, пропускается: он спрашивал бы сам себя."""
         pol = (self.dom.get("clients") or {}).get(ip, "p_global")
         for rule in (self.dom.get("policies") or {}).get(pol) or ():
             if any(match(name, self.dom_lists.get(lid) or ()) for lid in rule[0]):
                 if len(rule) >= 4:
-                    return rule[1], tuple(rule[2] or ()), bool(rule[3])
+                    own = () if rule[1] is None else tuple(s for s in rule[2] or () if s != self.self_addr)
+                    return rule[1], own, bool(rule[3])
                 return rule[1], (), True
         return None
 
