@@ -111,7 +111,6 @@ function viewRouting() {
     </div>
     ${S.lists.some((l) => l.kind === "domains") || rd.strict ? `<div class="field" style="margin-top:14px">
       <label class="check"><input type="checkbox" id="g-strict" ${rd.strict ? "checked" : ""}><span>${esc(t("rt.strict"))}</span></label>
-      <span class="hint">${esc(t("rt.strict_hint"))}</span>
       ${S.sni && S.sni.strict ? `<div class="small warn-text">${esc(t("rt.strict_now"))}</div>` : ""}</div>` : ""}
     <div class="savebar" id="savebar" hidden><span>${esc(t("rt.unsaved"))}</span>
       <span class="actions"><button class="btn sm" id="g-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="g-save">${esc(t("rt.save"))}</button></span></div>
@@ -266,7 +265,7 @@ function editList(id, kind, onSaved = null) {
     body = nameField() + `<label class="field"><span>${esc(t("ls.urls"))}</span><textarea id="l-src" dir="ltr" style="min-height:90px" placeholder="https://example.com/list.txt">${esc(l ? l.source : "")}</textarea>
       <span class="hint">${esc(t("ls.urls_hint"))}</span></label>`;
   } else if (kind === "domains") {
-    body = nameField("YouTube") + `<label class="field"><span>${esc(t("ls.domains"))}</span><textarea id="l-src" dir="ltr" spellcheck="false" placeholder="youtube.com&#10;googlevideo.com&#10;https://example.com/domains.txt">${esc(l ? l.source || "" : "")}</textarea>
+    body = nameField("YouTube") + `<label class="field"><span>${esc(t("ls.domains"))}</span><textarea id="l-src" dir="ltr" spellcheck="false" placeholder="youtube.com&#10;googlevideo.com&#10;.ru&#10;.cn&#10;.net&#10;https://example.com/domains.txt">${esc(l ? l.source || "" : "")}</textarea>
       <span class="hint">${esc(t("ls.domains_hint"))}</span></label>
       <p class="small muted" style="margin:0">${esc(t("ls.domains_how"))}</p>
       ${S.sni && S.sni.quic && S.sni.quic !== "on" ? `<p class="small warn-text" style="margin:6px 0 0">${esc(t("ls.quic_off"))}</p>` : ""}`;

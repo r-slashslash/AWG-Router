@@ -834,7 +834,8 @@ class TextsTest(unittest.TestCase):
         self.assertNotIn("Global policy", s)
         self.assertIn('"err.fallback_self": "Выход не может быть резервом самому себе"', s)
         self.assertIsNone(re.search(r"(до|up to) AWG 3(?!\.1)", s))
-        self.assertIn("не в контейнере приложения AmneziaVPN", s)
+        # пояснение под галочкой strict убрано (владелец 2026-11-19): где она действует — в README
+        self.assertNotIn('"rt.strict_hint"', s)
 
     def test_zh_and_fa_consistency(self):
         """zh: кнопка «Проверить» называется так же, как в README, кавычки одного вида. fa: одно слово для

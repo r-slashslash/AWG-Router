@@ -923,6 +923,13 @@ class RuleDnsTest(unittest.TestCase):
         self.assertNotIn("dns", out[1])                 # у правила по адресам свой DNS не имеет смысла
         self.assertNotIn("dns", out[2])                 # не задан — поля нет, состояние как до 1.22.0
 
+    def test_zone_with_leading_dot(self):
+        """«.cn» в списке — вся зона, как и «cn»: точка в начале не мешает (так подсказывает окно списка)."""
+        from app import dnsproxy, domains
+        self.assertEqual(domains.parse(".cn\n*.ru\nnet"), ["cn", "ru", "net"])
+        self.assertTrue(dnsproxy.match("www.baidu.cn.", {"cn"}))
+        self.assertFalse(dnsproxy.match("baidu.com.", {"cn"}))
+
     def test_policy_key_unchanged_without_dns(self):
         from app import nftgen
         p = {"rules": [], "default": "direct", "domain": [(["d1"], "direct")]}

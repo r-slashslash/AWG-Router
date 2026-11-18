@@ -129,6 +129,9 @@ it grows, so every user-visible change gets a new version.
 - "Show config" (personal page and client window): `.connect-actions` is `minmax(0, 1fr)` — a long `I1` line made the
   column as wide as itself and pushed the buttons past the card; the config is shown whole (`pre-wrap`,
   `overflow-wrap: anywhere`, no max height).
+- Domain list window: the hint says a whole zone works (`.ru`, `.cn`, `.net`; a leading dot was always stripped), the
+  placeholder shows it, and `ls.domains_how` keeps only what matters (ports, ECH, shared connections, no packet queue).
+  The long `rt.strict_hint` under "If domain rules don't work…" is removed.
 - No period right after a command in a hint (`pw.hint` ru, zh): it got copied with the command. *Test:*
   `test_no_period_after_a_command`.
 - Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the
