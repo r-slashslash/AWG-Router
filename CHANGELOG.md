@@ -107,6 +107,9 @@ it grows, so every user-visible change gets a new version.
   right edge: the Routing tab scrolled sideways.
 - The day/night button draws its sun and moon (`THEME_SUN`, `THEME_MOON`) instead of `☀` / `☾`: Android fonts set
   those below the middle of the line. The server name hint is shorter.
+- The bot's menu picture (`static/icons/tg-logo.png`) is on a white background, 1200×780 (was 1200×520 on black).
+  The saved Telegram `file_id` is tied to the picture's fingerprint (`tgbot.logo_sum`, `logo_sum` in `tgbot.json`),
+  so after an update the bot uploads the new one once instead of showing the old one forever.
 - Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the
   container mode is "Docker container"; the empty client and exit list hints say what to do in the panel. The README
   intro starts with the panel's own server. Unused `cl.empty_hint` removed.

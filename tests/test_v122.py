@@ -858,5 +858,22 @@ class ContainerPortTest(unittest.TestCase):
         self.assertNotIn("port_locked", read("app", "static", "js", "server.js"))
 
 
+class BotLogoTest(unittest.TestCase):
+    """Новая картинка меню бота: file_id прежней (сохранённый до обновления) не берётся."""
+
+    def test_logo_white_and_taller(self):
+        with open(tgbot.LOGO, "rb") as f:
+            head = f.read(24)
+        self.assertEqual(head[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(int.from_bytes(head[16:20], "big"), 1200)
+        self.assertEqual(int.from_bytes(head[20:24], "big"), 780)
+
+    def test_cached_id_of_old_picture_not_used(self):
+        src = read("app", "tgbot.py")
+        self.assertIn('self._st.get("logo_sum") == logo_sum()', src)
+        self.assertIn('self._st["logo_sum"] = logo_sum()', src)
+        self.assertEqual(len(tgbot.logo_sum()), 16)
+
+
 if __name__ == "__main__":
     unittest.main()

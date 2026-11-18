@@ -32,6 +32,19 @@ OLD = 600                 # сообщения старше (например, �
 ASK_TTL = 900             # сколько ждём ответа на «как назвать клиента?»
 DAY = 86400
 LOGO = os.path.join(os.path.dirname(__file__), "static", "icons", "tg-logo.png")   # фото главного меню
+_LOGO_SUM: list[str] = []
+
+
+def logo_sum() -> str:
+    """Отпечаток картинки меню (один раз за запуск): по нему видно, что file_id в Telegram — от прежней."""
+    if not _LOGO_SUM:
+        import hashlib
+        try:
+            with open(LOGO, "rb") as f:
+                _LOGO_SUM.append(hashlib.sha256(f.read()).hexdigest()[:16])
+        except OSError:
+            _LOGO_SUM.append("")
+    return _LOGO_SUM[0]
 CAPTION_MAX = 1024         # длиннее подпись к фото Telegram не примет — такой экран идёт текстом
 GB = 1024 ** 3
 COMMANDS = ("status", "clients", "add", "exits", "route", "backup", "panel", "help")
@@ -963,7 +976,8 @@ class Bot:
         """Меню — фото с логотипом и подписью. Файл загружаем один раз, дальше — по file_id
         (он свой у каждого бота: другой токен — загружаем заново)."""
         fid = self._st.get("logo")
-        if fid and self._st.get("logo_bot") == c["token"].split(":", 1)[0]:
+        # file_id годен, пока тот же бот и та же картинка: новый логотип в выпуске загружается заново
+        if fid and self._st.get("logo_bot") == c["token"].split(":", 1)[0] and self._st.get("logo_sum") == logo_sum():
             try:
                 r = notify._call(c["token"], "sendPhoto", {"chat_id": c["chat_id"], "photo": fid, "caption": caption,
                                                            "parse_mode": "HTML", "reply_markup": markup},
@@ -982,6 +996,7 @@ class Bot:
         if sizes and isinstance(sizes, list) and isinstance(sizes[-1], dict) and sizes[-1].get("file_id"):
             self._st["logo"] = sizes[-1]["file_id"]
             self._st["logo_bot"] = c["token"].split(":", 1)[0]
+            self._st["logo_sum"] = logo_sum()
         self._set_panel(c, r, photo=True)
         return r
 
