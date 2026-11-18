@@ -70,17 +70,17 @@ class UserError(MsgError):
 TUNNEL_NAME = re.compile(r"[A-Za-z0-9_=+.-]{1,15}")
 
 
-def conf_filename(name: str, pk: str) -> str:
-    """Имя файла конфига = имя туннеля в приложениях AmneziaWG и WireGuard: они принимают только
-    латиницу, цифры и `_=+.-`, не длиннее 15 знаков, а с другим именем файл не импортируется.
-    Латинское имя — как есть (пробелы и прочие знаки → `_`, длинное обрезается); имя на другом
-    языке — 8 цифр из ключа клиента: при каждом скачивании те же, у разных клиентов разные."""
-    if name.isascii():
-        safe = re.sub(r"[^A-Za-z0-9_=+.-]+", "_", name).strip("_.")[:15].rstrip("_.")
-        if TUNNEL_NAME.fullmatch(safe):
-            return safe + ".conf"
+def conf_label(pk: str) -> str:
+    """Название подключения у клиента — 8 цифр из его ключа (1.22.0, решение владельца): одно и то же при
+    каждом скачивании, у разных клиентов разное, и без имени, которое клиенту дал владелец панели. Подходит
+    приложениям AmneziaWG и WireGuard: имя туннеля у них — [A-Za-z0-9_=+.-]{1,15}."""
     num = int.from_bytes(hashlib.sha256(pk.encode()).digest()[:8], "big") % 10 ** 8
-    return f"{num:08d}.conf"
+    return f"{num:08d}"
+
+
+def conf_filename(pk: str) -> str:
+    """Имя файла конфига = имя туннеля в приложениях AmneziaWG и WireGuard."""
+    return conf_label(pk) + ".conf"
 
 
 EXTRA_HOSTS_MAX = 16
@@ -435,12 +435,11 @@ class ServerManager:
         override = cps.for_client(st.get("cps", {}).get(pk))      # свои I1–I5 клиента
         conf = awgserver.client_conf(sc, prof, p, priv, override)
         name = self._name(rows, pk) or p.ip
-        safe = conf_filename(name, pk)
-        # Название подключения в AmneziaVPN — только имя клиента: адрес сервера приложение и так
-        # показывает на главном экране, а в названии он светился бы у каждого клиента (issue #7).
-        # В .conf и QR названия нет вовсе: приложения AmneziaWG берут его из имени файла или спрашивают.
-        return {"name": name, "conf": conf, "filename": safe,
-                "link": awgserver.vpn_link(sc, prof, p, priv, conf, name, override),
+        # Название подключения — 8 цифр клиента (conf_label), и в имени файла, и в vpn:// для AmneziaVPN: ни
+        # имени клиента, ни адреса сервера (его приложение и так показывает; issue #7). В .conf и QR названия
+        # нет вовсе: приложения AmneziaWG берут его из имени файла или спрашивают. name — только для панели.
+        return {"name": name, "conf": conf, "filename": conf_filename(pk),
+                "link": awgserver.vpn_link(sc, prof, p, priv, conf, conf_label(pk), override),
                 "warn_host": not self.client_host(st, pk)}
 
     @staticmethod

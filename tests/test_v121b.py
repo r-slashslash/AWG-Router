@@ -43,34 +43,17 @@ class Req:
 
 # ------------------------------------------------------------------ имя файла конфига
 class ConfFilenameTest(unittest.TestCase):
-    """Приложения AmneziaWG и WireGuard берут имя туннеля из имени файла: [A-Za-z0-9_=+.-]{1,15}."""
+    """Название подключения у клиента — 8 цифр из ключа (1.22.0): без имени клиента, одно и то же при каждом
+    скачивании; приложения AmneziaWG и WireGuard берут имя туннеля из имени файла: [A-Za-z0-9_=+.-]{1,15}."""
 
-    def test_latin_name_as_is(self):
-        self.assertEqual(users.conf_filename("Phone", PK), "Phone.conf")
-        self.assertEqual(users.conf_filename("my-pc_2.home", PK), "my-pc_2.home.conf")
-
-    def test_spaces_and_symbols(self):
-        self.assertEqual(users.conf_filename("My Phone", PK), "My_Phone.conf")
-        self.assertEqual(users.conf_filename("a/b:c", PK), "a_b_c.conf")
-
-    def test_long_latin_name_is_cut(self):
-        name = users.conf_filename("Laptop of the big office", PK)
-        self.assertRegex(name, r"^[A-Za-z0-9_=+.-]{1,15}\.conf$")
-        self.assertTrue(name.startswith("Laptop_of_the"))
-
-    def test_other_language_gets_8_digits(self):
-        for n in ("Мой телефон", "我的手机", "تلفن من", "Phone ✓", "Ноут"):
-            name = users.conf_filename(n, PK)
-            self.assertRegex(name, r"^\d{8}\.conf$", n)
+    def test_8_digits_valid_tunnel_name(self):
+        name = users.conf_filename(PK)
+        self.assertRegex(name, r"^\d{8}\.conf$")
+        self.assertTrue(users.TUNNEL_NAME.fullmatch(users.conf_label(PK)))
 
     def test_digits_stable_per_client(self):
-        a = users.conf_filename("Мой телефон", PK)
-        self.assertEqual(a, users.conf_filename("Другое имя", PK))          # от ключа, не от имени
-        self.assertNotEqual(a, users.conf_filename("Мой телефон", "A" * 43 + "="))
-
-    def test_nothing_left(self):
-        self.assertRegex(users.conf_filename("___", PK), r"^\d{8}\.conf$")
-        self.assertRegex(users.conf_filename("", PK), r"^\d{8}\.conf$")
+        self.assertEqual(users.conf_filename(PK), users.conf_filename(PK))
+        self.assertNotEqual(users.conf_filename(PK), users.conf_filename("A" * 43 + "="))
 
 
 # ------------------------------------------------------------------ QUIC через SOCKS5

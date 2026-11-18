@@ -443,9 +443,11 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
  * правая колонка растягивается и забирает всё свободное место. */
 .connect > .qr-box { margin-inline: auto; }
 .qr { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
-.connect-actions { display: grid; gap: 8px; align-content: start; }
+/* minmax(0, 1fr): иначе колонка растёт до самой длинной строки конфига (I1 — сотни знаков) и тянет кнопки за край */
+.connect-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; }
 .connect-actions .btn { justify-content: flex-start; }
-.connect-actions details pre { margin-top: 8px; max-height: 220px; }
+/* конфиг целиком, без прокрутки: длинные строки переносятся (копируется и скачивается текст без переносов) */
+.connect-actions details pre { margin-top: 8px; max-height: none; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 560px) { .qr-box { margin-inline: auto; } }
 .manage-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid var(--rule); }
 .btn.danger { color: var(--bad); }

@@ -730,7 +730,7 @@ class Bot:
                 while len(links) > LINKS_MAX:                       # самые давние привязки — первыми
                     links.pop(min(links, key=lambda k: links[k].get("t") or 0))
                 self._save()
-                name = (self.ops.share_info(tok, False) or {}).get("name") or pk[:8]
+                name = (getattr(self.ops, "client_name", None) or (lambda _: ""))(pk) or pk[:8]
                 self.ops.audit(Msg("ev.tg_client_linked", name=name))
                 self.client_card(c, cid, L, tok)
                 return

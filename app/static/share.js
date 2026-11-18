@@ -136,13 +136,13 @@ function statusHtml() {
 }
 
 function render() {
-  document.title = D && D.name ? `${D.name} · AWG Router` : "AWG Router";
+  document.title = D ? `${t("share.title")} · AWG Router` : "AWG Router";      // без имени клиента
   if (ERR) { $("#main").innerHTML = `<div class="panel empty"><p>${esc(ERR)}</p></div>`; return; }
   if (!D) { $("#main").innerHTML = `<p class="muted">${esc(t("probe.checking"))}</p>`; return; }
   const cfg = D.config;
   $("#main").innerHTML = `
     <section class="section">
-      <h1 class="share-title"><bdi>${esc(D.name || "AWG")}</bdi></h1>
+      <h1 class="share-title">${esc(t("share.title"))}</h1>
       <div id="share-status">${statusHtml()}</div>
     </section>
     <section class="section">

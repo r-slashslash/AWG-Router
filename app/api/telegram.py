@@ -173,6 +173,7 @@ bot_ops = SimpleNamespace(
     share=clients.ensure_share,
     share_pk=clients.share_pk,
     share_info=clients.share_info,
+    client_name=lambda pk: next((x.get("name") for x in engine.clients if x["public_key"] == pk), ""),
     invite=lambda pk: clients.bot_invite(next(iter(store.peek(lambda st: [
         k for k, v in st.get("shares", {}).items() if v.get("pk") == pk])), "")),
     set_default=set_default_outbound,

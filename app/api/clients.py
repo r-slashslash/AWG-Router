@@ -174,10 +174,11 @@ def share_info(token: str, config: bool = True) -> dict | None:
         try:
             cfg = engine.srv.client_config(pk)
             cfg.pop("warn_host", None)
+            cfg.pop("name", None)                  # имя клиента ему не показываем (1.22.0)
         except Exception:  # noqa: BLE001
             cfg = None
     live = c.get("live") or {}
-    return {"name": c.get("name") or "", "enabled": c["enabled"], "now": time.time(),
+    return {"enabled": c["enabled"], "now": time.time(),
             "handshake": live.get("handshake") or None, "config": cfg,
             # разбивка по выходам — только в панели: на публичной странице она ни к чему
             "traffic": {k: v for k, v in engine.traffic.view(pk).items() if k != "by_out"},

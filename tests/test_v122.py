@@ -132,8 +132,12 @@ class ShareAtCreateTest(unittest.TestCase):
         panel.engine.reconcile()
         tok = next(k for k, v in panel.store.snapshot()["shares"].items() if v["pk"] == pk)
         d = clients.share_info(tok, config=False)
-        self.assertEqual(d["name"], "share-info")
+        self.assertNotIn("name", d)                                   # имя клиента ему не показывается (1.22.0)
         self.assertIsNone(d["config"])
+        cfg = clients.share_info(tok)["config"]
+        if cfg:                                                       # в демо у клиента панели ключ есть
+            self.assertNotIn("name", cfg)
+            self.assertRegex(cfg["filename"], r"^\d{8}\.conf$")
         self.assertIsNone(clients.share_info("y" * 24))
 
 
@@ -857,6 +861,40 @@ class ContainerPortTest(unittest.TestCase):
         self.assertIn("THEME_SUN", js)
         self.assertNotIn('"☀"', js)                              # символ шрифта на Android ниже середины
         self.assertNotIn("port_locked", read("app", "static", "js", "server.js"))
+
+
+class ClientLabelTest(unittest.TestCase):
+    """Файл конфига и описание в vpn:// — 8 цифр клиента, а не его имя (1.22.0), и в панели тоже."""
+
+    @classmethod
+    def setUpClass(cls):
+        panel.engine.reconcile()
+
+    def test_vpn_link_and_file(self):
+        import base64
+        import json as _json
+        import zlib
+        from app import users
+        pk = clients.add_user(Req({"name": "label-name"}))["public_key"]
+        cfg = panel.engine.srv.client_config(pk)
+        self.assertEqual(cfg["filename"], users.conf_filename(pk))
+        self.assertEqual(cfg["name"], "label-name")                   # панели имя по-прежнему нужно
+        raw = base64.urlsafe_b64decode(cfg["link"][len("vpn://"):] + "==")
+        doc = _json.loads(zlib.decompress(raw[4:]))
+        self.assertEqual(doc["description"], users.conf_label(pk))
+        self.assertNotIn("label-name", cfg["conf"])
+        self.assertNotIn("label-name", zlib.decompress(raw[4:]).decode())
+
+    def test_no_period_after_a_command(self):
+        """Точка сразу за командой копируется вместе с ней — и команда не работает."""
+        import re
+        src = read("app", "static", "i18n.js")
+        self.assertEqual(re.findall(r'"([\w.]+)": "[^"]*\{cmd\}[.。]', src), [])
+
+    def test_share_page_has_no_name(self):
+        js = read("app", "static", "share.js")
+        self.assertNotIn("D.name", js)
+        self.assertIn('t("share.title")', js)
 
 
 class BotLogoTest(unittest.TestCase):

@@ -1,4 +1,5 @@
-"""1.17.2: в названии подключения в AmneziaVPN (vpn://) — только имя клиента, без адреса сервера (#7).
+"""1.17.2: в названии подключения в AmneziaVPN (vpn://) нет адреса сервера (#7); с 1.22.0 нет и имени клиента —
+8 цифр из его ключа (users.conf_label), как и в имени файла.
 
 python3 -m unittest discover tests
 """
@@ -32,20 +33,14 @@ class ConnectionNameTest(unittest.TestCase):
         m.client_host = lambda st, pk=None: "203.0.113.5"
         return m.client_config(peer.public_key)
 
-    def test_only_the_client_name(self):
-        cfg = self.config("Phone")
-        self.assertEqual(description(cfg["link"]), "Phone")
-        self.assertNotIn("203.0.113.5", description(cfg["link"]))
-        self.assertEqual(cfg["filename"], "Phone.conf")
-
-    def test_name_with_spaces_and_cyrillic_stays_as_is(self):
-        self.assertEqual(description(self.config("Мой телефон")["link"]), "Мой телефон")
-
-    def test_unnamed_client(self):
-        cfg = self.config(None)
-        self.assertEqual(description(cfg["link"]), cfg["name"])
-        self.assertNotIn("·", description(cfg["link"]))
-
+    def test_digits_not_name_nor_address(self):
+        from app import users
+        for name in ("Phone", "Мой телефон", None):
+            cfg = self.config(name)
+            pk = awgserver.parse(AMNEZIA_SERVER).peers[0].public_key
+            self.assertEqual(description(cfg["link"]), users.conf_label(pk), name)
+            self.assertEqual(cfg["filename"], users.conf_filename(pk))
+            self.assertNotIn("203.0.113.5", description(cfg["link"]))
 
 if __name__ == "__main__":
     unittest.main()

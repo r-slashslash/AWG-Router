@@ -114,6 +114,16 @@ it grows, so every user-visible change gets a new version.
   and the file go with `cfg_caption_me` / `cfg_file_me` without the name. Card lines have icons (traffic, end date,
   limit, app-made client, hint), also in the panel chat's client card. Saving the Telegram settings says "Bot settings
   saved".
+- **The client's name is not shown to the client.** The config file name and the `vpn://` description are
+  `users.conf_label(pk)` — 8 digits from the client's key — everywhere (panel, bot, personal page); before, a Latin
+  name was the file name and the name was the description. The personal page gets no name (`share_info` without
+  `name`, `config` without `name`); its title and heading are `share.title` ("Your access"). The bot's "client
+  linked" event takes the name through `ops.client_name`.
+- "Show config" (personal page and client window): `.connect-actions` is `minmax(0, 1fr)` — a long `I1` line made the
+  column as wide as itself and pushed the buttons past the card; the config is shown whole (`pre-wrap`,
+  `overflow-wrap: anywhere`, no max height).
+- No period right after a command in a hint (`pw.hint` ru, zh): it got copied with the command. *Test:*
+  `test_no_period_after_a_command`.
 - Interface terms made consistent: the server is "the AmneziaWG server" in status, banner, events and System, the
   container mode is "Docker container"; the empty client and exit list hints say what to do in the panel. The README
   intro starts with the panel's own server. Unused `cl.empty_hint` removed.

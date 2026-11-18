@@ -1453,7 +1453,7 @@ Object.assign(I18N.ru, {
   "cl.share_create": "Создать ссылку",
 
   "btn.copy": "Копировать",
-  "share.conn": "Подключение", "share.active": "Доступ активен", "share.off": "Доступ отключён",
+  "share.title": "Ваш доступ", "share.conn": "Подключение", "share.active": "Доступ активен", "share.off": "Доступ отключён",
   "share.off_exp": "истёк срок действия", "share.off_quota": "исчерпан лимит трафика", "share.off_admin": "отключён владельцем сервера",
   "share.until": "Действует до", "share.unlimited": "бессрочно", "share.month": "Трафик за месяц",
   "share.total": "Трафик за всё время", "share.of": "{used} из {limit}", "share.last": "Последнее подключение",
@@ -1462,7 +1462,7 @@ Object.assign(I18N.ru, {
   "share.no_config": "Конфиг для этого устройства выдаёт владелец сервера.",
   "share.gone": "Ссылка недействительна. Попросите новую у владельца сервера.",
   "sy.version": "Версия панели", "sy.update_available": "Доступна новая версия {version}.",
-  "pw.title": "Пароль панели", "pw.hint": "Забыли пароль? Выполните на сервере {cmd}.", "pw.change": "Сменить пароль",
+  "pw.title": "Пароль панели", "pw.hint": "Забыли пароль? Выполните на сервере: {cmd}", "pw.change": "Сменить пароль",
   "pw.current": "Текущий пароль", "pw.new": "Новый пароль", "pw.repeat": "Повторите новый пароль",
   "pw.rules": "Не короче 10 символов. После смены все остальные входы в панель завершатся.",
   "pw.mismatch": "Пароли не совпадают", "pw.done": "Пароль изменён",
@@ -1513,7 +1513,7 @@ Object.assign(I18N.en, {
   "cl.share_create": "Create link",
 
   "btn.copy": "Copy",
-  "share.conn": "Connect", "share.active": "Access is active", "share.off": "Access is off",
+  "share.title": "Your access", "share.conn": "Connect", "share.active": "Access is active", "share.off": "Access is off",
   "share.off_exp": "the access period ended", "share.off_quota": "the traffic limit is used up", "share.off_admin": "turned off by the server owner",
   "share.until": "Valid until", "share.unlimited": "no end date", "share.month": "Traffic this month",
   "share.total": "Traffic all time", "share.of": "{used} of {limit}", "share.last": "Last connection",
@@ -1573,7 +1573,7 @@ Object.assign(I18N.zh, {
   "cl.share_create": "创建链接",
 
   "btn.copy": "复制",
-  "share.conn": "连接", "share.active": "访问已启用", "share.off": "访问已停用",
+  "share.title": "你的访问", "share.conn": "连接", "share.active": "访问已启用", "share.off": "访问已停用",
   "share.off_exp": "使用期限已到", "share.off_quota": "流量限额已用完", "share.off_admin": "已被服务器所有者停用",
   "share.until": "有效期至", "share.unlimited": "不限期", "share.month": "本月流量",
   "share.total": "累计流量", "share.of": "{used} / {limit}", "share.last": "上次连接",
@@ -1582,7 +1582,7 @@ Object.assign(I18N.zh, {
   "share.no_config": "此设备的配置由服务器所有者提供。",
   "share.gone": "此链接无效。请向服务器所有者索取新链接。",
   "sy.version": "面板版本", "sy.update_available": "新版本 {version} 可用。",
-  "pw.title": "面板密码", "pw.hint": "忘记密码？在服务器上运行 {cmd}。", "pw.change": "更改密码",
+  "pw.title": "面板密码", "pw.hint": "忘记密码？在服务器上运行：{cmd}", "pw.change": "更改密码",
   "pw.current": "当前密码", "pw.new": "新密码", "pw.repeat": "再次输入新密码",
   "pw.rules": "至少 10 个字符。更改后，其他所有面板登录都会结束。",
   "pw.mismatch": "两次输入的密码不一致", "pw.done": "密码已更改",
@@ -1633,7 +1633,7 @@ Object.assign(I18N.fa, {
   "cl.share_create": "ساخت لینک",
 
   "btn.copy": "کپی",
-  "share.conn": "اتصال", "share.active": "دسترسی فعال است", "share.off": "دسترسی غیرفعال است",
+  "share.title": "دسترسی شما", "share.conn": "اتصال", "share.active": "دسترسی فعال است", "share.off": "دسترسی غیرفعال است",
   "share.off_exp": "مدت اعتبار تمام شده", "share.off_quota": "سقف ترافیک تمام شده", "share.off_admin": "صاحب سرور آن را غیرفعال کرده",
   "share.until": "معتبر تا", "share.unlimited": "بدون انقضا", "share.month": "ترافیک این ماه",
   "share.total": "ترافیک از ابتدا", "share.of": "{used} از {limit}", "share.last": "آخرین اتصال",
