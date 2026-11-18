@@ -2440,8 +2440,8 @@ Object.assign(I18N.en, {
   "ov.socks_ms": "SOCKS5 · answers in {ms} ms",
   "ls.add_domains": "Domains", "ls.kind.domains": "Domains", "ls.new.domains": "Domain list",
   "ls.domains": "Domains and links to lists",
-  "ls.domains_ph": "youtube.com\ngooglevideo.com\n.net\n.uk\nhttps://example.com/domains.txt",
-  "ls.domains_hint": "One per line. example.com also covers all its subdomains (www.example.com, m.example.com). You can give a whole domain zone — .net, .uk: that is every site in it. You can paste a link to a ready-made list: plain domain lists and the dnsmasq, hosts, Adblock (||example.com^) and v2ray (domain:example.com) formats are understood.",
+  "ls.domains_ph": "youtube.com\ngooglevideo.com\n.com\n.net\nhttps://example.com/domains.txt",
+  "ls.domains_hint": "One per line. example.com also covers all its subdomains (www.example.com, m.example.com). You can give a whole domain zone — .com, .net: that is every site in it. You can paste a link to a ready-made list: plain domain lists and the dnsmasq, hosts, Adblock (||example.com^) and v2ray (domain:example.com) formats are understood.",
   "ls.domains_how": "Works for HTTPS and HTTP (TCP 443 and 80) and HTTP/3 (UDP 443) and is checked before address rules. Sites with Encrypted Client Hello (ECH, some sites behind Cloudflare) can't be recognized by name — add an address list for them. Sites that share an address and certificate (google.com and youtube.com) may be opened over one connection — keep one owner's domains in one list. If the server's kernel can't queue packets (happens on OpenVZ/LXC), HTTP/3 is turned off for all sites for clients with such rules.",
   "n.domains": { one: "{n} domain", other: "{n} domains" },
 
