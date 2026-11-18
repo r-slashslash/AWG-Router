@@ -3,7 +3,7 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.22.0 — 2026-11-18
+## 1.22.0 — 2026-11-19
 
 - **Clients in the Telegram bot.** Every client gets a personal link as soon as it is created (`users.add_client`
   writes a `shares` token in the same mutation); clients made before 1.22.0 get a **Create link** button. The same token is
