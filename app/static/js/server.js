@@ -128,7 +128,7 @@ function viewServer() {
         <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select data-field="panel_dns_enc" id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
           `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
         <div class="field">
-          <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_how", "srv.panel_dns_why", "srv.panel_dns_privacy", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
+          <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_why", "srv.panel_dns_cascade", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
         </div>
         <div class="row2">
           <label class="field"><span>MTU</span><input type="number" data-field="client_mtu" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
