@@ -1073,7 +1073,7 @@ class StateTagTest(unittest.TestCase):
         r = Req({})
         r.headers = {"X-State-Tag": full["tag"]}
         short = state.get_state(r)
-        self.assertEqual(sorted(short), ["last_reconcile", "now", "same", "system", "tag"])
+        self.assertEqual(sorted(short), ["last_reconcile", "now", "same", "speeds", "system", "tag"])   # speeds — 1.23.0
         r.headers = {"X-State-Tag": "other"}
         self.assertIn("clients", state.get_state(r))
 

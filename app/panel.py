@@ -53,15 +53,18 @@ engine.notifier = notifier
 
 
 def _tg_route(via: str):
-    """Путь к api.telegram.org: напрямую или через туннель выбранного выхода."""
+    """Путь к api.telegram.org: напрямую или через туннель выбранного выхода (не его резервом «Напрямую»)."""
     try:
-        return engine.own_route(via)
+        return engine.own_route(via, direct=False)
     except MsgError as e:
         raise notify.NotifyError(str(e.msg), e.msg, net=True) from None
 
 
 notify.router = _tg_route
 notify.alt_routes = engine.alt_routes
+# галочка «Если не получается — пробовать другие пути» — из сохранённых настроек на каждый запрос (без копии)
+notify.fallback_on = lambda: bool(store.peek(
+    lambda st: ((st.get("settings") or {}).get("telegram") or {}).get("fallback", True)))
 
 
 def _fetch_via_exit(url: str) -> tuple[str, bool]:

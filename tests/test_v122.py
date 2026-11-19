@@ -564,7 +564,8 @@ class ClientReminderTest(unittest.TestCase):
         self.assertEqual(len(calls), 1, calls)                     # раньше — повтор на каждое новое событие
 
     def test_switch_off_or_no_clients_bot(self):
-        for kw in ({"client_notify": False}, {"clients": False}, {"token": ""}):
+        # 1.23.0: напоминания — та же галочка, что клиенты в боте; «Включить бот» выключает и их
+        for kw in ({"enabled": False}, {"clients": False}, {"token": ""}):
             self.tg_cfg = cfg(**{"clients": True, "control": False, **kw})
             self.assertTrue(self.flush("ev.client_expiring"))
             self.assertEqual(self.sent(), [], kw)
@@ -603,7 +604,7 @@ class ClientReminderTest(unittest.TestCase):
         c = checks.telegram(st, notify.cfg_of(st), {"client_notify": False})
         self.assertFalse(c["client_notify"])
         js = read("app", "static", "js", "settings.js")
-        self.assertIn('client_notify: $("#tg-cnotify").checked', js)
+        self.assertIn('client_notify: $("#tg-clients").checked', js)      # 1.23.0: одна галочка с клиентами
         self.assertIn("notifier.client_fn = bot.remind", read("app", "api", "telegram.py"))
 
 

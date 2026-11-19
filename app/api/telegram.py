@@ -27,8 +27,12 @@ def _tg_draft(body: dict) -> dict:
 @app.put("/api/telegram")
 def put_telegram(req):
     c = _tg_draft(req.json())
-    if (c["enabled"] or c["control"]) and not (c["token"] and c["chat_id"]):
-        bad("err.tg_incomplete", field="token" if not c["token"] else "chat_id")
+    # «Включить бот» (1.23.0) — главный выключатель: нужен токен; номер чата — для уведомлений, управления и
+    # копий (бот только для клиентов по приглашению работает и без него)
+    if c["enabled"] and not c["token"]:
+        bad("err.tg_incomplete", field="token")
+    if c["enabled"] and not c["chat_id"] and (c["control"] or c["backup"] != "off" or any(c["events"].values())):
+        bad("err.tg_incomplete", field="chat_id")
     if c["control"] and c["chat_id"].startswith("@"):
         # @имя можно освободить и занять другому человеку, а в публичной группе с этим именем пишут
         # все её участники: команды (выключить клиентов, прислать копию) — только из чата с числовым ID

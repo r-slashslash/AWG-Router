@@ -161,9 +161,9 @@ class TextsTest(unittest.TestCase):
         with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "i18n.js"),
                   encoding="utf-8") as f:
             src = f.read()
-        for key in ("tg.control", "tg.control_hint", "tg.bot_ok", "tg.bot_error", "tg.act_on", "tg.act_off",
+        for key in ("tg.control", "tg.bot_ok", "tg.bot_error", "tg.act_on", "tg.act_off",
                     "tg.act_days", "tg.act_gb", "tg.act_config", "tg.act_share", "tg.act_default",
-                    "tg.act_backup", "tg.act_update", "tg.act_default_direct", "tg.control_title"):
+                    "tg.act_backup", "tg.act_update", "tg.act_default_direct"):
             self.assertEqual(src.count(f'"{key}":'), 4, key)
 
 

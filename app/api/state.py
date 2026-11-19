@@ -57,7 +57,8 @@ def _state_tag(out: dict) -> str:
 @app.get("/api/state")
 def get_state(req):
     """Состояние для браузера. Заголовок X-State-Tag с отпечатком прошлого ответа: ничего не изменилось —
-    короткий ответ {"same": true} со временем, процессором и памятью (без сжатия и разбора всего состояния)."""
+    короткий ответ {"same": true} со временем, процессором, памятью и скоростью клиентов (без сжатия и разбора
+    всего состояния)."""
     out = _state_view()
     last = out["engine"].pop("last_reconcile")
     out["tag"] = _state_tag(out)
@@ -65,7 +66,9 @@ def get_state(req):
     vol = {"now": time.time(),
            # демо: постоянные числа — снимки README не меняются от загрузки машины, где их снимали
            "system": {"cpu": 7.0, "cores": 2, "load": [0.14, 0.11, 0.09], "mem": [770 * 2**20, 2 * 2**30]}
-           if config.DRY_RUN else hostnet.system_view()}
+           if config.DRY_RUN else hostnet.system_view(),
+           # скорость клиентов сейчас (список клиентов, 1.23.0): меняется на каждом замере — вне отпечатка
+           "speeds": engine.client_speeds()}
     seen = req.headers.get("X-State-Tag") if req is not None and getattr(req, "headers", None) else None
     if seen and seen == out["tag"]:
         return {"same": True, "tag": out["tag"], "last_reconcile": last, **vol}
@@ -130,6 +133,8 @@ def _state_view() -> dict:
         "notify_error": notifier.last_error,
         "notify_pending": len(notifier.pending),
         "tg_bot": telegram.bot.view(),
+        # бот сейчас идёт запасным путём: выбранный не отвечает (notify.Paths, 1.23.0)
+        "tg_path": notify.paths.view(notify.cfg_of(st)["via"]),
         "upstreams": [_upstream_view(st, u, bal_members, bal_counts) for u in st["upstreams"]],
         "balance": {"members": sorted(bal_members), "new": engine.bal_new},
         "shaping": engine.shape_state and {k: v for k, v in engine.shape_state.items() if k != "sig"},

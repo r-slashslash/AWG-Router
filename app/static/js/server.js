@@ -58,6 +58,7 @@ const PARAM_GROUPS = [
 let SRV = null;          // /api/server
 let srvDraft = null;     // редактируемые параметры
 
+// поля по смыслу (владелец 2026-11-19): слева «Сервер AmneziaWG» — адреса, порт, подсеть, MTU; справа «DNS»
 function viewServer() {
   if (!S.target) return `<div class="panel empty"><p>${esc(t("status.no_target"))}</p></div>`;
   if (!SRV) { loadServer(); return `<p class="muted">${esc(t("probe.checking"))}</p>`; }
@@ -105,17 +106,21 @@ function viewServer() {
           <div><span>${esc(t("srv.version"))}</span><b>${esc(SRV.version ? "AWG " + SRV.version : "WireGuard")}</b></div>
         </div>
         <label class="field"><span>${esc(t("srv.public_host"))}</span><input type="text" data-field="public_host" id="s-host" dir="ltr" value="${esc(SRV.public_host)}" placeholder="203.0.113.10"><span class="hint">${esc(t("srv.public_host_hint"))}</span></label>
+        <label class="field"><span>${esc(t("srv.extra_hosts"))}</span><input type="text" data-field="extra_hosts" id="s-extra" dir="ltr" placeholder="203.0.113.20, vpn2.example.com" value="${esc((SRV.extra_hosts || []).join(", "))}"><span class="hint">${esc(t("srv.extra_hosts_hint"))}</span></label>
+        <label class="field"><span>${esc(t("srv.client_host"))}</span><select data-field="client_host" id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
         <div class="row2">
           <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" data-field="port" id="s-port" min="1" max="65535" value="${SRV.port}"><span class="hint">${esc(t("srv.port_hint"))}</span></label>
           <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" data-field="address" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
+        </div>
+        <div class="row2">
+          <label class="field"><span>MTU</span><input type="number" data-field="client_mtu" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
+          <label class="field"><span>PersistentKeepalive</span><input type="text" data-field="client_keepalive" id="s-ka" dir="ltr" value="${esc(SRV.client_keepalive)}" placeholder="${esc(t("srv.auto", { v: SRV.keepalive_auto }))}"><span class="hint">${esc(t("srv.ka_hint"))}</span></label>
         </div>
       </div>
     </section>
     <section class="section">
       <div class="section-head"><h2>${esc(t("srv.clients_title"))}</h2></div>
       <div class="panel panel-pad">
-        <label class="field"><span>${esc(t("srv.client_host"))}</span><select data-field="client_host" id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
-        <label class="field"><span>${esc(t("srv.extra_hosts"))}</span><input type="text" data-field="extra_hosts" id="s-extra" dir="ltr" placeholder="203.0.113.20, vpn2.example.com" value="${esc((SRV.extra_hosts || []).join(", "))}"><span class="hint">${esc(t("srv.extra_hosts_hint"))}</span></label>
         <label class="field"><span>DNS</span><input type="text" data-field="client_dns" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
         <div class="field">
           <label class="check"><input type="checkbox" id="s-pdns" ${SRV.panel_dns ? "checked" : ""}><span>${esc(t("srv.panel_dns"))}</span></label>
@@ -131,10 +136,6 @@ function viewServer() {
           `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
         <div class="field">
           <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_why", "srv.panel_dns_cascade", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
-        </div>
-        <div class="row2">
-          <label class="field"><span>MTU</span><input type="number" data-field="client_mtu" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
-          <label class="field"><span>PersistentKeepalive</span><input type="text" data-field="client_keepalive" id="s-ka" dir="ltr" value="${esc(SRV.client_keepalive)}" placeholder="${esc(t("srv.auto", { v: SRV.keepalive_auto }))}"><span class="hint">${esc(t("srv.ka_hint"))}</span></label>
         </div>
       </div>
     </section>
@@ -157,7 +158,9 @@ function engineSection() {
   const E = S.awg_engine;
   if (!E) return "";
   const m = E.module || {};
-  const srv = E.server === "kernel" ? t("eng.kernel") : E.server === "go" ? "amneziawg-go" : t("eng.unknown");
+  // после смены движка или перезапуска сервер ещё поднимается — «запускается», а не «не запущен»
+  const srv = E.server === "kernel" ? t("eng.kernel") : E.server === "go" ? "amneziawg-go"
+    : t(S.phase === "engine" || S.phase === "server_restart" ? "eng.starting" : "eng.unknown");
   // версия — слева направо и без переноса: в fa «3.1.20260812» иначе рвалась на «.3» и «1.20260812»
   const ver = `<bdi dir="ltr" class="nowrap">${esc(m.version || "?")}</bdi>`;
   const mod = !m.loaded ? esc(t("eng.mod_none")) : m.ok ? th("eng.mod_ok", { version: ver })
@@ -178,7 +181,6 @@ function engineSection() {
       ${engineChooser(E, m)}
       ${E.forced ? `<p class="small muted">${esc(t("eng.forced", { value: E.forced }))}</p>` : ""}
       <p class="small muted">${esc(t("eng.server_auto"))}</p>
-      <details class="small"><summary>${esc(t("eng.what"))}</summary>${["eng.what_go", "eng.what_kernel"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
       ${E.disabled ? `<div class="banner bad">${esc(t(E.disabled.error ? "eng.n_disabled_reboot" : "eng.n_disabled"))}</div>` : ""}
       ${engInstallBlock(E, m)}
     </div>

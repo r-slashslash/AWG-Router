@@ -45,9 +45,11 @@ class ServerMixin:
         (SERVER_GRACE: при смене порта и S1–S4 интерфейс пропадает ненадолго), дальше с растущими паузами."""
         if config.DRY_RUN:
             self.server_restart_at = None
+            self._srv_up = True
             return False
         now = time.time()
-        if t.is_up():
+        self._srv_up = t.is_up()
+        if self._srv_up:
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
             self.server_restart_at = None
             return False
@@ -120,6 +122,7 @@ class ServerMixin:
                         err = str(e)[:200]
                     finally:
                         t.start()
+                    self._settle = ("engine", time.time())   # до первого удачного прохода — «Смена движка…»
                 kernelmod.update(choice="go", seen=None, lost=None, disabled=None)
                 self.kernel_fallback = None
                 self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
@@ -132,7 +135,7 @@ class ServerMixin:
         kernelmod.update(choice=None)
         m = self.module_info()
         if m["loaded"] and m["ok"]:
-            self.restart_server()
+            self.restart_server("engine")
             return {"action": "restarted"}
         kernelmod.start()
         return {"action": "install"}
@@ -228,8 +231,9 @@ class ServerMixin:
             pass
         self._hold_key = None
 
-    def restart_server(self) -> None:
-        """Кнопка «Перезапустить сервер AWG». Дальше всё применит reconcile: у контейнера сменится Target.key."""
+    def restart_server(self, why: str = "server_restart") -> None:
+        """Кнопка «Перезапустить сервер AWG» (why = engine — смена движка). Дальше всё применит reconcile: у
+        контейнера сменится Target.key. До первого удачного прохода шапка говорит «Перезапуск…» (_settle)."""
         with self.lock:
             t = self.target
             if not t or not t.exists:
@@ -238,6 +242,7 @@ class ServerMixin:
                 t.native(["systemctl", "enable", f"awg-quick@{t.iface}"], check=False, timeout=30)
             self.server_restart_at = time.time()
             t.restart()
+            self._settle = (why, time.time())
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
             self.kernel_fallback = None     # на хосте Target.key не меняется: модуль пробуем снова здесь
         self.reconcile_soon()

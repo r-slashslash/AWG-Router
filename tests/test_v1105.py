@@ -163,10 +163,20 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
             self.bot._loop()
 
     def test_polls_with_notifications_off(self):
-        self.run_loop_once(cfg(enabled=False, control=True))
+        # 1.23.0: «Включить бот» — главный выключатель; уведомления — галочки событий, без них управление работает
+        self.run_loop_once(cfg(enabled=True, control=True, events={k: False for k in notify.KINDS}))
         self.assertIn("getUpdates", self.tg.methods())
         self.assertTrue(any("Total traffic" in t for t in self.tg.texts()))
         self.assertEqual(self.bot.state, "ok")
+
+    def test_bot_off_means_no_control(self):
+        self.bot.stop_ev.clear()
+        panel.store.mutate(lambda st: st["settings"].__setitem__("telegram", cfg(enabled=False, control=True,
+                                                                                 clients=True)))
+        with mock.patch.object(self.bot.wake, "wait", side_effect=lambda t: self.bot.stop_ev.set()):
+            self.bot._loop()
+        self.assertNotIn("getUpdates", self.tg.methods())
+        self.assertEqual(self.bot.state, "off")
 
     def test_off_without_control(self):
         self.bot.stop_ev.clear()
@@ -178,18 +188,24 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
 
     def test_control_needs_token_and_chat(self):
         panel.store.mutate(lambda st: st["settings"].__setitem__("telegram", notify.defaults()))
-        req = mock.Mock(json=lambda: {"enabled": False, "control": True, "chat_id": ""})
+        req = mock.Mock(json=lambda: {"enabled": True, "control": True, "chat_id": ""})
         with self.assertRaises(web.HTTPError) as cm:
             telegram.put_telegram(req)
         self.assertEqual(cm.exception.detail.key, "err.tg_incomplete")
-        req = mock.Mock(json=lambda: {"enabled": False, "control": True, "token": TOKEN, "chat_id": CHAT})
+        req = mock.Mock(json=lambda: {"enabled": True, "control": True, "token": TOKEN, "chat_id": ""})
+        with self.assertRaises(web.HTTPError) as cm:
+            telegram.put_telegram(req)
+        self.assertEqual(cm.exception.field, "chat_id")
+        # бот выключен — галочку управления можно сохранить и без чата: она подождёт
+        telegram.put_telegram(mock.Mock(json=lambda: {"enabled": False, "control": True, "chat_id": ""}))
+        req = mock.Mock(json=lambda: {"enabled": True, "control": True, "token": TOKEN, "chat_id": CHAT})
         telegram.put_telegram(req)
         c = notify.cfg_of(panel.store.snapshot())
-        self.assertEqual((c["enabled"], c["control"]), (False, True))
+        self.assertEqual((c["enabled"], c["control"]), (True, True))
 
     def test_panel_shows_state_without_notifications(self):
         src = panel_js.source()
-        self.assertIn("${c.control && S.tg_bot ? viewBotState(S.tg_bot)", src)
+        self.assertIn("c.enabled && (c.control || c.clients !== false) && S.tg_bot ? `<div style=\"margin-top:6px\">${viewBotState(S.tg_bot)}", src)
 
     def test_logs_helper_does_not_hang_in_a_pipe(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "install.sh"), encoding="utf-8") as f:

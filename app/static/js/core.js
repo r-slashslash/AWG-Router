@@ -431,7 +431,7 @@ async function refresh(auto = false) {
     pollFails = 0;
     if (data.same && S && data.tag === S.tag) {
       same = true;
-      S.now = data.now; S.system = data.system; S.engine.last_reconcile = data.last_reconcile;
+      S.now = data.now; S.system = data.system; S.speeds = data.speeds; S.engine.last_reconcile = data.last_reconcile;
     } else if (data.same) {
       return;                                   // отпечаток уже не тот (другой ответ успел раньше) — ждём следующий
     } else if (auto && S && $("#modal").open) {
@@ -458,7 +458,7 @@ async function refresh(auto = false) {
   }
   if (followUpdate()) return;
   renderStatus();
-  if (same) return;
+  if (same) { if (tab === "clients") fillSpeeds(); return; }
   // список скачивается в фоне: на вкладке «Маршрутизация» обновляется только таблица списков
   const busy = S.lists.some((l) => l.busy);
   if (auto && tab === "routing" && (busy || listsBusy) && $("#lists-sec") && !$("#modal").open) {
@@ -616,7 +616,7 @@ function render(force = false) {
   // поиск печатают, пока идёт опрос: перерисовка не должна уводить курсор из поля
   const keepCaret = sEl && document.activeElement === sEl ? [sEl.selectionStart, sEl.selectionEnd] : null;
   const html = banners() + views.get(tab)();
-  if (!force && tab === "clients" && patchClients(html)) return;
+  if (!force && tab === "clients" && patchClients(html)) { fillSpeeds(); return; }
   if (tab === "clients" && clientParts) clientParts.banner = html.slice(0, html.length - clientParts.html.length);
   clientsShown = tab === "clients" ? clientParts : null;
   $("#main").innerHTML = html;

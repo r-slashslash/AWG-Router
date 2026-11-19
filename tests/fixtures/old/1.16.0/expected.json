@@ -230,6 +230,7 @@
       "tls": true,
       "update": true
      },
+     "fallback": true,
      "lang": "ru",
      "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
      "via": "up:u6db4aa"
@@ -247,7 +248,8 @@
    },
    "upgraded": [
     "rule_names",
-    "client_bot"
+    "client_bot",
+    "bot_switch"
    ],
    "upstreams": [
     {
@@ -523,6 +525,7 @@
       "tls": true,
       "update": true
      },
+     "fallback": true,
      "lang": "ru",
      "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
      "via": "up:u6db4aa"
@@ -540,7 +543,8 @@
    },
    "upgraded": [
     "rule_names",
-    "client_bot"
+    "client_bot",
+    "bot_switch"
    ],
    "upstreams": [
     {
@@ -1208,7 +1212,8 @@
   },
   "upgraded": [
    "rule_names",
-   "client_bot"
+   "client_bot",
+   "bot_switch"
   ],
   "upstreams": [
    {

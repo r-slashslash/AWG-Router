@@ -39,6 +39,7 @@ HOST_FAST_TRIES, HOST_FAST_WAIT = 30, 20     # внешний IPv4: сначал
 HOST_SLOW_WAIT = 600                        # потом раз в 10 минут, пока не найдётся;
 HOST_RECHECK = 6 * 3600                     # найденный перепроверяем раз в 6 часов
 SERVER_DOWN_AFTER = 600  # с: дольше сервер AWG не поднимается — в шапке уже не «Перезапуск…», а ошибка
+SETTLE_SECS = 90         # с: после смены движка или перезапуска сервера из панели шапка ждёт первого удачного прохода
 MEM_ALERT, MEM_OK = 90, 85   # % занятой памяти: выше — тревога, ниже — снова норма
 CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
@@ -87,6 +88,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self._quic_nft: bool | None = None       # ядро принимает очередь QUIC (None — ещё не пробовали)
         self._quic_key = None                    # для какой цели это известно
         self.switching = False                         # идёт ручная смена движка (switch_engine)
+        # смена движка или перезапуск сервера из панели: (что, когда) — до первого удачного прохода с поднятым
+        # интерфейсом шапка говорит «Смена движка…» / «Перезапуск…», а не «Ошибка» (phase)
+        self._settle: tuple[str, float] | None = None
+        self._srv_up = True                            # интерфейс сервера был на месте в этом проходе (_watch_server)
         self._srv_tries = 0
         self._srv_next = 0.0
         self._res: dict[str, dict] = {}       # тревоги по памяти и процессору (_watch_resources)
@@ -318,13 +323,21 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         """Что панель сейчас делает — для шапки (в браузере): engine — ручная смена движка; server_restart —
         сервер AWG перезапускается (кнопка, автоперезапуск, интерфейс пропал и панель его ждёт); server_down —
         не поднимается дольше SERVER_DOWN_AFTER; starting — панель запущена, а первый проход ещё не применил
-        правила, туннели и sniproxy (если проход упал — это уже ошибка, last_error); None — ничего."""
+        правила, туннели и sniproxy (если проход упал — это уже ошибка, last_error); None — ничего.
+        После смены движка и перезапуска сервера из панели (_settle) — engine / server_restart до первого удачного
+        прохода с поднятым интерфейсом, но не дольше SETTLE_SECS: проходы, пока сервер поднимается на новом
+        движке, могут падать (около 30 с «Ошибки» в шапке, владелец 2026-11-19), а это не поломка."""
         now = time.time()
-        if self.switching:
+        settle = getattr(self, "_settle", None)
+        if settle and now - settle[1] >= SETTLE_SECS:
+            settle = None                 # так и не заработал — дальше шапка показывает то, что есть (ошибку)
+        if self.switching or (settle and settle[0] == "engine"):
             return "engine"
         since = self._srv_down if self._srv_down is not None else self.server_restart_at
         if since is not None:
             return "server_restart" if now - since < SERVER_DOWN_AFTER else "server_down"
+        if settle:
+            return "server_restart"
         if self.last_reconcile is None and self.last_error is None:
             return "starting"
         return None
@@ -519,8 +532,15 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             except Exception as e:  # noqa: BLE001
                 log.exception("shaping")
                 self.shape_state = {"state": "error", "error": msg_of(e)}
-            self.last_error = None
-            self.last_reconcile = time.time()
+            self._pass_done()
+
+    def _pass_done(self) -> None:
+        """Проход удался. Сервер после смены движка или перезапуска из панели снова работает (интерфейс на месте) —
+        шапка больше не ждёт (_settle)."""
+        self.last_error = None
+        self.last_reconcile = time.time()
+        if getattr(self, "_srv_up", True):
+            self._settle = None
 
     def teardown(self) -> None:
         """Полностью убирает следы панели (как будто её не было)."""

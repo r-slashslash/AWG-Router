@@ -22,7 +22,11 @@ RULE_NAMES = "rule_names"       # подписи правил именем вы�
 # приглашения клиентов в бота (1.22.0): бот начинает читать сообщения и без управления. Где бот был только для
 # уведомлений, его же могла читать другая программа (вторая панель) — там приглашения выключены, пока их не включат
 CLIENT_BOT = "client_bot"
-UPGRADES = (RULE_NAMES, CLIENT_BOT)
+# «Включить бот» (1.23.0) — главный выключатель: раньше «Присылать уведомления» не трогал управление и клиентов
+# в боте. Где бот работал без уведомлений (управление или клиенты), он включается — и уведомления пойдут
+# (решение владельца 2026-11-19: «пусть присылает, сами снимут»)
+BOT_SWITCH = "bot_switch"
+UPGRADES = (RULE_NAMES, CLIENT_BOT, BOT_SWITCH)
 
 DEFAULT_STATE = {
     "version": 1,
@@ -103,6 +107,8 @@ class Store:
             changed = True
         if Store.client_bot_once(self.state):
             changed = True
+        if Store.bot_switch_once(self.state):
+            changed = True
         if any(isinstance(l, dict) and l.get("kind") in TEXT_KINDS and l.get("source")
                for l in self.state.get("lists") or []):
             changed = True              # state.json до 1.21.0: тексты списков — в свои файлы (_write)
@@ -133,6 +139,26 @@ class Store:
             tg["clients"] = False
         state["upgraded"] = [x for x in (state.get("upgraded") if isinstance(state.get("upgraded"), list) else [])
                              if x in UPGRADES and x != CLIENT_BOT] + [CLIENT_BOT]
+        return True
+
+    @staticmethod
+    def bot_switch_once(state: dict, source: dict | None = None) -> bool:
+        """Один раз для состояния (или копии) до 1.23.0: бот с токеном, у которого работало управление или клиенты
+        по приглашению, а «Присылать уведомления» было выключено, — включается («Включить бот» теперь выключает
+        всё). Идёт после client_bot_once: у того бота до 1.22.0 клиенты уже выключены. True — что-то поменялось."""
+        done = (source if source is not None else state).get("upgraded")
+        done = [x for x in done if x in UPGRADES] if isinstance(done, list) else []
+        mine = [x for x in (state.get("upgraded") if isinstance(state.get("upgraded"), list) else [])
+                if x in UPGRADES and x != BOT_SWITCH]
+        if BOT_SWITCH in done:
+            if state.get("upgraded") != mine + [BOT_SWITCH]:
+                state["upgraded"] = mine + [BOT_SWITCH]
+                return True
+            return False
+        tg = (state.get("settings") or {}).get("telegram")
+        if isinstance(tg, dict) and tg.get("token") and not tg.get("enabled") and (tg.get("control") or tg.get("clients")):
+            tg["enabled"] = True
+        state["upgraded"] = mine + [BOT_SWITCH]
         return True
 
     @staticmethod

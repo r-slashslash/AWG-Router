@@ -21,16 +21,19 @@ class DiagMixin:
     """Проверка выхода и маршрута (часть Engine)."""
 
     # ---------------------------------------------------------------- tools
-    def own_route(self, out: str) -> tuple[int, int] | None:
-        """Путь для собственных запросов панели (Telegram): None — напрямую из панели,
+    def own_route(self, out: str, direct: bool = True) -> tuple[int, int] | None:
+        """Путь для собственных запросов панели (Telegram, списки): None — напрямую из панели,
         (PID, fwmark) — через туннель выхода в сети сервера AWG. Выход выбирается так же,
-        как для клиентов: не работает — его резервный выход."""
+        как для клиентов: не работает — его резервный выход. direct=False (Telegram, 1.23.0): выбранный выход
+        не уводит запрос напрямую и резервом «Напрямую» — такой выход считается неработающим."""
         if out == "direct" or config.DRY_RUN:
             return None
         name = (Store.upstream(self.store.snapshot(), out[3:]) or {}).get("name", out) \
             if out.startswith("up:") else out
         eff = self.resolve(out, self.store.snapshot())
         if eff == "direct":
+            if not direct:
+                raise system.SysError(Msg("tg.via_down", name=name))
             return None
         if eff == "block":
             raise system.SysError(Msg("tg.via_blocked", name=name))

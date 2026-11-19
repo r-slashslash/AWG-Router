@@ -186,7 +186,8 @@
   "shares": {},
   "upgraded": [
    "rule_names",
-   "client_bot"
+   "client_bot",
+   "bot_switch"
   ],
   "upstreams": [
    {

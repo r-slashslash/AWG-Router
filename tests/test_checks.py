@@ -151,9 +151,14 @@ class BackupForgivesTest(unittest.TestCase):
         self.assertNotIn("strict", st["routing"])
         self.assertNotIn("quic", st["upstreams"][0])
         self.assertIsNone(st["upstreams"][0]["quota"])
-        # уведомления и управление без чата — выключены, а не ошибка
+        # управление без чата — выключено, а не ошибка; бот (1.23.0: главный выключатель) остаётся — клиентам по
+        # приглашению чат панели не нужен, а уведомления без чата и так не уходят
         b = base()
         b["settings"]["telegram"].update(chat_id="", control=True)
+        tg = backup.clean_backup_state(b)["settings"]["telegram"]
+        self.assertEqual((tg["enabled"], tg["control"]), (True, False))
+        b = base()
+        b["settings"]["telegram"].update(token="", control=True)
         tg = backup.clean_backup_state(b)["settings"]["telegram"]
         self.assertEqual((tg["enabled"], tg["control"]), (False, False))
         # форма на то же отвечает ошибкой

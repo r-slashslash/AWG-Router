@@ -11,6 +11,8 @@ function viewTelegram() {
     <div class="section-head"><div><h2>${esc(t("tg.title"))}</h2><p class="muted small">${esc(t("tg.sub"))}</p></div></div>
     <div class="panel panel-pad">
       <label class="check"><input type="checkbox" id="tg-on" ${c.enabled ? "checked" : ""}><span><b>${esc(t("tg.enable"))}</b></span></label>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="tg-control" ${c.control ? "checked" : ""}><span><b>${esc(t("tg.control"))}</b></span></label>
+      ${c.enabled && (c.control || c.clients !== false) && S.tg_bot ? `<div style="margin-top:6px">${viewBotState(S.tg_bot)}</div>` : ""}
       <div class="tg-cols"><div>
       <label class="field"><span>${esc(t("tg.token"))}</span>
         <input type="text" data-field="token" id="tg-token" autocomplete="off" spellcheck="false" dir="ltr"
@@ -28,19 +30,13 @@ function viewTelegram() {
           ...S.upstreams.map((u) => ["up:" + u.id, t("out.via", { name: u.name })])].map(([v, l]) =>
           `<option value="${esc(v)}" ${v === (c.via || "direct") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
         <span class="hint">${esc(t("tg.via_hint"))}</span></label>
+      <label class="check" style="margin:-6px 0 12px"><input type="checkbox" id="tg-fb" ${c.fallback !== false ? "checked" : ""}><span>${esc(t("tg.fallback"))}</span></label>
+      ${c.enabled && S.tg_path ? `<p class="small warn-text" style="margin:-6px 0 12px">${th("tg.path_now", { name: `<bdi>${esc(exitName(S.tg_path.via))}</bdi>` })}</p>` : ""}
       </div><div class="field"><span>${esc(t("tg.events"))}</span>
         ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div></div>
-      <fieldset class="pgroup" style="margin:4px 0 12px"><legend>${esc(t("tg.control_title"))}</legend>
-        <label class="check"><input type="checkbox" id="tg-control" ${c.control ? "checked" : ""}><span><b>${esc(t("tg.control"))}</b></span></label>
-        <p class="small muted" style="margin:6px 0 0">${esc(t("tg.control_hint"))}</p>
-        ${c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
-      </fieldset>
       <fieldset class="pgroup" style="margin:4px 0 12px"><legend>${esc(t("tg.clients_title"))}</legend>
         <label class="check"><input type="checkbox" id="tg-clients" ${c.clients !== false ? "checked" : ""}><span><b>${esc(t("tg.clients"))}</b></span></label>
         <p class="small muted" style="margin:6px 0 0">${esc(t("tg.clients_hint"))}</p>
-        <label class="check" style="margin-top:10px"><input type="checkbox" id="tg-cnotify" ${c.client_notify !== false ? "checked" : ""}><span>${esc(t("tg.client_notify"))}</span></label>
-        <p class="small muted" style="margin:6px 0 0">${esc(t("tg.client_notify_hint"))}</p>
-        ${c.clients !== false && c.token_set && !c.control && S.tg_bot ? viewBotState(S.tg_bot) : ""}
         ${c.clients !== false && S.tg_bot && S.tg_bot.linked ? `<p class="small muted">${esc(t("tg.clients_linked", { n: S.tg_bot.linked }))}</p>` : ""}
       </fieldset>
       <fieldset class="pgroup" style="margin-top:4px"><legend>${esc(t("tg.backup"))}</legend>
@@ -64,7 +60,7 @@ function viewTelegram() {
     </div>
   </section>`;
 }
-/* Состояние бота-пульта: слушает ли и когда была последняя команда */
+/* Состояние бота: слушает ли (управление или клиенты) и когда была последняя команда */
 function viewBotState(b) {
   const out = [];
   if (b.state === "error") out.push(`<p class="err small">${esc(t("tg.bot_error"))}: <bdi>${esc(tm(b.error))}</bdi></p>`);
@@ -79,7 +75,9 @@ function bindTelegram() {
     TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });
     return { enabled: $("#tg-on").checked, token: $("#tg-token").value.trim(),
       chat_id: $("#tg-chat").value.trim(), lang: $("#tg-lang").value, via: $("#tg-via").value, events,
-      control: $("#tg-control").checked, clients: $("#tg-clients").checked, client_notify: $("#tg-cnotify").checked,
+      fallback: $("#tg-fb").checked,
+      // напоминания клиентам — та же галочка (1.23.0); поле остаётся для отката на 1.22.0
+      control: $("#tg-control").checked, clients: $("#tg-clients").checked, client_notify: $("#tg-clients").checked,
       backup: $("#tg-bk").value, backup_pw: $("#tg-bk-pw").value,
       backup_pw_clear: !!($("#tg-bk-clear") && $("#tg-bk-clear").checked) };
   };

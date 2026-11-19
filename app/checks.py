@@ -511,7 +511,7 @@ def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:
     if isinstance(ev, dict):
         one = (lambda k: forgive(lambda: flag(ev[k]), c["events"].get(k, True))) if backup else (lambda k: flag(ev[k]))
         c["events"] = {k: one(k) if k in ev else c["events"].get(k, True) for k in notify.KINDS}
-    for k in ("enabled", "control", "clients", "client_notify"):
+    for k in ("enabled", "control", "clients", "client_notify", "fallback"):
         if k in body:
             c[k] = soft(lambda: flag(body[k]), k)
     if "backup" in body:
@@ -526,7 +526,7 @@ def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:
         c["backup_pw"] = ""
     if backup:
         ready = bool(c["token"] and c["chat_id"])
-        c["enabled"] = c["enabled"] and ready
+        c["enabled"] = c["enabled"] and bool(c["token"])     # бот только для клиентов работает и без чата
         # @имя можно освободить и занять другому: управление — только из чата с числовым ID
         c["control"] = c["control"] and ready and not c["chat_id"].startswith("@")
     return c

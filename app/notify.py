@@ -29,8 +29,12 @@ TGREQ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tgreq.py")
 # Путь запросов: via ("direct" | "up:<id>") → None (напрямую из панели) или (PID, fwmark) —
 # через туннель выхода в сети сервера AWG. Задаёт app/panel.py; может бросить NotifyError.
 router = None
-# Другие пути к Telegram, когда выбранный выход не работает: alt_routes(via) → список «up:<id>»
+# Другие пути к Telegram, когда выбранный не работает: alt_routes(via) → работающие выходы «up:<id>», кроме via
 alt_routes = None
+# Галочка «Если не получается — пробовать другие пути» (1.23.0) из сохранённых настроек: fallback_on() → bool.
+# Задаёт app/panel.py; нет — только выбранный путь
+fallback_on = None
+PATH_RETRY = 600         # с: бот идёт запасным путём — выбранный пробуется снова раз в столько секунд
 LANGS = ("ru", "en", "zh", "fa")
 # категории событий, которые можно включать по отдельности
 KINDS = ("exit", "server", "system", "clients", "login", "tls", "update")
@@ -285,16 +289,21 @@ BACKUP_PERIODS = {"off": 0, "daily": 86400, "weekly": 7 * 86400}
 
 
 def defaults() -> dict:
+    # enabled — «Включить бот» (1.23.0): главный выключатель — уведомления, управление, клиенты и копии
     return {"enabled": False, "token": "", "chat_id": "", "lang": "en",
             "events": {k: True for k in KINDS},
             # как ходить к api.telegram.org: direct | up:<id> (через выход, если Telegram заблокирован)
             "via": "direct",
             # управление из Telegram: команды и кнопки (только из этого чата), см. tgbot.py
             "control": False,
+            # выбранный путь не работает — запасные (1.23.0, включено у всех): «напрямую» → работающие выходы по
+            # очереди; выход → другие выходы, напрямую никогда. Paths ниже
+            "fallback": True,
             # клиенты открывают приглашение в бота и смотрят там свой доступ (1.22.0); бот читает сообщения и
             # при выключенном управлении. У установок до 1.22.0 без управления — выключено (store.CLIENT_BOT)
             "clients": True,
-            # напоминания клиенту в его чат с ботом: срок скоро, 90% лимита, отключён, снова включён (1.22.0)
+            # напоминания клиенту в его чат с ботом: срок скоро, 90% лимита, отключён, снова включён (1.22.0). С 1.23.0
+            # идут вместе с clients (одна галочка); поле пишется так же, как clients, — для отката на 1.22.0
             "client_notify": True,
             # резервная копия в чат: off | daily | weekly; пароль — шифровать файл (пусто — нет)
             "backup": "off", "backup_pw": "", "backup_last": None, "backup_error": None}
@@ -388,7 +397,73 @@ def _post_via(route: tuple[int, int], url: str, data: bytes, ctype: str,
     return int(res.get("status") or 0), str(res.get("body") or "").encode()
 
 
+class Paths:
+    """Запасные пути к Telegram (1.23.0, решение владельца 2026-11-19). Выбран «Напрямую» и не вышло — работающие
+    выходы по очереди; выбран выход — другие работающие выходы, а напрямую никогда (раз выбрали выход, напрямую
+    Telegram, скорее всего, закрыт, а попытка выдала бы, что сервер ходит в Telegram). Сработавший запасной путь
+    держится: следующие запросы идут сначала им, выбранный пробуется снова раз в PATH_RETRY. Касается всего, что
+    шлёт бот: уведомлений, управления, сообщений клиентам и копий."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.now: dict | None = None      # {"chosen": выбранный, "via": запасной, "since": когда перешли}
+
+    def order(self, via: str, now: float | None = None) -> list[str]:
+        if not (fallback_on and alt_routes):
+            return [via]
+        try:
+            if not fallback_on():
+                return [via]
+            alts = [v for v in alt_routes(via) if v != via and v != "direct"]
+        except Exception:  # noqa: BLE001
+            log.exception("telegram paths")
+            return [via]
+        out = [via] + alts
+        cur, now = self.now, time.time() if now is None else now
+        if cur and cur["chosen"] == via and cur["via"] in alts and now - cur["since"] < PATH_RETRY:
+            out = [cur["via"]] + [v for v in out if v != cur["via"]]
+        return out
+
+    def ok(self, via: str, used: str, now: float | None = None) -> None:
+        """Запрос дошёл до Telegram путём used (выбран via)."""
+        now = time.time() if now is None else now
+        with self.lock:
+            if used == via:
+                self.now = None
+            elif not (self.now and self.now["chosen"] == via and self.now["via"] == used
+                      and now - self.now["since"] < PATH_RETRY):
+                self.now = {"chosen": via, "via": used, "since": now}
+
+    def view(self, via: str) -> dict | None:
+        """Для браузера: бот сейчас идёт запасным путём ({"via": …}) или выбранным (None)."""
+        cur = self.now
+        return {"via": cur["via"], "since": cur["since"]} if cur and cur["chosen"] == via else None
+
+
+paths = Paths()
+
+
 def _post(token: str, method: str, data: bytes, ctype: str, timeout: float, via: str) -> dict:
+    """Запрос к Bot API выбранным путём, а если он не работает — запасными (Paths). Отказ самого Telegram (токен,
+    чат) — сразу: путь до него работает. Сбой на всех путях — ошибка выбранного: она лучше объясняет, что не так."""
+    first = None
+    for v in paths.order(via):
+        try:
+            res = _post_once(token, method, data, ctype, timeout, v)
+        except NotifyError as e:
+            if not e.net:
+                paths.ok(via, v)
+                raise
+            first = first or e
+            if v != via or len(paths.order(via)) > 1:
+                log.warning("telegram via %s: %s", v, e)
+            continue
+        paths.ok(via, v)
+        return res
+    raise first or NotifyError("no route", net=True)
+
+
+def _post_once(token: str, method: str, data: bytes, ctype: str, timeout: float, via: str) -> dict:
     url = f"{API}/bot{token}/{method}"
     route = router(via) if router and via and via != "direct" else None
     try:
@@ -639,32 +714,10 @@ class Notifier:
             self._target_lost = False
             self.event("server", "target_back")
 
-    def routes(self, via: str) -> list[str]:
-        """Пути по порядку: выбранный, затем (если это выход) остальные работающие выходы и
-        «напрямую». Выбранный «напрямую» остаётся единственным: его человек выбрал сам."""
-        out = [via]
-        if via != "direct":
-            try:
-                out += [v for v in (alt_routes(via) if alt_routes else []) if v not in out]
-            except Exception:  # noqa: BLE001
-                log.exception("notify alt routes")
-            out.append("direct")
-        return out
-
     def deliver(self, token: str, chat: str, text: str, via: str, markup: dict | None) -> None:
-        """Отправка по очереди путей. Если сбой пути на всех, бросает ошибку первого (выбранного)
-        пути: она лучше всего объясняет, что не так. Отказ Telegram (токен, чат) — сразу."""
-        first = None
-        for v in self.routes(via):
-            try:
-                send(token, chat, text, v, markup)
-                return
-            except NotifyError as e:
-                if not e.net:
-                    raise
-                first = first or e
-                log.warning("telegram via %s: %s", v, e)
-        raise first or NotifyError("no route", net=True)
+        """Отправка выбранным путём; запасные пути (галочка «пробовать другие пути») — в _post (Paths), общие
+        для всего, что шлёт бот. Сбой на всех путях — ошибка выбранного, отказ Telegram (токен, чат) — сразу."""
+        send(token, chat, text, via, markup)
 
     def _take(self, wait: float | None) -> None:
         """Забрать новые сообщения в хвост очереди отложенных (ждать не дольше wait секунд)."""

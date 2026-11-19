@@ -590,9 +590,15 @@ def client_lang(frm: dict | None) -> str:
 
 
 def admin_on(c: dict) -> bool:
-    """Управление ботом действует: включено и указан числовой номер чата."""
+    """Управление ботом действует: бот включён (1.23.0: «Включить бот» — главный выключатель), управление включено
+    и указан числовой номер чата."""
     chat = str(c.get("chat_id") or "")
-    return bool(c.get("token") and c.get("control") and chat and not chat.startswith("@"))
+    return bool(c.get("enabled") and c.get("token") and c.get("control") and chat and not chat.startswith("@"))
+
+
+def clients_on(c: dict) -> bool:
+    """Клиенты по приглашению видят свой доступ и получают напоминания: бот включён и галочка клиентов стоит."""
+    return bool(c.get("enabled") and c.get("token") and c.get("clients"))
 
 
 def menu_action(text: str) -> str | None:
@@ -693,7 +699,7 @@ class Bot:
         me = self._st.get("me") or {}
         c = notify.cfg_of(self.store.peek(lambda st: {"settings": {"telegram": dict(
             (st.get("settings") or {}).get("telegram") or {})}}))
-        if not (c["token"] and c.get("clients")) or me.get("bot") != c["token"].split(":", 1)[0]:
+        if not clients_on(c) or me.get("bot") != c["token"].split(":", 1)[0]:
             return None
         name = me.get("username")
         return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_]{3,64}", name) else None
@@ -908,7 +914,7 @@ class Bot:
         настройкам и состоянию клиента сейчас: напоминания выключили, срок продлили или клиента снова включили,
         пока ждали связи, — устаревшее не отправляется."""
         c = notify.cfg_of(self.store.snapshot())
-        if not (c["token"] and c.get("clients") and c.get("client_notify")):
+        if not clients_on(c):          # напоминания — та же галочка, что и клиенты в боте (1.23.0)
             self._reminders.clear()
             return True
         while self._reminders:
@@ -972,9 +978,9 @@ class Bot:
     def _loop(self) -> None:
         while not self.stop_ev.is_set():
             c = notify.cfg_of(self.store.snapshot())
-            # управление не зависит от уведомлений: можно командовать ботом и без них; клиенты по приглашению —
-            # и без управления (тогда команды панели не принимаются ни из какого чата)
-            if not (c["token"] and ((c["chat_id"] and c["control"]) or c.get("clients"))):
+            # бот выключен — молчит совсем (1.23.0); включён — управление и клиенты по своим галочкам: клиенты по
+            # приглашению работают и без управления (тогда команды панели не принимаются ни из какого чата)
+            if not (c["enabled"] and c["token"] and ((c["chat_id"] and c["control"]) or c.get("clients"))):
                 self.state, self.error = "off", None
                 try:
                     self._drop_commands(c)
@@ -1021,7 +1027,7 @@ class Bot:
         now = fresh() if fresh else c
         same = now["token"] == c["token"]
         now = {**now, "_admin": bool(same and admin_on(now) and now["chat_id"] == c["chat_id"]),
-               "_clients": bool(same and now.get("clients"))}
+               "_clients": bool(same and clients_on(now))}
         live = now["_admin"] or now["_clients"]
         for u in ups if isinstance(ups, list) else []:
             # отметку сохраняем до выполнения: после перезапуска команда не повторится

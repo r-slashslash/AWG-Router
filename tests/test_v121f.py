@@ -1046,7 +1046,7 @@ class RuleNameKeptTest(unittest.TestCase):
                 json.dump(self.state(), f)                         # state.json 1.20.0: отметки нет
             s = Store(path)
             self.assertEqual(s.state["routing"]["rules"][0]["comment"], "")
-            self.assertEqual(s.state["upgraded"], ["rule_names", "client_bot"])     # client_bot — с 1.22.0
+            self.assertEqual(s.state["upgraded"], ["rule_names", "client_bot", "bot_switch"])     # client_bot — с 1.22.0
             s.state["routing"]["rules"][0]["comment"] = "mobile"   # своё название, как у выхода
             s._write()
             s = Store(path)                                        # следующий запуск
@@ -1054,7 +1054,7 @@ class RuleNameKeptTest(unittest.TestCase):
 
     def test_new_install(self):
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(Store(os.path.join(d, "state.json")).state["upgraded"], ["rule_names", "client_bot"])
+            self.assertEqual(Store(os.path.join(d, "state.json")).state["upgraded"], ["rule_names", "client_bot", "bot_switch"])
 
     def test_backup(self):
         old = self.state()

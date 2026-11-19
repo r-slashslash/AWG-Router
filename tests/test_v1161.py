@@ -183,44 +183,90 @@ class NotifyErrorKindTest(unittest.TestCase):
             self.assertTrue(cm.exception.net)
 
 
-class NotifyFallbackTest(unittest.TestCase):
-    def setUp(self):
-        self.alt = mock.patch.object(notify, "alt_routes", lambda via: ["up:b", "up:c"])
-        self.alt.start()
+class FakePost:
+    """notify._post_once: пути из down не работают (сеть), из refused — отказ Telegram, остальные доставляют."""
 
-    def tearDown(self):
-        self.alt.stop()
+    def __init__(self, down=(), refused=()):
+        self.down, self.refused, self.calls = set(down), set(refused), []
+
+    def __call__(self, token, method, data, ctype, timeout, via):
+        self.calls.append(via)
+        if via in self.refused:
+            raise notify.NotifyError("Unauthorized")
+        if via in self.down:
+            raise notify.NotifyError("api.telegram.org: timed out", net=True)
+        return {}
+
+
+class NotifyFallbackTest(unittest.TestCase):
+    """Запасные пути (1.23.0, notify.Paths): выбран выход — другие выходы, напрямую никогда; выбран «Напрямую» —
+    выходы по очереди; галочка выключена — только выбранный. Это касается всех запросов бота (_post)."""
+
+    def setUp(self):
+        self.on = True
+        for name, val in (("alt_routes", lambda via: [v for v in ("up:a", "up:b", "up:c") if v != via]),
+                          ("fallback_on", lambda: self.on), ("paths", notify.Paths())):
+            p = mock.patch.object(notify, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def post(self, via, fake):
+        with mock.patch.object(notify, "_post_once", fake):
+            return notify._post(TOKEN, "sendMessage", b"{}", "application/json", 1, via)
 
     def test_routes_order(self):
-        n = make_notifier(cfg_state())
-        self.assertEqual(n.routes("up:a"), ["up:a", "up:b", "up:c", "direct"])
-        self.assertEqual(n.routes("direct"), ["direct"])        # «напрямую» человек выбрал сам
+        self.assertEqual(notify.paths.order("up:a"), ["up:a", "up:b", "up:c"])      # напрямую — никогда
+        self.assertEqual(notify.paths.order("direct"), ["direct", "up:a", "up:b", "up:c"])
+        self.on = False
+        self.assertEqual(notify.paths.order("up:a"), ["up:a"])
 
     def test_other_exit_when_selected_is_down(self):
-        n, fake = make_notifier(cfg_state()), FakeSend(down={"up:a"})
-        with mock.patch.object(notify, "send", fake):
-            n.deliver(TOKEN, "42", "text", "up:a", None)
+        fake = FakePost(down={"up:a"})
+        self.post("up:a", fake)
         self.assertEqual(fake.calls, ["up:a", "up:b"])
 
-    def test_direct_is_the_last_resort(self):
-        n, fake = make_notifier(cfg_state()), FakeSend(down={"up:a", "up:b", "up:c"})
-        with mock.patch.object(notify, "send", fake):
-            n.deliver(TOKEN, "42", "text", "up:a", None)
-        self.assertEqual(fake.calls, ["up:a", "up:b", "up:c", "direct"])
+    def test_never_direct_after_an_exit(self):
+        fake = FakePost(down={"up:a", "up:b", "up:c"})
+        with self.assertRaises(notify.NotifyError):
+            self.post("up:a", fake)
+        self.assertEqual(fake.calls, ["up:a", "up:b", "up:c"])
+
+    def test_direct_falls_back_to_exits(self):
+        fake = FakePost(down={"direct"})
+        self.post("direct", fake)
+        self.assertEqual(fake.calls, ["direct", "up:a"])
+
+    def test_working_path_sticks_and_chosen_is_retried(self):
+        fake = FakePost(down={"direct"})
+        self.post("direct", fake)
+        fake.calls.clear()
+        self.post("direct", fake)
+        self.assertEqual(fake.calls, ["up:a"])                     # сразу запасным, без ожидания «напрямую»
+        self.assertEqual(notify.paths.view("direct")["via"], "up:a")
+        notify.paths.now["since"] -= notify.PATH_RETRY + 1         # прошло 10 минут — снова выбранный
+        fake.down.clear()
+        fake.calls.clear()
+        self.post("direct", fake)
+        self.assertEqual(fake.calls, ["direct"])
+        self.assertIsNone(notify.paths.view("direct"))
 
     def test_error_of_selected_route_is_reported(self):
-        n = make_notifier(cfg_state())
-        errors = [notify.NotifyError(w, net=True) for w in ("first", "second", "third", "fourth")]
-        with mock.patch.object(notify, "send", side_effect=errors):
+        errors = [notify.NotifyError(w, net=True) for w in ("first", "second", "third")]
+        with mock.patch.object(notify, "_post_once", side_effect=errors):
             with self.assertRaises(notify.NotifyError) as cm:
-                n.deliver(TOKEN, "42", "text", "up:a", None)
+                notify._post(TOKEN, "sendMessage", b"{}", "application/json", 1, "up:a")
         self.assertEqual(str(cm.exception), "first")
 
     def test_telegram_refusal_does_not_try_other_routes(self):
-        n, fake = make_notifier(cfg_state()), FakeSend(refused={"up:a"})
+        fake = FakePost(refused={"up:a"})
+        with self.assertRaises(notify.NotifyError):
+            self.post("up:a", fake)
+        self.assertEqual(fake.calls, ["up:a"])
+
+    def test_deliver_is_one_send(self):
+        n, fake = make_notifier(cfg_state()), FakeSend()
         with mock.patch.object(notify, "send", fake):
-            with self.assertRaises(notify.NotifyError):
-                n.deliver(TOKEN, "42", "text", "up:a", None)
+            n.deliver(TOKEN, "42", "text", "up:a", None)
         self.assertEqual(fake.calls, ["up:a"])
 
 

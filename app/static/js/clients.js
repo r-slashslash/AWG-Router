@@ -56,8 +56,10 @@ function viewClients() {
       (p.note ? `<span class="tag"><bdi>${esc(p.note)}</bdi></span>` : "") +
       (c.cps ? `<span class="tag" title="${esc(t("cl.cps"))}">${esc(cpsTag(c.cps))}</span>` : "") + limitTags(c);
     const wanted = p.outbound !== "inherit" ? p.outbound : c.default;
+    // скорость сейчас — пустое место в строке, заполняет fillSpeeds: строка не меняется на каждом опросе
     const activity = !c.enabled ? `<span class="muted">—</span>`
-      : `<span class="state"><span class="dot ${online ? "ok" : ""}"></span>${esc(online ? t("cl.online") : fmtAge(age))}</span>`;
+      : `<span class="state"><span class="dot ${online ? "ok" : ""}"></span>${esc(online ? t("cl.online") : fmtAge(age))}</span>`
+        + (online ? `<span class="cl-speed small muted" data-speed="${esc(c.public_key)}"></span>` : "");
     return [c.public_key, `<tr class="click ${c.enabled ? "" : "row-off"}" ${endingSoon(c) ? 'data-soon="1"' : ""} data-pk="${esc(c.public_key)}" data-q="${esc((c.name + " " + c.ip + " " + p.note).toLowerCase())}">
       <td><span class="client-name"><bdi>${esc(c.name || t("cl.unnamed"))}</bdi></span>${tags}</td>
       <td data-m="sub" class="nowrap"><bdi>${esc(c.ip || "—")}</bdi></td>
@@ -81,6 +83,17 @@ function viewClients() {
   const html = shell.replace(ROWS_MARK, () => rows);
   clientParts = { shell, rows: rowList, order: rowList.map((r) => r[0]).join(","), html, banner: "" };
   return html;
+}
+/* Скорость клиентов сейчас (1.23.0): S.speeds приходит с каждым ответом опроса, и короткий ответ «ничего не
+   изменилось» её тоже несёт — обновляются только эти места, не строки таблицы. «↓ к клиенту ↑ от клиента». */
+function fillSpeeds() {
+  const sp = (S && S.speeds) || {};
+  $$("#main [data-speed]").forEach((el) => {
+    const v = sp[el.dataset.speed];
+    const d = v ? fmtMbps(v[0]) : "0", u = v ? fmtMbps(v[1]) : "0";
+    const html = v && (d !== "0" || u !== "0") ? mbpsHtml([`↓ ${d}`, `↑ ${u}`]) : "";
+    if (el.innerHTML !== html) el.innerHTML = html;
+  });
 }
 const CLIENT_SORTS = ["ip", "name", "traffic", "activity"];
 let clientSort = (() => { try { return localStorage.getItem("awgr.sort") || "ip"; } catch { return "ip"; } })();
@@ -167,6 +180,7 @@ function endingSoon(c) {
   return used >= L.quota * 0.9 && used < L.quota;
 }
 bind.clients = () => {
+  fillSpeeds();
   const s = $("#client-search");
   if (s) s.oninput = filterClients;
   const soon = $("#client-soon");

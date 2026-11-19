@@ -318,6 +318,7 @@ def clean_backup_state(new: dict) -> dict:
                              sub=("via",))
     Store.drop_auto_comments_once(st, new)    # копия до 1.21.0: правила из окна выхода с его именем
     Store.client_bot_once(st, new)            # копия до 1.22.0: бот только для уведомлений — без приглашений
+    Store.bot_switch_once(st, new)            # копия до 1.23.0: бот без уведомлений, но с управлением — включён
     return st
 
 

@@ -27,10 +27,44 @@ SERVER_ENGINE_EVERY = 60     # с: как часто заново смотрет
 FLAP_SECS = 60                          # туннель упал раньше — считаем неудачным запуском
 CONNECTING_SECS = 30     # с после запуска выхода без ответа: «подключается» — его клиенты в блоке, а не на резерве
 HANDSHAKE_POLL = 0.5     # с: как часто смотреть, ответил ли только что запущенный выход AWG
+CLIENT_SPEED_EVERY = 2.5  # с: скорость клиентов в списке — не чаще одного замера счётчиков сервера за столько секунд
+CLIENT_SPEED_GAP = 30    # с: прошлый замер старше (панель никто не смотрел) — скорость считается заново
+_speed_lock = threading.Lock()
 
 
 class TunnelsMixin:
     """Туннели выходов: запуск, остановка, живость, трафик и квоты (часть Engine)."""
+    # ------------------------------------------------------------ скорость клиентов
+    def client_speeds(self) -> dict[str, list[int]]:
+        """Скорость клиентов сейчас для списка клиентов (1.23.0): {ключ: [к клиенту, от клиента]}, байт/с — по
+        счётчикам сервера (`awg show dump`) между двумя замерами. Замер — по запросу браузера, не чаще
+        CLIENT_SPEED_EVERY: панель никто не смотрит — сервер не опрашивается. Без движения — клиента нет в ответе."""
+        now = time.time()
+        with _speed_lock:
+            s = self.__dict__.setdefault("_cspeed", {"at": 0.0, "prev": None, "rates": {}})
+            if now - s["at"] < CLIENT_SPEED_EVERY:
+                return s["rates"]
+            t = self.target
+            if t is None or not t.exists:
+                s["rates"] = {}
+                return s["rates"]
+            s["at"] = now
+            try:
+                live = t.dump()
+            except Exception:  # noqa: BLE001  — сервер перезапускается: скорость подождёт
+                return s["rates"]
+            cur = {pk: (p["rx"], p["tx"]) for pk, p in live.items()}
+            prev, s["prev"] = s["prev"], (now, t.key, cur)
+            rates: dict[str, list[int]] = {}
+            if prev and prev[1] == t.key and 0 < now - prev[0] <= CLIENT_SPEED_GAP:
+                dt = now - prev[0]
+                for pk, (rx, tx) in cur.items():
+                    o = prev[2].get(pk)
+                    if o and rx >= o[0] and tx >= o[1] and (rx > o[0] or tx > o[1]):
+                        rates[pk] = [round((tx - o[1]) / dt), round((rx - o[0]) / dt)]
+            s["rates"] = rates
+            return rates
+
 
     def parsed(self, u: dict) -> awgconf.UpstreamConf:
         h = _sha(u["config"])

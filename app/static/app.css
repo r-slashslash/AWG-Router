@@ -277,6 +277,9 @@ textarea.short { min-height: 64px; }
 .dot.bad { background: var(--bad); }
 .state { display: inline-block; font-size: .88rem; }
 .state > .dot { margin-inline-end: 7px; }
+/* скорость клиента сейчас — под «В сети» в списке клиентов (пусто — места не занимает) */
+.cl-speed { display: block; margin-top: 2px; white-space: nowrap; }
+.cl-speed:empty { display: none; }
 .state-bad { cursor: pointer; }
 .state-bad b { color: var(--bad); }
 
