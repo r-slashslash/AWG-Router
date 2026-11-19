@@ -444,18 +444,20 @@ paths = Paths()
 
 
 def _post(token: str, method: str, data: bytes, ctype: str, timeout: float, via: str) -> dict:
-    """Запрос к Bot API выбранным путём, а если он не работает — запасными (Paths). Отказ самого Telegram (токен,
-    чат) — сразу: путь до него работает. Сбой на всех путях — ошибка выбранного: она лучше объясняет, что не так."""
+    """Запрос к Bot API выбранным путём, а если он не работает — запасными (Paths). Ответил сам Telegram — отказ
+    (токен, чат) или «слишком много запросов» и его сбой (429, 5xx: e.code) — сразу: путь до него работает, а другой путь
+    тот же ответ и получит (проверка 1.23.0). Сбой на всех путях — ошибка выбранного: она лучше объясняет, что не так."""
     first = None
-    for v in paths.order(via):
+    order = paths.order(via)
+    for v in order:
         try:
             res = _post_once(token, method, data, ctype, timeout, v)
         except NotifyError as e:
-            if not e.net:
+            if not e.net or e.code:
                 paths.ok(via, v)
                 raise
             first = first or e
-            if v != via or len(paths.order(via)) > 1:
+            if v != via or len(order) > 1:
                 log.warning("telegram via %s: %s", v, e)
             continue
         paths.ok(via, v)

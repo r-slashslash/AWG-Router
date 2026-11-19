@@ -181,6 +181,33 @@ class ClientSpeedTest(unittest.TestCase):
             clock[0] += 3
             self.assertEqual(e.client_speeds(), {})
 
+    def test_hung_server_does_not_hold_the_poll(self):
+        """`awg show` завис (проверка 1.23.0): опрос ждёт замер не дольше CLIENT_SPEED_WAIT, другие опросы — совсем не
+        ждут, а после неудачи следующий замер — через CLIENT_SPEED_PAUSE."""
+        import threading
+        import time as _time
+        e = engine_mod.Engine.__new__(engine_mod.Engine)
+        go, calls = threading.Event(), []
+
+        def hung():
+            calls.append(1)
+            go.wait(5)
+            raise OSError("awg show: timed out")
+        e.target = mock.Mock(exists=True, key="k1", dump=hung)
+        with mock.patch.object(tunnels_mod, "CLIENT_SPEED_WAIT", 0.05):
+            t0 = _time.monotonic()
+            self.assertEqual(e.client_speeds(), {})
+            self.assertEqual(e.client_speeds(), {})              # замер ещё идёт — сразу прежний ответ
+            self.assertLess(_time.monotonic() - t0, 1)
+            go.set()
+            for _ in range(100):
+                if not e._cspeed["busy"]:
+                    break
+                _time.sleep(0.01)
+            self.assertEqual(e.client_speeds(), {})              # не удался — пауза, сервер не спрашивается
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(e._cspeed["at"], _time.time() + tunnels_mod.CLIENT_SPEED_PAUSE - 5)
+
     def test_speeds_outside_the_tag(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "app", "api", "state.py"), encoding="utf-8") as f:
             src = f.read()

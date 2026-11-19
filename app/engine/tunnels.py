@@ -29,6 +29,8 @@ CONNECTING_SECS = 30     # с после запуска выхода без от
 HANDSHAKE_POLL = 0.5     # с: как часто смотреть, ответил ли только что запущенный выход AWG
 CLIENT_SPEED_EVERY = 2.5  # с: скорость клиентов в списке — не чаще одного замера счётчиков сервера за столько секунд
 CLIENT_SPEED_GAP = 30    # с: прошлый замер старше (панель никто не смотрел) — скорость считается заново
+CLIENT_SPEED_WAIT = 1.0  # с: столько ответ опроса ждёт замер; дольше (сервер завис) — прежняя скорость, замер идёт дальше
+CLIENT_SPEED_PAUSE = 10  # с: замер не удался (сервер перезапускается, `awg show` не отвечает) — следующий не раньше
 _speed_lock = threading.Lock()
 
 
@@ -38,21 +40,35 @@ class TunnelsMixin:
     def client_speeds(self) -> dict[str, list[int]]:
         """Скорость клиентов сейчас для списка клиентов (1.23.0): {ключ: [к клиенту, от клиента]}, байт/с — по
         счётчикам сервера (`awg show dump`) между двумя замерами. Замер — по запросу браузера, не чаще
-        CLIENT_SPEED_EVERY: панель никто не смотрит — сервер не опрашивается. Без движения — клиента нет в ответе."""
+        CLIENT_SPEED_EVERY: панель никто не смотрит — сервер не опрашивается. Без движения — клиента нет в ответе.
+        Замер идёт в своём потоке, и опрос ждёт его не дольше CLIENT_SPEED_WAIT: `awg show` завис (сбой
+        amneziawg-go, модуля) — панель не кажется отключённой, а остальные опросы берут прежний ответ сразу
+        (проверка 1.23.0)."""
         now = time.time()
         with _speed_lock:
-            s = self.__dict__.setdefault("_cspeed", {"at": 0.0, "prev": None, "rates": {}})
-            if now - s["at"] < CLIENT_SPEED_EVERY:
+            s = self.__dict__.setdefault("_cspeed", {"at": 0.0, "prev": None, "rates": {}, "busy": False})
+            if s["busy"] or now - s["at"] < CLIENT_SPEED_EVERY:
                 return s["rates"]
             t = self.target
             if t is None or not t.exists:
                 s["rates"] = {}
                 return s["rates"]
-            s["at"] = now
-            try:
-                live = t.dump()
-            except Exception:  # noqa: BLE001  — сервер перезапускается: скорость подождёт
-                return s["rates"]
+            s["at"], s["busy"] = now, True
+        th = threading.Thread(target=self._speed_sample, args=(s, t, now), name="client-speed", daemon=True)
+        th.start()
+        th.join(CLIENT_SPEED_WAIT)
+        return s["rates"]
+
+    def _speed_sample(self, s: dict, t, now: float) -> None:
+        try:
+            live = t.dump()
+        except Exception:  # noqa: BLE001  — сервер перезапускается или не отвечает: скорость подождёт
+            live = None
+        with _speed_lock:
+            s["busy"] = False
+            if live is None:
+                s["at"] = time.time() + CLIENT_SPEED_PAUSE - CLIENT_SPEED_EVERY
+                return
             cur = {pk: (p["rx"], p["tx"]) for pk, p in live.items()}
             prev, s["prev"] = s["prev"], (now, t.key, cur)
             rates: dict[str, list[int]] = {}
@@ -63,8 +79,6 @@ class TunnelsMixin:
                     if o and rx >= o[0] and tx >= o[1] and (rx > o[0] or tx > o[1]):
                         rates[pk] = [round((tx - o[1]) / dt), round((rx - o[0]) / dt)]
             s["rates"] = rates
-            return rates
-
 
     def parsed(self, u: dict) -> awgconf.UpstreamConf:
         h = _sha(u["config"])

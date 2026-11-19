@@ -263,6 +263,22 @@ class NotifyFallbackTest(unittest.TestCase):
             self.post("up:a", fake)
         self.assertEqual(fake.calls, ["up:a"])
 
+    def test_telegram_busy_or_failing_does_not_try_other_routes(self):
+        """429 и 5xx — ответ самого Telegram (проверка 1.23.0): путь работает, другой путь получит то же, а бот не уходит
+        на запасной путь на 10 минут."""
+        for code in (429, 502):
+            calls = []
+
+            def busy(token, method, data, ctype, timeout, via, code=code):
+                calls.append(via)
+                raise notify.NotifyError("Too Many Requests", net=True, code=code)
+            with self.subTest(code=code), mock.patch.object(notify, "_post_once", busy):
+                with self.assertRaises(notify.NotifyError) as cm:
+                    notify._post(TOKEN, "sendMessage", b"{}", "application/json", 1, "direct")
+                self.assertTrue(cm.exception.net)             # уведомление повторится позже, как раньше
+                self.assertEqual(calls, ["direct"])
+                self.assertIsNone(notify.paths.view("direct"))
+
     def test_deliver_is_one_send(self):
         n, fake = make_notifier(cfg_state()), FakeSend()
         with mock.patch.object(notify, "send", fake):
