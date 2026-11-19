@@ -348,7 +348,7 @@ class RuleListsTest(unittest.TestCase):
         self.assertNotIn("re.countries", js)
         self.assertNotIn('value="cc:', js)
         # окно клиента: «Удалить» — внизу слева, рядом с «Сохранить»; в «Управлении» строки удаления больше нет
-        self.assertIn('<button class="btn danger left" id="c-delete" title="${esc(t("cl.delete"))}">${esc(t("btn.delete"))}</button>', js)
+        self.assertIn('<button class="btn danger left" id="c-delete">${esc(t("cl.delete"))}</button>', js)
         self.assertNotIn("cl.delete_hint", js)
         # «Маршрутизация»: «+ Добавить правило» и «Применить для …» — строкой под заголовком, не в шапке справа
         self.assertIn('<div class="add-row rules-add"><button class="btn primary" id="g-add">', js)

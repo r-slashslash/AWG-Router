@@ -419,6 +419,11 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .add-row .btn { flex: none; white-space: nowrap; }
 /* «+ Добавить правило» и «Применить для …» — строкой под заголовком «Общих правил», с начала строки на всех языках */
 .rules-add { margin-bottom: 12px; }
+/* на телефоне — два ровных столбца во всю ширину; длинная подпись переносится внутри кнопки, кнопки ряда одной высоты */
+@media (max-width: 560px) {
+  .rules-add { display: grid; grid-template-columns: 1fr 1fr; }
+  .rules-add .btn { white-space: normal; text-align: center; }
+}
 .soon-bar { margin: -2px 0 12px; }
 .btn[aria-pressed="true"] { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, var(--surface)); }
 @media (max-width: 560px) { .section-head > .add-row { flex-wrap: wrap; } }

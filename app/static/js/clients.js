@@ -380,9 +380,9 @@ function editClient(pk, section = null) {
         <button class="btn sm" id="c-toggle">${esc(t(c.enabled ? "cl.disable_btn" : "cl.enable_btn"))}</button>
       </div>
     </div>
-  `, // «Удалить» — внизу окна слева, как «Удалить правило» в окне правила (владелец, 2026-11-20); короткое, чтобы на
-  // телефоне три кнопки помещались в строку
-  `<button class="btn danger left" id="c-delete" title="${esc(t("cl.delete"))}">${esc(t("btn.delete"))}</button><button class="btn" data-close>${esc(t("btn.close"))}</button><button class="btn primary" id="c-save">${esc(t("btn.save"))}</button>`);
+  `, // «Удалить клиента» — внизу окна слева, как «Удалить правило» в окне правила (владелец, 2026-11-20); на узком
+  // телефоне подпись переносится внутри кнопки, кнопки остаются в одной строке
+  `<button class="btn danger left" id="c-delete">${esc(t("cl.delete"))}</button><button class="btn" data-close>${esc(t("btn.close"))}</button><button class="btn primary" id="c-save">${esc(t("btn.save"))}</button>`);
 
   const hostSel = $("#c-host");
   if (hostSel) hostSel.onchange = async () => {
