@@ -205,7 +205,7 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
 
     def test_panel_shows_state_without_notifications(self):
         src = panel_js.source()
-        self.assertIn("c.enabled && (c.control || c.clients !== false) && S.tg_bot ? `<div style=\"margin-top:6px\">${viewBotState(S.tg_bot)}", src)
+        self.assertIn("c.enabled && (c.control || c.clients !== false) && S.tg_bot ? `<div style=\"margin:6px 0 12px\">${viewBotState(S.tg_bot)}", src)
 
     def test_logs_helper_does_not_hang_in_a_pipe(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "install.sh"), encoding="utf-8") as f:
