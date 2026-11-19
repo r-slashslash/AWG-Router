@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 </div>
 
 <p align="center">
-  <img src="docs/screenshots/install.gif" alt="نصب با یک فرمان، سپس پنل: ورود، کلاینت تازه با کد QR، خروجی‌ها و مسیریابی" width="860">
+  <img src="docs/screenshots/install.gif" alt="نصب با یک فرمان، سپس پنل: ورود، قانون‌های روسیه با یک دکمه، کلاینت تازه با کد QR، خروجی‌ها و مسیریابی" width="860">
 </p>
 
 <div dir="rtl">
@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 
 <p align="center">
   <img src="docs/screenshots/exits.png" alt="خروجی‌ها: ترافیک هر خروجی و مستقیم، سقف ماهانه، سرعت فعلی و محدودیت سرعت" width="860">
-  <img src="docs/screenshots/routing.png" alt="مسیریابی: قانون‌ها و توزیع بار بین خروجی‌ها" width="860">
+  <img src="docs/screenshots/routing.png" alt="مسیریابی: قانون‌های «اعمال برای روسیه» و پنجرهٔ قانون — فهرست سایت‌های .ru، DNS ویژهٔ آن‌ها و خروجی" width="860">
 </p>
 
 **پنل**

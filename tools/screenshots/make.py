@@ -8,12 +8,13 @@
 1. запускает панель в демо-режиме (DRY_RUN) с пустой папкой данных; списки стран не скачиваются,
    а собираются синтетически — так снимки не зависят от интернета и всегда одинаковые;
 2. через API панели собирает набор: выходы Netherlands, Germany (в демо второй туннель «мёртвый»)
-   и USA proxy (SOCKS5 со своими сайтами), три общих правила, клиенты с ручными выходами,
-   своими правилами, заметкой, сроком и лимитами, плюс клиент My phone;
+   и USA proxy (SOCKS5 со своими сайтами), общие правила (и те, что даёт «Применить для России», с «DNS на
+   сервере»), клиенты с ручными выходами, своими правилами, заметкой, сроком и лимитами, плюс клиент My phone;
 3. останавливает панель и записывает traffic.json с правдоподобными итогами клиентов, выходов
    и сервера, снова запускает панель;
 4. снимает вкладки в Chromium: английский, светлая тема, 1280×860 ×1.25 и телефон 390×844 ×3,
-   без демо-баннера и «(demo)», 256 цветов (правила снимков — в CLAUDE.md).
+   без демо-баннера и «(demo)», 256 цветов (правила снимков — в CLAUDE.md); «Маршрутизация» — с открытым
+   окном правила доменов России (списки, свой DNS, выход).
 
 Нужны Playwright и Pillow — только для этого скрипта, панели они не нужны.
 """
@@ -120,8 +121,9 @@ class Api:
             raise SystemExit(f"{method} {path}: {e.code} {e.read()[:300]!r}") from None
 
 
-def build(api: Api) -> dict:
-    """Выходы, правила, клиенты и лимиты через API. → ключи клиентов и id выходов."""
+def build(api: Api, rules: bool = True) -> dict:
+    """Выходы, правила, клиенты и лимиты через API. → ключи клиентов и id выходов.
+    rules=False (GIF): общих правил нет — в «Обзоре» видны кнопки «Применить для …», GIF нажимает «Россию»."""
     api("POST", "login", {"password": PASSWORD})
     api("POST", "users", {"name": "My phone"})
     for _ in range(40):
@@ -151,17 +153,22 @@ def build(api: Api) -> dict:
     office = api("POST", "lists", {"kind": "manual", "name": "Office",
                                    "source": "10.20.0.0/16\n192.168.50.0/24"})["id"]
     own = next(l["id"] for l in api("GET", "state")["lists"] if l["kind"] == "domains")
-    for cc in COUNTRIES:              # новая установка с 1.22.0 — без списков стран (синтетические, run_panel)
-        api("POST", "lists", {"kind": "country", "source": cc})
     # балансировка вместо одного выхода по умолчанию; «напрямую» — если все её выходы лежат
     api("PUT", "routing", {"default": "direct", "balance": {"on": True, "skip": []}, "rules": [
         {"lists": [own], "outbound": "up:" + us, "comment": "USA proxy"},
-        {"lists": ["ru", "cn", "ir"], "outbound": "direct", "comment": "Local sites"},
-        {"lists": [office], "outbound": "direct", "comment": "Office"}]})
+        {"lists": [office], "outbound": "direct", "comment": "Office"}] if rules else []})
+    if rules:
+        # как кнопка «Применить для России» (applyCountry): список страны (синтетический, run_panel), список её
+        # доменов со своим DNS, два правила «Напрямую» и «DNS на сервере»
+        api("POST", "country-preset", {"cc": "ru", "apply": True})
+        api("PUT", "server", {"panel_dns": True})
+        r = api("GET", "state")["routing"]          # «Office» — после правил России (кнопка ставит их в конец)
+        api("PUT", "routing", {**r, "rules": [r["rules"][0], *r["rules"][2:], r["rules"][1]]})
     api("PUT", f"clients/{q('Dad')}", {"outbound": "up:" + de})
     api("PUT", f"clients/{q('Office router')}", {"outbound": "direct", "note": "office"})
     api("PUT", f"clients/{q('Living room TV')}", {"outbound": "up:" + de, "rules_mode": "custom",
-                                                  "rules": [{"lists": ["ru"], "outbound": "direct"}]})
+                                                  "rules": [{"lists": ["ru" if rules else office],
+                                                             "outbound": "direct"}]})
     api("PUT", f"limits/{q('Guest')}", {"expires": int(time.time()) + 86400 + 3600, "quota_gb": 20,
                                         "period": "month", "rate_down": 10, "rate_up": 5})
     api("PUT", "settings", {"shaping": {"down": 900, "up": 200}})
@@ -242,7 +249,15 @@ def shoot(url: str, out_dir: str) -> None:
             if name == "clients":
                 # скорость клиентов в сети (1.23.0) — после двух замеров счётчиков и следующего опроса
                 pg.locator("#main [data-speed]:not(:empty)").first.wait_for(timeout=20000)
+            if name == "routing":
+                # окно правила доменов России: за ним правила «Применить для России», в нём — свой DNS правила
+                pg.click(".rule-item:has-text('.su') [data-open]")
+                pg.wait_for_selector("#modal2[open] #rw-dns-in", timeout=10000)
+                pg.wait_for_timeout(800)
             save(pg, name)
+            if name == "routing":
+                pg.keyboard.press("Escape")
+                pg.wait_for_timeout(500)
         tab(pg, "clients")
         pg.click("tr[data-pk]:has-text('My phone')")
         pg.wait_for_selector("#modal[open] .connect", timeout=10000)

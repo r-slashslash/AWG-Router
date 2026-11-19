@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 The installer sets up everything, including Docker Compose, and prints the panel link and password at the end. Details: [Install](#install).
 
 <p align="center">
-  <img src="docs/screenshots/install.gif" alt="Installing with one command, then the panel: sign in, a new client with its QR code, exits and routing" width="860">
+  <img src="docs/screenshots/install.gif" alt="Installing with one command, then the panel: sign in, rules for Russia with one button, a new client with its QR code, exits and routing" width="860">
 </p>
 
 ```
@@ -102,7 +102,7 @@ Details are in [How routing works](#how-routing-works).
 
 <p align="center">
   <img src="docs/screenshots/exits.png" alt="Exits: traffic per exit and direct, monthly limits, speed now and speed limits" width="860">
-  <img src="docs/screenshots/routing.png" alt="Routing: rules and load balancing across exits" width="860">
+  <img src="docs/screenshots/routing.png" alt="Routing: the rules from “Apply for Russia” and the rule window — the list of .ru sites, their own DNS and the exit" width="860">
 </p>
 
 **Panel**

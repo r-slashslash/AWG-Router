@@ -7,9 +7,11 @@
 адрес, секретный путь, пароль и имя машины заменены выдуманными. Вывод «проигрывается» строками, с
 паузами примерно там, где их делает установщик. Поменялся вывод install.sh — поменяй INSTALL ниже.
 
-Панель — та же демо-панель и тот же набор, что у скриншотов (make.py): вход, «Обзор», клиенты,
-новый клиент с QR-кодом, выходы, маршрутизация. Кадры снимаются по одному (не видеозапись), у каждого
-своя длительность; палитра общая на все кадры, поэтому цвета не прыгают.
+Панель — та же демо-панель и тот же набор, что у скриншотов (make.py), но без общих правил, как после
+установки: вход, «Обзор» с кнопками стран, нажатие «Применить для России» (вопрос о DNS на сервере
+принимается сам: окно браузера на снимок не попадает), клиенты, новый клиент с QR-кодом, выходы,
+маршрутизация с правилами России. Кадры снимаются по одному (не видеозапись), у каждого своя длительность;
+указатель мыши дорисовывается поверх кадра; палитра общая на все кадры, поэтому цвета не прыгают.
 Нужны Playwright и Pillow, как для make.py.
 """
 from __future__ import annotations
@@ -33,6 +35,7 @@ URL = f"https://{HOST}:{PORT}/{SECRET}/"
 PROMPT = "root@server:~# "
 COMMAND = "curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/install.sh | bash"
 FONT = os.path.join(make.ROOT, "app", "static", "fonts", "JetBrainsMono.woff2")
+ARROW = [(0, 0), (0, 19), (5, 14.5), (8.5, 22), (12, 20.5), (8.5, 13), (14, 13)]   # указатель, остриё в (0, 0)
 
 # (строка, пауза после неё в мс). Разметка: [b]жирный[/], [g]зелёный[/], [c]голубой жирный[/]
 INSTALL = [
@@ -43,7 +46,8 @@ INSTALL = [
     ("  [g]✓[/] Amnezia container: amnezia-awg2", 500),
     ("", 0), ("[b]▸ Preparing settings[/]", 400),
     (f"  [g]✓[/] Public address: {HOST}", 250),
-    (f"  [g]✓[/] Panel port: {PORT}", 500),
+    (f"  [g]✓[/] Panel port: {PORT}", 250),
+    (f"  [g]✓[/] Address in client configs: {HOST}", 500),
     ("", 0), ("[b]▸ Docker[/]", 400),
     ("  [g]✓[/] Docker 29.1.3, Compose 5.7.0, buildx 0.38.2", 600),
     ("", 0), ("[b]▸ Downloading the panel[/]", 1300),
@@ -55,7 +59,7 @@ INSTALL = [
     ("[g]" + "═" * 56 + "[/]", 0),
     (f"  Link:     [c]{URL}[/]", 0),
     (f"  Password: [b]{PASSWORD}[/]", 0),
-    ("  Let's Encrypt certificate valid until 2026-11-16 11:03, renews automatically", 0),
+    ("  Let's Encrypt certificate valid until 2027-02-17 21:58, renews automatically", 0),
     ("  Show this again: awg-router info", 0),
     ("", 0), (PROMPT, 4000),
 ]
@@ -94,8 +98,9 @@ class Frames:
         self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
         self.items: list[tuple[object, int]] = []
 
-    def window(self, shot: bytes, title: str, dark: bool):
-        """Кадр с полосой окна: у терминала — заголовок, у браузера — адресная строка."""
+    def window(self, shot: bytes, title: str, dark: bool, cursor: tuple[float, float] | None = None):
+        """Кадр с полосой окна: у терминала — заголовок, у браузера — адресная строка; cursor — указатель
+        мыши в точке страницы."""
         Image, Draw = self.Image, self.Draw
         im = Image.new("RGB", (W, H), "#1f2328" if dark else "#e9ebee")
         im.paste(Image.open(io.BytesIO(shot)).convert("RGB"), (0, BAR))
@@ -107,6 +112,9 @@ class Frames:
         else:
             d.rounded_rectangle((90, 7, W - 90, BAR - 7), 8, fill="#ffffff", outline="#d0d7de")
             d.text((106, BAR // 2), title, fill="#1f2328", font=self.font, anchor="lm")
+        if cursor:
+            x, y = cursor[0], cursor[1] + BAR
+            d.polygon([(x + a * 1.15, y + b * 1.15) for a, b in ARROW], fill="#1f2328", outline="#ffffff", width=2)
         return im
 
     def add(self, im, ms: int) -> None:
@@ -156,30 +164,58 @@ def panel(b, url: str, fr: Frames) -> None:
     ctx = b.new_context(viewport={"width": W, "height": H - BAR}, locale="en-US", color_scheme="light",
                         timezone_id="UTC")
     pg = ctx.new_page()
+    cur: list = [None]                              # где указатель мыши (точка страницы)
 
     def snap(ms: int) -> None:
         pg.evaluate(make.CLEAN)
-        fr.add(fr.window(pg.screenshot(), URL, False), ms)
+        fr.add(fr.window(pg.screenshot(), URL, False, cur[0]), ms)
+
+    def point(sel: str, ms: int) -> None:
+        """Указатель плавно к середине элемента (кадры без наведения), затем кадр с наведением."""
+        bb = pg.locator(sel).first.bounding_box()
+        to = (bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+        if cur[0]:
+            pg.evaluate(make.CLEAN)
+            shot = pg.screenshot()
+            for k in range(1, 6):
+                f = k / 6
+                fr.add(fr.window(shot, URL, False, (cur[0][0] + (to[0] - cur[0][0]) * f,
+                                                    cur[0][1] + (to[1] - cur[0][1]) * f)), 40)
+        pg.mouse.move(*to)
+        cur[0] = to
+        pg.wait_for_timeout(250)
+        snap(ms)
+
+    def click(sel: str, ms: int = 450) -> None:
+        point(sel, ms)
+        pg.mouse.click(*cur[0])
 
     def tab(name: str, ms: int) -> None:
-        pg.click(f"#tabs [data-tab={name}]")
+        click(f"#tabs [data-tab={name}]", 300)
         pg.wait_for_timeout(900)
         snap(ms)
 
     pg.goto(url + "/")
     pg.wait_for_selector("#login-pass")
     pg.wait_for_timeout(500)
-    snap(900)
+    snap(700)
+    click("#login-pass", 300)
     for n in range(2, len(PASSWORD) + 1, 2):        # ввод пароля
         pg.fill("#login-pass", PASSWORD[:n])
         snap(60)
-    snap(400)
-    pg.click("#login-form button[type=submit]")
+    click("#login-form button[type=submit]", 400)
     pg.wait_for_selector("#brand-traffic b", timeout=15000)
     pg.wait_for_timeout(2000)
-    snap(3200)
-    tab("clients", 2200)
-    pg.click("#add-client")
+    snap(2600)                                      # «Обзор»: правил нет, кнопки стран
+    # «Применить для России»: клиенты уже есть, DNS на сервере выключен — браузер спрашивает (confirm), «OK»
+    pg.once("dialog", lambda d: d.accept())
+    click("[data-cp=ru]", 1100)
+    pg.locator("#main .cp-box").wait_for(state="detached", timeout=15000)
+    pg.locator("#toasts .toast").nth(1).wait_for(timeout=10000)
+    pg.wait_for_timeout(400)
+    snap(3000)                                      # правила России и сообщения «применены», «DNS включён»
+    tab("clients", 1800)
+    click("#add-client", 300)
     pg.wait_for_selector("#n-name")
     pg.wait_for_timeout(400)
     snap(500)
@@ -194,9 +230,9 @@ def panel(b, url: str, fr: Frames) -> None:
     snap(3500)
     pg.keyboard.press("Escape")
     pg.wait_for_timeout(600)
-    snap(1500)
-    tab("exits", 2800)
-    tab("routing", 3500)
+    snap(1200)
+    tab("exits", 2600)
+    tab("routing", 4000)                            # правила России в «Общих правилах»
     ctx.close()
 
 
@@ -214,7 +250,7 @@ def main() -> None:
     try:
         print("demo panel:", data_dir)
         pnl.start()
-        ids = make.build(make.Api(pnl.url))
+        ids = make.build(make.Api(pnl.url), rules=False)
         time.sleep(3)
         pnl.stop()
         make.write_traffic(data_dir, ids)

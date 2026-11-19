@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 安装程序会完成全部配置（包括 Docker Compose），并在结束时显示面板链接和密码。详情见[安装](#安装)。
 
 <p align="center">
-  <img src="docs/screenshots/install.gif" alt="一条命令完成安装，然后是面板：登录、新客户端及其二维码、出口和路由" width="860">
+  <img src="docs/screenshots/install.gif" alt="一条命令完成安装，然后是面板：登录、一键应用俄罗斯规则、新客户端及其二维码、出口和路由" width="860">
 </p>
 
 ```
@@ -102,7 +102,7 @@ AWG Router 让你的 AmneziaWG 服务器成为级联的入口（中转服务器�
 
 <p align="center">
   <img src="docs/screenshots/exits.png" alt="出口：各出口和直连的流量、每月限额、当前速度和速度限制" width="860">
-  <img src="docs/screenshots/routing.png" alt="路由：规则和出口负载均衡" width="860">
+  <img src="docs/screenshots/routing.png" alt="路由：「应用于俄罗斯」生成的规则和规则窗口——.ru 网站列表、其专用 DNS 和出口" width="860">
 </p>
 
 **面板**

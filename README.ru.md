@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 Установщик настроит всё сам, включая Docker Compose, и в конце покажет ссылку на панель и пароль. Подробности: [Установка](#установка).
 
 <p align="center">
-  <img src="docs/screenshots/install.gif" alt="Установка одной командой, затем панель: вход, новый клиент с QR-кодом, выходы и маршрутизация" width="860">
+  <img src="docs/screenshots/install.gif" alt="Установка одной командой, затем панель: вход, правила для России одной кнопкой, новый клиент с QR-кодом, выходы и маршрутизация" width="860">
 </p>
 
 ```
@@ -102,7 +102,7 @@ AWG Router делает ваш сервер AmneziaWG входом каскад�
 
 <p align="center">
   <img src="docs/screenshots/exits.png" alt="Выходы: трафик по выходам и напрямую, месячные лимиты, текущая скорость и её ограничение" width="860">
-  <img src="docs/screenshots/routing.png" alt="Маршрутизация: правила и балансировка между выходами" width="860">
+  <img src="docs/screenshots/routing.png" alt="Маршрутизация: правила от «Применить для России» и окно правила — список сайтов .ru, их свой DNS и выход" width="860">
 </p>
 
 **Панель**
