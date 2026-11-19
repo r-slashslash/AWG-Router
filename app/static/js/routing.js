@@ -316,12 +316,14 @@ function routingCountryButtons() {
 }
 function viewRouting() {
   const rd = routingDraft || routingNow();
+  // «+ Добавить правило» и «Применить для …» — своей строкой под заголовком: в шапке рядом с коротким подзаголовком
+  // (en, zh) они уезжали вправо (владелец, 2026-11-20)
   return `
   <div class="savebar" id="savebar" hidden><span>${esc(t("rt.unsaved"))}</span>
     <span class="actions"><button class="btn sm" id="g-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="g-save">${esc(t("rt.save"))}</button></span></div>
   <section class="section">
-    <div class="section-head"><div><h2>${esc(t("rt.title"))}</h2><p class="muted small">${esc(t("rt.subtitle"))}</p></div>
-      <div class="add-row"><button class="btn primary" id="g-add">${esc(t("rw.add"))}</button>${routingCountryButtons()}</div></div>
+    <div class="section-head"><div><h2>${esc(t("rt.title"))}</h2><p class="muted small">${esc(t("rt.subtitle"))}</p></div></div>
+    <div class="add-row rules-add"><button class="btn primary" id="g-add">${esc(t("rw.add"))}</button>${routingCountryButtons()}</div>
     <div id="g-rules">${ruleRowsHtml(S.routing.rules)}</div>
     <div class="default-row" style="margin-top:8px">
       <div class="rule-n" style="padding:0">∗</div>

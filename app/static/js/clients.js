@@ -379,12 +379,10 @@ function editClient(pk, section = null) {
         <div><b>${esc(t(c.enabled ? "cl.disable" : "cl.enable"))}</b><div class="small muted">${esc(t(c.enabled ? "cl.disable_hint" : "cl.enable_hint"))}</div></div>
         <button class="btn sm" id="c-toggle">${esc(t(c.enabled ? "cl.disable_btn" : "cl.enable_btn"))}</button>
       </div>
-      <div class="manage-row">
-        <div><b>${esc(t("cl.delete"))}</b><div class="small muted">${esc(t("cl.delete_hint"))}</div></div>
-        <button class="btn sm danger" id="c-delete">${esc(t("btn.delete"))}</button>
-      </div>
     </div>
-  `, `<button class="btn" data-close>${esc(t("btn.close"))}</button><button class="btn primary" id="c-save">${esc(t("btn.save"))}</button>`);
+  `, // «Удалить» — внизу окна слева, как «Удалить правило» в окне правила (владелец, 2026-11-20); короткое, чтобы на
+  // телефоне три кнопки помещались в строку
+  `<button class="btn danger left" id="c-delete" title="${esc(t("cl.delete"))}">${esc(t("btn.delete"))}</button><button class="btn" data-close>${esc(t("btn.close"))}</button><button class="btn primary" id="c-save">${esc(t("btn.save"))}</button>`);
 
   const hostSel = $("#c-host");
   if (hostSel) hostSel.onchange = async () => {

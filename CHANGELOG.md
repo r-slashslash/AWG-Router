@@ -55,7 +55,10 @@ it grows, so every user-visible change gets a new version.
   no pressed button until the page was reloaded.
 - **Client window → Manage.** "This month by exit" is a column next to the totals ("Traffic this month", "All time"),
   one exit per line (`trafficHtml`), instead of full-width rows under them: with balancing over many exits it no longer
-  stretches the window.
+  stretches the window. **Delete** moved from Manage to the bottom of the window, on the left next to **Save**, like
+  **Delete rule** in the rule window.
+- **Routing.** **+ Add rule** and **Apply for …** sit in their own row under the "Shared rules" title in every
+  language: in the title row, next to a short subtitle (en, zh), they used to slide to the right of the page.
 
 ## 1.22.0 — 2026-11-19
 

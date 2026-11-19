@@ -417,6 +417,8 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 /* в шапке раздела поиск, сортировка и кнопка — одной строкой; переносится вся группа целиком */
 .section-head > .add-row { flex-wrap: nowrap; }
 .add-row .btn { flex: none; white-space: nowrap; }
+/* «+ Добавить правило» и «Применить для …» — строкой под заголовком «Общих правил», с начала строки на всех языках */
+.rules-add { margin-bottom: 12px; }
 .soon-bar { margin: -2px 0 12px; }
 .btn[aria-pressed="true"] { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, var(--surface)); }
 @media (max-width: 560px) { .section-head > .add-row { flex-wrap: wrap; } }

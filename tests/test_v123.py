@@ -347,6 +347,11 @@ class RuleListsTest(unittest.TestCase):
         # в «+ Добавить список» окна правила нет группы «Страны — готовые правила»
         self.assertNotIn("re.countries", js)
         self.assertNotIn('value="cc:', js)
+        # окно клиента: «Удалить» — внизу слева, рядом с «Сохранить»; в «Управлении» строки удаления больше нет
+        self.assertIn('<button class="btn danger left" id="c-delete" title="${esc(t("cl.delete"))}">${esc(t("btn.delete"))}</button>', js)
+        self.assertNotIn("cl.delete_hint", js)
+        # «Маршрутизация»: «+ Добавить правило» и «Применить для …» — строкой под заголовком, не в шапке справа
+        self.assertIn('<div class="add-row rules-add"><button class="btn primary" id="g-add">', js)
 
     def test_routing_rows_audit(self):
         """Проверка 1.23.0 (этап 2): строки правил «Маршрутизации»."""
