@@ -33,6 +33,13 @@ it grows, so every user-visible change gets a new version.
   waits at most `CLIENT_SPEED_WAIT`, so a hung `awg show` doesn't make the panel look offline). `speeds` comes with every
   `/api/state` answer, the short one too, outside the tag, and only the speed spots are refreshed (`fillSpeeds`), not
   the rows.
+- **DNS encryption stays on after "Apply for …".** The country buttons turn DNS on the server on with only
+  `{panel_dns: true}` (`panelDnsOn`), and the encryption wasn't written, so the next panel start (an update, a
+  reboot) took it for DNS on the server turned on before 1.16.0 and set **No encryption** (`Store._upgrade`). Now
+  `users.update_server` writes the encryption in effect (DoH by default) when DNS on the server is on without one,
+  and a missing one becomes "plain" only in files from before 1.21.0 (`Store.missing_dns_enc`, by the
+  `rule_names` mark; backups too), "doh" otherwise. Installs that pressed a country button in 1.22.0 and restarted
+  since keep "plain": the release notes ask to check Server → DNS query encryption.
 - **Engine switch without "Error".** After switching the engine or **Restart the AWG server** the header says
   "Switching the engine…" / "Restarting the AWG server…" until the first good pass with the server interface up, at
   most `SETTLE_SECS` (90 s) (`Engine._settle`, `_pass_done`); passes that fail while the server comes up on the new

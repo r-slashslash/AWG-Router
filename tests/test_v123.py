@@ -378,3 +378,39 @@ class SmallUiTest(unittest.TestCase):
             css = f.read()
         self.assertIn("input[type=search], input[type=date], select, textarea {", css)   # как остальные поля
         self.assertRegex(css, r"\.field \{[^}]*align-content: start")  # поле рядом с высоким не растягивается
+
+
+# ------------------------------------------------------------------ шифрование DNS после «Применить для …»
+class DnsEncKeptTest(unittest.TestCase):
+    """«Применить для …» включает DNS на сервере без шифрования в запросе (1.22.0): шифрование записывается (DoH),
+    а не становится «Без шифрования» при следующем запуске; DNS на сервере 1.15.0 (до шифрования) — как было."""
+
+    def test_button_writes_doh(self):
+        from app import panel
+        panel.engine.reconcile()                                          # демо-сервер (DRY_RUN)
+        panel.store.mutate(lambda st: [st["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc")])
+        try:
+            panel.engine.srv.update_server({"panel_dns": True})          # так шлёт panelDnsOn в routing.js
+            self.assertEqual(panel.store.snapshot()["settings"].get("panel_dns_enc"), "doh")
+            panel.engine.srv.update_server({"panel_dns": True, "panel_dns_enc": "dot"})
+            panel.engine.srv.update_server({"panel_dns": True})
+            self.assertEqual(panel.store.snapshot()["settings"].get("panel_dns_enc"), "dot")   # выбранное — не трогаем
+        finally:
+            panel.store.mutate(lambda st: [st["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc")])
+
+    def test_start_and_backup_by_release(self):
+        import json
+        import tempfile
+        from app.api import backup
+        d = tempfile.mkdtemp()
+        for upgraded, want in ((None, "plain"), (["rule_names"], "doh"), (["rule_names", "client_bot"], "doh")):
+            st = {"settings": {"panel_dns": True}}
+            if upgraded:
+                st["upgraded"] = upgraded
+            path = os.path.join(d, "state.json")
+            with open(path, "w") as f:
+                json.dump(st, f)
+            self.assertEqual(Store(path).snapshot()["settings"].get("panel_dns_enc"), want, upgraded)
+            self.assertEqual(backup.clean_backup_state(st)["settings"].get("panel_dns_enc"), want, upgraded)
+        st = backup.clean_backup_state({"settings": {"panel_dns": False}, "upgraded": ["rule_names"]})
+        self.assertNotIn("panel_dns_enc", st["settings"])               # DNS на сервере выключен — DoH по умолчанию

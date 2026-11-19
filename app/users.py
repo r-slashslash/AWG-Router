@@ -600,6 +600,11 @@ class ServerManager:
             if settings_patch:
                 def apply(st):
                     st["settings"].update(settings_patch)
+                    # DNS на сервере включили без выбора шифрования («Применить для …» шлёт только panel_dns):
+                    # записать то, с которым он работает (DoH по умолчанию), — без записи Store._upgrade при
+                    # следующем запуске принял бы его за включённый до 1.16.0 и поставил «Без шифрования»
+                    if st["settings"].get("panel_dns") and "panel_dns_enc" not in st["settings"]:
+                        st["settings"]["panel_dns_enc"] = dns_encrypt(st["settings"])
                     if st["settings"].get("public_host") is None:
                         st["settings"].pop("public_host", None)
                     if not st["settings"].get("extra_hosts"):

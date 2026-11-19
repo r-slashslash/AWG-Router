@@ -305,6 +305,8 @@ def clean_backup_state(new: dict) -> dict:
             out[k] = v
     if v := soft(lambda: users.check_dns_enc(s.get("panel_dns_enc")), None):
         out["panel_dns_enc"] = v
+    if out.get("panel_dns") and "panel_dns_enc" not in out:
+        out["panel_dns_enc"] = Store.missing_dns_enc(new)     # как при запуске (Store._upgrade): по выпуску копии
     if s.get("client_mtu") not in (None, ""):
         out["client_mtu"] = at("settings.client_mtu", lambda: users.check_mtu(s["client_mtu"]))
     if s.get("client_keepalive") not in (None, "") and \

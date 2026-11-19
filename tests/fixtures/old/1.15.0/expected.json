@@ -210,6 +210,7 @@
     "list_update_hours": 12,
     "on_stop": "restore",
     "panel_dns": true,
+    "panel_dns_enc": "plain",
     "telegram": {
      "backup": "weekly",
      "backup_error": null,
@@ -504,6 +505,7 @@
     "list_update_hours": 12,
     "on_stop": "restore",
     "panel_dns": true,
+    "panel_dns_enc": "plain",
     "telegram": {
      "backup": "weekly",
      "backup_error": null,

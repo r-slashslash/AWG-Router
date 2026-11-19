@@ -98,6 +98,7 @@ class Store:
         """Прежние имена шаблонов маскировки у клиентов (cps.RENAMED), шифрование DNS на сервере у тех, кто
         включил его до 1.16.0. True — что-то поменялось."""
         from .cps import RENAMED
+        dns_enc = Store.missing_dns_enc(self.state)     # до отметок ниже: по ним видно, какой выпуск писал файл
         changed = False
         for e in (self.state.get("cps") or {}).values():
             if isinstance(e, dict) and e.get("preset") in RENAMED:
@@ -114,11 +115,19 @@ class Store:
             changed = True              # state.json до 1.21.0: тексты списков — в свои файлы (_write)
         s = self.state.get("settings") or {}
         if s.get("panel_dns") and "panel_dns_enc" not in s:
-            # DNS на сервере включили в 1.15.0, до шифрования: оставляем как было — DoH по умолчанию
-            # сломал бы DNS клиентов, если серверы в настройках его не умеют
-            s["panel_dns_enc"] = "plain"
+            s["panel_dns_enc"] = dns_enc
             changed = True
         return changed
+
+    @staticmethod
+    def missing_dns_enc(src: dict) -> str:
+        """Шифрование для DNS на сервере, включённого без записанного шифрования, в состоянии или копии src.
+        Без отметки RULE_NAMES (файл до 1.21.0) — «plain»: DNS на сервере включили в 1.15.0, до шифрования, и DoH
+        по умолчанию сломал бы DNS клиентов, если серверы в настройках его не умеют. С ней — «doh», с которым DNS на
+        сервере и работал: так его включала кнопка «Применить для …» 1.22.0, не записывая шифрования, и первый же
+        перезапуск панели ставил «Без шифрования»."""
+        done = src.get("upgraded")
+        return "doh" if isinstance(done, list) and RULE_NAMES in done else "plain"
 
     @staticmethod
     def client_bot_once(state: dict, source: dict | None = None) -> bool:
