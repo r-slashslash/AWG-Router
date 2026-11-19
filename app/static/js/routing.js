@@ -151,7 +151,6 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
     // списки доменов — отдельные правила (по имени сайта, раньше правил по адресам): с сетями не смешиваются
     const addable = S.lists.filter((l) => !r.lists.includes(l.id) && (!r.lists.length || (l.kind === "domains") === dom));
     const kinds = LIST_KINDS.filter((k) => !r.lists.length || (k === "domains") === dom);
-    const quick = dom ? [] : Object.keys(S.country_presets || {}).filter((cc) => !listObj(cc));
     const rows = r.lists.map((id) => {
       const l = listObj(id);
       if (!l) return "";
@@ -167,7 +166,7 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
     // перерисовка по таймеру (quiet), а человек сейчас в выборе списка — не пересоздаём его под рукой
     const pick = $("#rw-pick", box);
     if (!(quiet && pick.contains(document.activeElement))) {
-      pick.innerHTML = `<select class="add-list" id="rw-add" aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.length ? `<optgroup label="${esc(t("rw.ready"))}">${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}</optgroup>` : ""}${quick.length ? `<optgroup label="${esc(t("re.countries"))}">${quick.map((cc) => `<option value="cc:${cc}">${esc(countryName(cc))}</option>`).join("")}</optgroup>` : ""}<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup></select>`;
+      pick.innerHTML = `<select class="add-list" id="rw-add" aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.length ? `<optgroup label="${esc(t("rw.ready"))}">${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}</optgroup>` : ""}<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup></select>`;
     }
     drawDns(dom);
     $$("[data-rm]", box).forEach((b) => b.onclick = () => { r.lists = r.lists.filter((x) => x !== b.dataset.rm); drawLists(); });
@@ -186,7 +185,9 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
       if (!v) return;
       if (v.startsWith("new:")) { form = { kind: v.slice(4), id: null }; drawLists(); return; }
       const cl = listObj(v);
-      const cc = v.startsWith("cc:") ? v.slice(3) : cl && cl.kind === "country" ? cl.source : "";
+      // группы «Страны — готовые правила» в выборе больше нет (владелец, 2026-11-20): готовые правила — кнопки
+      // «Применить для …»; готовый список страны из «Готовых списков» по-прежнему ставит и правило её доменов
+      const cc = cl && cl.kind === "country" ? cl.source : "";
       if (cc && (S.country_presets || {})[cc]) { e.target.disabled = true; await countryPick(r, extras, made, cc); drawLists(); return; }
       addListTo(r, v);
       drawLists();

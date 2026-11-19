@@ -7,8 +7,9 @@ it grows, so every user-visible change gets a new version.
 
 - **Rules in their own window, lists inside rules.** The Routing tab has no separate Lists section any more. A rule
   opens in a window (**+ Add rule**, or a click on the rule row; `ruleWindow` in `js/routing.js`, a second `dialog`
-  `#modal2` so it also opens over the client window): name, lists — an existing one, a country (with the country's
-  domain rule right below it, as before) or a new list made right in the window, without a second window — the own
+  `#modal2` so it also opens over the client window): name, lists — an existing one (an existing Russia / China / Iran
+  list brings the country's domain rule right below it, as before) or a new list made right in the window, without a
+  second window; ready rules are the **Apply for …** buttons, no "Countries — ready rules" group in the list picker — the own
   DNS field, shown only when the rule has a domain list, the exit and on/off. On Routing, **Save**, on/off, order and
   delete take effect at once (`saveRules`; while one is saved the rows take no clicks, and the poll redraws them when the
   rules changed in another tab); "Default" (was "Everything else"), balancing and "block" keep the save bar. A client's own
@@ -49,6 +50,12 @@ it grows, so every user-visible change gets a new version.
   the Overview title is **Traffic exits**; "Everything else" is now **Default** ("when no rule matches"). The
   example in a domain list starts with zones, then sites, then a link. The expiry date field looks like the other
   fields (it was light in the dark theme on Android), and a field next to a taller one no longer stretches.
+- **The engine block follows the server.** Server → AmneziaWG engine is redrawn by the poll when it changes
+  (`drawEngine`; the rest of the tab still isn't, for its fields): after an engine switch it showed the old engine and
+  no pressed button until the page was reloaded.
+- **Client window → Manage.** "This month by exit" is a column next to the totals ("Traffic this month", "All time"),
+  one exit per line (`trafficHtml`), instead of full-width rows under them: with balancing over many exits it no longer
+  stretches the window.
 
 ## 1.22.0 — 2026-11-19
 

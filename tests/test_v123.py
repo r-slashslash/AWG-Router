@@ -335,6 +335,19 @@ class RuleListsTest(unittest.TestCase):
         # созданные в окне и не попавшие в правило списки удаляются при закрытии окна
         self.assertIn("made.splice(0, made.length, ...made.filter((id) => !keepIds.has(id)));", js)
 
+    def test_owner_requests_20(self):
+        """Просьбы владельца 2026-11-20."""
+        from tests import panel_js
+        js = panel_js.source()
+        # «Сервер»: опрос перерисовывает блок «Движок AmneziaWG», когда он изменился (после смены движка)
+        self.assertIn('if (auto && tab === "server" && !anyModal()) drawEngine();', js)
+        self.assertIn("if (!fresh || fresh.outerHTML === el.outerHTML) return;", js)
+        # окно клиента → «Управление»: «За месяц по выходам» — колонкой рядом с суммами
+        self.assertIn('<div class="c-traffic"><div class="kv">${sums}</div>', js)
+        # в «+ Добавить список» окна правила нет группы «Страны — готовые правила»
+        self.assertNotIn("re.countries", js)
+        self.assertNotIn('value="cc:', js)
+
     def test_routing_rows_audit(self):
         """Проверка 1.23.0 (этап 2): строки правил «Маршрутизации»."""
         from tests import panel_js

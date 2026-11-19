@@ -327,6 +327,12 @@ textarea.short { min-height: 64px; }
 .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 20px; }
 .kv > div > span { display: block; font-size: .8rem; color: var(--muted); }
 .kv > div > b { font-weight: 500; word-break: break-all; }
+/* окно клиента, «Управление»: суммы трафика колонкой, рядом — «За месяц по выходам», выход на строку (trafficHtml) */
+.c-traffic { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 20px; margin-bottom: 16px; }
+.c-traffic > .kv { grid-template-columns: 1fr; align-content: start; }
+.by-exit > span { display: block; font-size: .8rem; color: var(--muted); }
+.by-exit > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 10px; }
+.by-exit > div > b { font-weight: 500; margin-inline-start: auto; }   /* перенеслось — к краю строки */
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .disabled-exit { opacity: .62; }
 

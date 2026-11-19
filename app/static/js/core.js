@@ -466,6 +466,9 @@ async function refresh(auto = false) {
   const busy = S.lists.some((l) => l.busy);
   const g = tab === "routing" && $("#g-rules");
   if (auto && g && !g.inert && !anyModal() && (busy || listsBusy || JSON.stringify(S.routing.rules) !== rulesDrawn)) drawRoutingRules();
+  // «Сервер» опрос тоже не перерисовывает, кроме блока «Движок AmneziaWG» (после смены движка он менялся только с
+  // перезагрузкой страницы)
+  if (auto && tab === "server" && !anyModal()) drawEngine();
   listsBusy = busy;
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;

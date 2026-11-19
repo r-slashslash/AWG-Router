@@ -238,18 +238,42 @@ function engineChooser(E, m) {
     <div class="seg">${b("kernel", "eng.opt_kernel", kernelOk)}${b("go", "eng.opt_go", true)}</div></div>`;
 }
 
+let engChoosing = false;   // выбор движка отправлен и ещё идёт (сервер перезапускается): drawEngine ждёт
+
 async function engChoose(v) {
   const E = S.awg_engine || {};
   if (v === E.server) return;
   if (!confirm(t(v === "go" ? "eng.to_go_confirm" : "eng.to_kernel_confirm"))) return;
   $$("[data-eng-choose]").forEach((x) => x.disabled = true);
+  engChoosing = true;
   try {
     const r = await api("POST", "engine/choose", { engine: v });
     if (r.action === "install") { engWatching = true; engWatch(); }
     else toast(t(r.reboot ? "eng.go_reboot" : "srv.restarting"));
   } catch (e) { toast(e.message, true); }
+  engChoosing = false;
   await refresh();
   if (tab === "server") render();
+}
+
+/** Блок «Движок AmneziaWG» заново, если он изменился. Вкладку «Сервер» опрос не перерисовывает (поля формы), а после
+ *  смены движка сервер перезапускается и определяется заново: без этого блок до перезагрузки страницы показывал
+ *  прежний движок и не подсвечивал выбранный (владелец, 2026-11-20). Пока ставится модуль, блок ведёт engWatch. */
+function drawEngine() {
+  const el = $("#engine");
+  if (!el || engChoosing || ((engJob || (S.awg_engine || {}).install || {}).state) === "running") return;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = engineSection().trim();
+  const fresh = tpl.content.firstElementChild;
+  if (!fresh || fresh.outerHTML === el.outerHTML) return;
+  el.replaceWith(fresh);
+  bindEngine(fresh);
+}
+function bindEngine(root) {
+  $$("[data-eng-choose]", root).forEach((b) => b.onclick = () => engChoose(b.dataset.engChoose));
+  $$("[data-eng]", root).forEach((b) => b.onclick = () => engAction(b.dataset.eng, b));
+  const ec = $("#eng-copy", root);
+  if (ec) ec.onclick = () => copyText(KERNEL_CMD);
 }
 
 /** «Установка модуля ядра»: модуль уже работает — блока нет; сервер не подходит — только почему; иначе кнопка,
@@ -403,9 +427,7 @@ bind.server = () => {
     return;
   }
   if (!SRV || !SRV.exists) return;
-  $$("[data-eng-choose]").forEach((b) => b.onclick = () => engChoose(b.dataset.engChoose));
-  const ec = $("#eng-copy");
-  if (ec) ec.onclick = () => copyText(KERNEL_CMD);
+  if ($("#engine")) bindEngine($("#engine"));
   // кнопки ниже перерисовывают вкладку: несохранённые правки выше пропали бы без слова
   const saveFirst = () => {
     if (!srvDirty()) return false;

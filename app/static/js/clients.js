@@ -154,16 +154,21 @@ function exitQuota(u) {
   return `${esc(t("share.of", { used: fmtBytes(used), limit: fmtBytes(u.quota) }))}
     <div class="meter ${pct >= 90 ? "hot" : ""}"><span style="width:${pct}%"></span></div>`;
 }
-/** разбивка трафика клиента за месяц по выходам */
-function byExitHtml(c) {
-  const bo = (c.traffic || {}).by_out || {};
+/** Трафик клиента в «Управлении»: за месяц и за всё время, а если был трафик через выходы — рядом, своей колонкой,
+ *  «За месяц по выходам», выход на строку. Раньше разбивка шла под ними во всю ширину, и с балансировкой (много выходов)
+ *  растягивала окно; колонка рядом с двумя суммами занимает место, что там и так пустует (решение владельца 2026-11-20). */
+function trafficHtml(c) {
+  const tr = c.traffic || {}, bo = tr.by_out || {};
+  const sums = `<div><span>${esc(t("cl.this_month"))}</span><b>↓ ${esc(fmtBytes(tr.month_tx))} ↑ ${esc(fmtBytes(tr.month_rx))}</b></div>
+        <div><span>${esc(t("cl.all_time"))}</span><b>↓ ${esc(fmtBytes(tr.total_tx))} ↑ ${esc(fmtBytes(tr.total_rx))}</b></div>`;
   const keys = ["direct", ...S.upstreams.map((u) => u.id)].filter((k) => bo[k]);
-  if (!keys.length) return "";
+  if (!keys.length) return `<div class="kv" style="margin-bottom:16px">${sums}</div>`;
   const rows = keys.map((k) => {
     const name = k === "direct" ? esc(t("out.direct")) : `<bdi>${esc(upstreamById(k).name)}</bdi>`;
     return `<div><span>${name}</span><b>↓ ${esc(fmtBytes(bo[k][1]))} ↑ ${esc(fmtBytes(bo[k][0]))}</b></div>`;
   }).join("");
-  return `<p class="small muted" style="margin:0 0 6px">${esc(t("cl.by_exit"))}</p><div class="kv" style="margin-bottom:16px">${rows}</div>`;
+  return `<div class="c-traffic"><div class="kv">${sums}</div>
+        <div class="by-exit"><span>${esc(t("cl.by_exit"))}</span>${rows}</div></div>`;
 }
 function filterClients() {
   const q = ($("#client-search").value || "").toLowerCase().trim();
@@ -331,7 +336,7 @@ function editClient(pk, section = null) {
   const draft = { outbound: c.policy.outbound, rules_mode: c.policy.rules_mode, note: c.policy.note,
     rules: structuredClone(c.policy.rules_mode === "custom" ? c.policy.rules : S.routing.rules) };
   let view = section || (c.has_config ? "connect" : "route");
-  const L = c.limits || {}, tr = c.traffic || {};
+  const L = c.limits || {};
   openModal(c.name || c.ip, `
     <p class="muted small" style="margin-top:0"><bdi>${esc(c.ip || "")}</bdi> · ${esc(t("cl.key"))} <span class="mono">${esc(pk.slice(0, 10))}…</span>${c.enabled ? "" : ` · <span class="err">${esc(t("cl.disabled_tag"))}</span>`}</p>
     <div class="seg seg-wide" id="c-view">
@@ -353,11 +358,7 @@ function editClient(pk, section = null) {
     </div>
     <div id="c-pane-manage" class="c-pane">
       <label class="field"><span>${esc(t("cl.name"))}</span><input type="text" id="c-name" maxlength="60" value="${esc(c.name)}"></label>
-      <div class="kv" style="margin-bottom:16px">
-        <div><span>${esc(t("cl.this_month"))}</span><b>↓ ${esc(fmtBytes(tr.month_tx))} ↑ ${esc(fmtBytes(tr.month_rx))}</b></div>
-        <div><span>${esc(t("cl.all_time"))}</span><b>↓ ${esc(fmtBytes(tr.total_tx))} ↑ ${esc(fmtBytes(tr.total_rx))}</b></div>
-      </div>
-      ${byExitHtml(c)}
+      ${trafficHtml(c)}
       <div class="row2">
         <label class="field"><span>${esc(t("cl.expires"))}</span>
           <input type="date" id="c-exp" value="${esc(L.expires ? isoDay(L.expires) : "")}">
