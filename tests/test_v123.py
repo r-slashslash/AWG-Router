@@ -293,3 +293,16 @@ class RuleListsTest(unittest.TestCase):
         self.assertIn("dropNewLists(newLists.splice(0))", js)  # окно клиента закрыли без сохранения
         self.assertIn('if (!dom) { delete r.dns; box.innerHTML = ""; return; }', js)   # свой DNS — только у доменов
         self.assertNotIn('t("out.via"', js)                     # «Германия», а не «Через «Германия»»
+
+
+class SmallUiTest(unittest.TestCase):
+    def test_default_and_date_field(self):
+        root = os.path.join(os.path.dirname(__file__), "..", "app", "static")
+        with open(os.path.join(root, "i18n.js"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('"rt.else": "По умолчанию"', src)               # вместо «Всё остальное» (владелец 2026-11-19)
+        self.assertNotIn("Всё остальное", src)
+        with open(os.path.join(root, "app.css"), encoding="utf-8") as f:
+            css = f.read()
+        self.assertIn("input[type=search], input[type=date], select, textarea {", css)   # как остальные поля
+        self.assertRegex(css, r"\.field \{[^}]*align-content: start")  # поле рядом с высоким не растягивается

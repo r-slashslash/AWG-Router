@@ -10,7 +10,7 @@ it grows, so every user-visible change gets a new version.
   `#modal2` so it also opens over the client window): name, lists — an existing one, a country (with the country's
   domain rule right below it, as before) or a new list made right in the window, without a second window — the own
   DNS field, shown only when the rule has a domain list, the exit and on/off. On Routing, **Save**, on/off, order and
-  delete take effect at once (`saveRules`); "Everything else", balancing and "block" keep the save bar. A client's own
+  delete take effect at once (`saveRules`); "Default" (was "Everything else"), balancing and "block" keep the save bar. A client's own
   rules use the same window, with **Done** putting the rule into the client draft. A list that is no longer in any rule
   is deleted with it on the server (`api.routing.drop_unused_lists`, from `PUT /api/routing` and `PUT /api/clients/<pk>`;
   an exit forgets its own-sites list then), and lists made in a window that was cancelled are deleted by the browser
@@ -42,7 +42,7 @@ it grows, so every user-visible change gets a new version.
   PersistentKeepalive; right: **DNS**. "below" is gone from the external address hint, and the "AmneziaWG engine — what
   it is and when you need it" box is gone.
 - **Plain exit names.** Exit choices say "Germany", not "Via “Germany”" (rule window, client window, Telegram);
-  the Overview title is **Traffic exits**.
+  the Overview title is **Traffic exits**; "Everything else" is now **Default** ("when no rule matches").
 
 ## 1.22.0 — 2026-11-19
 

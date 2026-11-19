@@ -178,10 +178,10 @@ main { max-width: 1180px; margin: 0 auto; padding: 22px 16px 80px; }
 .icon-btn { border: 0; background: none; padding: 4px 6px; cursor: pointer; color: var(--muted); border-radius: 6px; font-size: 1rem; line-height: 1; }
 .icon-btn:hover { color: var(--ink); background: var(--surface-2); }
 .icon-btn:disabled { opacity: .3; cursor: default; }
-.field { display: grid; gap: 5px; margin-bottom: 14px; }
+.field { display: grid; gap: 5px; margin-bottom: 14px; align-content: start; }   /* соседнее поле выше — строки не растягиваются */
 .field > span { font-weight: 500; font-size: .9rem; }
 .field .hint { font-size: .82rem; color: var(--muted); }
-input[type=text], input[type=password], input[type=number], input[type=search], select, textarea {
+input[type=text], input[type=password], input[type=number], input[type=search], input[type=date], select, textarea {
   width: 100%; border: 1px solid var(--rule-strong); background: var(--surface); border-radius: 7px;
   padding: 8px 10px; min-height: 38px;
 }
