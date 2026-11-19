@@ -493,9 +493,12 @@ function editClient(pk, section = null) {
           rate_down: rd || null, rate_up: ru || null });
         if (r.enabled) toast(t("toast.client_enabled"));
       }
+      const own = draft.rules_mode === "custom" ? draft.rules : null;
+      if (own && !panelDnsAsk(own)) return;
       await api("PUT", "clients/" + encodeURIComponent(pk), {
         outbound: $("#c-out").value, rules_mode: draft.rules_mode,
         rules: draft.rules_mode === "custom" ? draft.rules : [], note: $("#c-note").value.trim() });
+      if (own) await panelDnsOn(own);
       closeModal(); toast(t("toast.saved_applying")); refresh();
     } catch (e) { toast(e.message, true); markField(e, document.querySelector("dialog[open]")); }
   };

@@ -26,6 +26,7 @@ from tests import e2e_servers  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import exits, routing, state, telegram  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+from tests.seed import legacy, legacy_lists  # noqa: E402,F401
 import panel_js  # noqa: E402
 
 
@@ -356,6 +357,7 @@ class PanelTest(unittest.TestCase):
         panel.engine.reconcile()
 
     def setUp(self):
+        legacy_lists(panel.store)                 # страны, как в новой установке до 1.22.0
         st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
@@ -463,6 +465,7 @@ class ExitDialogRoutingTest(unittest.TestCase):
         panel.engine.reconcile()
 
     def setUp(self):
+        legacy_lists(panel.store)                 # страны, как в новой установке до 1.22.0
         st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         self._lists = {l["id"] for l in st["lists"]}

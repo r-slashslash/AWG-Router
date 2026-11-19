@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from app import lists, panel  # noqa: E402
 from app.api import backup, routing, state  # noqa: E402
 from app.store import Store  # noqa: E402
+from tests.seed import legacy, legacy_lists  # noqa: E402,F401
 
 R = lambda body: type("R", (), {"json": lambda self: body})()
 NETS = "203.0.113.0/24\n198.51.100.0/25 # склад\n" + "\n".join(f"10.{i // 256}.{i % 256}.0/24" for i in range(3000))
@@ -38,6 +39,7 @@ class StoreTextsTest(unittest.TestCase):
 
     def test_text_in_its_file(self):
         s = Store(self.path)
+        legacy_lists(s)                                          # страны, как в новой установке до 1.22.0
         self.add(s, "l1", NETS)
         self.add(s, "l2", "example.com\n*.example.org", "domains")
         disk = {l["id"]: l for l in self.disk()["lists"]}

@@ -14,6 +14,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from tests.seed import legacy, legacy_lists  # noqa: E402,F401
 
 from app.store import Store  # noqa: E402
 from app import lists, nftgen  # noqa: E402
@@ -44,6 +45,7 @@ class DomainsAnyExitTest(unittest.TestCase):
         panel.engine.reconcile()
 
     def setUp(self):
+        legacy_lists(panel.store)                 # страны, как в новой установке до 1.22.0
         st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         self._lists = {l["id"] for l in st["lists"]}

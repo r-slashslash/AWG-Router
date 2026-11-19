@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 
-from .. import (awgconf, checks, config, hostnet, limits, lists, notify,
+from .. import (awgconf, checks, config, countries, hostnet, limits, lists, notify,
                 selfupdate, totp)
 from ..i18n import Msg
 from ..panel import (app, engine, notifier, panel_origin, panel_url, store, tls, updates)
@@ -122,6 +122,7 @@ def _state_view() -> dict:
         "hosts": {"default": engine.srv.client_host(st), "choices": engine.srv.host_choices(st)},
         "global_effective": engine.resolve(engine.default_out(st, None), st),
         "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},
+        "country_presets": countries.view(),     # «Применить для …» и выбор страны в правиле
         "security": {"totp": bool(totp.load()), "session_hours": auth.SESSION_TTL // 3600,
                      "password_custom": bool(auth.custom_password())},
         "version": {**updates.status(), "update": selfupdate.status()},

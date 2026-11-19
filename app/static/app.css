@@ -362,6 +362,9 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
   position: sticky; top: calc(var(--tabs-h, 43px) + 8px); z-index: 4; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px;
   padding-block: 10px; padding-inline: 16px 12px; border-radius: 10px; background: var(--ink); color: var(--bg); box-shadow: 0 8px 24px rgba(0,0,0,.2); flex-wrap: wrap;
 }
+.cp-box { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.cp-box p { margin: 0 0 8px; }
+.cp-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .savebar.flash { animation: savebar-flash .5s ease-in-out 2; }
 @keyframes savebar-flash { 50% { box-shadow: 0 0 0 4px var(--primary), 0 8px 24px rgba(0,0,0,.2); } }
 @media (prefers-reduced-motion: reduce) { .savebar.flash { animation: none; } }

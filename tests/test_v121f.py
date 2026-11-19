@@ -798,7 +798,7 @@ class InterfaceTest(unittest.TestCase):
 
     def test_lower_buttons_keep_edits(self):
         """Н33. «Сохранить» скорости и «Перезапустить сервер» не выбрасывают несохранённое выше."""
-        self.assertEqual(self.js.count("saveFirst()"), 3)      # и кнопка «Для каскада» (1.22.0)
+        self.assertEqual(self.js.count("saveFirst()"), 2)
         self.assertEqual(i18n_text().count('"srv.save_first":'), 4)
 
     def test_first_request_retried(self):

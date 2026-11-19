@@ -130,7 +130,7 @@ function viewServer() {
         <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select data-field="panel_dns_enc" id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
           `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
         <div class="field">
-          <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_why", "srv.panel_dns_cascade"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}${cascadeHtml()}<p class="small">${esc(t("srv.panel_dns_best"))}</p></details>
+          <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_why", "srv.panel_dns_cascade", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
         </div>
         <div class="row2">
           <label class="field"><span>MTU</span><input type="number" data-field="client_mtu" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
@@ -371,50 +371,6 @@ function clientHostHint(val) {
   if (!v6.length) out.push(esc(t("srv.no_v6")));
   return out.join(" ");
 }
-/* «Для каскада» (решение владельца 2026-11-19): одно нажатие — правило по доменам «Напрямую» для зоны страны сервера
-   с местным DNS. Правило встаёт в черновик вкладки «Маршрутизация» последним (более точные правила по доменам выше
-   него), сохраняет человек сам. Страну знает проверка «напрямую» (engine.public_cc); местный DNS — где мы его знаем. */
-const CASCADE_DNS = { RU: "77.88.8.8", CN: "223.5.5.5", IR: "178.22.122.100" };
-function cascadeZone() {
-  const cc = SRV && SRV.public_cc;
-  if (!cc || !S.upstreams.length) return null;             // без выходов каскада нет
-  return "." + (cc === "GB" ? "uk" : cc.toLowerCase());
-}
-function cascadeList(zone) { return S.lists.find((l) => l.kind === "domains" && l.name === zone); }
-function cascadeHtml() {
-  const zone = cascadeZone();
-  if (!zone) return "";
-  const l = cascadeList(zone);
-  if (l && S.routing.rules.some((r) => r.outbound === "direct" && r.lists.includes(l.id))) {
-    return `<p class="small muted">${esc(t("srv.cascade_done", { zone }))}</p>`;
-  }
-  const dns = CASCADE_DNS[SRV.public_cc];
-  return `<div class="field" style="margin:8px 0 12px"><button class="btn sm" id="s-cascade">${esc(t("srv.cascade_btn", { zone }))}</button>
-    <span class="hint">${esc(dns ? t("srv.cascade_hint", { zone, dns }) : t("srv.cascade_hint_nodns", { zone }))}</span></div>`;
-}
-async function cascadeAdd(b) {
-  const zone = cascadeZone();
-  if (!zone) return;
-  b.disabled = true;
-  try {
-    let l = cascadeList(zone);
-    if (!l) {
-      const r = await api("POST", "lists", { kind: "domains", source: zone.slice(1), name: zone });
-      await refresh();
-      l = listObj(r.id) || { id: r.id };
-    }
-    const rule = { lists: [l.id], outbound: "direct", enabled: true, comment: "" };
-    if (CASCADE_DNS[SRV.public_cc]) rule.dns = [CASCADE_DNS[SRV.public_cc]];
-    const d = structuredClone(routingNow());
-    d.rules.push(rule);
-    routingDraft = d;
-    goTab("routing");
-    toast(t("srv.cascade_added"));
-    const el = $$("#g-rules .rule").pop();
-    if (el) el.scrollIntoView({ block: "center" });
-  } catch (e) { toast(e.message, true); b.disabled = false; }
-}
-
 function srvDirty() {
   if (!SRV || !srvDraft) return false;
   const pdns = $("#s-pdns");
@@ -455,8 +411,6 @@ bind.server = () => {
     flashBar($("#s-bar"));
     return true;
   };
-  const cb = $("#s-cascade");
-  if (cb) cb.onclick = () => { if (!saveFirst()) cascadeAdd(cb); };
   $("#sh-save").onclick = async () => {
     if (saveFirst()) return;
     const b = $("#sh-save"); b.disabled = true;
@@ -546,5 +500,8 @@ function panelDnsStatus() {
   const n = d.queries != null ? t("srv.panel_dns_stats", { q: d.queries, c: d.cached || 0 }) : "";
   const mode = t("srv.pdns_mode_" + (d.encrypt || "plain"));
   return `<div class="small muted">${esc(t("srv.panel_dns_on", { addr: d.listen }))} · ${esc(mode)}${n ? " · " + esc(n) : ""}</div>`
-    + (d.upstream_error ? `<div class="small warn-text">${esc(t("srv.panel_dns_upfail", { error: d.upstream_error }))}</div>` : "");
+    + (d.upstream_error ? `<div class="small warn-text">${esc(t("srv.panel_dns_upfail", { error: d.upstream_error }))}</div>` : "")
+    // шифрованный DNS не проходит напрямую из страны сервера (1.22.0): с местным DNS — что спрашивается у него
+    + (d.direct_down ? `<div class="small warn-text">${esc(d.direct_down.fallback.length
+      ? t("srv.pdns_direct_fb", { dns: d.direct_down.fallback.join(", ") }) : t("srv.pdns_direct_down"))}</div>` : "");
 }

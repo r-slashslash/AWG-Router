@@ -8,7 +8,7 @@ import signal
 import subprocess
 import time
 
-from .. import config, domains, nftgen, system
+from .. import config, countries, domains, nftgen, system
 from ..i18n import Msg
 from ..users import client_dns, dns_encrypt
 from .common import APP_DIR, DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, _sha, _trim_log
@@ -134,9 +134,13 @@ class DnsMixin:
             return
         default, routes = self.dns_routes(st)
         dom = self.dns_domains(st, self.dom_filter(st))
+        enc = dns_encrypt(st["settings"])
         cfg = {"listen": listen, "port": DNS_PORT, "clients": net, "stats": DNS_STATS,
-               "upstreams": client_dns(st["settings"]), "encrypt": dns_encrypt(st["settings"]),
-               "default": default, "routes": routes, "dom": dom}
+               "upstreams": client_dns(st["settings"]), "encrypt": enc,
+               "default": default, "routes": routes, "dom": dom,
+               # запасной DNS для пути «напрямую»: шифрованный DNS из России, Китая и Ирана часто не проходит, а
+               # клиенты, которые идут напрямую, и так идут через провайдера сервера (countries.local_dns)
+               "direct_fallback": countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else []}
         mt = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in dom["lists"].values()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
         key = f"{t.key}|{listen}"
@@ -196,6 +200,11 @@ class DnsMixin:
                     err_at = float(s.get("last_error_at") or 0)
                     if err_at > float(s.get("last_ok") or 0) and time.time() - err_at < 300:
                         v["upstream_error"] = s.get("last_error") or "?"
+                    # шифрованный DNS не отвечает на пути «напрямую» (последняя попытка — неудачная, за 15 минут):
+                    # клиентам, которые идут напрямую, имена ищет местный DNS или (без него) никто
+                    fail_at = float(s.get("direct_fail_at") or 0)
+                    if fail_at > float(s.get("direct_ok_at") or 0) and time.time() - fail_at < 900:
+                        v["direct_down"] = {"fallback": [str(x) for x in s.get("fallback") or []][:2]}
             except (OSError, ValueError):
                 pass
         return v

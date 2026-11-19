@@ -20,6 +20,7 @@ from app import lists, traffic  # noqa: E402
 from app.store import Store  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import backup, clients, exits, routing  # noqa: E402
+from tests.seed import legacy, legacy_lists  # noqa: E402,F401
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
 import panel_js  # noqa: E402
 
@@ -146,6 +147,7 @@ class ExitReferencesTest(unittest.TestCase):
 
     def test_delete_with_replace_leaves_no_reference(self):
         R = lambda b: type("R", (), {"json": lambda self: b})()
+        legacy_lists(panel.store)
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
             panel.engine.reconcile()
             x = exits.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080"}))["id"]
@@ -185,6 +187,7 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
 
     def test_round_trip(self):
         R = lambda b: type("R", (), {"json": lambda self: b})()
+        legacy_lists(panel.store)
         with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
             panel.engine.reconcile()
             x = exits.add_upstream(R({"name": "X", "config": "socks5://198.51.100.9:1080", "quota_gb": 5,

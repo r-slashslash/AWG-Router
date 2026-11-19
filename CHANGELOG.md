@@ -150,13 +150,27 @@ it grows, so every user-visible change gets a new version.
   listens on (`engine.dns_listen()` → `checks.rules(…, self_dns)`), with `err.rule_dns_self` at that rule's field
   (`data-field="rule_dns_<i>"`; the other own DNS errors are marked there too); backups and exits are checked without
   it, as before. *Test:* `RuleDnsTest.test_own_server_address_refused_at_the_field`.
-- **A cascade in one press.** Under Server → DNS on the server → "Why and how to set it up", the cascade paragraph has a
-  button "Add a rule: .ru — Direct": the zone is the server's country (`engine.public_cc`, from the "Direct" check that
-  finds the public IP; `GB` → `.uk`), the own DNS a local one where known (`CASCADE_DNS`: RU 77.88.8.8, CN 223.5.5.5,
-  IR 178.22.122.100; else the field is left for the owner). It creates the domain list `.<zone>` (or takes the one with
-  that name) and puts a Direct rule with that DNS last in the Routing draft (more exact domain rules stay above it), then
-  opens Routing: the owner checks and saves. Shown only with at least one exit; with such a rule saved it says the rule
-  is there. *Test:* `CascadeButtonTest`.
+- **Ready rules for Russia, China and Iran; a new install starts empty.** A new install has no rules and no lists
+  (`DEFAULT_STATE`; before, the country lists `ru`, `cn`, `ir` and the rule `r_geo` "→ Direct", downloaded every day
+  even if unused). Updated installs keep what they have. `app/countries.py` holds the presets: zones (`.ru .su .рф`,
+  `.cn .中国 .中國`, `.ir .ایران`) and the country's DNS (Yandex 77.88.8.8/77.88.8.1, Alibaba 223.5.5.5/223.6.6.6,
+  Shecan 178.22.122.100/185.51.200.2). `POST /api/country-preset {cc, apply?}` makes the country list (id = the code)
+  and the domain list named by its zones (or takes one with the same domains); with `apply` it adds two Direct rules
+  at the end: the domains with the country's DNS and the addresses. Overview → Shared rules shows "Apply for Russia /
+  China / Iran" (all languages, the interface language's country first) only while there are no rules at all. In a
+  rule, "+ list" always offers the three countries; picking one (or an existing country list of them) puts its
+  addresses in this rule and a rule for its domains with the same exit and the country's DNS right below it. Both
+  ways turn on DNS on the server (`PUT /api/server {panel_dns: true}`) when it is off; with clients already issued
+  they first ask, since those configs keep the old DNS until imported again. *Tests:* `CountryPresetTest`;
+  `tests/seed.py` puts the old country lists into the tests that rely on them.
+- **DNS on the server when encrypted DNS is blocked from the server's country.** In Russia (DoH/DoT to Google and
+  Cloudflare cut since August 2026), China and Iran the shared servers often don't answer over DoH/DoT on the direct
+  path, and DNS on the server never fell back to plain DNS: clients going direct found no sites. Now the direct path
+  (mark 0, no own DNS) asks the local DNS of the server's country by plain DNS (`direct_fallback` in dnsproxy.py's
+  config = `countries.local_dns(engine.public_cc)`, the country from the "Direct" check), and doesn't wait for the
+  encrypted servers again for `DIRECT_RETRY` (120 s). Paths through an exit never fall back (names would go past the
+  exit). Server → DNS on the server says when encrypted DNS fails directly (`direct_down` in `dns_view`), with the
+  local DNS used or, for other countries, what to do. *Tests:* `DirectFallbackTest`, `ServerCountryTest`.
 - **The client's name is not shown to the client.** The config file name and the `vpn://` description are
   `users.conf_label(pk)` — 8 digits from the client's key — everywhere (panel, bot, personal page); before, a Latin
   name was the file name and the name was the description. The personal page gets no name (`share_info` without

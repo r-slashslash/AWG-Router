@@ -65,6 +65,7 @@ function viewOverview() {
     <div class="ov-c2">
       <div class="panel panel-pad">
         ${rulesSummary(S.routing.rules)}
+        ${countryButtons()}
         <div style="margin-top:10px">${!balOn() ? th("ov.everything_else", { exit: effChip(S.global_effective, S.routing.default) })
           : balMembers().length ? th("ov.everything_bal", { exits: balMembers().map((id) => outChip("up:" + id)).join(" ") })
           : th("ov.everything_bal_down", { exit: effChip(S.global_effective, S.routing.default) })}</div>
@@ -74,7 +75,35 @@ function viewOverview() {
     </div>
   </div>`;
 }
+/* Готовые правила стран (решение владельца 2026-11-19): пока общих правил нет совсем — «Применить для …» во всех
+   языках, первой страна языка интерфейса. Нажатие: при выданных клиентах и выключенном «DNS на сервере» — сначала
+   вопрос; затем список страны, список её доменов и два правила «Напрямую» (POST /api/country-preset), и DNS на
+   сервере включается: без него свой DNS страны не работает. */
+const COUNTRY_ORDER = { ru: ["ru", "cn", "ir"], zh: ["cn", "ru", "ir"], fa: ["ir", "ru", "cn"] };
+function countryButtons() {
+  if (S.routing.rules.length || !S.country_presets) return "";
+  const order = (COUNTRY_ORDER[LANG] || COUNTRY_ORDER.ru).filter((cc) => S.country_presets[cc]);
+  return `<div class="cp-box"><p class="small muted">${esc(t("cp.hint"))}</p>
+    <div class="cp-btns">${order.map((cc) => `<button class="btn sm" data-cp="${cc}">${esc(t("cp.apply_" + cc))}</button>`).join("")}</div>
+    ${S.settings.panel_dns ? "" : `<p class="small muted">${esc(t("cp.dns_note"))}</p>`}</div>`;
+}
+async function applyCountry(cc, b) {
+  const pseudo = Object.assign([{ dns: S.country_presets[cc].dns }], { _cc: true });
+  if (!panelDnsAsk(pseudo)) return;
+  $$("[data-cp]").forEach((x) => { x.disabled = true; });
+  try {
+    await api("POST", "country-preset", { cc, apply: true });
+    toast(t("cp.applied", { country: countryName(cc) }));
+    await panelDnsOn(pseudo);
+    await refresh();
+  } catch (e) {
+    toast(e.message, true);
+    $$("[data-cp]").forEach((x) => { x.disabled = false; });
+  }
+}
+
 bind.overview = () => {
   $$("[data-goto]").forEach((b) => b.onclick = () => { tab = b.dataset.goto; history.replaceState(null, "", "#" + tab); render(); });
   $$("[data-probe]").forEach((b) => b.onclick = () => runProbe(b.dataset.probe, render));
+  $$("[data-cp]").forEach((b) => b.onclick = () => applyCountry(b.dataset.cp, b));
 };

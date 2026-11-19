@@ -28,17 +28,12 @@ DEFAULT_STATE = {
     "version": 1,
     "routing": {
         "default": "direct",
-        "rules": [
-            {"id": "r_geo", "lists": ["ru", "cn", "ir"], "outbound": "direct",
-             "enabled": True, "comment": ""},
-        ],
+        # новая установка — без правил и списков (решение владельца 2026-11-19): страны — кнопками «Применить для …»
+        # в «Обзоре» (countries.py). До 1.22.0 здесь были Россия, Китай и Иран напрямую — у обновившихся они остаются
+        "rules": [],
     },
     "upstreams": [],
-    "lists": [
-        {"id": "ru", "name": "", "kind": "country", "source": "ru"},
-        {"id": "cn", "name": "", "kind": "country", "source": "cn"},
-        {"id": "ir", "name": "", "kind": "country", "source": "ir"},
-    ],
+    "lists": [],
     "clients": {},
     "keys": {},
     "limits": {},     # срок и лимит трафика клиентов (limits.py)

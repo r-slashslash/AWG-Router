@@ -5,7 +5,7 @@ import ipaddress
 import re
 import socket
 
-from .. import (awgconf, checks, domains, lists)
+from .. import (awgconf, checks, countries, domains, lists)
 from ..checks import bad
 from ..i18n import Msg
 from ..panel import (app, engine, store)
@@ -132,6 +132,46 @@ def add_list(req):
         return lid
     lid = store.mutate(fn)
     return {"id": lid, **(refresh_now_or_bg(lid) or {})}
+
+
+@app.post("/api/country-preset")
+def country_preset(req):
+    """Готовое правило страны (countries.PRESETS): список страны по адресам и список её доменов — готовые или новые;
+    с apply — ещё и два правила «Напрямую» в конце общих: по доменам со своим DNS страны и по адресам («Применить
+    для …» в «Обзоре»). Без apply — только списки: выбор страны в правиле добавляет правила в черновик сам."""
+    body = req.json()
+    p = countries.preset(body.get("cc"))
+    if not p:
+        bad("err.bad_value")
+    cc = str(body["cc"]).lower()
+    want = domains.parse(countries.zones_text(cc))
+    st0 = store.snapshot()
+    same = next((l["id"] for l in st0["lists"] if l["kind"] == "domains"
+                 and domains.parse(domains.split_source(store.list_text(l["id"]))[1]) == want), None)
+    name = " ".join(p["zones"])[:40]          # «.ru .su .рф»: в выборе списка не спутать со страной «Россия»
+
+    def fn(st):
+        made = []
+        if not Store.lst(st, cc):
+            st["lists"].append({"id": cc, **checks.list_fields({"kind": "country", "source": cc})})
+            made.append(cc)
+        dom = same if same and Store.lst(st, same) else None
+        if not dom:
+            dom = new_id("l")
+            st["lists"].append({"id": dom, **checks.list_fields(
+                {"kind": "domains", "source": countries.zones_text(cc), "name": name})})
+            made.append(dom)
+        if body.get("apply"):
+            r = st["routing"]
+            r["rules"] = checks.rules(st, list(r["rules"]) + [
+                {"lists": [dom], "outbound": "direct", "enabled": True, "comment": "", "dns": list(p["dns"])},
+                {"lists": [cc], "outbound": "direct", "enabled": True, "comment": ""}])
+        return {"country": cc, "domains": dom, "made": made}
+    out = store.mutate(fn)
+    for lid in out.pop("made"):
+        refresh_now_or_bg(lid)
+    engine.trigger()
+    return out
 
 
 @app.put("/api/lists/{lid}")

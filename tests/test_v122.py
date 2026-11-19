@@ -1211,9 +1211,8 @@ class RuleDnsTest(unittest.TestCase):
         self.assertIn(socket.inet_aton("203.0.113.1"), r)
 
 
-class CascadeButtonTest(unittest.TestCase):
-    """«Для каскада» (1.22.0): страна сервера — из проверки «напрямую»; кнопка создаёт список зоны и правило
-    «Напрямую» с местным DNS в черновике вкладки «Маршрутизация» (сохраняет человек сам)."""
+class ServerCountryTest(unittest.TestCase):
+    """Страна сервера (1.22.0) — из проверки «напрямую», для запасного местного DNS пути «напрямую»."""
 
     def test_country_from_direct_check(self):
         import threading
@@ -1236,14 +1235,145 @@ class CascadeButtonTest(unittest.TestCase):
             self.assertEqual(e.public_cc, "RU")                    # не код страны — прежний остаётся
         finally:
             e.stop_ev, e.public_v4, e.public_v4_state, e.public_cc = old
+        from app import countries
+        self.assertEqual(countries.local_dns("RU"), ["77.88.8.8", "77.88.8.1"])
+        self.assertEqual(countries.local_dns("de"), [])
+        self.assertIn('countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else []',
+                      read("app", "engine", "dns.py"))
 
-    def test_button_code(self):
-        js = read("app", "static", "js", "server.js")
-        self.assertIn('const CASCADE_DNS = { RU: "77.88.8.8", CN: "223.5.5.5", IR: "178.22.122.100" };', js)
-        self.assertIn("if (!cc || !S.upstreams.length) return null;", js)   # без выходов каскада нет
-        self.assertIn("d.rules.push(rule);", js)                               # последним: точные правила выше
-        self.assertIn("if (!saveFirst()) cascadeAdd(cb);", js)
-        self.assertIn('"public_cc": getattr(self.e, "public_cc", None)', read("app", "users.py"))
+
+class CountryPresetTest(unittest.TestCase):
+    """Готовые правила стран (1.22.0, решение владельца 2026-11-19): новая установка — без правил и списков;
+    «Применить для …» в «Обзоре», пока правил нет; выбор страны в правиле добавляет правило её доменов."""
+
+    def setUp(self):
+        st = panel.store.snapshot()
+        self._routing = {k: st["routing"][k] for k in ("default", "rules")}
+        self._lists = {l["id"] for l in st["lists"]}
+        p = mock.patch.object(lists, "_fetch", side_effect=OSError("offline"))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        from app.api import routing
+        r = self._routing
+        panel.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
+        for l in panel.store.snapshot()["lists"]:
+            if l["id"] not in self._lists:
+                routing.del_list(None, l["id"])
+
+    def test_new_install_is_empty(self):
+        d = tempfile.mkdtemp()
+        st = Store(os.path.join(d, "state.json")).snapshot()
+        self.assertEqual((st["routing"]["rules"], st["lists"], st["routing"]["default"]), ([], [], "direct"))
+
+    def test_lists_once_and_apply_adds_two_direct_rules(self):
+        from app.api import routing
+        panel.store.mutate(lambda st: st["routing"].update(rules=[]))
+        a = routing.country_preset(Req({"cc": "ru", "name": "Россия"}))
+        b = routing.country_preset(Req({"cc": "RU", "name": "Россия"}))
+        self.assertEqual(a, b)                                    # второй раз — те же списки, новых нет
+        self.assertEqual(a["country"], "ru")
+        st = panel.store.snapshot()
+        self.assertEqual([l["id"] for l in st["lists"]].count("ru"), 1)
+        dom = Store.lst(st, a["domains"])
+        self.assertEqual((dom["kind"], dom["name"]), ("domains", ".ru .su .рф"))      # не спутать со страной
+        self.assertEqual(panel.store.list_text(a["domains"]), ".ru\n.su\n.рф")
+        self.assertEqual(st["routing"]["rules"], [])              # без apply — правил нет
+        routing.country_preset(Req({"cc": "ru", "name": "Россия", "apply": True}))
+        rules = panel.store.snapshot()["routing"]["rules"]
+        self.assertEqual([(r["lists"], r["outbound"], r.get("dns")) for r in rules],
+                         [([a["domains"]], "direct", ["77.88.8.8", "77.88.8.1"]), (["ru"], "direct", None)])
+        self.assertEqual(code(lambda: routing.country_preset(Req({"cc": "de"}))), (400, "err.bad_value"))
+
+    def test_panel_code(self):
+        ov = read("app", "static", "js", "overview.js")
+        self.assertIn("if (S.routing.rules.length || !S.country_presets) return \"\";", ov)   # пока правил нет
+        self.assertIn('{ ru: ["ru", "cn", "ir"], zh: ["cn", "ru", "ir"], fa: ["ir", "ru", "cn"] }', ov)
+        self.assertIn('api("POST", "country-preset", { cc, apply: true })', ov)
+        rt = read("app", "static", "js", "routing.js")
+        self.assertIn("return !S.clients.length || confirm(t(\"cp.dns_confirm\"));", rt)   # клиенты есть — спросить
+        self.assertIn('await api("PUT", "server", { panel_dns: true });', rt)
+        self.assertIn("rules.splice(i + 1, 0, { lists: [res.domains], outbound: r.outbound", rt)
+        self.assertIn("if (!panelDnsAsk(draft.rules)) return;", rt)
+        self.assertIn("if (own && !panelDnsAsk(own)) return;", read("app", "static", "js", "clients.js"))
+        self.assertNotIn("cascade", read("app", "static", "js", "server.js").replace("srv.panel_dns_cascade", ""))
+        self.assertIn('"country_presets": countries.view()', read("app", "api", "state.py"))
+
+
+class DirectFallbackTest(unittest.TestCase):
+    """Шифрованный DNS не проходит напрямую из страны сервера (Россия, Китай, Иран, 2026): путь «напрямую» спрашивает
+    местный DNS обычным DNS и DIRECT_RETRY не ждёт шифрованного; путь через выход — никогда (мимо выхода)."""
+
+    def _proxy(self, fallback):
+        import json as _json
+        from app import dnsproxy
+        d = tempfile.mkdtemp()
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            _json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                        "encrypt": "doh", "direct_fallback": fallback, "default": {"mark": 0, "tcp": False},
+                        "routes": {"10.8.1.7": {"mark": 0x1000, "tcp": False}}}, f)
+        return dnsproxy.Proxy(conf)
+
+    def run_q(self, p, names, ip="10.8.1.5"):
+        import asyncio
+        from app import dnsproxy
+        from tests.test_v115 import q_msg
+
+        async def go():
+            out = []
+            for n in names:
+                query = q_msg(n)
+                out.append(await p.resolve(query, dnsproxy.parse_query(query), ip))
+            return out
+        return asyncio.run(go())
+
+    def test_direct_asks_local_dns(self):
+        import socket
+        from tests.test_v115 import a_reply
+        p = self._proxy(["77.88.8.8"])
+        enc, plain = [], []
+
+        async def blocked(msg, server, mark, mode):
+            enc.append((server, mark))
+            raise OSError("reset")
+
+        async def udp(msg, server, mark):
+            plain.append((server, mark))
+            return a_reply(msg, ["203.0.113.7"])
+        p._enc, p._udp = blocked, udp
+        out = self.run_q(p, ["google.com", "example.org"])
+        self.assertIn(socket.inet_aton("203.0.113.7"), out[0])
+        self.assertEqual(enc, [("1.1.1.1", 0)])                       # второе имя — сразу у местного
+        self.assertEqual(plain, [("77.88.8.8", 0), ("77.88.8.8", 0)])
+        self.assertEqual(p.stats["direct_fallback"], 2)
+        self.assertGreater(p.direct_fail_at, p.direct_ok_at)
+        p.direct_down_until = 0                                       # прошло DIRECT_RETRY — снова шифрованный
+        self.run_q(p, ["example.net"])
+        self.assertEqual(len(enc), 2)
+
+    def test_exit_path_never_falls_back(self):
+        from app import dnsproxy
+        p = self._proxy(["77.88.8.8"])
+        plain = []
+
+        async def blocked(msg, server, mark, mode):
+            raise OSError("reset")
+
+        async def udp(msg, server, mark):
+            plain.append(server)
+            return None
+        p._enc, p._udp = blocked, udp
+        out = self.run_q(p, ["google.com"], ip="10.8.1.7")              # клиент идёт через выход
+        self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
+        self.assertEqual(plain, [])
+        p = self._proxy([])                                             # страна без местного DNS — только ошибка
+        p._enc, p._udp = blocked, udp
+        self.assertEqual(self.run_q(p, ["google.com"])[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
+        self.assertEqual(plain, [])
+        self.assertIn('v["direct_down"]', read("app", "engine", "dns.py"))
+        self.assertIn('t("srv.pdns_direct_fb"', read("app", "static", "js", "server.js"))
 
 
 class RecoverRenamedTest(unittest.TestCase):

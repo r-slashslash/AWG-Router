@@ -179,8 +179,9 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     r = self.probe("direct")
                     ip = r.get("ip") if r.get("ok") else None
                     cc = r.get("cc") if r.get("ok") else None
-                    if isinstance(cc, str) and len(cc) == 2 and cc.isalpha():
+                    if isinstance(cc, str) and len(cc) == 2 and cc.isalpha() and cc.upper() != self.public_cc:
                         self.public_cc = cc.upper()
+                        self.trigger()          # запасной местный DNS пути «напрямую» зависит от страны
                     # только IPv4: адрес идёт во «Внешний адрес сервера» и в конфиги клиентов
                     ip = str(ipaddress.IPv4Address(str(ip).strip())) if ip else None
                 except Exception:  # noqa: BLE001  — в том числе не адрес (ValueError)

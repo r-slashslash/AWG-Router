@@ -58,6 +58,11 @@ NEG_TTL_MAX = 300           # «нет такого имени» / «нет за
 NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
 STATS_EVERY = 15
 MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
+# Путь «напрямую» и шифрованный DNS: из России, Китая и Ирана общие серверы по DoH/DoT часто не отвечают. Тогда
+# имена спрашиваются у местного DNS страны сервера (cfg direct_fallback, обычный DNS), а шифрованный пробуется снова
+# не раньше чем через DIRECT_RETRY: иначе каждый запрос ждал бы ENC_TIMEOUT на каждом сервере. Только «напрямую»:
+# имена клиентов, которые идут через выход, мимо выхода не уходят никогда.
+DIRECT_RETRY = 120.0
 
 DOT_PORT, DOH_PORT = 853, 443
 ENC_TIMEOUT = 5.0           # соединение и ответ по DoT/DoH
@@ -342,6 +347,9 @@ class Proxy:
         self.cache_bytes = 0
         self.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
         self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
+        # шифрованный DNS на пути «напрямую»: когда последний раз ответил и когда не ответил ни один сервер
+        self.direct_ok_at = self.direct_fail_at = 0.0
+        self.direct_down_until = 0.0
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
         self.pools: dict[tuple, Pool] = {}
@@ -508,7 +516,23 @@ class Proxy:
             return error_reply(query, q, RC_SERVFAIL)
         self.inflight += 1
         try:
-            reply = await self.forward(query, q, mark, tcp, servers)
+            cfg = getattr(self, "cfg", None) or {}       # тесты собирают Proxy без load()
+            enc_direct = not servers and mark == 0 and (cfg.get("encrypt") or "plain") != "plain"
+            fb = tuple(cfg.get("direct_fallback") or ()) if enc_direct else ()
+            reply = None
+            if not (fb and time.monotonic() < getattr(self, "direct_down_until", 0.0)):
+                reply = await self.forward(query, q, mark, tcp, servers)
+                if enc_direct:
+                    if reply is None:
+                        self.direct_fail_at = time.time()
+                        self.direct_down_until = time.monotonic() + DIRECT_RETRY
+                    else:
+                        self.direct_ok_at = time.time()
+                        self.direct_down_until = 0.0
+            if reply is None and fb:
+                reply = await self.forward(query, q, mark, tcp, fb)          # местный DNS, обычный
+                if reply is not None:
+                    self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
         finally:
             self.inflight -= 1
         if reply is None:
@@ -654,6 +678,8 @@ class Proxy:
                     json.dump({"pid": os.getpid(), "at": time.time(), "cache": len(self.cache),
                                "encrypt": self.cfg.get("encrypt") or "plain", "last_ok": self.last_ok,
                                "last_error": self.last_error, "last_error_at": self.last_error_at,
+                               "direct_ok_at": self.direct_ok_at, "direct_fail_at": self.direct_fail_at,
+                               "fallback": list(self.cfg.get("direct_fallback") or ()),
                                **self.stats}, f)
                 os.replace(p + ".tmp", p)
             except OSError:

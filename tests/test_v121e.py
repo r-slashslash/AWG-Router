@@ -27,6 +27,7 @@ from app import store as store_mod  # noqa: E402
 from app import users  # noqa: E402
 from app.api import auth, backup, exits, routing, server, state, telegram  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+from tests.seed import legacy, legacy_lists  # noqa: E402,F401
 import panel_js  # noqa: E402
 
 
@@ -182,7 +183,7 @@ class InputTypesTest(unittest.TestCase):
             self.assertEqual(code(lambda: server.put_server(Req({"params": v}))), (400, "err.bad_value"), v)
 
     def test_rule_enabled_string(self):
-        st = panel.store.snapshot()
+        st = legacy(panel.store.snapshot())
         for v in ("false", "no", 0, 1):
             self.assertEqual(code(lambda: checks.rules(st, [{"lists": ["ru"], "outbound": "direct",
                                                               "enabled": v}])), (400, "err.bad_value"), v)

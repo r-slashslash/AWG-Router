@@ -14,6 +14,8 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
       const dom = r.lists.some(isDomainList);
       const addable = S.lists.filter((l) => !r.lists.includes(l.id) && (!r.lists.length || (l.kind === "domains") === dom));
       const kinds = LIST_KINDS.filter((k) => !r.lists.length || (k === "domains") === dom);
+      // готовые страны (countries.py): ещё нет такого списка — он появится при выборе
+      const quick = dom ? [] : Object.keys(S.country_presets || {}).filter((cc) => !listObj(cc));
       return `
       <div class="rule ${r.enabled ? "" : "off"}" data-i="${i}">
         ${rules.length > 1
@@ -23,7 +25,7 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
         <div>
           <div class="rule-lists">
             ${r.lists.map((l) => `<span class="chip"><span>${listLabel(l)}</span><button type="button" data-rm-list="${esc(l)}" aria-label="${esc(t("re.remove_list"))}">×</button></span>`).join("")}
-            <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
+            <select class="add-list" data-add-list aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}${quick.length ? `<optgroup label="${esc(t("re.countries"))}">${quick.map((cc) => `<option value="cc:${cc}">${esc(countryName(cc))}</option>`).join("")}</optgroup>` : ""}${create ? `<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup>` : ""}</select>
           </div>
           <input type="text" class="rule-comment" data-comment value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}" maxlength="80">
           ${dom ? `<label class="rule-dns"><span>${esc(t("re.dns"))}</span><input type="text" data-dns data-field="rule_dns_${i}" dir="ltr" value="${esc((r.dns || []).join(", "))}" placeholder="${esc(t("re.dns_ph"))}" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
@@ -48,6 +50,9 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
         const v = e.target.value;
         if (!v) return;
         if (v.startsWith("new:")) { e.target.value = ""; create(v.slice(4), (id) => addListTo(r, id)); return; }
+        const cl = listObj(v);
+        const cc = v.startsWith("cc:") ? v.slice(3) : cl && cl.kind === "country" ? cl.source : "";
+        if (cc && (S.country_presets || {})[cc]) { e.target.disabled = true; countryPick(rules, i, cc, onChange, draw); return; }
         addListTo(r, v);
         ch();
       };
@@ -73,6 +78,39 @@ function rulesEditor(box, rules, onChange, { create = null } = {}) {
     };
   };
   draw();
+}
+
+/* Страна из готовых (решение владельца 2026-11-19): её список адресов — в это правило, а сразу под ним — правило по
+   её доменам с тем же выходом и своим DNS страны (два отдельных правила: домены с адресами не смешиваются). Списки
+   создаёт сервер (POST /api/country-preset) или берёт готовые; «DNS на сервере» — при сохранении (rules._cc). */
+async function countryPick(rules, i, cc, onChange, draw) {
+  const r = rules[i];
+  onChange();                                   // черновик — до обновления состояния: refresh его не тронет
+  try {
+    const res = await api("POST", "country-preset", { cc });
+    await refresh();
+    addListTo(r, res.country);
+    if (!rules.some((x) => x.lists.includes(res.domains))) {
+      rules.splice(i + 1, 0, { lists: [res.domains], outbound: r.outbound, enabled: true, comment: "",
+        dns: [...S.country_presets[cc].dns] });
+      toast(t("cp.picked"));
+    }
+    rules._cc = true;
+  } catch (e) { toast(e.message, true); }
+  onChange(); draw();
+}
+/** «DNS на сервере» для своего DNS страны. Выключен, а клиенты уже есть — спросить: в выданных конфигах прежний
+    DNS, им нужно заново отсканировать QR. false — человек отказался (ничего не применяем). */
+function panelDnsAsk(rules) {
+  if (S.settings.panel_dns || (rules && !(rules._cc && rules.some((x) => x.dns && x.dns.length)))) return true;
+  return !S.clients.length || confirm(t("cp.dns_confirm"));
+}
+async function panelDnsOn(rules) {
+  if (S.settings.panel_dns || (rules && !(rules._cc && rules.some((x) => x.dns && x.dns.length)))) return;
+  try {
+    await api("PUT", "server", { panel_dns: true });
+    toast(t("cp.dns_on"));
+  } catch (e) { toast(t("cp.dns_failed", { e: e.message }), true); }
 }
 
 /* ================================================================ правила */
@@ -159,8 +197,10 @@ bind.routing = () => {
   });
   $("#g-reset").onclick = () => { routingDraft = null; render(); };
   $("#g-save").onclick = async () => {
+    if (!panelDnsAsk(draft.rules)) return;
     try {
       await api("PUT", "routing", draft);
+      await panelDnsOn(draft.rules);
       routingDraft = null; toast(t("toast.rules_saved")); await refresh();
     } catch (e) { toast(e.message, true); markField(e, $("#g-rules")); }
   };

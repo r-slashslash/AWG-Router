@@ -116,6 +116,9 @@ blocked for these clients, as before.
 DNS on the server (`dnsproxy.py`) resolves names from domain rules through the rule's exit. With the DNS
 filter setting, only addresses that it returned for those names (the `dom4` set with timeouts, refilled after
 every rebuild of the table) are redirected to the handler.
+On the direct path only, when the encrypted shared servers don't answer (DoH/DoT cut from the server's country),
+it asks the country's local DNS by plain DNS (`direct_fallback`, from `countries.py` by the server's country) and
+skips the encrypted servers for `DIRECT_RETRY`; paths through an exit never fall back.
 
 The panel looks at the handler every second: it touches a heartbeat file every second, and a handler that
 exited or stopped touching it for `SNI_HANG` seconds is restarted. While it is down, redirected connections are

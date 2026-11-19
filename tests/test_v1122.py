@@ -16,6 +16,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from tests.seed import legacy, legacy_lists  # noqa: E402,F401
 
 from app import awgserver, config, lists, nftgen, sniproxy, system, users, web  # noqa: E402
 from app.i18n import Msg  # noqa: E402
@@ -49,6 +50,7 @@ class Fixture(unittest.TestCase):
     """Своё состояние на время теста: выходы, списки и правила потом убираются."""
 
     def setUp(self):
+        legacy_lists(panel.store)                 # страны, как в новой установке до 1.22.0
         st = panel.store.snapshot()
         self._routing = {"default": st["routing"]["default"], "rules": list(st["routing"]["rules"])}
         self._lists = {l["id"] for l in st["lists"]}
