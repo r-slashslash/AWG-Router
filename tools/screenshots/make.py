@@ -239,6 +239,9 @@ def shoot(url: str, out_dir: str) -> None:
         save(pg, "overview")
         for name in ("clients", "exits", "routing", "server"):
             tab(pg, name)
+            if name == "clients":
+                # скорость клиентов в сети (1.23.0) — после двух замеров счётчиков и следующего опроса
+                pg.locator("#main [data-speed]:not(:empty)").first.wait_for(timeout=20000)
             save(pg, name)
         tab(pg, "clients")
         pg.click("tr[data-pk]:has-text('My phone')")

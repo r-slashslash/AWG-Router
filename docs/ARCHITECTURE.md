@@ -31,7 +31,7 @@ namespace, and enters the network of the AWG container with `nsenter`.
 | API by topic | `app/api/`: `auth` (login, sessions, 2FA, `same_origin`), `clients` (clients, limits, masking, the client's page `/s/…`), `exits`, `routing` (rules, lists, route check), `server` (AWG server, engine, HTTPS, updates), `state` (`/api/state`, settings), `backup`, `telegram` (settings and bot control) |
 | Input checks, one per kind of thing | `app/checks.py`; the server's client settings in `users.py` |
 | Engine (`Engine`, one class in parts) | `app/engine/`: `__init__` (the pass, loops, events), `tunnels` (exits' tunnels, health, traffic, quotas), `routes` (routing decisions, nftables, ip rule), `sni` (domain rules, QUIC by name), `dns` (DNS on the server), `server` (AWG server, kernel module, rules "before the panel"), `speed` (`tc`), `diag` (exit check, route check), `common` |
-| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` with lists, `exits`, `server`, `system`, `settings` — Telegram, password, backup), `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
+| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` — rules and the rule window with its lists, also used for a client's own rules, `exits`, `server`, `system`, `settings` — Telegram, password, backup); a window over a window (the rule window over the client window) is the second `dialog`, `#modal2`, `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
 
 ## The AWG server ("Target")
 
@@ -144,6 +144,7 @@ domain rules become a block.
   `fsync`; the previous version stays as `state.json.bak`, and the panel starts from it when `state.json`
   is damaged. State and backups of earlier releases are kept in `tests/fixtures/old` and must load as
   before (`tests/test_old_files.py`).
+- Lists live inside rules: a list that is no longer in any rule (shared or a client's own) is deleted when the rules are saved (`api.routing.drop_unused_lists`).
 - Texts of the lists typed in by hand (networks and domains, up to 2 MB each) are not in `state.json`: each
   is in `data/texts/<id>-<tag>.txt`, and the list in the state has an empty `source` and the file's tag
   `text`. Read a text with `Store.list_text`; a backup is `Store.snapshot(texts=True)` (texts inline, as
@@ -151,7 +152,7 @@ domain rules become a block.
   stays while `state.json.bak` needs it.
 - `traffic.json` — counters (`traffic.FORMAT` stays 2 so older panels can still read it).
 - `tls.json` — HTTPS settings for this particular server; not part of backups.
-- `/api/state` is polled every few seconds, so keep it small; load big data with separate requests,
+- `/api/state` is polled every few seconds, so keep it small (the clients' live speed, `speeds`, and CPU and memory come with every answer, outside the tag); load big data with separate requests,
   and read the state once per request (`store.snapshot()` copies all of it). The server keeps connections
   open (HTTP/1.1) and compresses text responses from `web.GZIP_MIN` bytes; static files are compressed once per
   version (`web.gzip_static`). Public routes (`/s/…`) read the state with `store.peek`, without a copy.
@@ -170,7 +171,7 @@ has to show a panel message (an error), `app/uitext.py` reads the same dictionar
 | Module | What it does |
 |---|---|
 | `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego), own certificate, a web server on port 80 |
-| `notify.py`, `tgbot.py` | Telegram notifications and control; clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) and, if on, get reminders about the end date and the limit (`Notifier.client_fn` → `Bot.remind`, sent by the `tgbot-remind` thread) |
+| `notify.py`, `tgbot.py` | Telegram notifications and control (every Bot API request goes through `notify.Paths`: the chosen path, then other working exits — never Direct after an exit; "Turn on the bot" is the main switch); clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) and, if on, get reminders about the end date and the limit (`Notifier.client_fn` → `Bot.remind`, sent by the `tgbot-remind` thread) |
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
 | `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (Overview buttons, a country picked in a rule, the local DNS of the direct path in `dnsproxy.py`) |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |

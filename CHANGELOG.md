@@ -3,6 +3,47 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.23.0 — 2026-11-19
+
+- **Rules in their own window, lists inside rules.** The Routing tab has no separate Lists section any more. A rule
+  opens in a window (**+ Add rule**, or a click on the rule row; `ruleWindow` in `js/routing.js`, a second `dialog`
+  `#modal2` so it also opens over the client window): name, lists — an existing one, a country (with the country's
+  domain rule right below it, as before) or a new list made right in the window, without a second window — the own
+  DNS field, shown only when the rule has a domain list, the exit and on/off. On Routing, **Save**, on/off, order and
+  delete take effect at once (`saveRules`); "Everything else", balancing and "block" keep the save bar. A client's own
+  rules use the same window, with **Done** putting the rule into the client draft. A list that is no longer in any rule
+  is deleted with it on the server (`api.routing.drop_unused_lists`, from `PUT /api/routing` and `PUT /api/clients/<pk>`;
+  an exit forgets its own-sites list then), and lists made in a window that was cancelled are deleted by the browser
+  (`dropNewLists`; `POST /api/country-preset` now returns `made`). **Apply for Russia / China / Iran** sit next to
+  **+ Add rule** always (Overview keeps them only while there are no rules). "Refresh lists every, h" moved under the
+  rules. A domain rule whose handler failed says so in its row.
+- **The bot tries other paths when the chosen one fails** (System → Telegram → "If it fails, try other paths",
+  `telegram.fallback`, on for everyone). For every Bot API request (`notify._post` → `notify.Paths`): chosen Direct —
+  the working exits one by one; chosen exit — the other working exits, never Direct (`engine.own_route(via,
+  direct=False)`: an exit whose fallback is Direct counts as down for Telegram). A path that worked is kept and the
+  chosen one is tried again every `PATH_RETRY` (10 minutes); `/api/state` has `tg_path`, and the settings say
+  "The bot now goes through …". This covers notifications, control, messages to clients and backups — before, only
+  notifications had fallbacks, and Direct was their last resort.
+- **Live speed of clients.** The clients list shows ↓/↑ Mbit/s under "online" (`engine.client_speeds`: two samples
+  of `awg show dump` at least `CLIENT_SPEED_EVERY` apart, taken only when a browser asks). `speeds` comes with every
+  `/api/state` answer, the short one too, outside the tag, and only the speed spots are refreshed (`fillSpeeds`), not
+  the rows.
+- **Engine switch without "Error".** After switching the engine or **Restart the AWG server** the header says
+  "Switching the engine…" / "Restarting the AWG server…" until the first good pass with the server interface up, at
+  most `SETTLE_SECS` (90 s) (`Engine._settle`, `_pass_done`); passes that fail while the server comes up on the new
+  engine no longer show "Error" for ~30 s. The engine row says "starting" meanwhile.
+- **Telegram settings, simpler.** **Turn on the bot** (`enabled`) is now the main switch: off — no notifications,
+  control, clients or backups (`tgbot.admin_on` / `clients_on`). **Control from Telegram** is one checkbox right under
+  it, without its own section and hint; "Notify about" is **Notifications**; client access and reminders are one
+  checkbox (`client_notify` is written the same as `clients`, for a rollback). A token is needed to turn the bot on, a
+  Chat ID only for notifications, control or backups (a bot just for clients works without it). Bots that had control
+  or clients on with notifications off get `enabled` once (`store.BOT_SWITCH`) — they start sending notifications.
+- **Server tab, by meaning.** Left: the AmneziaWG server, its addresses, address in configs, port, subnet, MTU and
+  PersistentKeepalive; right: **DNS**. "below" is gone from the external address hint, and the "AmneziaWG engine — what
+  it is and when you need it" box is gone.
+- **Plain exit names.** Exit choices say "Germany", not "Via “Germany”" (rule window, client window, Telegram);
+  the Overview title is **Traffic exits**.
+
 ## 1.22.0 — 2026-11-19
 
 - **Clients in the Telegram bot.** Every client gets a personal link as soon as it is created (`users.add_client`
