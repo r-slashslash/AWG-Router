@@ -313,8 +313,8 @@ class RuleListsTest(unittest.TestCase):
         from tests import panel_js
         js = panel_js.source()
         self.assertNotIn('id="lists-sec"', js)                 # раздела «Списки» нет
-        self.assertIn('<dialog id="modal2">', open(os.path.join(os.path.dirname(__file__), "..", "app", "static",
-                                                                "index.html"), encoding="utf-8").read())
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "index.html"), encoding="utf-8") as f:
+            self.assertIn('<dialog id="modal2">', f.read())
         self.assertIn("ruleWindow(i === null ?", js)            # свои правила клиента — то же окно
         self.assertIn('okLabel: t("rw.done")', js)
         self.assertIn("dropNewLists(newLists.splice(0))", js)  # окно клиента закрыли без сохранения

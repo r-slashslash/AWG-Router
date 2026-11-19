@@ -10,22 +10,26 @@ it grows, so every user-visible change gets a new version.
   `#modal2` so it also opens over the client window): name, lists — an existing one, a country (with the country's
   domain rule right below it, as before) or a new list made right in the window, without a second window — the own
   DNS field, shown only when the rule has a domain list, the exit and on/off. On Routing, **Save**, on/off, order and
-  delete take effect at once (`saveRules`); "Default" (was "Everything else"), balancing and "block" keep the save bar. A client's own
+  delete take effect at once (`saveRules`; while one is saved the rows take no clicks, and the poll redraws them when the
+  rules changed in another tab); "Default" (was "Everything else"), balancing and "block" keep the save bar. A client's own
   rules use the same window, with **Done** putting the rule into the client draft. A list that is no longer in any rule
   is deleted with it on the server (`api.routing.drop_unused_lists`, from `PUT /api/routing` and `PUT /api/clients/<pk>`;
   an exit forgets its own-sites list then), and lists made in a window that was cancelled are deleted by the browser
-  (`dropNewLists`; `POST /api/country-preset` now returns `made`). **Apply for Russia / China / Iran** sit next to
+  (`dropNewLists`; `POST /api/country-preset` now returns `made`), as are lists made in a window that did not end up in
+  its rule; a country removed from the rule before saving adds no domain rule. **Apply for Russia / China / Iran** sit next to
   **+ Add rule** always (Overview keeps them only while there are no rules). "Refresh lists every, h" moved under the
   rules. A domain rule whose handler failed says so in its row.
 - **The bot tries other paths when the chosen one fails** (System → Telegram → "If it fails, try other paths",
   `telegram.fallback`, on for everyone). For every Bot API request (`notify._post` → `notify.Paths`): chosen Direct —
   the working exits one by one; chosen exit — the other working exits, never Direct (`engine.own_route(via,
   direct=False)`: an exit whose fallback is Direct counts as down for Telegram). A path that worked is kept and the
-  chosen one is tried again every `PATH_RETRY` (10 minutes); `/api/state` has `tg_path`, and the settings say
+  chosen one is tried again every `PATH_RETRY` (10 minutes); Telegram's own answers — refusals, 429, 5xx — don't switch
+  paths; `/api/state` has `tg_path`, and the settings say
   "The bot now goes through …". This covers notifications, control, messages to clients and backups — before, only
   notifications had fallbacks, and Direct was their last resort.
 - **Live speed of clients.** The clients list shows ↓/↑ Mbit/s under "online" (`engine.client_speeds`: two samples
-  of `awg show dump` at least `CLIENT_SPEED_EVERY` apart, taken only when a browser asks). `speeds` comes with every
+  of `awg show dump` at least `CLIENT_SPEED_EVERY` apart, taken only when a browser asks, in their own thread: a poll
+  waits at most `CLIENT_SPEED_WAIT`, so a hung `awg show` doesn't make the panel look offline). `speeds` comes with every
   `/api/state` answer, the short one too, outside the tag, and only the speed spots are refreshed (`fillSpeeds`), not
   the rows.
 - **Engine switch without "Error".** After switching the engine or **Restart the AWG server** the header says
