@@ -370,7 +370,8 @@ class PanelTest(unittest.TestCase):
         r = self._routing
         panel.store.mutate(lambda st: st.update(routing={"default": r["default"], "rules": r["rules"]}))
         exits.del_upstream(Req({"replace": "direct"}), self.socks)
-        routing.del_list(None, self.lid)
+        if Store.lst(panel.store.snapshot(), self.lid):    # 1.23.0: список без правил сервер удаляет и сам
+            routing.del_list(None, self.lid)
         panel.engine.reconcile()
 
     def rules(self, *rules):
@@ -554,11 +555,12 @@ class RoutingTabTest(unittest.TestCase):
         self.assertNotIn('data-tab="lists"', html)
         js = panel_js.source()
         self.assertIn('if (tab === "lists")', js)            # старые закладки #lists
-        self.assertIn('id="lists-sec"', js)
+        self.assertIn('<div id="rw-lists"></div>', js)        # 1.23.0: списки — в окне правила
+        self.assertNotIn('id="lists-sec"', js)
 
     def test_texts(self):
         js = self.read("i18n.js")
-        for key in ("re.new_list", "ls.col_used", "ls.unused", "ex.route_hint"):
+        for key in ("re.new_list", "rw.lists", "rw.ready", "ex.route_hint"):
             self.assertEqual(js.count(f'"{key}":'), 4, key)
         self.assertNotIn("«Правила»", js)
 

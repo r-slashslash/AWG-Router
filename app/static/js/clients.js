@@ -145,7 +145,7 @@ function quotaSwitched(u) { return !!(u.enabled && u.over_quota && u.quota_actio
 function quotaOptions(u) {
   const sel = u ? u.quota_action : "notify";
   const opts = [["notify", t("ex.qa_notify")], ["block", t("out.block")], ["direct", t("out.direct")]];
-  for (const x of S.upstreams) if (!u || x.id !== u.id) opts.push(["up:" + x.id, t("out.via", { name: x.name })]);
+  for (const x of S.upstreams) if (!u || x.id !== u.id) opts.push(["up:" + x.id, x.name]);
   return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${esc(l)}</option>`).join("");
 }
 function exitQuota(u) {
@@ -477,6 +477,21 @@ function editClient(pk, section = null) {
   };
   $$("#c-view button").forEach((b) => b.onclick = () => { view = b.dataset.v; showView(); });
 
+  // свои правила клиента — то же окно правила, что на «Маршрутизации» (1.23.0); «Готово» кладёт правило в черновик,
+  // сохраняется всё кнопкой окна клиента. Списки, созданные в окне правила, — сразу на сервере: окно клиента закрыли
+  // без сохранения — они удаляются (если не стоят в другом правиле)
+  const newLists = [];
+  $("#modal").addEventListener("close", () => dropNewLists(newLists.splice(0)), { once: true });
+  const setRules = (next) => {
+    const cc = draft.rules._cc || next._cc;
+    draft.rules.splice(0, draft.rules.length, ...next);
+    if (cc) draft.rules._cc = true;
+  };
+  const openOwn = (i) => ruleWindow(i === null ? { lists: [], outbound: "direct", enabled: true, comment: "" } : draft.rules[i], {
+    title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("rw.done"), at: i === null ? draft.rules.length : i,
+    ok: (nr, extras, made) => { setRules(withRule(draft.rules, i, nr, extras)); newLists.push(...made); drawMode(); },
+    del: i === null ? null : { i, fn: () => { draft.rules.splice(i, 1); drawMode(); } },
+  });
   const drawMode = () => {
     $$("#c-mode button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === draft.rules_mode));
     const box = $("#c-rules");
@@ -485,7 +500,9 @@ function editClient(pk, section = null) {
         : `<p class="muted small">${esc(t("cl.no_global"))}</p>`;
       watchRules(box);
     } else {
-      rulesEditor(box, draft.rules, () => {});
+      box.innerHTML = ruleRowsHtml(draft.rules) + `<button class="btn sm" type="button" id="c-rule-add" style="margin-top:8px">${esc(t("rw.add"))}</button>`;
+      bindRuleRows(box, draft.rules, (next) => { setRules(next); drawMode(); }, openOwn);
+      $("#c-rule-add").onclick = () => openOwn(null);
     }
   };
   $$("#c-mode button").forEach((b) => b.onclick = () => { draft.rules_mode = b.dataset.v; drawMode(); });
@@ -514,6 +531,7 @@ function editClient(pk, section = null) {
         outbound: $("#c-out").value, rules_mode: draft.rules_mode,
         rules: draft.rules_mode === "custom" ? draft.rules : [], note: $("#c-note").value.trim() });
       if (own) await panelDnsOn(own);
+      newLists.length = 0;                       // сохранены вместе с правилами клиента
       closeModal(); toast(t("toast.saved_applying")); refresh();
     } catch (e) { toast(e.message, true); markField(e, document.querySelector("dialog[open]")); }
   };

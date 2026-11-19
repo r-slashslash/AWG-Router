@@ -12,11 +12,34 @@ from ..panel import (app, engine, store)
 from ..store import TEXT_KINDS, Store, new_id
 
 # ------------------------------------------------------------------ routing
+def rule_lists(rules) -> set[str]:
+    return {lid for r in rules or [] if isinstance(r, dict) for lid in r.get("lists") or []}
+
+
+def drop_unused_lists(st: dict, ids) -> list[str]:
+    """Списки, которые убрали из правил (удалили правило или список из него) и которые больше не стоят ни в одном
+    правиле, удаляются вместе с ними (1.23.0, решение владельца 2026-11-19: раздела «Списки» больше нет). Свои сайты
+    выхода — тоже, и выход их забывает. → удалённые (после записи — lists.delete_cidrs)."""
+    gone = [lid for lid in sorted(set(ids)) if Store.lst(st, lid) and not Store.list_refs(st, lid)]
+    if gone:
+        st["lists"] = [l for l in st["lists"] if l["id"] not in gone]
+        for u in st["upstreams"]:
+            if u.get("own_list") in gone:
+                u.pop("own_list", None)
+    return gone
+
+
+def forget_lists(gone: list[str]) -> None:
+    for lid in gone:
+        lists.delete_cidrs(lid)
+
+
 @app.put("/api/routing")
 def put_routing(req):
     body = req.json()
 
     def fn(st):
+        before = rule_lists(st["routing"]["rules"])
         bal = checks.balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
         strict = checks.strict(body["strict"] if "strict" in body else st["routing"].get("strict"))
         st["routing"] = {"default": checks.outbound(st, body.get("default")),
@@ -25,7 +48,8 @@ def put_routing(req):
             st["routing"]["balance"] = bal
         if strict:
             st["routing"]["strict"] = True
-    store.mutate(fn)
+        return drop_unused_lists(st, before - rule_lists(st["routing"]["rules"]))
+    forget_lists(store.mutate(fn))
     engine.trigger()
     return {"ok": True}
 
@@ -171,7 +195,7 @@ def country_preset(req):
                 if (tuple(x["lists"]), x["outbound"]) not in have])
         return {"country": cc, "domains": dom, "made": made}
     out = store.mutate(fn)
-    for lid in out.pop("made"):
+    for lid in out["made"]:          # новые списки — окно правила удалит их, если правило так и не сохранят
         refresh_now_or_bg(lid)
     engine.trigger()
     return out

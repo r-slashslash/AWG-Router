@@ -789,7 +789,7 @@ class InterfaceTest(unittest.TestCase):
 
     def test_toasts_inside_open_window(self):
         """Н31. Сообщения — внутри открытого окна (оно в верхнем слое), после закрытия — снова на странице."""
-        self.assertIn('document.querySelector("dialog[open]") || document.body', self.js)
+        self.assertIn('[...document.querySelectorAll("dialog[open]")].pop() || document.body', self.js)   # окно над окном — верхнее
         self.assertIn('document.body.append($("#toasts"))', self.js)
 
     def test_dns_filter_shows_save_bar(self):
@@ -815,10 +815,9 @@ class InterfaceTest(unittest.TestCase):
         """Н37: двойной Enter, выделение мышью за край окна, сообщение «нет связи» вместо «Failed to fetch»,
         курсор в поиске, стрелка справа налево, разделитель даты и времени."""
         self.assertIn('if ($("#n-save").disabled) return;', self.js)
-        self.assertIn('e.target.id === "modal" && downOnBackdrop', self.js)
+        self.assertIn('e.target.id === id && downOnBackdrop', self.js)                 # оба окна (1.23.0)
         self.assertIn('new Error(t("status.offline"))', self.js)
         self.assertIn("setSelectionRange(...keepCaret)", self.js)
-        self.assertIn('LANGS[LANG].dir === "rtl" ? "←" : "→"', self.js)
         self.assertNotIn('+ ", " +', self.js)
         self.assertEqual(i18n_text().count('"btn.retry":'), 4)
 

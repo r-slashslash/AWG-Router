@@ -1133,8 +1133,8 @@ class RuleDnsTest(unittest.TestCase):
             checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "yandex"}])
         self.assertEqual(cm.exception.field, "rule_dns_0")
         js = read("app", "static", "js", "routing.js")
-        self.assertIn('data-field="rule_dns_${i}"', js)
-        self.assertIn('markField(e, $("#g-rules"))', js)
+        self.assertIn('data-field="rule_dns_${at}"', js)        # 1.23.0: поле — в окне правила
+        self.assertIn("markField(err, m)", js)
 
     def test_zone_with_leading_dot(self):
         """«.cn» в списке — вся зона, как и «cn»: точка в начале не мешает (так подсказывает окно списка)."""
@@ -1343,7 +1343,8 @@ class CountryPresetTest(unittest.TestCase):
         panel.store.mutate(lambda st: st["routing"].update(rules=[]))
         a = routing.country_preset(Req({"cc": "ru", "name": "Россия"}))
         b = routing.country_preset(Req({"cc": "RU", "name": "Россия"}))
-        self.assertEqual(a, b)                                    # второй раз — те же списки, новых нет
+        self.assertEqual((a["country"], a["domains"]), (b["country"], b["domains"]))   # второй раз — те же списки
+        self.assertEqual(b["made"], [])                            # новых нет (окно правила удаляет только новые)
         self.assertEqual(a["country"], "ru")
         st = panel.store.snapshot()
         self.assertEqual([l["id"] for l in st["lists"]].count("ru"), 1)
@@ -1367,8 +1368,10 @@ class CountryPresetTest(unittest.TestCase):
         rt = read("app", "static", "js", "routing.js")
         self.assertIn("return !S.clients.length || confirm(t(\"cp.dns_confirm\"));", rt)   # клиенты есть — спросить
         self.assertIn('await api("PUT", "server", { panel_dns: true });', rt)
-        self.assertIn("rules.splice(i + 1, 0, { lists: [res.domains], outbound: r.outbound", rt)
-        self.assertIn("if (!panelDnsAsk(draft.rules)) return;", rt)
+        # 1.23.0: правило доменов страны — в окне правила, встаёт сразу под ним при сохранении (withRule)
+        self.assertIn("extras.push({ lists: [res.domains], outbound: r.outbound", rt)
+        self.assertIn("out.splice(at + 1, 0, ...add);", rt)
+        self.assertIn("if (!panelDnsAsk(rules)) return false;", rt)
         cl = read("app", "static", "js", "clients.js")
         self.assertIn("if (own && !panelDnsAsk(own)) return;", cl)
         # второй круг проверки: вопрос — до первого запроса, иначе «Отмена» сохраняла имя и лимиты без правил

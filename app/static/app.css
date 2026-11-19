@@ -356,10 +356,29 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .rule-then { display: grid; gap: 4px; }
 .rule-then label { font-size: .8rem; color: var(--muted); }
 .default-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(170px, 230px) auto; gap: 10px; align-items: center; padding: 12px; border-radius: 9px; border: 1px dashed var(--rule-strong); }
+/* строка правила (1.23.0): номер, что ловит правило и выход (нажатие — окно правила), включение и место */
+.rule.rule-item { grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; }
+.rule-item .rule-n { padding-top: 0; }
+.rule-item select.rule-pos { margin-top: 0; }
+.rule-open { display: grid; gap: 3px; min-width: 0; padding: 2px 0; border: 0; background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.rule-open:hover .rule-what, .rule-open:focus-visible .rule-what { text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; }
+.rule-item.off .rule-what { text-decoration: line-through; }
+.rule-title { font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.rule-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.rule-line .rule-what { min-width: 0; overflow-wrap: anywhere; }
+.rule-item .rule-ctl { padding-top: 0; }
+/* окно правила: списки строками, новый список — формой прямо в окне */
+.rw-list { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--rule); border-radius: 8px; }
+.rw-list-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rw-list-acts { display: flex; gap: 2px; flex: none; }
+.rw-form { margin-top: 10px; padding: 12px; border: 1px dashed var(--rule-strong); border-radius: 8px; }
+.rw-form-title { font-weight: 600; margin-bottom: 10px; }
 @media (max-width: 680px) {
   .rule, .default-row { grid-template-columns: 30px minmax(0, 1fr); }
   .rule-then, .default-row > :nth-child(3) { grid-column: 2; }
   .rule-ctl { grid-column: 2; padding-top: 0; }
+  .rule.rule-item { grid-template-columns: 30px minmax(0, 1fr); }
+  .rule-item .rule-ctl { grid-column: 2; }
 }
 .savebar {
   position: sticky; top: calc(var(--tabs-h, 43px) + 8px); z-index: 4; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px;

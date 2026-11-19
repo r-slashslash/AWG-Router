@@ -27,7 +27,7 @@ function viewTelegram() {
           `<option value="${k}" ${k === (c.enabled || c.token_set ? c.lang : LANG) ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
       <label class="field"><span>${esc(t("tg.via"))}</span>
         <select data-field="via" id="tg-via" style="max-width:320px">${[["direct", t("out.direct")],
-          ...S.upstreams.map((u) => ["up:" + u.id, t("out.via", { name: u.name })])].map(([v, l]) =>
+          ...S.upstreams.map((u) => ["up:" + u.id, u.name])].map(([v, l]) =>
           `<option value="${esc(v)}" ${v === (c.via || "direct") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
         <span class="hint">${esc(t("tg.via_hint"))}</span></label>
       <label class="check" style="margin:0 0 14px"><input type="checkbox" id="tg-fb" ${c.fallback !== false ? "checked" : ""}><span>${esc(t("tg.fallback"))}</span></label>

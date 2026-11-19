@@ -82,7 +82,8 @@ function toast(msg, bad = false) {
   el.className = "toast" + (bad ? " bad" : "");
   el.textContent = msg;
   // открытое окно (dialog) лежит в верхнем слое поверх всей страницы: сообщения — в нём, иначе их не видно
-  const box = $("#toasts"), host = document.querySelector("dialog[open]") || document.body;
+  // окно над окном (окно правила в окне клиента) — в верхнем
+  const box = $("#toasts"), host = [...document.querySelectorAll("dialog[open]")].pop() || document.body;
   if (box.parentNode !== host) host.append(box);
   box.append(el);
   setTimeout(() => el.remove(), bad ? 6000 : 3000);
@@ -210,7 +211,7 @@ function outOptions(selected, { inherit = null, exclude = null } = {}) {
   const opts = [];
   if (inherit !== null) opts.push(["inherit", inherit]);
   opts.push(["direct", t("out.direct")]);
-  for (const u of S.upstreams) if ("up:" + u.id !== exclude) opts.push(["up:" + u.id, t("out.via", { name: u.name })]);
+  for (const u of S.upstreams) if ("up:" + u.id !== exclude) opts.push(["up:" + u.id, u.name]);   // просто имя выхода: «Выход: Германия»
   opts.push(["block", t("out.block")]);
   return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(l)}</option>`).join("");
 }
@@ -434,7 +435,7 @@ async function refresh(auto = false) {
       S.now = data.now; S.system = data.system; S.speeds = data.speeds; S.engine.last_reconcile = data.last_reconcile;
     } else if (data.same) {
       return;                                   // отпечаток уже не тот (другой ответ успел раньше) — ждём следующий
-    } else if (auto && S && $("#modal").open) {
+    } else if (auto && S && anyModal()) {
       // Окно открыто: его списки выбора и обработчики живут на состоянии, с которым оно открылось (иначе
       // список в окне — старый, а обработчик ищет по новому). Новое состояние — после закрытия окна.
       pendingS = data;
@@ -450,7 +451,7 @@ async function refresh(auto = false) {
     if (!auto) toast(e.offline ? e.message : t("panel.offline", { e: e.message }), true);   // при опросе — шапка
     return;
   }
-  if (pendingS && $("#modal").open) {           // шапка — по новому состоянию, окно — по своему
+  if (pendingS && anyModal()) {                 // шапка — по новому состоянию, окно — по своему
     const keep = S;
     S = pendingS;
     try { renderStatus(); } finally { S = keep; }
@@ -459,16 +460,13 @@ async function refresh(auto = false) {
   if (followUpdate()) return;
   renderStatus();
   if (same) { if (tab === "clients") fillSpeeds(); return; }
-  // список скачивается в фоне: на вкладке «Маршрутизация» обновляется только таблица списков
+  // список скачивается в фоне: на вкладке «Маршрутизация» обновляются только строки правил (их предупреждения)
   const busy = S.lists.some((l) => l.busy);
-  if (auto && tab === "routing" && (busy || listsBusy) && $("#lists-sec") && !$("#modal").open) {
-    $("#lists-sec").innerHTML = listsSection();
-    bindLists();
-  }
+  if (auto && tab === "routing" && (busy || listsBusy) && $("#g-rules") && !anyModal()) drawRoutingRules();
   listsBusy = busy;
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;
-  if (auto && $("#modal").open) return;
+  if (auto && anyModal()) return;
   // не перерисовываем, пока человек печатает в поиске или выбирает сортировку
   const a = document.activeElement;
   if (auto && a && $("#main").contains(a) && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName)
@@ -604,12 +602,6 @@ function render(force = false) {
   // свойства Object.prototype
   const views = new Map([["overview", viewOverview], ["clients", viewClients], ["exits", viewExits],
                          ["routing", viewRouting], ["server", viewServer], ["system", viewSystem]]);
-  if (!force && tab === "routing" && routingDraft && $("#g-rules")) {
-    // правку правил не трогаем, а раздел списков обновляем (счётчики, ошибки, новые списки)
-    $("#lists-sec").innerHTML = listsSection();
-    bindLists();
-    return;
-  }
   if (!views.has(tab)) tab = "overview";
   const sEl = $("#client-search");
   const keepSearch = sEl ? sEl.value : null;
@@ -709,11 +701,29 @@ function openModal(title, body, foot, tag) {
   m.showModal();
 }
 function closeModal() { $("#modal").close(); }
+/* Окно над окном (1.23.0): окно правила — и на «Маршрутизации», и в окне клиента; у него свой dialog */
+function openModal2(title, body, foot) {
+  const m = $("#modal2");
+  $("#modal2-body").innerHTML = `<div class="modal-head"><h2><bdi>${esc(title)}</bdi></h2><button class="icon-btn" data-close aria-label="${esc(t("btn.close"))}">✕</button></div>
+    <div class="modal-body">${body}</div><div class="modal-foot">${foot}</div>`;
+  $$("[data-close]", m).forEach((b) => b.onclick = closeModal2);
+  m.showModal();
+}
+function closeModal2() { $("#modal2").close(); }
+const anyModal = () => $("#modal").open || $("#modal2").open;
 // окно закрывает только нажатие на затемнение: выделение текста мышью, отпущенной за краем окна, — тоже «щелчок»
 // по нему, и введённое пропадало
 let downOnBackdrop = false;
-$("#modal").addEventListener("pointerdown", (e) => { downOnBackdrop = e.target.id === "modal"; });
-$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal" && downOnBackdrop) closeModal(); });
+for (const id of ["modal", "modal2"]) {
+  $("#" + id).addEventListener("pointerdown", (e) => { downOnBackdrop = e.target.id === id; });
+  $("#" + id).addEventListener("click", (e) => { if (e.target.id === id && downOnBackdrop) $("#" + id).close(); });
+}
+$("#modal2").addEventListener("close", () => {
+  document.body.append($("#toasts"));
+  if ($("#modal").open) { $("#modal").append($("#toasts")); return; }   // под ним окно клиента — оно на своём состоянии
+  if (pendingS) { S = pendingS; pendingS = null; }
+  render();
+});
 $("#modal").addEventListener("close", () => {
   document.body.append($("#toasts"));          // сообщения, начатые в окне, досматриваются после него
   if (pendingS) { S = pendingS; pendingS = null; }

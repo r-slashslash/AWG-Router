@@ -10,6 +10,7 @@ from .. import (awgconf, checks, config, cps, limits)
 from ..checks import bad
 from ..panel import (STATIC, app, engine, share_url, store, user_errors)
 from ..web import Page
+from . import routing
 
 # ----------------------------------------------- срок и лимит трафика клиента
 @app.put("/api/limits/{pk:path}")
@@ -193,13 +194,17 @@ def put_client(req, pk):
     body = req.json()
 
     def fn(st):
+        old = st["clients"].get(pk) or {}
+        before = routing.rule_lists(old.get("rules") if old.get("rules_mode") == "custom" else [])
         c = {**checks.client_policy(st, body, engine.dns_listen()),
              "name": next((x.get("name") for x in engine.clients if x["public_key"] == pk), "")}
         if c["outbound"] == "inherit" and c["rules_mode"] == "inherit" and not c["note"]:
             st["clients"].pop(pk, None)
         else:
             st["clients"][pk] = c
-    store.mutate(fn)
+        # свои правила клиента: список, который из них ушёл и больше нигде не стоит, удаляется (как на «Маршрутизации»)
+        return routing.drop_unused_lists(st, before - routing.rule_lists(c["rules"] if c["rules_mode"] == "custom" else []))
+    routing.forget_lists(store.mutate(fn))
     engine.trigger()
     return {"ok": True}
 

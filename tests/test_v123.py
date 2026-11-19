@@ -230,3 +230,66 @@ class BotPathsTest(unittest.TestCase):
         p.ok("direct", "up:x", now=100.0)
         self.assertEqual(p.view("direct"), {"via": "up:x", "since": 100.0})
         self.assertIsNone(p.view("up:y"))                                     # выбрали другой путь — не про него
+
+
+# ------------------------------------------------------------------ окно правила: списки внутри правил
+class RuleListsTest(unittest.TestCase):
+    """Список, который убрали из правил и который больше нигде не стоит, удаляется вместе с правилом (1.23.0)."""
+
+    def setUp(self):
+        from app import panel
+        self.panel = panel
+
+        def fn(st):
+            st["lists"] = [{"id": "la", "kind": "manual", "source": "", "name": "a"},
+                           {"id": "lb", "kind": "manual", "source": "", "name": "b"},
+                           {"id": "lc", "kind": "domains", "source": "", "name": "c"}]
+            st["routing"]["rules"] = [{"lists": ["la"], "outbound": "direct", "enabled": True},
+                                      {"lists": ["lb"], "outbound": "direct", "enabled": True}]
+            st["clients"] = {}
+        panel.store.mutate(fn)
+
+    def ids(self):
+        return [l["id"] for l in self.panel.store.snapshot()["lists"]]
+
+    def test_rule_deleted_with_its_list(self):
+        from app.api import routing
+        st = self.panel.store.snapshot()
+        routing.put_routing(mock.Mock(json=lambda: {"default": "direct", "rules": [st["routing"]["rules"][1]]}))
+        self.assertEqual(self.ids(), ["lb", "lc"])           # «la» ушёл с правилом; «lc» и не стоял — не трогаем
+
+    def test_list_kept_while_a_client_uses_it(self):
+        from app.api import clients, routing
+        pk = "DEMO" + "A" * 40
+        with mock.patch.object(clients, "awgconf") as ac:
+            ac.KEY_RE.match.return_value = True
+            clients.put_client(mock.Mock(json=lambda: {"outbound": "inherit", "rules_mode": "custom",
+                                                       "rules": [{"lists": ["la"], "outbound": "block", "enabled": True}]}), pk)
+        routing.put_routing(mock.Mock(json=lambda: {"default": "direct", "rules": []}))
+        self.assertEqual(self.ids(), ["la", "lc"])           # «la» нужен клиенту, «lb» ушёл
+        with mock.patch.object(clients, "awgconf") as ac:
+            ac.KEY_RE.match.return_value = True
+            clients.put_client(mock.Mock(json=lambda: {"outbound": "inherit", "rules_mode": "inherit", "rules": []}), pk)
+        self.assertEqual(self.ids(), ["lc"])                 # своих правил больше нет — и списка
+
+    def test_exit_forgets_its_own_sites(self):
+        from app.api import routing
+        self.panel.store.mutate(lambda st: st["upstreams"].append({"id": "u9", "name": "X", "own_list": "la"}))
+        try:
+            routing.put_routing(mock.Mock(json=lambda: {"default": "direct", "rules": []}))
+            u = next(u for u in self.panel.store.snapshot()["upstreams"] if u["id"] == "u9")
+            self.assertNotIn("own_list", u)
+        finally:
+            self.panel.store.mutate(lambda st: st.update(upstreams=[u for u in st["upstreams"] if u["id"] != "u9"]))
+
+    def test_panel_code(self):
+        from tests import panel_js
+        js = panel_js.source()
+        self.assertNotIn('id="lists-sec"', js)                 # раздела «Списки» нет
+        self.assertIn('<dialog id="modal2">', open(os.path.join(os.path.dirname(__file__), "..", "app", "static",
+                                                                "index.html"), encoding="utf-8").read())
+        self.assertIn("ruleWindow(i === null ?", js)            # свои правила клиента — то же окно
+        self.assertIn('okLabel: t("rw.done")', js)
+        self.assertIn("dropNewLists(newLists.splice(0))", js)  # окно клиента закрыли без сохранения
+        self.assertIn('if (!dom) { delete r.dns; box.innerHTML = ""; return; }', js)   # свой DNS — только у доменов
+        self.assertNotIn('t("out.via"', js)                     # «Германия», а не «Через «Германия»»
