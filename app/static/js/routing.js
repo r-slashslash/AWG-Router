@@ -107,11 +107,11 @@ async function dropNewLists(ids) {
   }
   refresh();
 }
-/** Окно правила. ok(правило, правила доменов стран, новые списки) — сохранить (страница) или положить в черновик
-    (окно клиента); false — остаться в окне. del — удалить правило (нет — новое). */
+/** Окно правила. ok(правило, новые списки) — сохранить (страница) или положить в черновик (окно клиента); false —
+    остаться в окне. del — удалить правило (нет — новое). Готовых правил стран здесь нет (владелец, 2026-11-20): список
+    страны — просто список; адреса и домены страны со своим DNS — только кнопки «Применить для …». */
 function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
   const r = structuredClone(rule0);
-  const extras = [];             // правила по доменам страны (выбор страны): встанут сразу под этим
   const made = [];               // списки, созданные в этом окне: «Отмена» — удалить их
   let form = null;               // открытая форма списка: {kind, id}
   let timer = null;
@@ -180,15 +180,10 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
       } catch (e) { toast(e.message, true); }
       await refresh(); drawLists();
     });
-    $("#rw-add", box).onchange = async (e) => {
+    $("#rw-add", box).onchange = (e) => {
       const v = e.target.value;
       if (!v) return;
       if (v.startsWith("new:")) { form = { kind: v.slice(4), id: null }; drawLists(); return; }
-      const cl = listObj(v);
-      // группы «Страны — готовые правила» в выборе больше нет (владелец, 2026-11-20): готовые правила — кнопки
-      // «Применить для …»; готовый список страны из «Готовых списков» по-прежнему ставит и правило её доменов
-      const cc = cl && cl.kind === "country" ? cl.source : "";
-      if (cc && (S.country_presets || {})[cc]) { e.target.disabled = true; await countryPick(r, extras, made, cc); drawLists(); return; }
       addListTo(r, v);
       drawLists();
     };
@@ -244,11 +239,11 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
     keep();
     if (!r.lists.length) { toast(t("rw.need_list"), true); $("#rw-add", m).focus(); return; }
     e.target.disabled = true;
-    // созданные здесь списки, которые в правило так и не попали (убрали крестиком, убрали страну), удаляются при
-    // закрытии окна, как при «Отмене»; остальные уходят вместе с правилом
-    const keepIds = new Set([...r.lists, ...extras.filter((x) => r.lists.includes(x.from)).flatMap((x) => x.lists)]);
+    // созданные здесь списки, которые в правило так и не попали (убрали крестиком), удаляются при закрытии окна, как
+    // при «Отмене»; остальные уходят вместе с правилом
+    const keepIds = new Set(r.lists);
     try {
-      if (await ok(r, extras, made.filter((id) => keepIds.has(id))) !== false) {
+      if (await ok(r, made.filter((id) => keepIds.has(id))) !== false) {
         made.splice(0, made.length, ...made.filter((id) => !keepIds.has(id)));
         closeModal2();
         return;
@@ -263,37 +258,11 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
     };
   }
 }
-/** правила с правилом из окна: на месте i (null — в конец) и правила доменов стран сразу под ним (если таких ещё нет) */
-function withRule(rules, i, r, extras) {
+/** правила с правилом из окна: на месте i (null — в конец) */
+function withRule(rules, i, r) {
   const out = [...rules];
-  const at = i === null ? out.push(r) - 1 : (out[i] = r, i);
-  // только для стран, что остались в правиле: страну могли выбрать и убрать крестиком (проверка 1.23.0)
-  const live = extras.filter((x) => r.lists.includes(x.from));
-  const add = live.filter((x) => !out.some((y) => y.lists.includes(x.lists[0])))
-    // тот же выход, что у правила страны сейчас
-    .map((x) => ({ lists: x.lists, outbound: r.outbound, enabled: x.enabled, comment: x.comment, dns: x.dns }));
-  out.splice(at + 1, 0, ...add);
-  if (live.length) out._cc = true;              // panelDnsAsk / panelDnsOn: со страной включается «DNS на сервере»
+  if (i === null) out.push(r); else out[i] = r;
   return out;
-}
-
-/* Страна из готовых (решение владельца 2026-11-19): её список адресов — в это правило, а сразу под ним — правило по
-   её доменам с тем же выходом и своим DNS страны (два отдельных правила: домены с адресами не смешиваются). Списки
-   создаёт сервер (POST /api/country-preset) или берёт готовые; новые — в made (окно закрыли без сохранения — удалить);
-   «DNS на сервере» — при сохранении (withRule → _cc). */
-async function countryPick(r, extras, made, cc) {
-  try {
-    const res = await api("POST", "country-preset", { cc });
-    made.push(...(res.made || []));
-    await refresh();
-    addListTo(r, res.country);
-    if (!extras.some((x) => x.lists.includes(res.domains))) {
-      // from — список страны: правило её доменов встанет, только пока страна в правиле (withRule)
-      extras.push({ lists: [res.domains], outbound: r.outbound, enabled: true, comment: "",
-        dns: [...S.country_presets[cc].dns], from: res.country });
-      toast(t("cp.picked"));
-    }
-  } catch (e) { toast(e.message, true); }
 }
 /** «DNS на сервере» для своего DNS страны. Выключен, а клиенты уже есть — спросить: в выданных конфигах прежний
     DNS, им нужно заново отсканировать QR. false — человек отказался (ничего не применяем). */
@@ -322,9 +291,7 @@ function routingDirty() {
 }
 /** правила сохранить сейчас: всё остальное — как сохранено (черновик строки сохранения не трогаем) */
 async function saveRules(rules) {
-  if (!panelDnsAsk(rules)) return false;
   await api("PUT", "routing", { ...routingNow(), rules });
-  await panelDnsOn(rules);
   toast(t("toast.rules_saved"));
   await refresh();
   return true;
@@ -394,7 +361,7 @@ function openRoutingRule(i) {
   ruleWindow(r, {
     title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("btn.save"),
     at: i === null ? rules.length : i,
-    ok: async (nr, extras) => saveRules(withRule(S.routing.rules, i, nr, extras)),
+    ok: async (nr) => saveRules(withRule(S.routing.rules, i, nr)),
     del: i === null ? null : { i, fn: () => saveRules(S.routing.rules.filter((_, j) => j !== i)) },
   });
 }

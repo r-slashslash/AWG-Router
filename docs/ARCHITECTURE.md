@@ -173,7 +173,7 @@ has to show a panel message (an error), `app/uitext.py` reads the same dictionar
 | `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego), own certificate, a web server on port 80 |
 | `notify.py`, `tgbot.py` | Telegram notifications and control (every Bot API request goes through `notify.Paths`: the chosen path, then other working exits — never Direct after an exit; "Turn on the bot" is the main switch); clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) and, if on, get reminders about the end date and the limit (`Notifier.client_fn` → `Bot.remind`, sent by the `tgbot-remind` thread) |
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
-| `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (Overview buttons, a country picked in a rule, the local DNS of the direct path in `dnsproxy.py`) |
+| `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (the **Apply for …** buttons on Overview and Routing, the local DNS of the direct path in `dnsproxy.py`) |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |
 | `awgconf.py`, `awgserver.py`, `cps.py` | AmneziaWG configs and the I1–I5 masking templates |
 | `tgreq.py` | A request through an exit (Telegram, list downloads, a name's address), run inside the AWG server's network with the exit's mark |

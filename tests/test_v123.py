@@ -325,10 +325,10 @@ class RuleListsTest(unittest.TestCase):
         """Проверка 1.23.0 (этап 1): окно правила."""
         from tests import panel_js
         js = panel_js.source()
-        # страну выбрали и убрали крестиком — правило её доменов не добавляется и «DNS на сервере» не включается
-        self.assertIn("const live = extras.filter((x) => r.lists.includes(x.from));", js)
-        self.assertIn("if (live.length) out._cc = true;", js)
-        self.assertIn("from: res.country", js)
+        # список страны в окне — просто список (владелец, 2026-11-20): ни правила её доменов, ни «DNS на сервере»
+        self.assertNotIn("countryPick", js)
+        self.assertIn("function withRule(rules, i, r) {", js)
+        self.assertIn("const keepIds = new Set(r.lists);", js)
         # пока список в правиле скачивается, перерисовка раз в 2,5 с не стирает открытую форму списка
         self.assertIn("drawLists(true); } }, 2500)", js)
         self.assertIn("else if (fb.dataset.key !== `${form.kind}:${form.id || \"\"}`) drawForm();", js)

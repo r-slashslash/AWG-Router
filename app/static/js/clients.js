@@ -483,14 +483,10 @@ function editClient(pk, section = null) {
   // без сохранения — они удаляются (если не стоят в другом правиле)
   const newLists = [];
   $("#modal").addEventListener("close", () => dropNewLists(newLists.splice(0)), { once: true });
-  const setRules = (next) => {
-    const cc = draft.rules._cc || next._cc;
-    draft.rules.splice(0, draft.rules.length, ...next);
-    if (cc) draft.rules._cc = true;
-  };
+  const setRules = (next) => draft.rules.splice(0, draft.rules.length, ...next);
   const openOwn = (i) => ruleWindow(i === null ? { lists: [], outbound: "direct", enabled: true, comment: "" } : draft.rules[i], {
     title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("rw.done"), at: i === null ? draft.rules.length : i,
-    ok: (nr, extras, made) => { setRules(withRule(draft.rules, i, nr, extras)); newLists.push(...made); drawMode(); },
+    ok: (nr, made) => { setRules(withRule(draft.rules, i, nr)); newLists.push(...made); drawMode(); },
     del: i === null ? null : { i, fn: () => { draft.rules.splice(i, 1); drawMode(); } },
   });
   const drawMode = () => {
@@ -511,9 +507,6 @@ function editClient(pk, section = null) {
   showView();
 
   $("#c-save").onclick = async () => {
-    // вопрос про DNS на сервере — до первого запроса: «Отмена» не должна сохранить имя и лимиты без правил
-    const own = draft.rules_mode === "custom" ? draft.rules : null;
-    if (own && !panelDnsAsk(own)) return;
     try {
       const name = $("#c-name").value.trim();
       if (name && name !== c.name) await api("PUT", "users/" + encodeURIComponent(pk), { name });
@@ -531,7 +524,6 @@ function editClient(pk, section = null) {
       await api("PUT", "clients/" + encodeURIComponent(pk), {
         outbound: $("#c-out").value, rules_mode: draft.rules_mode,
         rules: draft.rules_mode === "custom" ? draft.rules : [], note: $("#c-note").value.trim() });
-      if (own) await panelDnsOn(own);
       newLists.length = 0;                       // сохранены вместе с правилами клиента
       closeModal(); toast(t("toast.saved_applying")); refresh();
     } catch (e) { toast(e.message, true); markField(e, document.querySelector("dialog[open]")); }

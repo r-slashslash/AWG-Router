@@ -7,9 +7,9 @@ it grows, so every user-visible change gets a new version.
 
 - **Rules in their own window, lists inside rules.** The Routing tab has no separate Lists section any more. A rule
   opens in a window (**+ Add rule**, or a click on the rule row; `ruleWindow` in `js/routing.js`, a second `dialog`
-  `#modal2` so it also opens over the client window): name, lists — an existing one (an existing Russia / China / Iran
-  list brings the country's domain rule right below it, as before) or a new list made right in the window, without a
-  second window; ready rules are the **Apply for …** buttons, no "Countries — ready rules" group in the list picker — the own
+  `#modal2` so it also opens over the client window): name, lists — an existing one or a new list made right in the window,
+  without a second window; a country's list is just a list there (no domain rule, no DNS on the server: ready rules are
+  only the **Apply for …** buttons, owner 2026-11-20; `countryPick` is gone) — the own
   DNS field, shown only when the rule has a domain list, the exit and on/off. On Routing, **Save**, on/off, order and
   delete take effect at once (`saveRules`; while one is saved the rows take no clicks, and the poll redraws them when the
   rules changed in another tab); "Default" (was "Everything else"), balancing and "block" keep the save bar. A client's own
@@ -17,7 +17,7 @@ it grows, so every user-visible change gets a new version.
   is deleted with it on the server (`api.routing.drop_unused_lists`, from `PUT /api/routing` and `PUT /api/clients/<pk>`;
   an exit forgets its own-sites list then), and lists made in a window that was cancelled are deleted by the browser
   (`dropNewLists`; `POST /api/country-preset` now returns `made`), as are lists made in a window that did not end up in
-  its rule; a country removed from the rule before saving adds no domain rule. **Apply for Russia / China / Iran** sit next to
+  its rule. **Apply for Russia / China / Iran** sit next to
   **+ Add rule** always (Overview keeps them only while there are no rules). "Refresh lists every, h" moved under the
   rules. A domain rule whose handler failed says so in its row.
 - **The bot tries other paths when the chosen one fails** (System → Telegram → "If it fails, try other paths",
