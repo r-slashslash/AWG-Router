@@ -31,7 +31,11 @@ it grows, so every user-visible change gets a new version.
   with a live token, in the chat's language. Each reminder is built from what the client has now (`share_info`): one
   that no longer fits (extended, on again) is not sent. Telegram unreachable — the rest waits (`REMIND_PAUSES`), a chat
   already sent to is not sent again, older than `REMIND_AGE` (a day) is dropped; a refusal (the client deleted the chat)
-  skips that chat. Off, without the token or with clients in the bot off — nothing is sent. *Test:* `ClientReminderTest`.
+  skips that chat. Off, without the token or with clients in the bot off — nothing is sent. Only clients with a bound
+  chat are queued, the same reminder to the same client goes at most once in `REMIND_REPEAT` (an hour: limits.py raises
+  the event again every pass when its marks can't be saved, e.g. a full disk), new events don't cut the pause while
+  Telegram is down, and "ends soon" / "90%" are checked against the window and the threshold again when sent (an
+  extended date or a raised limit is not reminded). *Test:* `ClientReminderTest`.
 - **Telegram group became a supergroup.** Telegram gives such a chat a new number and refuses the old one with
   `migrate_to_chat_id`; notifications used to stop silently. `notify.send` and file sends take the new number into
   the settings (only if the old one was there) and send again; the bot does the same on the service message
@@ -84,8 +88,10 @@ it grows, so every user-visible change gets a new version.
 - **"Find" for the Chat ID works while the bot is running.** A bot that already reads its messages (control or client
   invitations) takes them before the button could see them, and "Find" said no messages were found. The bot now
   remembers the last chat that wrote to it (`Bot.last_chat`, for 10 minutes) and the button uses it (`notify.chat_of`).
-  A client's chat is never taken (`Bot._seen`: no button presses, no chat bound by an invitation, no `/start <token>`):
-  saved by mistake, it would get the notifications, the control and the backups with every key.
+  A client's chat is never taken (`Bot._seen`: no button presses, no chat bound by an invitation, no `/start <token>`),
+  neither from `last_chat` nor from the updates the button gets itself (`notify.detect_chat(accept=…)`: a bot that
+  doesn't read messages, or waits after a 409, leaves them to Telegram): saved by mistake, it would get the
+  notifications, the control and the backups with every key.
 - **The bot keeps quiet in groups.** In a group where it sees all messages it answered every phrase with its menu;
   now only commands, a mention of `@bot` or a reply to its message get an answer.
 - **The bot's ssh command names the right user and port.** With access through an ssh tunnel, **Panel** in the bot
@@ -119,7 +125,12 @@ it grows, so every user-visible change gets a new version.
   policy, and the VPN was down until fixed by hand: in container mode the panel now renames it back, sets the restart
   policy and starts it (`system.recover_renamed`: only when no container has the usual name, the installer isn't
   running and the old one has been stopped for `RECOVER_AFTER` s), with `ev.container_recovered` and a Telegram notice.
-  *Test:* `RecoverRenamedTest`.
+  The config with the new port is written before the container is re-created, so `recreate_with_port` keeps the old
+  one in `data/port-change.json` (root only) while it runs, and the recovered container gets it back — otherwise it
+  would listen on the new port behind Docker's old one. A change cut off before the rename (stopped, restart policy
+  `no`) is brought back the same way. An `-old-` container without that mark (the installer keeps one on purpose
+  when it puts a new server in place of a broken one) is left alone, and the mark goes once the server runs under its
+  usual name. *Tests:* `RecoverRenamedTest`, `ContainerPortTest`.
 - **"You have unsaved changes" sits at the top** of the Routing and Server tabs, right under the tab row
   (`position: sticky`, `top` = the tab row's height from `--tabs-h`), for as long as there is something to save; at
   the bottom it went off the screen with its section. "Save first" now flashes it (`flashBar`) instead of scrolling.
@@ -161,16 +172,26 @@ it grows, so every user-visible change gets a new version.
   rule, "+ list" always offers the three countries; picking one (or an existing country list of them) puts its
   addresses in this rule and a rule for its domains with the same exit and the country's DNS right below it. Both
   ways turn on DNS on the server (`PUT /api/server {panel_dns: true}`) when it is off; with clients already issued
-  they first ask, since those configs keep the old DNS until imported again. *Tests:* `CountryPresetTest`;
+  they first ask, since those configs keep the old DNS until imported again (the client window asks before it saves
+  anything). A second press from another tab adds nothing. The hint says they are for a cascade. A domain rule is not
+  intercepted when it, the address rules and the default all lead the same way (`Engine._policies`; before, any
+  address rule kept the interception): on a new install, everything direct, a country preset doesn't send all web
+  traffic through sniproxy.py. *Tests:* `CountryPresetTest`, `test_useless_domain_rule_skips_sniffing`;
   `tests/seed.py` puts the old country lists into the tests that rely on them.
 - **DNS on the server when encrypted DNS is blocked from the server's country.** In Russia (DoH/DoT to Google and
   Cloudflare cut since August 2026), China and Iran the shared servers often don't answer over DoH/DoT on the direct
   path, and DNS on the server never fell back to plain DNS: clients going direct found no sites. Now the direct path
   (mark 0, no own DNS) asks the local DNS of the server's country by plain DNS (`direct_fallback` in dnsproxy.py's
   config = `countries.local_dns(engine.public_cc)`, the country from the "Direct" check), and doesn't wait for the
-  encrypted servers again for `DIRECT_RETRY` (120 s). Paths through an exit never fall back (names would go past the
-  exit). Server → DNS on the server says when encrypted DNS fails directly (`direct_down` in `dns_view`), with the
-  local DNS used or, for other countries, what to do. *Tests:* `DirectFallbackTest`, `ServerCountryTest`.
+  encrypted servers again for `DIRECT_RETRY` (120 s); then one query tries them in the background, and clients keep
+  getting the local answer meanwhile (DoH from Russia hangs until the timeout: tried with a client's query, names on
+  the direct path stopped for ~10 s every two minutes). A SERVFAIL from the encrypted servers is an answer (a broken
+  site), not a failure. Paths through an exit never fall back (names would go past the exit), and neither do names of
+  a domain rule without a path (its exit connecting, down or "Block"; such rules now reach dnsproxy.py without the
+  DNS filter too). New servers or a new encryption mode forget the old failure. Server → DNS on the server says when
+  encrypted DNS fails directly (`direct_down` in `dns_view`, not with "No encryption"), with the local DNS used or,
+  for other countries, what to do. The server's country is asked again in 10 minutes, not 6 hours, when the check
+  found only the address. *Tests:* `DirectFallbackTest`, `ServerCountryTest`.
 - **The client's name is not shown to the client.** The config file name and the `vpn://` description are
   `users.conf_label(pk)` — 8 digits from the client's key — everywhere (panel, bot, personal page); before, a Latin
   name was the file name and the name was the description. The personal page gets no name (`share_info` without

@@ -45,7 +45,9 @@ namespace, and enters the network of the AWG container with `nsenter`.
 Peers are changed with `awg syncconf`. Port, S1–S4, H1–H4 and HeaderProtectionKey need an
 interface restart; a new port of a server in a container re-creates the container (Docker publishes the port
 when it is created): `Target.change_port` → `system.recreate_with_port`, with the old container brought back
-if the new one doesn't come up. A disabled client is kept in the config as a commented block marked
+if the new one doesn't come up. A change or an update of the panel's own container cut off midway leaves the
+server stopped under another name; `system.recover_renamed` (from `discover`) brings it back with its old config
+(`data/port-change.json`). A disabled client is kept in the config as a commented block marked
 `#awgr:disabled`, so its address stays taken.
 
 The server's interface comes from `awg-quick`, which takes the AmneziaWG kernel module when it is loaded
@@ -118,7 +120,8 @@ filter setting, only addresses that it returned for those names (the `dom4` set 
 every rebuild of the table) are redirected to the handler.
 On the direct path only, when the encrypted shared servers don't answer (DoH/DoT cut from the server's country),
 it asks the country's local DNS by plain DNS (`direct_fallback`, from `countries.py` by the server's country) and
-skips the encrypted servers for `DIRECT_RETRY`; paths through an exit never fall back.
+skips the encrypted servers for `DIRECT_RETRY`, then tries them again with one query in the background; paths
+through an exit and names of a domain rule without a path (its exit down or "Block") never fall back.
 
 The panel looks at the handler every second: it touches a heartbeat file every second, and a handler that
 exited or stopped touching it for `SNI_HANG` seconds is restarted. While it is down, redirected connections are
@@ -169,6 +172,7 @@ has to show a panel message (an error), `app/uitext.py` reads the same dictionar
 | `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego), own certificate, a web server on port 80 |
 | `notify.py`, `tgbot.py` | Telegram notifications and control; clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) and, if on, get reminders about the end date and the limit (`Notifier.client_fn` → `Bot.remind`, sent by the `tgbot-remind` thread) |
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
+| `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (Overview buttons, a country picked in a rule, the local DNS of the direct path in `dnsproxy.py`) |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |
 | `awgconf.py`, `awgserver.py`, `cps.py` | AmneziaWG configs and the I1–I5 masking templates |
 | `tgreq.py` | A request through an exit (Telegram, list downloads, a name's address), run inside the AWG server's network with the exit's mark |
