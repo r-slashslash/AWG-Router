@@ -21,7 +21,7 @@ import re
 import threading
 import time
 
-from . import config, notify, qr, uitext
+from . import config, limits, notify, qr, uitext
 from .i18n import Msg
 
 log = logging.getLogger("awgr.tgbot")
@@ -580,6 +580,8 @@ REMIND_MAX = 1000                     # напоминаний в очереди
 REMIND_AGE = 86400                    # не дошедшее за сутки — уже не новость
 REMIND_PAUSES = (30, 60, 120, 300)    # повтор, когда Telegram недоступен
 REMIND_GAP = 0.05                     # между сообщениями: предел Telegram — около 30 в секунду
+REMIND_REPEAT = 3600                  # то же напоминание тому же клиенту — не чаще раза в час (отметки limits.py
+                                     # не записались, например диск полон, — событие повторялось бы каждый проход)
 
 
 def client_lang(frm: dict | None) -> str:
@@ -657,6 +659,7 @@ class Bot:
         self._cfg_t: dict[str, float] = {}        # чат клиента → когда отправили конфиг (CFG_EVERY)
         self._remind_q: queue.Queue = queue.Queue(maxsize=REMIND_MAX)
         self._reminders: collections.deque = collections.deque(maxlen=REMIND_MAX)   # не дошедшие напоминания
+        self._reminded: dict[tuple, float] = {}  # (напоминание, ключ клиента) → когда поставлено (REMIND_REPEAT)
         self._st = self._load()
         # сообщение-меню (обычно одно): его правим на месте, старые удаляем; переживает перезапуск
         self._panel_msgs: list[int] = [m for m in self._st.get("panel") or [] if isinstance(m, int)]
@@ -863,26 +866,42 @@ class Bot:
         rk = REMIND.get(key)
         if not rk or not pk:
             return
+        try:            # у клиента нет чата с ботом — напоминать некому: тысяча клиентов с одним сроком не займёт очередь
+            if not any(l.get("pk") == pk for l in list((self._st.get("links") or {}).values())):
+                return
+        except RuntimeError:            # чаты меняет поток опроса — тогда просто в очередь
+            pass
+        now = time.time()
+        seen = self.__dict__.setdefault("_reminded", {})
+        if now - seen.get((rk, pk), 0) < REMIND_REPEAT:
+            return
+        seen[(rk, pk)] = now
+        if len(seen) > REMIND_MAX * 4:
+            self._reminded = {k: v for k, v in seen.items() if now - v < REMIND_REPEAT}
         try:
-            self._remind_q.put_nowait((rk, pk, time.time()))
+            self._remind_q.put_nowait((rk, pk, now))
         except queue.Full:
             log.warning("telegram: reminders queue is full, a reminder is dropped")
 
     def _remind_loop(self) -> None:
-        fails = 0
+        fails, retry_at = 0, 0.0
         while not self.stop_ev.is_set():
-            wait = REMIND_PAUSES[min(fails, len(REMIND_PAUSES) - 1)] if self._reminders else None
+            wait = max(0.0, retry_at - time.monotonic()) if self._reminders else None
             try:
                 self._reminders.append(list(self._remind_q.get(timeout=wait)) + [set()])
                 while True:
                     self._reminders.append(list(self._remind_q.get_nowait()) + [set()])
             except queue.Empty:
                 pass
+            if self._reminders and time.monotonic() < retry_at:
+                continue            # Telegram недоступен: новые ждут паузы вместе со старыми, а не будят повтор
             try:
-                fails = 0 if self.remind_flush() else fails + 1
+                ok = self.remind_flush()
             except Exception:  # noqa: BLE001  — поток напоминаний не должен умирать
                 log.exception("telegram reminders")
-                fails += 1
+                ok = False
+            fails = 0 if ok else fails + 1
+            retry_at = 0.0 if ok else time.monotonic() + REMIND_PAUSES[min(fails - 1, len(REMIND_PAUSES) - 1)]
 
     def remind_flush(self, now: float | None = None) -> bool:
         """Отправить накопленные напоминания. False — Telegram недоступен, остаток ждёт повтора. Каждое — по
@@ -929,11 +948,12 @@ class Bot:
             else (tv.get("total_rx", 0) + tv.get("total_tx", 0))
         exp, quota = lim.get("expires"), lim.get("quota")
         if rk == "rm_expiring":
-            if not (on and exp and exp > now):
+            # срок продлили, пока ждали связи, — «скоро закончится» уже не к месту
+            if not (on and exp and now < exp <= now + limits.WARN_DAYS * DAY):
                 return None
             return tr(L, rk, date=fmt_date(exp), days=max(1, math.ceil((exp - now) / DAY)))
         if rk == "rm_quota_warn":
-            if not (on and quota and used < quota):
+            if not (on and quota and quota * limits.WARN_SHARE <= used < quota):     # лимит подняли — тоже
                 return None
             return tr(L, rk, used=fmt_size(used, L), quota=fmt_size(quota, L))
         if rk == "rm_expired":

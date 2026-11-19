@@ -151,6 +151,8 @@ def build(api: Api) -> dict:
     office = api("POST", "lists", {"kind": "manual", "name": "Office",
                                    "source": "10.20.0.0/16\n192.168.50.0/24"})["id"]
     own = next(l["id"] for l in api("GET", "state")["lists"] if l["kind"] == "domains")
+    for cc in COUNTRIES:              # новая установка с 1.22.0 — без списков стран (синтетические, run_panel)
+        api("POST", "lists", {"kind": "country", "source": cc})
     # балансировка вместо одного выхода по умолчанию; «напрямую» — если все её выходы лежат
     api("PUT", "routing", {"default": "direct", "balance": {"on": True, "skip": []}, "rules": [
         {"lists": [own], "outbound": "up:" + us, "comment": "USA proxy"},

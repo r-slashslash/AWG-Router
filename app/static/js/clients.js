@@ -479,6 +479,9 @@ function editClient(pk, section = null) {
   showView();
 
   $("#c-save").onclick = async () => {
+    // вопрос про DNS на сервере — до первого запроса: «Отмена» не должна сохранить имя и лимиты без правил
+    const own = draft.rules_mode === "custom" ? draft.rules : null;
+    if (own && !panelDnsAsk(own)) return;
     try {
       const name = $("#c-name").value.trim();
       if (name && name !== c.name) await api("PUT", "users/" + encodeURIComponent(pk), { name });
@@ -493,8 +496,6 @@ function editClient(pk, section = null) {
           rate_down: rd || null, rate_up: ru || null });
         if (r.enabled) toast(t("toast.client_enabled"));
       }
-      const own = draft.rules_mode === "custom" ? draft.rules : null;
-      if (own && !panelDnsAsk(own)) return;
       await api("PUT", "clients/" + encodeURIComponent(pk), {
         outbound: $("#c-out").value, rules_mode: draft.rules_mode,
         rules: draft.rules_mode === "custom" ? draft.rules : [], note: $("#c-note").value.trim() });

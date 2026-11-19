@@ -523,10 +523,45 @@ class ClientReminderTest(unittest.TestCase):
         self.assertEqual(self.sent(), [])
         self.info["enabled"] = False
         self.info["limits"] = {**self.info["limits"], "period": "total"}
+        self.bot._reminded.clear()                                 # другой срок/лимит — новое событие (REMIND_REPEAT)
         self.assertTrue(self.flush("ev.client_quota", "ev.client_quota_reset"))
         out = self.sent()
         self.assertEqual(len(out), 1)
         self.assertIn("напишите тому, кто выдал вам доступ", out[0][1])
+        # второй круг проверки: срок продлили на месяц, лимит подняли — «скоро закончится» и «90%» уже не к месту
+        self.tg.calls.clear()
+        self.bot._reminded.clear()
+        self.info = {"enabled": True, "traffic": {"month_rx": 9 * 2 ** 30, "month_tx": 0},
+                     "limits": {"expires": time.time() + 30 * 86400, "quota": 100 * 2 ** 30, "period": "month"}}
+        self.assertTrue(self.flush("ev.client_expiring", "ev.client_quota_warn"))
+        self.assertEqual(self.sent(), [])
+
+    def test_once_an_hour_and_only_for_linked_clients(self):
+        """Второй круг проверки: отметки limits.py не записались (диск полон) — событие о сроке приходило бы каждый
+        проход (10 с), и клиент получал бы его каждый раз; клиент без чата с ботом очередь не занимает."""
+        for _ in range(3):
+            self.assertTrue(self.flush("ev.client_expiring"))
+        self.assertEqual(len(self.sent()), 1)
+        self.bot.remind("ev.client_expiring", "PK_nobody")         # чата нет — в очередь не ставится
+        self.assertTrue(self.bot._remind_q.empty())
+
+    def test_pause_kept_while_events_keep_coming(self):
+        """Telegram недоступен: пауза между повторами держится, даже если события идут одно за другим."""
+        import threading
+        calls = []
+        self.bot.remind_flush = lambda now=None: calls.append(time.monotonic()) or False
+        self.bot.stop_ev = threading.Event()
+        with mock.patch.object(tgbot, "REMIND_PAUSES", (0.5,)):
+            th = threading.Thread(target=self.bot._remind_loop, daemon=True)
+            th.start()
+            for i in range(15):                                    # 0,3 с событий подряд
+                self.bot._remind_q.put(("rm_expiring", f"PK{i}", time.time()))
+                time.sleep(0.02)
+            time.sleep(0.1)
+            self.bot.stop_ev.set()
+            self.bot._remind_q.put(("rm_expiring", "PKx", time.time()))      # разбудить, чтобы поток вышел
+            th.join(2)
+        self.assertEqual(len(calls), 1, calls)                     # раньше — повтор на каждое новое событие
 
     def test_switch_off_or_no_clients_bot(self):
         for kw in ({"client_notify": False}, {"clients": False}, {"token": ""}):
@@ -767,6 +802,12 @@ class DetectSeenChatTest(unittest.TestCase):
         self.bot.last_chat["t"] -= telegram.DETECT_SEEN                         # давнее сообщение — не годится
         with mock.patch.object(telegram, "bot", self.bot):
             self.assertEqual(code(lambda: telegram.telegram_detect(Req({"token": TOKEN}))), (404, "err.tg_no_chat"))
+        # второй круг проверки: события, которые бот ещё не забрал (не читает сообщения или ждёт после 409), «Найти»
+        # получает от Telegram само — и там последним может быть клиент; берётся только чат, который годится
+        self.tg.updates = [msg("hi", chat="1002", uid=5), msg("привет", chat="7007", uid=6),
+                           button("me:r", chat="8008", uid=7), msg("/start " + tok, chat="9009", uid=8)]
+        with mock.patch.object(telegram, "bot", self.bot):
+            self.assertEqual(telegram.telegram_detect(Req({"token": TOKEN}))["id"], "1002")
 
     def test_chat_of_update(self):
         self.assertEqual(notify.chat_of({"channel_post": {"chat": {"id": -5, "title": "News"}}}),
@@ -941,6 +982,24 @@ class ContainerPortTest(unittest.TestCase):
         create = next(b for m, p, _, b in calls if p == "/containers/create")
         self.assertEqual(create["Image"], "awg-router-port:T")
         self.assertNotIn(("PUT", "/containers/amnezia-awg2-old-T/archive"), paths)
+
+    def test_mark_kept_only_while_the_change_runs(self):
+        """port-change.json — пока идёт смена (с прежним конфигом, только для root); после успеха и после возврата
+        прежнего — нет: по нему recover_renamed отличает прерванную смену и возвращает конфиг с прежним портом."""
+        from app import system
+        real = system._port_mark
+        for up in (True, False):
+            seen = []
+
+            def rec(mark):
+                real(mark)
+                seen.append((system._port_mark_get(), mark and os.stat(system._port_mark_path()).st_mode & 0o777))
+            with mock.patch.object(system, "_port_mark", rec):
+                err, calls = self.run_change(self.INFO, up=up)
+            self.assertEqual(seen, [({"old": "amnezia-awg2-old-T", "dir": "/opt/amnezia/awg", "iface": "awg0",
+                                      "conf": "OLD CONF"}, 0o600), ({}, None)], up)
+            self.assertFalse(os.path.exists(system._port_mark_path()), up)
+            self.assertEqual(err is None, up)
 
     def test_own_container_folder_on_disk_no_commit(self):
         info = {**self.INFO, "Mounts": [{"Destination": "/opt/amnezia/awg"}]}
@@ -1233,6 +1292,17 @@ class ServerCountryTest(unittest.TestCase):
                     mock.patch.object(e, "probe", return_value={"ok": True, "ip": "203.0.113.9", "cc": "<b>"}):
                 e._detect_host()
             self.assertEqual(e.public_cc, "RU")                    # не код страны — прежний остаётся
+            # второй круг проверки: адрес нашёлся, а страна нет (ответил только ifconfig.me) — снова через 10 минут
+            waits = []
+            ev.clear()
+            ev.wait = lambda t=None: (waits.append(t), ev.set())
+            e.public_cc = None
+            with mock.patch.object(e, "target", mock.Mock(exists=True)), \
+                    mock.patch.object(e.srv, "public_host", return_value="198.51.100.1"), \
+                    mock.patch.object(e, "probe", return_value={"ok": True, "ip": "203.0.113.9"}):
+                e._detect_host()
+            from app import engine as eng
+            self.assertEqual(waits, [eng.HOST_SLOW_WAIT])
         finally:
             e.stop_ev, e.public_v4, e.public_v4_state, e.public_cc = old
         from app import countries
@@ -1284,6 +1354,8 @@ class CountryPresetTest(unittest.TestCase):
         rules = panel.store.snapshot()["routing"]["rules"]
         self.assertEqual([(r["lists"], r["outbound"], r.get("dns")) for r in rules],
                          [([a["domains"]], "direct", ["77.88.8.8", "77.88.8.1"]), (["ru"], "direct", None)])
+        routing.country_preset(Req({"cc": "ru", "apply": True}))   # второй раз (другая вкладка) — без повторов
+        self.assertEqual(panel.store.snapshot()["routing"]["rules"], rules)
         self.assertEqual(code(lambda: routing.country_preset(Req({"cc": "de"}))), (400, "err.bad_value"))
 
     def test_panel_code(self):
@@ -1296,7 +1368,10 @@ class CountryPresetTest(unittest.TestCase):
         self.assertIn('await api("PUT", "server", { panel_dns: true });', rt)
         self.assertIn("rules.splice(i + 1, 0, { lists: [res.domains], outbound: r.outbound", rt)
         self.assertIn("if (!panelDnsAsk(draft.rules)) return;", rt)
-        self.assertIn("if (own && !panelDnsAsk(own)) return;", read("app", "static", "js", "clients.js"))
+        cl = read("app", "static", "js", "clients.js")
+        self.assertIn("if (own && !panelDnsAsk(own)) return;", cl)
+        # второй круг проверки: вопрос — до первого запроса, иначе «Отмена» сохраняла имя и лимиты без правил
+        self.assertLess(cl.index("if (own && !panelDnsAsk(own)) return;"), cl.index('api("PUT", "users/"'))
         self.assertNotIn("cascade", read("app", "static", "js", "server.js").replace("srv.panel_dns_cascade", ""))
         self.assertIn('"country_presets": countries.view()', read("app", "api", "state.py"))
 
@@ -1316,7 +1391,7 @@ class DirectFallbackTest(unittest.TestCase):
                         "routes": {"10.8.1.7": {"mark": 0x1000, "tcp": False}}}, f)
         return dnsproxy.Proxy(conf)
 
-    def run_q(self, p, names, ip="10.8.1.5"):
+    def run_q(self, p, names, ip="10.8.1.5", wait_probe=False):
         import asyncio
         from app import dnsproxy
         from tests.test_v115 import q_msg
@@ -1325,7 +1400,11 @@ class DirectFallbackTest(unittest.TestCase):
             out = []
             for n in names:
                 query = q_msg(n)
+                t0 = time.monotonic()
                 out.append(await p.resolve(query, dnsproxy.parse_query(query), ip))
+                p._waited = time.monotonic() - t0
+            if wait_probe and p._direct_probe:
+                await p._direct_probe                 # фоновая проба шифрованного DNS
             return out
         return asyncio.run(go())
 
@@ -1349,9 +1428,130 @@ class DirectFallbackTest(unittest.TestCase):
         self.assertEqual(plain, [("77.88.8.8", 0), ("77.88.8.8", 0)])
         self.assertEqual(p.stats["direct_fallback"], 2)
         self.assertGreater(p.direct_fail_at, p.direct_ok_at)
-        p.direct_down_until = 0                                       # прошло DIRECT_RETRY — снова шифрованный
-        self.run_q(p, ["example.net"])
+        self.assertTrue(p.direct_down)
+        p.direct_retry_at = 0                                         # прошло DIRECT_RETRY — снова шифрованный (в фоне)
+        self.run_q(p, ["example.net"], wait_probe=True)
         self.assertEqual(len(enc), 2)
+        self.assertEqual(plain[-1], ("77.88.8.8", 0))                 # клиенту ответил местный, не дожидаясь пробы
+
+    def test_client_never_waits_for_the_retry(self):
+        """Проверка 1.22.0, второй круг: DoH из России «зависает» до таймаута. Проба шифрованного раз в DIRECT_RETRY
+        шла с запросом клиента — и раз в две минуты имена «напрямую» стояли ~10 с. Теперь проба — в фоне."""
+        import asyncio
+        from tests.test_v115 import a_reply
+        p = self._proxy(["77.88.8.8"])
+        state = {"enc_ok": False}
+
+        async def enc(msg, server, mark, mode):
+            await asyncio.sleep(0.3)                                  # «зависший» DoH
+            if state["enc_ok"]:
+                return a_reply(msg, ["198.51.100.1"])
+            raise asyncio.TimeoutError()
+
+        async def udp(msg, server, mark):
+            return a_reply(msg, ["203.0.113.7"])
+        p._enc, p._udp = enc, udp
+        self.run_q(p, ["a.example"])                                  # первый раз — ждёт и уходит к местному
+        self.assertTrue(p.direct_down)
+        p.direct_retry_at, state["enc_ok"] = 0, True
+        t0 = time.monotonic()
+        self.run_q(p, ["b.example"], wait_probe=True)
+        self.assertLess(p._waited, 0.2)                               # клиент ответ получил сразу
+        self.assertGreater(time.monotonic() - t0, 0.25)               # а проба отработала в фоне
+        self.assertFalse(p.direct_down)                               # шифрованный снова отвечает
+        self.assertGreater(p.direct_ok_at, p.direct_fail_at)
+
+    def test_servfail_is_an_answer(self):
+        """SERVFAIL общего сервера — сломан сам сайт, а не шифрованный DNS: местный не включается и предупреждения нет."""
+        from app import dnsproxy
+        from tests.test_v115 import a_reply
+        p = self._proxy(["77.88.8.8"])
+        plain = []
+
+        async def enc(msg, server, mark, mode):
+            return a_reply(msg, [], rcode=dnsproxy.RC_SERVFAIL)
+
+        async def udp(msg, server, mark):
+            plain.append(server)
+            return a_reply(msg, ["203.0.113.7"])
+        p._enc, p._udp = enc, udp
+        out = self.run_q(p, ["broken.example"])
+        self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
+        self.assertEqual(plain, [])
+        self.assertFalse(p.direct_down)
+        self.assertGreater(p.direct_ok_at, p.direct_fail_at)
+        self.assertEqual(p.stats["errors"], 1)
+
+    def test_rule_without_path_never_falls_back(self):
+        """Имя из правила по доменам, у которого выход подключается, лежит или «блок» (путь None), у клиента
+        «напрямую»: к местному DNS открытым текстом оно не уходит — сайт должен идти через выход."""
+        import json as _json
+        from app import dnsproxy
+        for rule in ([["l1"], None], [["l1"], None, ["8.8.4.4"], False]):
+            d = tempfile.mkdtemp()
+            lst = os.path.join(d, "l1.txt")
+            with open(lst, "w") as f:
+                f.write("youtube.com\n")
+            conf = os.path.join(d, "dns.json")
+            with open(conf, "w") as f:
+                _json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                            "encrypt": "doh", "direct_fallback": ["77.88.8.8"], "default": {"mark": 0, "tcp": False},
+                            "routes": {}, "dom": {"lists": {"l1": lst}, "policies": {"p_global": [rule]},
+                                                  "clients": {}, "set": None}}, f)
+            p = dnsproxy.Proxy(conf)
+            plain = []
+
+            async def blocked(msg, server, mark, mode):
+                raise OSError("reset")
+
+            async def udp(msg, server, mark):
+                plain.append(server)
+                return None
+            p._enc, p._udp = blocked, udp
+            out = self.run_q(p, ["www.youtube.com", "example.org"])
+            self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL, rule)
+            self.assertEqual(plain, ["77.88.8.8"], rule)             # только второе имя — оно не из правила
+
+    def test_direct_down_shown_on_the_server_tab(self):
+        import json as _json
+        import types
+        from app.engine import Engine
+        from app.engine import dns as edns
+        e = Engine.__new__(Engine)
+        e.dns_state = {"state": "on", "listen": "10.8.1.1", "encrypt": "doh"}
+        e.dns = types.SimpleNamespace(proc=types.SimpleNamespace(pid=4242))
+        path = os.path.join(tempfile.mkdtemp(), "dns-stats.json")
+        now = time.time()
+        for ok_at, fail_at, fb, want in ((now - 60, now - 5, ["77.88.8.8"], {"fallback": ["77.88.8.8"]}),
+                                         (now - 60, now - 5, [], {"fallback": []}),
+                                         (now - 1, now - 5, ["77.88.8.8"], None),          # снова отвечает
+                                         (0, now - 1000, ["77.88.8.8"], None)):            # давно — не тревожим
+            with open(path, "w") as f:
+                _json.dump({"pid": 4242, "at": now, "direct_ok_at": ok_at, "direct_fail_at": fail_at,
+                            "fallback": fb}, f)
+            with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
+                self.assertEqual(e.dns_view().get("direct_down"), want)
+        # второй круг проверки: переключили на «Без шифрования» — совет «выберите Без шифрования» не показывается
+        with open(path, "w") as f:
+            _json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 60, "direct_fail_at": now - 5, "fallback": [],
+                        "encrypt": "plain"}, f)
+        with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
+            self.assertNotIn("direct_down", e.dns_view())
+
+    def test_new_servers_forget_the_old_failure(self):
+        """Другие серверы DNS или шифрование (SIGHUP): прежнее «шифрованный не отвечает» к ним не относится."""
+        import json as _json
+        p = self._proxy(["77.88.8.8"])
+        p._direct_seen(False, True)
+        self.assertTrue(p.direct_down)
+        with open(p.conf_path) as f:
+            cfg = _json.load(f)
+        cfg["upstreams"] = ["9.9.9.9"]
+        with open(p.conf_path, "w") as f:
+            _json.dump(cfg, f)
+        p.load()
+        self.assertFalse(p.direct_down)
+        self.assertEqual((p.direct_ok_at, p.direct_fail_at, p.direct_retry_at), (0.0, 0.0, 0.0))
 
     def test_exit_path_never_falls_back(self):
         from app import dnsproxy
@@ -1382,15 +1582,20 @@ class RecoverRenamedTest(unittest.TestCase):
     не работал бы. Панель возвращает ему имя и автозапуск и запускает — но не во время работы установщика и не
     сразу (идущую замену не спутать с прерванной)."""
 
-    def run_recover(self, names, finished_ago=300, running=False, mode="container", installing=False):
+    def run_recover(self, names, finished_ago=300, running=False, mode="container", installing=False, mark="auto",
+                    policy="no"):
         from app import selfupdate, system
         calls = []
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S.123456789Z", time.gmtime(time.time() - finished_ago))
+        if mark == "auto":            # «-old-» оставила смена порта панели: её отметка с прежним конфигом
+            old = next((n for n in names if "-old-" in n), None)
+            mark = {"old": old, "dir": "/opt/amnezia/awg", "iface": "awg0", "conf": "OLD CONF"} if old else None
+        system._port_mark(mark)
 
         def get(path):
             if path.startswith("/containers/json"):
                 return [{"Names": ["/" + n]} for n in names]
-            return {"State": {"Running": running, "FinishedAt": stamp}}
+            return {"State": {"Running": running, "FinishedAt": stamp}, "HostConfig": {"RestartPolicy": {"Name": policy}}}
 
         def api(method, path, timeout=10, body=None):
             calls.append((method, path, body))
@@ -1402,15 +1607,24 @@ class RecoverRenamedTest(unittest.TestCase):
             return system.recover_renamed(), calls
 
     def test_interrupted_port_change_brought_back(self):
+        """Второй круг проверки 1.22.0: в прежнем контейнере уже конфиг с новым портом, а Docker открывает прежний —
+        без возврата конфига вернувшийся сервер слушал бы не тот порт, и VPN так и не работал бы."""
+        import io
+        import tarfile
+        from app import system
         name, calls = self.run_recover(["awg-router", "amnezia-awg2-old-20261119-045800"])
         self.assertEqual(name, "amnezia-awg2")
         self.assertEqual([(m, p.split("?")[0]) for m, p, _ in calls],
-                         [("POST", "/containers/amnezia-awg2-old-20261119-045800/rename"),
+                         [("PUT", "/containers/amnezia-awg2-old-20261119-045800/archive"),
+                          ("POST", "/containers/amnezia-awg2-old-20261119-045800/rename"),
                           ("POST", "/containers/amnezia-awg2/update"), ("POST", "/containers/amnezia-awg2/start")])
-        self.assertIn("name=amnezia-awg2", calls[0][1])
-        self.assertEqual(calls[1][2], {"RestartPolicy": {"Name": "always"}})
-        from app import system
+        self.assertIn("path=/opt/amnezia/awg", calls[0][1].replace("%2F", "/"))
+        with tarfile.open(fileobj=io.BytesIO(calls[0][2])) as tf:
+            self.assertEqual(tf.extractfile("awg0.conf").read(), b"OLD CONF")     # прежний конфиг — прежний порт
+        self.assertIn("name=amnezia-awg2", calls[1][1])
+        self.assertEqual(calls[2][2], {"RestartPolicy": {"Name": "always"}})
         self.assertEqual(system.recovered, ["amnezia-awg2"])
+        self.assertEqual(system._port_mark_get(), {})                           # отметка смены порта снята
         system.recovered.clear()
 
     def test_latest_of_two_and_installer_prev(self):
@@ -1426,12 +1640,55 @@ class RecoverRenamedTest(unittest.TestCase):
             "работает установщик": dict(names=["amnezia-awg2-prev-20261119-050000"], installing=True),
             "сервер на хосте": dict(names=["amnezia-awg2-old-20261119-045800"], mode="auto"),
             "отложенный установщиком пустой": dict(names=["amnezia-awg2-empty-20261119-045800"]),
+            # установщик, ставя новый сервер вместо неисправного, оставляет прежний «-old-» нарочно
+            "«-old-» без отметки смены порта": dict(names=["amnezia-awg2-old-20261119-045800"], mark=None),
+            "отметка о другом контейнере": dict(names=["amnezia-awg2-old-20261119-045800"],
+                                               mark={"old": "amnezia-awg2-old-20261118-010101", "conf": "X"}),
         }
         for what, kw in cases.items():
             with self.subTest(what):
                 name, calls = self.run_recover(**kw)
                 self.assertIsNone(name)
                 self.assertEqual(calls, [])
+
+    def test_cut_off_before_the_rename(self):
+        """Смену порта прервали раньше переименования: контейнер с обычным именем выключен, автозапуск «no», а в нём
+        уже конфиг с новым портом. Его — тоже: прежний конфиг, автозапуск, запуск (без переименования). Выключенный
+        руками (автозапуск остался) не трогаем."""
+        mk = {"old": "amnezia-awg2-old-20261119-045800", "dir": "/opt/amnezia/awg", "iface": "awg0", "conf": "OLD"}
+        name, calls = self.run_recover(["amnezia-awg2"], mark=mk)
+        self.assertEqual(name, "amnezia-awg2")
+        self.assertEqual([(m, p.split("?")[0]) for m, p, _ in calls],
+                         [("PUT", "/containers/amnezia-awg2/archive"), ("POST", "/containers/amnezia-awg2/update"),
+                          ("POST", "/containers/amnezia-awg2/start")])
+        from app import system
+        system.recovered.clear()
+        for kw in (dict(policy="always"), dict(mark=None), dict(finished_ago=10)):
+            name, calls = self.run_recover(["amnezia-awg2"], **{"mark": mk, **kw})
+            self.assertIsNone(name, kw)
+            self.assertEqual([c for c in calls if c[0] != "GET"], [], kw)
+
+    def test_other_family_does_not_block(self):
+        """Рядом контейнер приложения другого протокола (amnezia-awg, выключен) — прерванная смена порта amnezia-awg2
+        всё равно возвращается."""
+        name, calls = self.run_recover(["amnezia-awg", "amnezia-awg2-old-20261119-045800"])
+        self.assertEqual(name, "amnezia-awg2")
+        from app import system
+        system.recovered.clear()
+
+    def test_stale_mark_dropped_when_the_server_runs(self):
+        """Панель упала уже после смены порта (новый контейнер работает) — отметка снимается при следующем проходе:
+        иначе, пропади потом контейнер, вернулся бы давний «-old-», а в общую папку лёг бы прежний конфиг."""
+        from app import system
+        for running, mark_old, kept in (("amnezia-awg2", "amnezia-awg2-old-20261119-045800", False),
+                                        ("amnezia-awg", "amnezia-awg2-old-20261119-045800", True)):
+            system._port_mark({"old": mark_old, "dir": "/opt/amnezia/awg", "iface": "awg0", "conf": "OLD"})
+            with mock.patch.object(config, "AWG_MODE", "container"), mock.patch.object(config, "AWG_CONTAINER", ""), \
+                    mock.patch.object(system, "docker_containers", lambda: [running]), \
+                    mock.patch.object(system, "_container_target", lambda n: n):
+                self.assertEqual(system.discover(), running)
+            self.assertEqual(bool(system._port_mark_get()), kept, running)
+        system._port_mark(None)
 
     def test_discover_uses_it(self):
         from app import system

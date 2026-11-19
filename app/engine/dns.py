@@ -61,7 +61,8 @@ class DnsMixin:
         """Правила по доменам для dnsproxy.py: имя из правила разбирается через выход правила.
         → {"lists": {id: файл}, "policies": {имя: [[списки, путь|None]]}, "clients": {IP: имя},
         "set": [таблица, набор] | None}. Путь None — обычным путём клиента (правило «блок», выход
-        не работает); такие правила нужны только для набора адресов (with_set — режим «фильтр по DNS»).
+        не работает, но без местного DNS: имя не должно уйти мимо выхода) и в набор адресов (with_set — режим
+        «фильтр по DNS»).
         Имена политик — из nftgen.layout, как у nftables и sniproxy.py."""
         gp, cps = self._policies(st)
         up_nums = {u["num"] for u in self._up_list(st)}
@@ -83,8 +84,9 @@ class DnsMixin:
                 for lids, o in p.get("domain") or ():
                     eff = self.resolve(o, st)
                     r = route(eff) if eff != "block" else None
-                    if r is not None or with_set:
-                        rules.append([list(lids), r])
+                    # и без пути (выход подключается, лежит, «блок»): dnsproxy.py должен знать, что имя — из
+                    # правила, иначе спросил бы его у местного DNS «напрямую» мимо выхода (direct_fallback)
+                    rules.append([list(lids), r])
             if rules:
                 pols[n] = rules
         lids = sorted({lid for rules in pols.values() for rule in rules for lid in rule[0]})
@@ -203,7 +205,8 @@ class DnsMixin:
                     # шифрованный DNS не отвечает на пути «напрямую» (последняя попытка — неудачная, за 15 минут):
                     # клиентам, которые идут напрямую, имена ищет местный DNS или (без него) никто
                     fail_at = float(s.get("direct_fail_at") or 0)
-                    if fail_at > float(s.get("direct_ok_at") or 0) and time.time() - fail_at < 900:
+                    if fail_at > float(s.get("direct_ok_at") or 0) and time.time() - fail_at < 900 \
+                            and s.get("encrypt") != "plain":         # без шифрования совет «выберите его» ни к чему
                         v["direct_down"] = {"fallback": [str(x) for x in s.get("fallback") or []][:2]}
             except (OSError, ValueError):
                 pass

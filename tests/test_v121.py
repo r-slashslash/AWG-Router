@@ -107,6 +107,11 @@ class DomainsAnyExitTest(unittest.TestCase):
         self.rules("direct", ([self.lid], "direct"), (["ru"], "block"))
         gp, _ = panel.engine._policies(panel.store.snapshot())
         self.assertEqual(gp["domain"], [([self.lid], "direct")])
+        # второй круг проверки 1.22.0: и правила по адресам туда же («Применить для России» на новой установке,
+        # всё напрямую) — уводить нечего, перехват всего HTTPS клиентов не нужен
+        self.rules("direct", ([self.lid], "direct"), (["ru"], "direct"))
+        gp, _ = panel.engine._policies(panel.store.snapshot())
+        self.assertEqual(gp["domain"], [])
         self.rules("direct", ([self.lid], "block"))
         gp, _ = panel.engine._policies(panel.store.snapshot())
         self.assertEqual(gp["domain"], [([self.lid], "block")])
@@ -647,7 +652,7 @@ class DnsDomainTest(unittest.TestCase):
         p = self.proxy()
         seen = []
 
-        async def fake(query, q, route, servers=()):
+        async def fake(query, q, route, servers=(), fallback=True):
             seen.append(route)
             return b"\0\0" + query[2:]
         p._resolve = fake
@@ -690,10 +695,13 @@ class EngineDomainDnsTest(DomainsAnyExitTest):
         num = Store.upstream(st, uid)["num"]
         with mock.patch.object(panel.engine, "resolve", side_effect=lambda o, s: num if o == "up:" + uid else o):
             d = panel.engine.dns_domains(st, with_set=False)
-            self.assertEqual(d["policies"]["p_global"], [[[self.lid], {"mark": nftgen.mark_for(num), "tcp": False}]])
+            # «блок» (путь None) — и без набора: по нему dnsproxy.py не спрашивает такие имена у местного DNS
+            # «напрямую» (второй круг проверки 1.22.0)
+            self.assertEqual(d["policies"]["p_global"], [[[self.lid], {"mark": nftgen.mark_for(num), "tcp": False}],
+                                                        [[self.lid], None]])
             self.assertIsNone(d["set"])
             d = panel.engine.dns_domains(st, with_set=True)
-            self.assertEqual(d["policies"]["p_global"][1], [[self.lid], None])     # блок — только для набора
+            self.assertEqual(d["policies"]["p_global"][1], [[self.lid], None])     # блок — и в набор
             self.assertEqual(d["set"], [_config.NFT_TABLE, nftgen.DOM_SET])
             self.assertEqual(panel.engine._quic_mark(st, "up:" + uid), nftgen.mark_for(num))
         self.assertEqual(panel.engine._quic_mark(st, "direct"), _config.QUIC_DIRECT_MARK)

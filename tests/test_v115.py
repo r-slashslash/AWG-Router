@@ -538,6 +538,7 @@ class DetectHostTest(unittest.TestCase):
     def run_detect(self, answers):
         eng = engine.Engine.__new__(engine.Engine)
         eng.public_v4, eng.public_v4_state = None, "pending"
+        eng.trigger = lambda: None
         eng.target = mock.Mock(exists=True)
         eng.srv = mock.Mock()
         eng.srv.public_host.return_value = "203.0.113.5"
@@ -562,7 +563,7 @@ class DetectHostTest(unittest.TestCase):
 
     def test_keeps_trying_then_finds(self):
         no = {"ok": True, "ip": None, "warn": "no_ip"}
-        eng, seen, waits = self.run_detect([no, no, no, no, {"ok": True, "ip": "198.51.100.7"}])
+        eng, seen, waits = self.run_detect([no, no, no, no, {"ok": True, "ip": "198.51.100.7", "cc": "NL"}])
         self.assertEqual(seen[:4], ["pending", "pending", "failed", "failed"])
         self.assertEqual(waits[:4], [engine.HOST_FAST_WAIT] * 2 + [engine.HOST_SLOW_WAIT] * 2)  # 3 частые попытки
         self.assertEqual((eng.public_v4, eng.public_v4_state), ("198.51.100.7", "ok"))

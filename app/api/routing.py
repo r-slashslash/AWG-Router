@@ -163,9 +163,12 @@ def country_preset(req):
             made.append(dom)
         if body.get("apply"):
             r = st["routing"]
-            r["rules"] = checks.rules(st, list(r["rules"]) + [
+            # второе нажатие (две открытые вкладки) не добавляет те же правила ещё раз
+            have = {(tuple(x["lists"]), x["outbound"]) for x in r["rules"]}
+            r["rules"] = checks.rules(st, list(r["rules"]) + [x for x in (
                 {"lists": [dom], "outbound": "direct", "enabled": True, "comment": "", "dns": list(p["dns"])},
-                {"lists": [cc], "outbound": "direct", "enabled": True, "comment": ""}])
+                {"lists": [cc], "outbound": "direct", "enabled": True, "comment": ""})
+                if (tuple(x["lists"]), x["outbound"]) not in have])
         return {"country": cc, "domains": dom, "made": made}
     out = store.mutate(fn)
     for lid in out.pop("made"):

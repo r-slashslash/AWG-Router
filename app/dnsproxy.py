@@ -60,8 +60,10 @@ STATS_EVERY = 15
 MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
 # Путь «напрямую» и шифрованный DNS: из России, Китая и Ирана общие серверы по DoH/DoT часто не отвечают. Тогда
 # имена спрашиваются у местного DNS страны сервера (cfg direct_fallback, обычный DNS), а шифрованный пробуется снова
-# не раньше чем через DIRECT_RETRY: иначе каждый запрос ждал бы ENC_TIMEOUT на каждом сервере. Только «напрямую»:
-# имена клиентов, которые идут через выход, мимо выхода не уходят никогда.
+# не раньше чем через DIRECT_RETRY и одним запросом в фоне: DoH из России «зависает» до ENC_TIMEOUT на каждом
+# сервере, и проба с запросом клиента раз в две минуты на 10 с останавливала бы имена всем, кто идёт напрямую.
+# Только «напрямую»: имена клиентов, которые идут через выход, и имена из правил по доменам, у которых сейчас нет
+# пути (выход подключается, лежит или «блок»), мимо выхода не уходят никогда.
 DIRECT_RETRY = 120.0
 
 DOT_PORT, DOH_PORT = 853, 443
@@ -347,9 +349,11 @@ class Proxy:
         self.cache_bytes = 0
         self.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
         self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
-        # шифрованный DNS на пути «напрямую»: когда последний раз ответил и когда не ответил ни один сервер
+        # шифрованный DNS на пути «напрямую»: когда последний раз ответил и когда не ответил ни один сервер;
+        # direct_down — не отвечает, имена у местного DNS; direct_retry_at — когда пробовать снова (в фоне)
         self.direct_ok_at = self.direct_fail_at = 0.0
-        self.direct_down_until = 0.0
+        self.direct_down, self.direct_retry_at = False, 0.0
+        self._direct_probe = None            # идущая проба шифрованного (asyncio.Task)
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
         self.pools: dict[tuple, Pool] = {}
@@ -372,6 +376,9 @@ class Proxy:
         if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")):
             self.cache.clear()                       # другие серверы — старые ответы не нужны
             self.cache_bytes = 0
+            # и «шифрованный не отвечает напрямую» был о прежних серверах или прежнем шифровании
+            self.direct_ok_at = self.direct_fail_at = 0.0
+            self.direct_down, self.direct_retry_at = False, 0.0
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -494,12 +501,14 @@ class Proxy:
             return error_reply(query, q, 0)
         if servers:
             self.stats["own_dns"] = self.stats.get("own_dns", 0) + 1
-        reply = await self._resolve(query, q, route, servers)
+        # имя из правила, у которого сейчас нет пути (выход подключается, лежит или «блок»): местного DNS ему нельзя —
+        # сайт должен идти через выход, и имя ушло бы мимо него открытым текстом
+        reply = await self._resolve(query, q, route, servers, fallback=not (dom and dom[0] is None))
         if dom and dom[2] and q["qtype"] == T_A:
             self.remember(reply)
         return reply
 
-    async def _resolve(self, query: bytes, q: dict, route: dict, servers: tuple = ()) -> bytes:
+    async def _resolve(self, query: bytes, q: dict, route: dict, servers: tuple = (), fallback: bool = True) -> bytes:
         mark, tcp = int(route.get("mark") or 0), bool(route.get("tcp"))
         key = (mark, servers, q["name"], q["qtype"], q["qclass"])
         hit = self.cache.get(key)
@@ -518,26 +527,24 @@ class Proxy:
         try:
             cfg = getattr(self, "cfg", None) or {}       # тесты собирают Proxy без load()
             enc_direct = not servers and mark == 0 and (cfg.get("encrypt") or "plain") != "plain"
-            fb = tuple(cfg.get("direct_fallback") or ()) if enc_direct else ()
+            fb = tuple(cfg.get("direct_fallback") or ()) if enc_direct and fallback else ()
             reply = None
-            if not (fb and time.monotonic() < getattr(self, "direct_down_until", 0.0)):
+            if fb and getattr(self, "direct_down", False):
+                self._probe_direct(query, q, tcp)          # клиент не ждёт: шифрованный пробуется в фоне
+            else:
                 reply = await self.forward(query, q, mark, tcp, servers)
                 if enc_direct:
-                    if reply is None:
-                        self.direct_fail_at = time.time()
-                        self.direct_down_until = time.monotonic() + DIRECT_RETRY
-                    else:
-                        self.direct_ok_at = time.time()
-                        self.direct_down_until = 0.0
+                    self._direct_seen(reply is not None, bool(fb))
             if reply is None and fb:
                 reply = await self.forward(query, q, mark, tcp, fb)          # местный DNS, обычный
                 if reply is not None:
                     self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
         finally:
             self.inflight -= 1
-        if reply is None:
-            self.stats["errors"] += 1
-            return error_reply(query, q, RC_SERVFAIL)
+        if reply is None or reply[3] & 0xF == RC_SERVFAIL:
+            self.stats["errors"] += 1           # SERVFAIL самих серверов не кэшируется (cache_ttl) и уходит клиенту
+            if reply is None:
+                return error_reply(query, q, RC_SERVFAIL)
         try:
             ttl, offs = cache_ttl(reply)
         except (ValueError, struct.error):
@@ -552,11 +559,39 @@ class Proxy:
             self.cache_bytes += len(reply)
         return struct.pack("!H", q["id"]) + reply[2:]
 
+    def _direct_seen(self, ok: bool, fallback: bool) -> None:
+        """Ответил ли шифрованный DNS на пути «напрямую» (ответ SERVFAIL — тоже ответ: сервер на связи, сломан сайт).
+        Не ответил и есть местный DNS — имена «напрямую» идут к нему, шифрованный пробуется снова через DIRECT_RETRY."""
+        if ok:
+            self.direct_ok_at, self.direct_down = time.time(), False
+            return
+        self.direct_fail_at = time.time()
+        if fallback:
+            self.direct_down, self.direct_retry_at = True, time.monotonic() + DIRECT_RETRY
+
+    def _probe_direct(self, query: bytes, q: dict, tcp: bool) -> None:
+        """Шифрованный DNS не отвечает напрямую: раз в DIRECT_RETRY один запрос клиента спрашивается у него ещё раз — в
+        фоне, а клиент сразу получает ответ местного DNS. Ответил — имена «напрямую» снова идут к шифрованному."""
+        probe = getattr(self, "_direct_probe", None)
+        if time.monotonic() < getattr(self, "direct_retry_at", 0.0) or (probe and not probe.done()):
+            return
+        self.direct_retry_at = time.monotonic() + DIRECT_RETRY
+
+        async def run():
+            try:
+                reply = await self.forward(query, q, 0, tcp)
+            except Exception:  # noqa: BLE001  — проба не должна ронять цикл; считаем, что не ответил
+                reply = None
+            self._direct_seen(reply is not None, True)
+        self._direct_probe = asyncio.get_running_loop().create_task(run())
+
     async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = ()) -> bytes | None:
         """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. servers — свой DNS правила по
         сайтам: всегда обычный DNS (UDP, при обрезанном ответе — TCP), без шифрования: местные DNS вроде
-        Яндекса, Alibaba или иранских по адресу DoH/DoT часто не отвечают."""
+        Яндекса, Alibaba или иранских по адресу DoH/DoT часто не отвечают. Все, кто ответил, ответили SERVFAIL, —
+        этот ответ (серверы на связи, не разрешилось само имя); None — не ответил никто."""
         mode = "plain" if servers else (self.cfg.get("encrypt") or "plain")
+        servfail = None
         for server in servers or self.cfg.get("upstreams") or []:
             qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
             out = struct.pack("!H", qid) + query[2:]
@@ -576,10 +611,11 @@ class Proxy:
                 self._fail(server, "bad answer")
                 continue
             if reply[3] & 0xF == RC_SERVFAIL:
+                servfail = reply
                 continue                                              # спросим следующий сервер
             self.last_ok = time.time()
             return reply
-        return None
+        return servfail
 
     def _fail(self, server: str, e) -> None:
         if isinstance(e, asyncio.TimeoutError):

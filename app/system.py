@@ -507,6 +507,8 @@ def recreate_with_port(name: str, conf_dir: str, iface: str, old_port: int, new_
     on_disk = any(m.get("Destination") == conf_dir for m in info.get("Mounts") or [])
     old = f"{name}-old-{_stamp()}"
     renamed, made = False, None
+    # конфиг с новым портом уже записан: оборвись смена посреди — recover_renamed вернёт прежнему контейнеру и его конфиг
+    _port_mark({"old": old, "dir": conf_dir, "iface": iface, "conf": old_conf})
     try:
         docker_api("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": {"Name": "no"}})
         docker_api("POST", f"/containers/{q(name)}/stop?t=3", timeout=40)     # освобождает порт
@@ -537,7 +539,9 @@ def recreate_with_port(name: str, conf_dir: str, iface: str, old_port: int, new_
             _quiet("POST", f"/containers/{q(old)}/rename?name={q(name)}")
         _quiet("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": policy})
         _quiet("POST", f"/containers/{q(name)}/restart?t=3", timeout=40)
+        _port_mark(None)
         raise SysError(f"new port {new_port}: {e}") from None
+    _port_mark(None)
     _quiet("DELETE", f"/containers/{q(old)}?force=1", timeout=40)
     prev = (info.get("Config") or {}).get("Image") or ""
     if not on_disk and prev.startswith(PORT_IMAGE + ":"):
@@ -546,6 +550,45 @@ def recreate_with_port(name: str, conf_dir: str, iface: str, old_port: int, new_
 
 def _stamp() -> str:
     return time.strftime("%Y%m%d-%H%M%S")
+
+
+def _port_mark_path() -> str:
+    return os.path.join(config.DATA_DIR, "port-change.json")
+
+
+def _port_mark(mark: dict | None) -> None:
+    """Идущая смена порта контейнера (data/port-change.json): имя прежнего контейнера и его конфиг (в нём ключ сервера —
+    как и state.json, только для root). None — смена закончилась."""
+    p = _port_mark_path()
+    try:
+        if mark is None:
+            if os.path.exists(p):
+                os.remove(p)
+            return
+        fd = os.open(p + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(mark, f)
+        os.replace(p + ".tmp", p)
+    except OSError as e:
+        log.warning("port change mark: %s", e)
+
+
+def _port_mark_done(name: str) -> None:
+    """Контейнер сервера с обычным именем работает — смена его порта закончилась (или панель упала уже после неё):
+    отметка больше не нужна. Иначе, пропади он потом, recover_renamed вернул бы давний «-old-» со старым конфигом —
+    а у своего контейнера папка сервера общая, и в неё лёг бы прежний список клиентов."""
+    m = _RENAMED.fullmatch(str(_port_mark_get().get("old") or ""))
+    if m and m.group(1) == name:
+        _port_mark(None)
+
+
+def _port_mark_get() -> dict:
+    try:
+        with open(_port_mark_path()) as f:
+            m = json.load(f)
+        return m if isinstance(m, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _quiet(method: str, path: str, **kw) -> None:
@@ -591,7 +634,8 @@ def _docker_time(s) -> float:
 
 def recover_renamed() -> str | None:
     """Контейнер сервера, оставшийся переименованным после прерванной смены порта или обновления: вернуть ему
-    имя и автозапуск и запустить. → имя или None."""
+    имя и автозапуск и запустить. Смена порта, прерванная ещё до переименования, оставляет контейнер с обычным
+    именем выключенным и без автозапуска — его тоже. → имя или None."""
     if config.AWG_MODE != "container" or config.AWG_CONTAINER:
         return None
     try:
@@ -599,29 +643,48 @@ def recover_renamed() -> str | None:
     except (SysError, OSError):
         return None
     names = {n.lstrip("/") for c in cs for n in c.get("Names", [])}
-    if names & {"amnezia-awg2", "amnezia-awg"}:
-        return None                                  # контейнер с обычным именем есть (пусть и выключен)
     from . import selfupdate          # selfupdate импортирует system: здесь — при вызове
     if selfupdate.installer_running():
         return None                                  # установщик сам вернёт прежний контейнер, если надо
-    cands = sorted((n for n in names if _RENAMED.fullmatch(n)), key=lambda n: n[-15:])
-    if not cands:
+    # «-old-» — только тот, что оставила прерванная смена порта панели (port-change.json): такой же оставляет и
+    # установщик, ставя новый сервер вместо неисправного, — нарочно, его не возвращаем
+    mark = _port_mark_get()
+    mf = _RENAMED.fullmatch(str(mark.get("old") or ""))
+    cands = sorted((n for n in names if _RENAMED.fullmatch(n) and ("-prev-" in n or n == mark.get("old"))),
+                   key=lambda n: n[-15:])
+    if cands:
+        old = cands[-1]
+        name = _RENAMED.fullmatch(old).group(1)
+        if name in names:
+            return None                              # контейнер с обычным именем есть (пусть и выключен)
+    elif mf and mf.group(1) in names and mark["old"] not in names:
+        old = name = mf.group(1)                     # смену прервали до переименования
+    else:
         return None
-    old = cands[-1]
-    name = _RENAMED.fullmatch(old).group(1)
+    by_mark = old == mark.get("old") or (old == name and bool(mf))
     q = urllib.parse.quote
     try:
-        st = (docker_get(f"/containers/{q(old)}/json") or {}).get("State") or {}
+        info = docker_get(f"/containers/{q(old)}/json") or {}
+        st = info.get("State") or {}
         if st.get("Running") or time.time() - _docker_time(st.get("FinishedAt")) < RECOVER_AFTER:
             return None
-        docker_api("POST", f"/containers/{q(old)}/rename?name={q(name)}")
+        if old == name and ((info.get("HostConfig") or {}).get("RestartPolicy") or {}).get("Name") != "no":
+            return None                              # выключен руками, а не сменой порта: автозапуск у него остался
+        if by_mark and isinstance(mark.get("conf"), str) and mark.get("dir") and mark.get("iface"):
+            # в нём уже конфиг с новым портом, а Docker открывает прежний: без возврата конфига VPN бы не заработал
+            docker_api("PUT", f"/containers/{q(old)}/archive?path={q(mark['dir'])}",
+                       body=_tar_one(f"{mark['iface']}.conf", mark["conf"]), timeout=30)
+        if old != name:
+            docker_api("POST", f"/containers/{q(old)}/rename?name={q(name)}")
         docker_api("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": {"Name": "always"}})
         docker_api("POST", f"/containers/{q(name)}/start", timeout=40)
     except (SysError, OSError) as e:
-        log.warning("container %s left renamed, could not bring it back: %s", old, e)
+        log.warning("container %s left off, could not bring it back: %s", old, e)
         return None
-    log.warning("container %s was left renamed by an interrupted port change or update: renamed back to %s and started",
+    log.warning("container %s was left off by an interrupted port change or update: brought back as %s and started",
                 old, name)
+    if by_mark:
+        _port_mark(None)
     recovered.append(name)
     return name
 
@@ -642,6 +705,7 @@ def discover() -> Target:
     if mode in ("auto", "container"):
         name = find_amnezia_container() or recover_renamed()
         if name:
+            _port_mark_done(name)
             return _container_target(name)
         if mode == "container":
             raise SysError(Msg("sys.no_container"))

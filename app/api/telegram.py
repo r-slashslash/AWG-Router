@@ -77,7 +77,9 @@ def telegram_detect(req):
     seen = bot.last_chat if bot.last_chat and bot.last_chat.get("bot") == c["token"].split(":", 1)[0] \
         and time.time() - bot.last_chat.get("t", 0) < DETECT_SEEN else None
     try:
-        chat = notify.detect_chat(c["token"], c["via"])
+        # и здесь — без чатов клиентов и нажатий кнопок: бот, который не читает сообщения (или ждёт после 409), оставляет
+        # их Telegram, и последним мог оказаться клиент — ему ушли бы уведомления, управление и копии с ключами
+        chat = notify.detect_chat(c["token"], c["via"], accept=bot._seen)
     except notify.NotifyError as e:
         if not seen:
             bad(Msg("err.tg_failed", error=msg_of(e)), 502)

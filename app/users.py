@@ -479,7 +479,6 @@ class ServerManager:
             "panel_dns": bool(s.get("panel_dns")),
             "dom_filter": bool(s.get("dom_filter")),
             "panel_dns_addr": self._dns_live() or panel_dns_addr(sc),
-            "public_cc": getattr(self.e, "public_cc", None),       # страна сервера: кнопка «Прямые сайты»
             "panel_dns_state": self.e.dns_view(),
             "panel_dns_enc": dns_encrypt(s),
             "client_mtu": int(s.get("client_mtu") or DEFAULT_MTU),

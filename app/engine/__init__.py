@@ -78,7 +78,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self._fake = system.DemoTarget() if config.DRY_RUN else None
         self.public_v4: str | None = None      # внешний IPv4, найденный проверкой «напрямую»
         self.public_v4_state = "pending"        # pending — ещё ищем, ok — найден, failed — не нашли
-        self.public_cc: str | None = None       # страна сервера по той же проверке (кнопка «Прямые сайты»)
+        self.public_cc: str | None = None       # страна сервера по той же проверке (местный DNS «напрямую»)
         self.srv = ServerManager(self)
         self._runtime_checked = False
         self._masking_checked = None     # Target.key, на котором уже проверен старый I1
@@ -179,7 +179,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     r = self.probe("direct")
                     ip = r.get("ip") if r.get("ok") else None
                     cc = r.get("cc") if r.get("ok") else None
-                    if isinstance(cc, str) and len(cc) == 2 and cc.isalpha() and cc.upper() != self.public_cc:
+                    if isinstance(cc, str) and len(cc) == 2 and cc.isalpha() and cc.upper() != getattr(self, "public_cc", None):
                         self.public_cc = cc.upper()
                         self.trigger()          # запасной местный DNS пути «напрямую» зависит от страны
                     # только IPv4: адрес идёт во «Внешний адрес сервера» и в конфиги клиентов
@@ -191,7 +191,9 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     self.public_v4, self.public_v4_state = ip, "ok"
                     if not self.srv.public_host(self.store.snapshot()):
                         self.store.mutate(lambda st: st["settings"].setdefault("public_host", ip))
-                    tries, wait = 0, HOST_RECHECK
+                    # страна не узналась (ответил только ifconfig.me) — спросить снова через 10 минут, а не через
+                    # 6 часов: без неё нет местного DNS пути «напрямую», когда шифрованный не проходит
+                    tries, wait = 0, HOST_RECHECK if getattr(self, "public_cc", None) else HOST_SLOW_WAIT
                 elif self.public_v4:
                     wait = HOST_SLOW_WAIT       # перепроверка не прошла — оставляем прежний адрес
                 elif tries >= HOST_FAST_TRIES:

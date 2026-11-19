@@ -116,10 +116,11 @@ class RoutesMixin:
                     ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
             default = self.resolve(self.default_out(st, pk, pol), st)
             # правила по доменам, которые ведут туда же, куда всё остальное, ничего не меняют —
-            # но включили бы перехват всего HTTPS/HTTP клиента посредником. Только без правил по
-            # адресам: домен проверяется раньше них и мог бы увести сайт мимо правила по адресу
+            # но включили бы перехват всего HTTPS/HTTP клиента посредником. Только если и правила по
+            # адресам ведут туда же: домен проверяется раньше них и мог бы увести сайт мимо правила по
+            # адресу. Так готовые правила страны на новой установке («всё — напрямую») не включают перехват
             plain = int(default) if isinstance(default, int) else default
-            if dom and not ip_rules and all(self.resolve(o, st) == plain for _, o in dom):
+            if dom and all(self.resolve(o, st) == plain for _, o in dom) and all(o == plain for _, o in ip_rules):
                 dom = []
             if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
                 default = nftgen.Sticky(default)     # открытые соединения не переезжают

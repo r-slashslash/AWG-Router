@@ -529,11 +529,12 @@ def chat_of(u: dict) -> dict | None:
     return {"id": str(ch["id"]), "title": title}
 
 
-def detect_chat(token: str, via: str = "direct") -> dict | None:
-    """Чат, из которого боту писали последним (чтобы не искать chat id вручную)."""
+def detect_chat(token: str, via: str = "direct", accept=None) -> dict | None:
+    """Чат, из которого боту писали последним (чтобы не искать chat id вручную). accept(update) → чат или None —
+    какие годятся (tgbot.Bot._seen: не нажатия кнопок и не чаты клиентов по приглашению); без него — любой."""
     upd = _call(token, "getUpdates", {"limit": 50, "timeout": 0}, via=via)
     for u in reversed(upd if isinstance(upd, list) else []):
-        if ch := chat_of(u):
+        if ch := (accept or chat_of)(u):
             return ch
     return None
 
