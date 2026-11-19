@@ -302,6 +302,8 @@ class SmallUiTest(unittest.TestCase):
             src = f.read()
         self.assertIn('"rt.else": "По умолчанию"', src)               # вместо «Всё остальное» (владелец 2026-11-19)
         self.assertNotIn("Всё остальное", src)
+        # пример в поле списка доменов: сначала зоны, потом сайты, ссылка — последней (владелец 2026-11-19)
+        self.assertIn(r'"ls.domains_ph": ".net\n.ru\nyoutube.com\ngooglevideo.com\nhttps://example.com/domains.txt"', src)
         with open(os.path.join(root, "app.css"), encoding="utf-8") as f:
             css = f.read()
         self.assertIn("input[type=search], input[type=date], select, textarea {", css)   # как остальные поля

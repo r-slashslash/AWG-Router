@@ -42,7 +42,9 @@ it grows, so every user-visible change gets a new version.
   PersistentKeepalive; right: **DNS**. "below" is gone from the external address hint, and the "AmneziaWG engine — what
   it is and when you need it" box is gone.
 - **Plain exit names.** Exit choices say "Germany", not "Via “Germany”" (rule window, client window, Telegram);
-  the Overview title is **Traffic exits**; "Everything else" is now **Default** ("when no rule matches").
+  the Overview title is **Traffic exits**; "Everything else" is now **Default** ("when no rule matches"). The
+  example in a domain list starts with zones, then sites, then a link. The expiry date field looks like the other
+  fields (it was light in the dark theme on Android), and a field next to a taller one no longer stretches.
 
 ## 1.22.0 — 2026-11-19
 
