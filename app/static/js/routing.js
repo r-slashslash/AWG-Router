@@ -397,13 +397,20 @@ function openRoutingRule(i) {
     del: i === null ? null : { i, fn: () => saveRules(S.routing.rules.filter((_, j) => j !== i)) },
   });
 }
-/** строки правил вкладки заново (списки скачались, правило сохранено) — без перерисовки черновика */
+/** строки правил вкладки заново (списки скачались, правило сохранено, правила поменяли в другой вкладке) — без
+    перерисовки черновика. rulesDrawn — какие правила сейчас на экране (refresh сравнивает с пришедшими). */
+let rulesDrawn = "";
 function drawRoutingRules() {
   const box = $("#g-rules");
   if (!box) return;
   box.innerHTML = ruleRowsHtml(S.routing.rules);
+  rulesDrawn = JSON.stringify(S.routing.rules);
   bindRuleRows(box, S.routing.rules, async (next) => {
+    // пока это сохраняется, строки не нажимаются: следующее нажатие считалось бы от прежних правил и отменяло это
+    // (два переключателя подряд при медленной связи, проверка 1.23.0)
+    box.inert = true;
     try { await saveRules(next); } catch (e) { toast(e.message, true); markField(e, $("#g-rules")); drawRoutingRules(); }
+    finally { box.inert = false; }
   }, openRoutingRule);
 }
 bind.routing = () => {

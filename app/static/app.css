@@ -358,6 +358,8 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .default-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(170px, 230px) auto; gap: 10px; align-items: center; padding: 12px; border-radius: 9px; border: 1px dashed var(--rule-strong); }
 /* строка правила (1.23.0): номер, что ловит правило и выход (нажатие — окно правила), включение и место */
 .rule.rule-item { grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; }
+/* строки правил сохраняются (inert): если дольше четверти секунды — бледнее, чтобы было видно, что нажатие ждёт */
+#g-rules[inert] .rules { opacity: .55; transition: opacity .2s .25s; }
 .rule-item .rule-n { padding-top: 0; }
 .rule-item select.rule-pos { margin-top: 0; }
 .rule-open { display: grid; gap: 3px; min-width: 0; padding: 2px 0; border: 0; background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; }

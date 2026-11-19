@@ -308,6 +308,17 @@ class RuleListsTest(unittest.TestCase):
         # созданные в окне и не попавшие в правило списки удаляются при закрытии окна
         self.assertIn("made.splice(0, made.length, ...made.filter((id) => !keepIds.has(id)));", js)
 
+    def test_routing_rows_audit(self):
+        """Проверка 1.23.0 (этап 2): строки правил «Маршрутизации»."""
+        from tests import panel_js
+        js = panel_js.source()
+        # пока переключение или место правила сохраняется, следующее нажатие не проходит (иначе отменяло бы это)
+        self.assertIn("box.inert = true;\n    try { await saveRules(next); }", js)
+        self.assertIn("finally { box.inert = false; }", js)
+        # правила поменяли в другой вкладке — опрос перерисовывает строки (старая строка сохранила бы прежний набор)
+        self.assertIn("JSON.stringify(S.routing.rules) !== rulesDrawn)) drawRoutingRules();", js)
+        self.assertIn("rulesDrawn = JSON.stringify(S.routing.rules);", js)
+
 
 class SmallUiTest(unittest.TestCase):
     def test_default_and_date_field(self):

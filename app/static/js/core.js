@@ -460,9 +460,12 @@ async function refresh(auto = false) {
   if (followUpdate()) return;
   renderStatus();
   if (same) { if (tab === "clients") fillSpeeds(); return; }
-  // список скачивается в фоне: на вкладке «Маршрутизация» обновляются только строки правил (их предупреждения)
+  // на вкладке «Маршрутизация» опрос обновляет только строки правил: список скачивается (их предупреждения) или правила
+  // поменяли в другой вкладке — иначе нажатие на старой строке сохранило бы прежний набор (проверка 1.23.0). Пока
+  // строки сохраняются (inert), не трогаем: ответ опроса мог уйти до сохранения
   const busy = S.lists.some((l) => l.busy);
-  if (auto && tab === "routing" && (busy || listsBusy) && $("#g-rules") && !anyModal()) drawRoutingRules();
+  const g = tab === "routing" && $("#g-rules");
+  if (auto && g && !g.inert && !anyModal() && (busy || listsBusy || JSON.stringify(S.routing.rules) !== rulesDrawn)) drawRoutingRules();
   listsBusy = busy;
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;
