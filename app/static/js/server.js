@@ -121,7 +121,7 @@ function viewServer() {
     <section class="section">
       <div class="section-head"><h2>${esc(t("srv.clients_title"))}</h2></div>
       <div class="panel panel-pad">
-        <label class="field"><span>DNS</span><input type="text" data-field="client_dns" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
+        <label class="field"><span>${esc(t("srv.dns_servers"))}</span><input type="text" data-field="client_dns" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
         <div class="field">
           <label class="check"><input type="checkbox" id="s-pdns" ${SRV.panel_dns ? "checked" : ""}><span>${esc(t("srv.panel_dns"))}</span></label>
           <span class="hint">${esc(t("srv.panel_dns_hint", { addr: SRV.panel_dns_addr || "—" }))}</span>

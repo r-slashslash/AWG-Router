@@ -726,7 +726,7 @@ Object.assign(I18N.ru, {
   "srv.port": "Порт (UDP)", "srv.port_hint": "Сервер перезапустится на несколько секунд, клиентам понадобится новый конфиг.", "srv.port_failed": "Сервер не запустился на порту {port} (может быть, порт занят) — работает прежний порт.", "srv.confirm_port_app": "Клиентов, созданных в приложении AmneziaVPN: {n}. Их ключ хранится только на устройстве, поэтому панель не выдаст им новый конфиг, и после смены порта они перестанут подключаться, пока порт в их конфиге не поменяют вручную или не создадут им новых клиентов здесь. Продолжить?",
   
   "srv.subnet": "Подсеть", "srv.subnet_hint": "Например 10.8.1.0/24.", "srv.subnet_locked_hint": "Меняется, только пока нет клиентов.",
-  "srv.clients_title": "DNS", "srv.dns_hint": "IPv4, через запятую. Попадут в новые конфиги.",
+  "srv.clients_title": "DNS", "srv.dns_servers": "Серверы DNS", "srv.dns_hint": "IPv4, через запятую. Попадут в новые конфиги.",
   "srv.panel_dns": "DNS на сервере",
   "srv.panel_dns_hint": "Клиенты спрашивают DNS у сервера ({addr}), а он — серверы из поля выше, тем же путём, что и трафик клиента. Чтобы клиенты перешли на него, отдайте им новые конфиги.",
   "srv.panel_dns_more": "Зачем это и как настроить",
@@ -839,7 +839,7 @@ Object.assign(I18N.en, {
   "srv.port": "Port (UDP)", "srv.port_hint": "The server restarts for a few seconds; clients will need a new config.", "srv.port_failed": "The server did not start on port {port} (it may be busy) — the old port is in use.", "srv.confirm_port_app": "Clients made in the AmneziaVPN app: {n}. Their key is only on the device, so the panel can't give them a new config, and after the port change they stop connecting until the port in their config is changed by hand or new clients are made for them here. Continue?",
   
   "srv.subnet": "Subnet", "srv.subnet_hint": "For example 10.8.1.0/24.", "srv.subnet_locked_hint": "Can only change while there are no clients.",
-  "srv.clients_title": "DNS", "srv.dns_hint": "IPv4, comma-separated. Used in new configs.",
+  "srv.clients_title": "DNS", "srv.dns_servers": "DNS servers", "srv.dns_hint": "IPv4, comma-separated. Used in new configs.",
   "srv.panel_dns": "DNS on the server",
   "srv.panel_dns_hint": "Clients ask the server ({addr}) for DNS, and it asks the servers in the field above the same way the client's traffic goes. To move clients to it, give them new configs.",
   "srv.panel_dns_more": "Why and how to set it up",
@@ -952,7 +952,7 @@ Object.assign(I18N.zh, {
   "srv.port": "端口（UDP）", "srv.port_hint": "服务器将重启几秒钟，客户端需要新的配置。", "srv.port_failed": "服务器无法在端口 {port} 上启动（端口可能已被占用）——仍使用原来的端口。", "srv.confirm_port_app": "在 AmneziaVPN 应用中创建的客户端：{n} 个。它们的密钥只保存在设备上，面板无法为其生成新配置；更换端口后它们将无法连接，除非手动修改其配置中的端口，或在此为其创建新客户端。继续吗？",
   
   "srv.subnet": "子网", "srv.subnet_hint": "例如 10.8.1.0/24。", "srv.subnet_locked_hint": "仅在没有客户端时可修改。",
-  "srv.clients_title": "DNS", "srv.dns_hint": "IPv4，用逗号分隔，用于新配置。",
+  "srv.clients_title": "DNS", "srv.dns_servers": "DNS 服务器", "srv.dns_hint": "IPv4，用逗号分隔，用于新配置。",
   "srv.panel_dns": "服务器上的 DNS",
   "srv.panel_dns_hint": "客户端向服务器（{addr}）查询 DNS，服务器再通过与该客户端流量相同的路径查询上面字段中的服务器。要让客户端改用它，请给他们新的配置。",
   "srv.panel_dns_more": "作用与设置方法",
@@ -1065,7 +1065,7 @@ Object.assign(I18N.fa, {
   "srv.port": "درگاه (UDP)", "srv.port_hint": "سرور چند ثانیه راه‌اندازی مجدد می‌شود؛ کلاینت‌ها به پیکربندی جدید نیاز خواهند داشت.", "srv.port_failed": "سرور روی درگاه {port} راه‌اندازی نشد (شاید درگاه اشغال است) — درگاه قبلی در کار است.", "srv.confirm_port_app": "کلاینت‌های ساخته‌شده در برنامهٔ AmneziaVPN: {n}. کلید آن‌ها فقط روی دستگاه است، پس پنل نمی‌تواند پیکربندی تازه بدهد و پس از تغییر درگاه وصل نمی‌شوند، مگر درگاه در پیکربندی‌شان دستی عوض شود یا اینجا کلاینت تازه برایشان ساخته شود. ادامه می‌دهید؟",
   
   "srv.subnet": "زیرشبکه", "srv.subnet_hint": "مثلاً 10.8.1.0/24.", "srv.subnet_locked_hint": "فقط وقتی کلاینتی نیست قابل تغییر است.",
-  "srv.clients_title": "DNS", "srv.dns_hint": "IPv4، با ویرگول جدا کنید؛ در پیکربندی‌های جدید استفاده می‌شود.",
+  "srv.clients_title": "DNS", "srv.dns_servers": "سرورهای DNS", "srv.dns_hint": "IPv4، با ویرگول جدا کنید؛ در پیکربندی‌های جدید استفاده می‌شود.",
   "srv.panel_dns": "DNS روی سرور",
   "srv.panel_dns_hint": "کلاینت‌ها DNS را از سرور ({addr}) می‌پرسند و سرور آن را از سرورهای فیلد بالا، از همان مسیری که ترافیک کلاینت می‌رود، می‌پرسد. برای این‌که کلاینت‌ها از آن استفاده کنند، پیکربندی تازه به آن‌ها بدهید.",
   "srv.panel_dns_more": "چرا و چطور تنظیم کنیم",

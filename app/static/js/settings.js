@@ -12,7 +12,7 @@ function viewTelegram() {
     <div class="panel panel-pad">
       <label class="check"><input type="checkbox" id="tg-on" ${c.enabled ? "checked" : ""}><span><b>${esc(t("tg.enable"))}</b></span></label>
       <label class="check" style="margin-top:6px"><input type="checkbox" id="tg-control" ${c.control ? "checked" : ""}><span><b>${esc(t("tg.control"))}</b></span></label>
-      ${c.enabled && (c.control || c.clients !== false) && S.tg_bot ? `<div style="margin-top:6px">${viewBotState(S.tg_bot)}</div>` : ""}
+      ${c.enabled && (c.control || c.clients !== false) && S.tg_bot ? `<div style="margin:6px 0 12px">${viewBotState(S.tg_bot)}</div>` : ""}
       <div class="tg-cols"><div>
       <label class="field"><span>${esc(t("tg.token"))}</span>
         <input type="text" data-field="token" id="tg-token" autocomplete="off" spellcheck="false" dir="ltr"
@@ -30,7 +30,7 @@ function viewTelegram() {
           ...S.upstreams.map((u) => ["up:" + u.id, t("out.via", { name: u.name })])].map(([v, l]) =>
           `<option value="${esc(v)}" ${v === (c.via || "direct") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
         <span class="hint">${esc(t("tg.via_hint"))}</span></label>
-      <label class="check" style="margin:-6px 0 12px"><input type="checkbox" id="tg-fb" ${c.fallback !== false ? "checked" : ""}><span>${esc(t("tg.fallback"))}</span></label>
+      <label class="check" style="margin:0 0 14px"><input type="checkbox" id="tg-fb" ${c.fallback !== false ? "checked" : ""}><span>${esc(t("tg.fallback"))}</span></label>
       ${c.enabled && S.tg_path ? `<p class="small warn-text" style="margin:-6px 0 12px">${th("tg.path_now", { name: `<bdi>${esc(exitName(S.tg_path.via))}</bdi>` })}</p>` : ""}
       </div><div class="field"><span>${esc(t("tg.events"))}</span>
         ${TG_KINDS.map((k) => `<label class="check"><input type="checkbox" id="tg-ev-${k}" ${ev[k] !== false ? "checked" : ""}><span>${esc(t("tg.ev_" + k))}</span></label>`).join("")}</div></div>
