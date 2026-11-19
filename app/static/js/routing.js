@@ -140,9 +140,13 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
       if (v.length) r.dns = v; else delete r.dns;
     };
   };
-  const drawLists = () => {
+  /* Списки правила, выбор «+ Добавить список» и форма списка — три части #rw-lists. Строки и выбор рисуются заново
+     (скачался список, добавили, убрали), а форма — только когда открыли другую: иначе перерисовка, пока список в правиле
+     скачивается (раз в 2,5 с), стирала набранное в форме (проверка 1.23.0). */
+  const drawLists = (quiet = false) => {
     const box = $("#rw-lists", m);
     if (!box) return;
+    if (!$("#rw-rows", box)) box.innerHTML = `<div id="rw-rows"></div><div id="rw-pick"></div><div id="rw-form" class="rw-form" hidden></div>`;
     const dom = r.lists.some(isDomainList);
     // списки доменов — отдельные правила (по имени сайта, раньше правил по адресам): с сетями не смешиваются
     const addable = S.lists.filter((l) => !r.lists.includes(l.id) && (!r.lists.length || (l.kind === "domains") === dom));
@@ -159,9 +163,12 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
           <button type="button" class="icon-btn" data-rm="${esc(id)}" title="${esc(t("re.remove_list"))}" aria-label="${esc(t("re.remove_list"))}">✕</button>
         </div></div>`;
     }).join("");
-    box.innerHTML = `${rows}
-      <select class="add-list" id="rw-add" aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.length ? `<optgroup label="${esc(t("rw.ready"))}">${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}</optgroup>` : ""}${quick.length ? `<optgroup label="${esc(t("re.countries"))}">${quick.map((cc) => `<option value="cc:${cc}">${esc(countryName(cc))}</option>`).join("")}</optgroup>` : ""}<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup></select>
-      <div id="rw-form" class="rw-form" ${form ? "" : "hidden"}></div>`;
+    $("#rw-rows", box).innerHTML = rows;
+    // перерисовка по таймеру (quiet), а человек сейчас в выборе списка — не пересоздаём его под рукой
+    const pick = $("#rw-pick", box);
+    if (!(quiet && pick.contains(document.activeElement))) {
+      pick.innerHTML = `<select class="add-list" id="rw-add" aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.length ? `<optgroup label="${esc(t("rw.ready"))}">${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}</optgroup>` : ""}${quick.length ? `<optgroup label="${esc(t("re.countries"))}">${quick.map((cc) => `<option value="cc:${cc}">${esc(countryName(cc))}</option>`).join("")}</optgroup>` : ""}<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup></select>`;
+    }
     drawDns(dom);
     $$("[data-rm]", box).forEach((b) => b.onclick = () => { r.lists = r.lists.filter((x) => x !== b.dataset.rm); drawLists(); });
     $$("[data-edit]", box).forEach((b) => b.onclick = () => { form = { kind: listObj(b.dataset.edit).kind, id: b.dataset.edit }; drawLists(); });
@@ -184,16 +191,20 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
       addListTo(r, v);
       drawLists();
     };
-    if (form) drawForm();
+    // форма — заново только другая (или закрыта): открытая той же — с тем, что в ней уже набрано
+    const fb = $("#rw-form", box);
+    if (!form) { fb.hidden = true; fb.innerHTML = ""; delete fb.dataset.key; }
+    else if (fb.dataset.key !== `${form.kind}:${form.id || ""}`) drawForm();
     // список скачивается — посмотреть ещё раз через пару секунд, пока окно открыто
     clearTimeout(timer);
     if (r.lists.some((id) => (listObj(id) || {}).busy)) {
-      timer = setTimeout(async () => { if (m.open) { await refresh(); drawLists(); } }, 2500);
+      timer = setTimeout(async () => { if (m.open) { await refresh(); drawLists(true); } }, 2500);
     }
   };
   const drawForm = () => {
     const box = $("#rw-form", m), l = form.id ? listObj(form.id) : null;
     box.hidden = false;
+    box.dataset.key = `${form.kind}:${form.id || ""}`;
     box.innerHTML = `<div class="rw-form-title">${esc(l ? t("ls.edit", { name: listName(l.id) }) : t("ls.new." + form.kind))}</div>
       ${listFormHtml(form.kind, l)}
       <div class="actions"><button type="button" class="btn sm primary" id="lf-save">${esc(t(l ? "btn.save" : "rw.add_list_btn"))}</button><button type="button" class="btn sm" id="lf-cancel">${esc(t("btn.cancel"))}</button></div>`;
@@ -232,8 +243,15 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
     keep();
     if (!r.lists.length) { toast(t("rw.need_list"), true); $("#rw-add", m).focus(); return; }
     e.target.disabled = true;
+    // созданные здесь списки, которые в правило так и не попали (убрали крестиком, убрали страну), удаляются при
+    // закрытии окна, как при «Отмене»; остальные уходят вместе с правилом
+    const keepIds = new Set([...r.lists, ...extras.filter((x) => r.lists.includes(x.from)).flatMap((x) => x.lists)]);
     try {
-      if (await ok(r, extras, made) !== false) { made.length = 0; closeModal2(); return; }
+      if (await ok(r, extras, made.filter((id) => keepIds.has(id))) !== false) {
+        made.splice(0, made.length, ...made.filter((id) => !keepIds.has(id)));
+        closeModal2();
+        return;
+      }
     } catch (err) { toast(err.message, true); markField(err, m); }
     e.target.disabled = false;
   };
@@ -248,10 +266,13 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
 function withRule(rules, i, r, extras) {
   const out = [...rules];
   const at = i === null ? out.push(r) - 1 : (out[i] = r, i);
-  const add = extras.filter((x) => !out.some((y) => y.lists.includes(x.lists[0])))
-    .map((x) => ({ ...x, outbound: r.outbound }));         // тот же выход, что у правила страны сейчас
+  // только для стран, что остались в правиле: страну могли выбрать и убрать крестиком (проверка 1.23.0)
+  const live = extras.filter((x) => r.lists.includes(x.from));
+  const add = live.filter((x) => !out.some((y) => y.lists.includes(x.lists[0])))
+    // тот же выход, что у правила страны сейчас
+    .map((x) => ({ lists: x.lists, outbound: r.outbound, enabled: x.enabled, comment: x.comment, dns: x.dns }));
   out.splice(at + 1, 0, ...add);
-  if (extras.length) out._cc = true;            // panelDnsAsk / panelDnsOn: со страной включается «DNS на сервере»
+  if (live.length) out._cc = true;              // panelDnsAsk / panelDnsOn: со страной включается «DNS на сервере»
   return out;
 }
 
@@ -266,8 +287,9 @@ async function countryPick(r, extras, made, cc) {
     await refresh();
     addListTo(r, res.country);
     if (!extras.some((x) => x.lists.includes(res.domains))) {
+      // from — список страны: правило её доменов встанет, только пока страна в правиле (withRule)
       extras.push({ lists: [res.domains], outbound: r.outbound, enabled: true, comment: "",
-        dns: [...S.country_presets[cc].dns] });
+        dns: [...S.country_presets[cc].dns], from: res.country });
       toast(t("cp.picked"));
     }
   } catch (e) { toast(e.message, true); }
