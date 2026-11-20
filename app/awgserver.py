@@ -338,7 +338,7 @@ def validate_params(p: dict[str, str]) -> dict[str, str]:
             continue
         kind = AWG_PARAMS[k][0]
         if kind == "int":
-            if not v.isdigit() or int(v) > 65535:
+            if not (v.isascii() and v.isdigit()) or int(v) > 65535:        # «²» — isdigit(), но не число
                 raise ServerConfError(Msg("srv.bad_int", key=k))
             v = str(int(v))
         elif kind in ("range", "hrange"):

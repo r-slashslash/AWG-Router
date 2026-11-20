@@ -288,10 +288,18 @@ class RuleListsTest(unittest.TestCase):
     def test_list_kept_while_a_client_uses_it(self):
         from app.api import clients, routing
         pk = "DEMO" + "A" * 40
-        with mock.patch.object(clients, "awgconf") as ac:
+        body = {"outbound": "inherit", "rules_mode": "custom",
+                "rules": [{"lists": ["la"], "outbound": "block", "enabled": True}]}
+        with mock.patch.object(clients, "awgconf") as ac, \
+                mock.patch.object(clients.engine, "clients", [{"public_key": "other"}]):
             ac.KEY_RE.match.return_value = True
-            clients.put_client(mock.Mock(json=lambda: {"outbound": "inherit", "rules_mode": "custom",
-                                                       "rules": [{"lists": ["la"], "outbound": "block", "enabled": True}]}), pk)
+            # Г29: клиента уже удалили (его нет на сервере и в настройках) — «Сохранить» из старого окна не пишет его
+            with self.assertRaises(Exception) as cm:
+                clients.put_client(mock.Mock(json=lambda: body), pk)
+            self.assertIn("client_gone", str(getattr(cm.exception, "msg", cm.exception)) + repr(cm.exception))
+            self.assertNotIn(pk, self.panel.store.snapshot()["clients"])
+            clients.engine.clients.append({"public_key": pk})
+            clients.put_client(mock.Mock(json=lambda: body), pk)
         routing.put_routing(mock.Mock(json=lambda: {"default": "direct", "rules": []}))
         self.assertEqual(self.ids(), ["la", "lc"])           # «la» нужен клиенту, «lb» ушёл
         with mock.patch.object(clients, "awgconf") as ac:
@@ -520,3 +528,17 @@ class ClientIPv6ClosedTest(unittest.TestCase):
         text = srv_mod.v6_ruleset("awg0")
         self.assertIn('iifname "awg0" reject', text)
         self.assertIn("hook forward", text)
+
+
+class InstallerMarkTest(unittest.TestCase):
+    def test_mark_older_than_boot_is_stale(self):
+        """Пересмотр 5а (владелец 2026-11-21): VPS выключили посреди обновления — отметка «идёт установка» старше
+        загрузки системы, и панель не ждёт её 45 минут."""
+        import tempfile
+        from app import selfupdate
+        with tempfile.NamedTemporaryFile() as f, mock.patch.object(selfupdate, "INSTALLING", f.name):
+            os.utime(f.name, (time.time() - 600, time.time() - 600))
+            with mock.patch.object(selfupdate.hostnet, "uptime", return_value=3600):
+                self.assertTrue(selfupdate.installer_running())         # установщик идёт 10 минут
+            with mock.patch.object(selfupdate.hostnet, "uptime", return_value=120):
+                self.assertFalse(selfupdate.installer_running())        # а сервер загрузился 2 минуты назад

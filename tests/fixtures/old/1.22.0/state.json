@@ -1,0 +1,359 @@
+{
+  "version": 1,
+  "routing": {
+    "default": "up:u76e2f5",
+    "rules": [
+      {
+        "id": "r_8be49f",
+        "lists": [
+          "l5e5dc2",
+          "l6b2dd7"
+        ],
+        "outbound": "up:u8c1c24",
+        "enabled": true,
+        "comment": ""
+      },
+      {
+        "id": "r_fdeecd",
+        "lists": [
+          "l89ba57"
+        ],
+        "outbound": "up:u8c1c24",
+        "enabled": true,
+        "comment": ""
+      },
+      {
+        "id": "r_a0f9e7",
+        "lists": [
+          "ru",
+          "cn"
+        ],
+        "outbound": "direct",
+        "enabled": true,
+        "comment": "geo"
+      },
+      {
+        "id": "r_1357b8",
+        "lists": [
+          "l89ba57"
+        ],
+        "outbound": "up:u8c1c24",
+        "enabled": true,
+        "comment": "Proxy"
+      },
+      {
+        "id": "r_798ab9",
+        "lists": [
+          "l6b2dd7"
+        ],
+        "outbound": "block",
+        "enabled": false,
+        "comment": "off"
+      },
+      {
+        "id": "r_854b7d",
+        "lists": [
+          "l26e651",
+          "l37f6a8",
+          "de"
+        ],
+        "outbound": "direct",
+        "enabled": true,
+        "comment": ""
+      }
+    ],
+    "balance": {
+      "on": true,
+      "skip": [
+        "ua2b197"
+      ]
+    },
+    "strict": true
+  },
+  "upstreams": [
+    {
+      "id": "u76e2f5",
+      "name": "NL",
+      "num": 1,
+      "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+      "enabled": true,
+      "fallback": "direct",
+      "created": 1795210518.5823572,
+      "quota": 53687091200,
+      "quota_action": "up:u8c1c24",
+      "rate_down": 50.0,
+      "rate_up": 10.0,
+      "quota_hit": null,
+      "quota_warned": null
+    },
+    {
+      "id": "u8c1c24",
+      "name": "Proxy",
+      "num": 2,
+      "config": "socks5://user:pass@198.51.100.9:1080",
+      "enabled": true,
+      "fallback": "up:u76e2f5",
+      "created": 1795210518.592839,
+      "quota": 2684354560,
+      "quota_action": "block",
+      "quic": true,
+      "own_list": "l5e5dc2"
+    },
+    {
+      "id": "ua2b197",
+      "name": "Spare",
+      "num": 3,
+      "config": "socks5://198.51.100.10:1080",
+      "enabled": false,
+      "fallback": "direct",
+      "created": 1795210518.609912,
+      "quota": null,
+      "quota_action": "notify"
+    }
+  ],
+  "lists": [
+    {
+      "id": "l89ba57",
+      "kind": "manual",
+      "source": "",
+      "name": "Office",
+      "text": "636dbc569e9289b6",
+      "error": null,
+      "count": 3,
+      "addresses": 385,
+      "skipped_v6": 1,
+      "updated": 1795210518.5387602,
+      "checked": 1795210518.5387602
+    },
+    {
+      "id": "l6b2dd7",
+      "kind": "domains",
+      "source": "",
+      "name": "Sites",
+      "text": "f03ffea7fcf916be",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "lists.example: <urlopen error [Errno -3] Temporary failure in name resolution>"
+        }
+      },
+      "count": 2,
+      "first": "example.com",
+      "addresses": null,
+      "skipped_v6": 0,
+      "updated": 1795210518.8416145,
+      "checked": 1795210518.8416145
+    },
+    {
+      "id": "l26e651",
+      "kind": "asn",
+      "source": "AS64496 AS64511",
+      "name": "AS64496 AS64511",
+      "error": {
+        "$t": "list.asn_failed",
+        "p": {
+          "asn": 64496,
+          "detail": "ipverse: <urlopen error [Errno -3] Temporary failure in name resolution>; ripestat: <urlopen error [Errno -3] Temporary failure in name resolution>"
+        }
+      },
+      "checked": 1795210519.2624722
+    },
+    {
+      "id": "l37f6a8",
+      "kind": "url",
+      "source": "https://lists.example/nets.txt",
+      "name": "Feed",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "<urlopen error [Errno -3] Temporary failure in name resolution>"
+        }
+      },
+      "checked": 1795210518.8434167
+    },
+    {
+      "id": "de",
+      "kind": "country",
+      "source": "de",
+      "name": "Germany",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error [Errno -3] Temporary failure in name resolution>; raw.githubusercontent.com: <urlopen error [Errno -3] Temporary failure in name resolution>; www.ipdeny.com: <urlopen error [Errno -3] Temporary failure in name resolution>"
+        }
+      },
+      "checked": 1795210519.972354
+    },
+    {
+      "id": "l5e5dc2",
+      "kind": "domains",
+      "source": "",
+      "name": "Proxy",
+      "text": "2a191a2b08b137ec",
+      "error": null,
+      "count": 2,
+      "first": "a.example",
+      "addresses": null,
+      "skipped_v6": 0,
+      "updated": 1795210518.596814,
+      "checked": 1795210518.5968142
+    },
+    {
+      "id": "ru",
+      "kind": "country",
+      "source": "ru",
+      "name": "",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error [Errno -3] Temporary failure in name resolution>; raw.githubusercontent.com: <urlopen error [Errno -3] Temporary failure in name resolution>; www.ipdeny.com: <urlopen error [Errno -3] Temporary failure in name resolution>"
+        }
+      },
+      "checked": 1795210520.8720725
+    },
+    {
+      "id": "cn",
+      "kind": "country",
+      "source": "cn",
+      "name": "",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error [Errno -3] Temporary failure in name resolution>; raw.githubusercontent.com: <urlopen error [Errno -3] Temporary failure in name resolution>; www.ipdeny.com: <urlopen error [Errno -3] Temporary failure in name resolution>"
+        }
+      },
+      "checked": 1795210518.9357355
+    }
+  ],
+  "clients": {
+    "6ZPSzTAEFr/fmdxQmhBg9PAHvidoqZCse4uxeHYzcqw=": {
+      "outbound": "up:u8c1c24",
+      "rules_mode": "custom",
+      "rules": [
+        {
+          "id": "r_029133",
+          "lists": [
+            "l89ba57"
+          ],
+          "outbound": "direct",
+          "enabled": true,
+          "comment": "home"
+        }
+      ],
+      "note": "phone",
+      "name": "alice"
+    },
+    "K3Awv8HaO4/lkOvi++LFraqqsL0an/ryfppuBWDXK6s=": {
+      "outbound": "block",
+      "rules_mode": "inherit",
+      "rules": [],
+      "note": "",
+      "name": "bob"
+    }
+  },
+  "keys": {
+    "6ZPSzTAEFr/fmdxQmhBg9PAHvidoqZCse4uxeHYzcqw=": "Pv8I/S961yhy/YTtlZTAfGug9GRjgr5q8VMWcC8F2u4=",
+    "K3Awv8HaO4/lkOvi++LFraqqsL0an/ryfppuBWDXK6s=": "GwwHpWtjBXz7opddfys/NaVXYEHa2DVfPl+x9EUNsUU=",
+    "/eZdmcBvbexbsWbkZbJZr2i60GhvmqMr1c5u3lgr/dc=": "qCSHPyqa4DEGfX4nTT5rq0L4mobE1yTT5z3+NRpkB/I="
+  },
+  "limits": {
+    "6ZPSzTAEFr/fmdxQmhBg9PAHvidoqZCse4uxeHYzcqw=": {
+      "quota_done": null,
+      "quota_warned": null,
+      "expires": 1900000000,
+      "quota": 21474836480,
+      "period": "month",
+      "rate_down": 5.0,
+      "rate_up": 1.0
+    },
+    "K3Awv8HaO4/lkOvi++LFraqqsL0an/ryfppuBWDXK6s=": {
+      "quota_done": null,
+      "quota_warned": null,
+      "expires": 1800000000,
+      "quota": 1610612736,
+      "period": "total"
+    }
+  },
+  "shares": {
+    "yYz8YFCbAhUcgxylh_1uQIs8": {
+      "pk": "6ZPSzTAEFr/fmdxQmhBg9PAHvidoqZCse4uxeHYzcqw=",
+      "created": 1795210517.0140014
+    },
+    "eXJyREy5oq2vSyI7xV6IDENN": {
+      "pk": "K3Awv8HaO4/lkOvi++LFraqqsL0an/ryfppuBWDXK6s=",
+      "created": 1795210517.0230017
+    },
+    "kf_5UrJqocAcaA8M6xCPXfFb": {
+      "pk": "/eZdmcBvbexbsWbkZbJZr2i60GhvmqMr1c5u3lgr/dc=",
+      "created": 1795210517.0302188
+    }
+  },
+  "cps": {
+    "6ZPSzTAEFr/fmdxQmhBg9PAHvidoqZCse4uxeHYzcqw=": {
+      "preset": "icloud"
+    },
+    "K3Awv8HaO4/lkOvi++LFraqqsL0an/ryfppuBWDXK6s=": {
+      "preset": "custom",
+      "values": {
+        "I1": "<b 0x0102030405060708>",
+        "I2": "",
+        "I3": "",
+        "I4": "",
+        "I5": ""
+      }
+    }
+  },
+  "chost": {
+    "6ZPSzTAEFr/fmdxQmhBg9PAHvidoqZCse4uxeHYzcqw=": "198.51.100.20"
+  },
+  "settings": {
+    "list_update_hours": 12,
+    "on_stop": "restore",
+    "shaping": {
+      "down": 200.0,
+      "up": 100.0
+    },
+    "telegram": {
+      "enabled": true,
+      "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "chat_id": "-1001234567",
+      "lang": "ru",
+      "events": {
+        "exit": true,
+        "server": true,
+        "system": true,
+        "clients": true,
+        "login": false,
+        "tls": true,
+        "update": true
+      },
+      "via": "up:u76e2f5",
+      "control": true,
+      "clients": true,
+      "client_notify": true,
+      "backup": "weekly",
+      "backup_pw": "tg-backup-pass",
+      "backup_last": null,
+      "backup_error": null
+    },
+    "client_dns": [
+      "1.1.1.1",
+      "9.9.9.9"
+    ],
+    "client_mtu": 1380,
+    "client_keepalive": "25",
+    "panel_dns": true,
+    "panel_dns_enc": "doh",
+    "dom_filter": true,
+    "public_host": "vpn.example.com",
+    "extra_hosts": [
+      "198.51.100.20"
+    ],
+    "client_host": "198.51.100.21"
+  },
+  "upgraded": [
+    "rule_names",
+    "client_bot"
+  ],
+  "await_first": {}
+}

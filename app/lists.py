@@ -202,7 +202,11 @@ def fetch_domains(lst: dict) -> tuple[list[str], list[str]]:
     errors = []
     for url in urls:
         try:
-            found += domains.parse(_fetch(url))
+            got = domains.parse(_fetch(url))
+            if not got:
+                # пустой ответ 200 — тоже сбой: иначе домены этой ссылки молча пропадали до следующего обновления
+                raise RuntimeError("empty")
+            found += got
         except Exception as e:  # noqa: BLE001
             errors.append(f"{url.split('/')[2]}: {e}")
     if errors and (not found or len(errors) == len(urls) and not text.strip()):

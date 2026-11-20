@@ -600,6 +600,8 @@ class Proxy:
         mode = "plain" if servers else (self.cfg.get("encrypt") or "plain")
         servfail = None
         for server in servers or self.cfg.get("upstreams") or []:
+            if not servers and mode == "plain" and server == self.self_addr:
+                continue        # общий сервер = адрес этого DNS: спрашивал бы сам себя по кругу (Г20 проверки 1.23.0)
             qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
             out = struct.pack("!H", qid) + query[2:]
             try:

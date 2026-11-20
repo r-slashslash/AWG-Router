@@ -560,10 +560,11 @@ class ServerManager:
                     sc.set(k, v)
                 if awgserver.server_side_changed(old, sc.params()):
                     restart = True
-            try:
-                port = int(body.get("port") or sc.port)
-            except (TypeError, ValueError):
-                raise UserError(Msg("srv.bad_port")) from None
+            raw = body.get("port") or sc.port
+            # 1.5 и true int() молча делал портом 1: только целое число или строка из цифр
+            if isinstance(raw, bool) or not (isinstance(raw, int) or (isinstance(raw, str) and raw.strip().isdigit())):
+                raise UserError(Msg("srv.bad_port"))
+            port = int(raw)
             new_port = None
             if port != sc.port:
                 if not 1 <= port <= 65535:
@@ -647,6 +648,10 @@ class ServerManager:
                 raise UserError(Msg("srv.bad_port")) from None
             if port in system.AWG_RESERVED:
                 raise UserError(Msg("srv.port_dns", port=port))
+            try:
+                ipaddress.ip_network(str(subnet), strict=False)
+            except ValueError:
+                raise UserError(Msg("err.bad_value")) from None       # раньше — ошибка 500
             system.init_host_server(t, port, subnet, awgserver.generate_params(True))
             self.e.event("info", Msg("ev.server_created", port=port))
             self.e.trigger()

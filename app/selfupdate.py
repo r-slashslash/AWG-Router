@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from . import config, system
+from . import config, hostnet, system
 from .i18n import Msg, MsgError
 
 log = logging.getLogger("awgr.selfupdate")
@@ -95,9 +95,11 @@ def log_lines(n: int = 30, path: str | None = None) -> list[str]:
 
 def installer_running() -> bool:
     try:
-        return time.time() - os.path.getmtime(INSTALLING) < STALE
+        age = time.time() - os.path.getmtime(INSTALLING)
     except OSError:
         return False
+    up = hostnet.uptime()                 # отметка старше загрузки системы — установщик оборвался выключением
+    return age < STALE and (up is None or age < up)
 
 
 def status() -> dict:

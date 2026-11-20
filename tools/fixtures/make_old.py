@@ -138,9 +138,13 @@ def populate(p: Panel) -> None:
     if off:
         p.call("PUT", f"/api/upstreams/{off}", {"enabled": False})
 
+    # с 1.22.0 новая установка — без списков: страны ru и cn для правила «geo» заводятся сами (в прежних выпусках
+    # они уже есть — отказ «err.country_exists» не мешает)
+    for cc in ("ru", "cn"):
+        p.call("POST", "/api/lists", {"kind": "country", "source": cc})
     st = p.call("GET", "/api/state") or {}
     rules = (st.get("routing") or {}).get("rules") or []
-    rules = [{k: r.get(k) for k in ("id", "lists", "outbound", "enabled", "comment") if k in r} for r in rules]
+    rules = [{k: r.get(k) for k in ("id", "lists", "outbound", "enabled", "comment", "dns") if k in r} for r in rules]
     rules.append({"lists": ["ru", "cn"], "outbound": "direct", "comment": "geo"})
     if "office" in ids and px:
         rules.append({"lists": [ids["office"]], "outbound": f"up:{px}", "comment": "Proxy"})   # подпись = имя выхода

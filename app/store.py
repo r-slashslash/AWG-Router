@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 
@@ -224,7 +225,20 @@ class Store:
                 raise e from None
             log.warning("state.json is damaged (%s): using the previous version from state.json.bak; "
                         "the damaged file is kept as state.json.broken", e)
-            os.replace(self.path, self.path + ".broken")
+            # прежняя версия встаёт на место state.json сразу, а не при первой записи: раньше повреждённый файл
+            # переименовывался, и если первая запись не удалась (нет места), следующий запуск видел «нет файла» и
+            # начинал с пустых настроек — клиенты мимо выходов (Г6 глубокой проверки 1.23.0). Не вышло скопировать —
+            # state.json остаётся повреждённым, и следующий запуск снова возьмёт state.json.bak
+            try:
+                shutil.copyfile(self.path, self.path + ".broken")
+                tmp = self.path + ".restore"
+                shutil.copyfile(self.path + ".bak", tmp)
+                with open(tmp, "rb") as f:
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.path)
+                fsync_dir(os.path.dirname(self.path))
+            except OSError as err:
+                log.warning("could not put state.json.bak in place: %s", err)
             return state
 
     def _write(self, state: dict | None = None) -> None:

@@ -194,6 +194,10 @@ def put_client(req, pk):
     body = req.json()
 
     def fn(st):
+        # клиента удалили с другого устройства, а окно его осталось открытым: «Сохранить» не должно возвращать его запись
+        # (Г29 глубокой проверки 1.23.0) — списки его своих правил считались бы занятыми и не удалялись
+        if pk not in st["clients"] and engine.clients and not any(x["public_key"] == pk for x in engine.clients):
+            bad("err.client_gone", 404)
         old = st["clients"].get(pk) or {}
         before = routing.rule_lists(old.get("rules") if old.get("rules_mode") == "custom" else [])
         c = {**checks.client_policy(st, body, engine.dns_listen()),

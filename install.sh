@@ -451,6 +451,10 @@ kernel_next() {
   echo "  To go back to amneziawg-go: apt remove amneziawg-dkms && rm -f $MODLOAD, then reboot the server."
 }
 
+# without root .env is unreadable (0600): info would print "ready" with no link and no password
+if [ "$INFO_ONLY" = 1 ] && [ "$(id -u)" != 0 ] && [ -f "$DIR/.env" ] && [ ! -r "$DIR/.env" ]; then
+  die "Run as root: sudo awg-router info"
+fi
 if [ "$INFO_ONLY" = 1 ]; then print_info; exit 0; fi
 [ "$(id -u)" = 0 ] || die "Run as root: sudo bash install.sh"
 if [ "$KERNEL_ONLY" = 1 ]; then install_kernel; exit $?; fi
@@ -679,6 +683,17 @@ AWG_MODE="$(envget AWG_MODE)"; ACCESS="$(envget PANEL_ACCESS)"
 AWG_INIT_PORT=""; INSTALL_AWG=""; AWG_PORT=""
 
 find_amnezia() { [ "$HAVE_DOCKER" = 1 ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^amnezia-awg2?$' | sort -r | head -1; }
+# A move to the host cut off between the rename and the host config (move_server) leaves the server with its clients
+# stopped as $SRV_NAME-moved-<time>: with no container of the usual name and no server on the host, bring it back
+# before anything is decided — otherwise a new server would be offered and the clients' one would lie forgotten
+if [ "$HAVE_DOCKER" = 1 ] && [ ! -f "${HOSTCONF:-/etc/amnezia/amneziawg/awg0.conf}" ] && ! docker inspect "${SRV_NAME:-amnezia-awg2}" >/dev/null 2>&1; then
+  MOVED="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^${SRV_NAME:-amnezia-awg2}-moved-[0-9]{8}-[0-9]{6}\$" | sort | tail -1)"
+  if [ -n "$MOVED" ] && docker rename "$MOVED" "${SRV_NAME:-amnezia-awg2}" >/dev/null 2>&1; then
+    docker update --restart always "${SRV_NAME:-amnezia-awg2}" >/dev/null 2>&1
+    docker start "${SRV_NAME:-amnezia-awg2}" >/dev/null 2>&1
+    ok "Container $MOVED (a move to the host that was cut off) is ${SRV_NAME:-amnezia-awg2} again and running"
+  fi
+fi
 AMN="$(find_amnezia)"
 if [ -z "$AMN" ] && [ "$HAVE_DOCKER" = 1 ]; then   # the container exists but is stopped — start it
   STOPPED="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^amnezia-awg2?$' | sort -r | head -1)"
@@ -692,9 +707,19 @@ fi
 # keeps its config in $SRV_DATA, so removing $DIR removes it). It still holds the UDP port and the name, so
 # it is stopped and kept under another name, and a new server is offered below.
 BROKEN=""
-if [ -n "$AMN" ] && ! docker exec "$AMN" sh -c 'ls /opt/amnezia/awg/*.conf' >/dev/null 2>&1; then
-  BROKEN="$AMN"; AMN=""
-  warn "Container $BROKEN has no AmneziaWG config in /opt/amnezia/awg (its folder was deleted?): there is no server to manage"
+if [ -n "$AMN" ]; then
+  # 125-127: docker exec itself failed (the daemon or the container hiccuped) — that is not "no config": a new server
+  # with new keys would cut every client off. Ask again; still failing — stop and change nothing
+  for _try in 1 2 3; do
+    docker exec "$AMN" sh -c 'ls /opt/amnezia/awg/*.conf' >/dev/null 2>&1; _rc=$?
+    [ "$_rc" -lt 125 ] && break
+    sleep 2
+  done
+  [ "$_rc" -ge 125 ] && die "Could not look into container $AMN (docker exec failed): nothing was changed, run the same command again"
+  if [ "$_rc" != 0 ]; then
+    BROKEN="$AMN"; AMN=""
+    warn "Container $BROKEN has no AmneziaWG config in /opt/amnezia/awg (its folder was deleted?): there is no server to manage"
+  fi
 fi
 retire_broken() { # stop the empty container and keep it under another name: frees the port and the name
   [ -n "$BROKEN" ] || return 0
@@ -1233,10 +1258,14 @@ refresh_own_server() {
   [ -n "$port" ] || { warn "No ListenPort in $SRV_DATA/awg0.conf: the AmneziaWG container keeps its old image"; return 0; }
   step "Updating the AmneziaWG container $AMN (clients reconnect within seconds)"
   prev="$AMN-prev-$(date +%Y%m%d-%H%M%S)"
+  # the same mark as a port change in the panel (system.recover_renamed): cut off between the stop and the rename,
+  # the container is left stopped under its usual name with no restart policy, and the panel brings it back by the mark
+  (umask 077; printf '{"old": "%s"}\n' "$prev" >"$DIR/data/port-change.json")
   docker update --restart no "$AMN" >/dev/null 2>&1
   docker stop "$AMN" >/dev/null 2>&1
   if ! docker rename "$AMN" "$prev" >/dev/null 2>&1; then
     docker update --restart always "$AMN" >/dev/null 2>&1; docker start "$AMN" >/dev/null 2>&1
+    rm -f "$DIR/data/port-change.json"
     warn "Could not rename the AmneziaWG container: it keeps the old image"; return 0
   fi
   AWG_PORT="$port"
@@ -1247,6 +1276,7 @@ refresh_own_server() {
     done
   fi
   if docker exec "$SRV_NAME" ip link show awg0 >/dev/null 2>&1; then
+    rm -f "$DIR/data/port-change.json"
     docker rm -f "$prev" >/dev/null 2>&1
     [ -n "$old_img" ] && docker image rm "$old_img" >/dev/null 2>&1
     ok "AmneziaWG runs on the new image: container $SRV_NAME, UDP port $AWG_PORT"
@@ -1256,6 +1286,7 @@ refresh_own_server() {
     docker rename "$prev" "$SRV_NAME" >/dev/null 2>&1
     docker update --restart always "$SRV_NAME" >/dev/null 2>&1
     docker start "$SRV_NAME" >/dev/null 2>&1
+    rm -f "$DIR/data/port-change.json"
     warn "The new AmneziaWG container did not come up (see $DIR/data/awg-new.log): the old one is running again"
   fi
 }
@@ -1343,7 +1374,17 @@ for _ in $(seq 1 300); do
   [ -f "$DIR/data/status.json" ] && break
   sleep 1
 done
-[ -f "$DIR/data/status.json" ] || { docker logs --tail 30 "$NAME"; die "The panel did not start"; }
+if [ ! -f "$DIR/data/status.json" ]; then
+  docker logs --tail 30 "$NAME"
+  # an update whose new panel doesn't start: the previous image is still here (untagged) — put it back and start it,
+  # so the server isn't left without a panel until someone fixes it by hand
+  if [ -n "$OLD_IMAGE_ID" ] && [ "$OLD_IMAGE_ID" != "$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" ] \
+     && docker tag "$OLD_IMAGE_ID" "$IMAGE" >/dev/null 2>&1; then
+    warn "The new panel did not start: the previous one is started again"
+    docker compose up -d --no-build --force-recreate >>"$DIR/data/up.log" 2>&1 || true
+  fi
+  die "The panel did not start"
+fi
 # The previous panel image is not used any more: each update would otherwise leave ~100 MB behind
 if [ -n "$OLD_IMAGE_ID" ] && [ "$OLD_IMAGE_ID" != "$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" ]; then
   docker image rm "$OLD_IMAGE_ID" >/dev/null 2>&1 || true

@@ -129,7 +129,7 @@ def make_session() -> str:
 
 
 def check_session(v: str | None) -> bool:
-    if not v or v.count(".") != 2:
+    if not v or v.count(".") != 2 or not v.isascii():      # не-ASCII: compare_digest падал (500 и трассировка)
         return False
     exp, pw, sig = v.split(".")
     if not hmac.compare_digest(sig, _sign(exp + pw)):

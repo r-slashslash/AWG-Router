@@ -19,6 +19,19 @@ it grows, so every user-visible change gets a new version.
   them, and with ECH the rule can't read the name. IPv6 forwarding from the clients' interface is refused by a separate
   table `ip6 awgr6` (`Engine._sync_v6`, best effort: a network without IPv6 just has none): a host server installed by
   another script gave clients IPv6 past every rule.
+- **More fixes from the full audit (stage 2).** A damaged `state.json` is replaced by `state.json.bak` right away
+  (`Store._read`), not at the first write: a failed write left no file, and the next start began with empty settings.
+  Saving a client that was deleted on another device is refused (`err.client_gone`) instead of writing it back. DNS on
+  the server skips its own address among the shared servers (it asked itself in a loop). A domain list link that
+  answers empty counts as failed, so the list keeps its old content. Odd input answers 400 instead of 500 (a subnet in
+  `/api/server/init`, «²» in a number, masking values that aren't an object, a non-ASCII cookie), and a port `1.5` or
+  `true` is refused instead of becoming port 1. The installer: a failed `docker exec` into the AmneziaVPN app's container
+  stops it instead of setting the container aside and making a new server; a move to the host cut off before the host
+  config brings `-moved-` back; a new panel that doesn't start after an update falls back to the previous image; the own
+  container update writes `data/port-change.json` before the stop, so `recover_renamed` brings back an update cut off
+  before the rename; `awg-router info` without root asks for sudo. The install mark older than the system boot is stale
+  (`selfupdate.installer_running`). `tests/fixtures/old/1.22.0` added; `make_old.py` creates the country lists itself and
+  keeps a rule's `dns`.
 - **Fixes from the full audit.** Backups up to 24 MB are accepted by `/api/restore` and `/api/backup/decrypt`
   (`backup.BACKUP_BODY`; a password-protected backup over ~3 MB hit the 4 MB request limit). Client config values
   refuse every line break `str.splitlines` knows (U+2028 and others), not only `\n`/`\r`. A 2FA code in Persian,

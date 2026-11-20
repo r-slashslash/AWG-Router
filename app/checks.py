@@ -421,6 +421,8 @@ def cps_entry(preset, values=None) -> dict | None:
     if p not in (*cps.PRESETS, "custom", "server"):
         bad("err.bad_value")
     if p == "custom":
+        if values is not None and not isinstance(values, dict):
+            bad("err.bad_value")                                       # раньше — ошибка 500
         try:
             return {"preset": "custom", "values": cps.validate(values or {})}
         except cps.CPSError as e:
