@@ -28,6 +28,7 @@ for l in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^awg
 done
 nft delete table ip awgr 2>/dev/null || true
 nft delete table ip awgr_acct 2>/dev/null || true
+nft delete table ip6 awgr6 2>/dev/null || true
 ip rule show 2>/dev/null | awk -F: '$1 >= 20000 && $1 < 21000 {print $1}' | while read -r p; do
   ip rule del priority "$p" || true
 done

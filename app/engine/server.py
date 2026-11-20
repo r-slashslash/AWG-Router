@@ -9,6 +9,15 @@ from .. import config, hostnet, kernelmod, system
 from ..i18n import Msg, msg_of
 from .common import KERNEL_MIN, RUN_DIR, log
 
+V6_TABLE = "awgr6"
+
+
+def v6_ruleset(iface: str) -> str:
+    """Таблица ip6 панели: IPv6 из интерфейса клиентов дальше не пересылается (см. Engine._sync_v6)."""
+    return (f"table ip6 {V6_TABLE}\nflush table ip6 {V6_TABLE}\ntable ip6 {V6_TABLE} {{\n"
+            "\tchain forward {\n\t\ttype filter hook forward priority filter - 1; policy accept;\n"
+            f'\t\tiifname "{iface}" reject with icmpv6 type admin-prohibited\n\t}}\n}}\n')
+
 SERVER_GRACE = 30        # с: столько интерфейса сервера в контейнере может не быть, прежде чем панель его поднимет
 SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытками поднять сервер, если не помогает, с
 KERNEL_GIVE_UP = 2       # столько перезапусков сервер не поднялся на модуле ядра — панель переводит его на amneziawg-go
@@ -180,6 +189,27 @@ class ServerMixin:
             t.ns(["nft", "-f", path], timeout=60)
         except Exception as e:  # noqa: BLE001  — обычное применение в конце прохода скажет об ошибке само
             log.warning("rules before tunnels: %s", e)
+
+    def _sync_v6(self, t: system.Target) -> None:
+        """IPv6 клиентов закрыт (пересмотр Б8 глубокой проверки 1.23.0, Г3; владелец 2026-11-21). Правила панели — только
+        для IPv4, а сервер «на хосте», поставленный сторонним скриптом, раздаёт клиентам IPv6 и выпускает его в интернет
+        мимо выходов и блоков. Пересылка IPv6 из интерфейса клиентов — отказ (reject: приложение сразу берёт IPv4).
+        Отдельная таблица и без ошибки прохода: в сети без IPv6 её может не быть, а правила IPv4 важнее."""
+        if config.DRY_RUN:
+            return
+        key = (t.key, t.iface)
+        if getattr(self, "_v6_key", None) == key and t.ns(
+                ["nft", "list", "table", "ip6", V6_TABLE], check=False).returncode == 0:
+            return
+        path = os.path.join(RUN_DIR, "ruleset6.nft")
+        with open(path, "w") as f:
+            f.write(v6_ruleset(t.iface))
+        p = t.ns(["nft", "-f", path], check=False)
+        if p.returncode == 0:
+            self._v6_key = key
+        elif getattr(self, "_v6_key", None) != ("failed",) + key:
+            self._v6_key = ("failed",) + key            # в журнал — один раз на цель
+            log.info("IPv6 of clients: no ip6 table here: %s", (p.stderr or "").strip()[:200])
 
     def _hold_path(self, t: system.Target) -> str | None:
         """Где лежит файл правил «до панели» (HOLD_FILE) — там, где его применит сам сервер при запуске:

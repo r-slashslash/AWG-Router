@@ -482,7 +482,7 @@ function editClient(pk, section = null) {
   const newLists = [];
   $("#modal").addEventListener("close", () => dropNewLists(newLists.splice(0)), { once: true });
   const setRules = (next) => draft.rules.splice(0, draft.rules.length, ...next);
-  const openOwn = (i) => ruleWindow(i === null ? { lists: [], outbound: "direct", enabled: true, comment: "" } : draft.rules[i], {
+  const openOwn = (i) => ruleWindow(i === null ? { lists: [], outbound: "block", enabled: true, comment: "" } : draft.rules[i], {
     title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("rw.done"), at: i === null ? draft.rules.length : i,
     ok: (nr, made) => { setRules(withRule(draft.rules, i, nr)); newLists.push(...made); drawMode(); },
     del: i === null ? null : { i, fn: () => { draft.rules.splice(i, 1); drawMode(); } },

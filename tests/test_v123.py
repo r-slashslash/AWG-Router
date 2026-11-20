@@ -493,3 +493,30 @@ class AuditSmallFixesTest(unittest.TestCase):
                 fn(Req())
         self.assertEqual(seen, [backup.BACKUP_BODY] * 2)
         self.assertGreater(backup.BACKUP_BODY, 4 * web.MAX_BODY)
+
+
+class ClientIPv6ClosedTest(unittest.TestCase):
+    """Пересмотр Б8 (Г3, владелец 2026-11-21): IPv6 клиентов не пересылается — правила панели только для IPv4, а
+    сервер «на хосте» от стороннего скрипта выпускал IPv6 клиентов в интернет мимо выходов."""
+
+    def test_table_applied_once_and_failure_is_quiet(self):
+        from app.engine import server as srv_mod
+        e = engine_mod.Engine.__new__(engine_mod.Engine)
+        calls = []
+
+        class T:
+            key, iface = "k1", "awg0"
+
+            def ns(self, cmd, check=True, **kw):
+                calls.append(cmd)
+                return mock.Mock(returncode=0, stdout="", stderr="")
+        t = T()
+        with mock.patch.object(engine_mod.config, "DRY_RUN", False), \
+                mock.patch.object(srv_mod, "RUN_DIR", self.enterContext(__import__("tempfile").TemporaryDirectory())):
+            e._sync_v6(t)
+            self.assertIn("-f", calls[-1])
+            e._sync_v6(t)                                               # уже стоит — только проверка
+            self.assertEqual(calls[-1][:4], ["nft", "list", "table", "ip6"])
+        text = srv_mod.v6_ruleset("awg0")
+        self.assertIn('iifname "awg0" reject', text)
+        self.assertIn("hook forward", text)

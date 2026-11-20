@@ -187,7 +187,7 @@ async function editUpstream(id) {
       <label class="check"><input type="checkbox" id="u-rdef" ${out && S.routing.default === out ? "checked" : ""}><span>${esc(t("ex.route_default"))}</span></label>
     </fieldset>
     <label class="field"><span>${esc(t("ex.fallback"))}</span>
-      <select data-field="fallback" id="u-fb">${outOptions(u ? u.fallback : "direct", { exclude: out })}</select>
+      <select data-field="fallback" id="u-fb">${outOptions(u ? u.fallback : "block", { exclude: out })}</select>
       <span class="hint">${esc(t("ex.fallback_hint"))}</span>
     </label>
     <div class="row2">
@@ -208,7 +208,10 @@ async function editUpstream(id) {
   u && u.iface);
   const F = { host: $("#u-sh"), port: $("#u-sp"), user: $("#u-su"), pass: $("#u-sw") };
   const ta = $("#u-conf");
-  let routeTouched = false;
+  let routeTouched = false, rdefTouched = false;
+  // новый выход AWG становится основным, если основного ещё нет и в нём не вписаны свои сайты: вписали сайты — выход для
+  // них, а не для всего трафика (решение владельца 2026-11-21)
+  const rdefAuto = () => kind !== "socks5" && S.routing.default === "direct" && !$("#u-doms").value.trim();
   const toFields = () => {
     const f = socksParse(ta.value);
     if (f) for (const k in F) F[k].value = f[k];
@@ -222,7 +225,7 @@ async function editUpstream(id) {
     $("#u-sf").hidden = !socks;
     $("#u-filef").hidden = socks;
     // новый выход AWG, пока ничего не выбрано, становится основным, если основного ещё нет (как раньше)
-    if (!u && !routeTouched) $("#u-rdef").checked = !socks && S.routing.default === "direct";
+    if (!u && !routeTouched) $("#u-rdef").checked = rdefAuto();
     $("#u-conf-l").textContent = t(socks ? "ex.socks_line" : "ex.config");
     $("#u-conf-h").textContent = socks ? t("ex.socks_line_hint") : t("ex.config_hint");
     ta.placeholder = socks ? "socks5://login:password@203.0.113.20:1080" : t("ex.config_ph");
@@ -244,6 +247,8 @@ async function editUpstream(id) {
     if (!u && looksSocks(ta.value)) { buf.socks5 = ta.value.trim(); buf.awg = ""; kind = "socks5"; draw(); }   // вставили прокси — сразу SOCKS5
   };
   $$("#u-route input, #u-route textarea").forEach((el) => el.addEventListener("input", () => routeTouched = true));
+  $("#u-rdef").addEventListener("change", () => { rdefTouched = true; });
+  $("#u-doms").addEventListener("input", () => { if (!u && !rdefTouched) $("#u-rdef").checked = rdefAuto(); });
   $("#u-file").onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
     ta.value = buf.awg = (await f.text()).trim();

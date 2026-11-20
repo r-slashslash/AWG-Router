@@ -112,7 +112,7 @@ def add_upstream(req):
 
     def fn(st):
         with field("fallback"):
-            fb = checks.fallback(st, None, body.get("fallback") or "direct")
+            fb = checks.fallback(st, None, body.get("fallback") or "block")      # по умолчанию — «Блокировать» (2026-11-21)
         with field("quota_action"):
             action = checks.quota_action(st, body.get("quota_action"), None)
         u = {"id": new_id("u"), "name": name, "num": Store.free_num(st), "config": pc.raw,

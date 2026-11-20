@@ -359,7 +359,7 @@ function viewRouting() {
 /** окно правила i вкладки (null — новое): «Сохранить» и «Удалить правило» сохраняются сразу */
 function openRoutingRule(i) {
   const rules = S.routing.rules;
-  const r = i === null ? { lists: [], outbound: "direct", enabled: true, comment: "" } : rules[i];
+  const r = i === null ? { lists: [], outbound: "block", enabled: true, comment: "" } : rules[i];
   ruleWindow(r, {
     title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("btn.save"),
     at: i === null ? rules.length : i,

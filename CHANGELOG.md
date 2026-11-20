@@ -12,6 +12,13 @@ it grows, so every user-visible change gets a new version.
   fallback Block). Now an exit with no record is a block, like a `connecting` one; an AWG exit that waits for the
   server on the kernel module (`engine_pending`) is `connecting` too instead of `down`. `c_guard_post` drops every
   sniproxy.py policy mark (0xd100–0xe0ff), not only the first 256.
+- **Safer defaults and client IPv6 closed** (owner's answers to the full audit, 2026-11-21). A new exit gets the fallback
+  Block (`api/exits.py`, the exit window), a new rule — the exit Block (`openRoutingRule`, a client's own rules). A new
+  AWG exit with own sites typed in no longer becomes the default exit by itself (`rdefAuto` in `js/exits.js`). With DNS
+  on the server, names from domain rules get no HTTPS/SVCB records (`dnsproxy.T_HTTPS`): Chrome takes ECH keys from
+  them, and with ECH the rule can't read the name. IPv6 forwarding from the clients' interface is refused by a separate
+  table `ip6 awgr6` (`Engine._sync_v6`, best effort: a network without IPv6 just has none): a host server installed by
+  another script gave clients IPv6 past every rule.
 - **Fixes from the full audit.** Backups up to 24 MB are accepted by `/api/restore` and `/api/backup/decrypt`
   (`backup.BACKUP_BODY`; a password-protected backup over ~3 MB hit the 4 MB request limit). Client config values
   refuse every line break `str.splitlines` knows (U+2028 and others), not only `\n`/`\r`. A 2FA code in Persian,

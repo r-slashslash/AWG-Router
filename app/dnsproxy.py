@@ -82,6 +82,7 @@ SET_FLUSH = 0.3             # с: адреса копятся и уходят в
 SET_LIVE_MAX = 200000       # живых адресов в памяти для повторного добавления; больше — старые забываются
 
 T_OPT, T_SOA, T_A, T_AAAA = 41, 6, 1, 28
+T_SVCB, T_HTTPS = 64, 65   # записи SVCB и HTTPS: в HTTPS браузер берёт ключи ECH
 RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
 
 
@@ -498,6 +499,12 @@ class Proxy:
             # приложение сначала ждало бы соединения, которое не пройдёт, и только потом брало IPv4.
             # Ответ «записей нет» (NOERROR без записей) — и оно сразу идёт по IPv4.
             self.stats["aaaa"] = self.stats.get("aaaa", 0) + 1
+            return error_reply(query, q, 0)
+        if dom and q["qtype"] in (T_HTTPS, T_SVCB) and q["qclass"] == 1:
+            # ECH: ключи ECH браузер берёт из записи HTTPS (Cloudflare включил ECH по умолчанию), и тогда имя сайта в
+            # ClientHello зашифровано — правило по доменам его не узнаёт, и сайт идёт по правилам адресов. Для имён из
+            # правил по доменам — «записей нет»: браузер открывает сайт без ECH (решение владельца 2026-11-21)
+            self.stats["https_rr"] = self.stats.get("https_rr", 0) + 1
             return error_reply(query, q, 0)
         if servers:
             self.stats["own_dns"] = self.stats.get("own_dns", 0) + 1

@@ -528,6 +528,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             self._save_hold(t, st)
             self._sync_rules(t)
             try:
+                self._sync_v6(t)
+            except Exception:  # noqa: BLE001
+                log.exception("ipv6 table")
+            try:
                 self._sync_shaping(t, st)
             except Exception as e:  # noqa: BLE001
                 log.exception("shaping")
@@ -554,6 +558,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 self._drop_hold(t)
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
                 t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
+                t.ns(["nft", "delete", "table", "ip6", "awgr6"], check=False)      # server.V6_TABLE
+                self._v6_key = None
                 self._input_rule(t, "del")
                 self._input_rule(t, "del", [("udp", DNS_PORT), ("tcp", DNS_PORT)])
                 self._acct_key = None
