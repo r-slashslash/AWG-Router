@@ -17,7 +17,7 @@ from app.api import backup, routing, state  # noqa: E402
 from app.store import Store  # noqa: E402
 from tests.seed import legacy, legacy_lists  # noqa: E402,F401
 
-R = lambda body: type("R", (), {"json": lambda self: body})()
+R = lambda body: type("R", (), {"json": lambda self, *a: body})()
 NETS = "203.0.113.0/24\n198.51.100.0/25 # склад\n" + "\n".join(f"10.{i // 256}.{i % 256}.0/24" for i in range(3000))
 
 

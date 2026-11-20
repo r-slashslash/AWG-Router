@@ -411,14 +411,19 @@ class ClientProfile:
     keepalive: str = "25"
 
 
+LINE_BREAKS = ("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+
+
 def _one_line(prof: ClientProfile, peer: Peer, priv: str, params: dict[str, str]) -> None:
     """Каждое значение конфига клиента — одна строка. Перевод строки в адресе сервера (или в другом
     поле) дописал бы в конфиг свои строки, например `[Interface]` + `PostUp = …`, а awg-quick и
     wg-quick выполняют PostUp от root на устройстве клиента. Такой конфиг не выдаём."""
-    if any(c in prof.host for c in "\r\n"):
+    if len(prof.host.splitlines()) > 1 or prof.host.endswith(LINE_BREAKS):
         raise ServerConfError(Msg("srv.bad_host"))
     vals = [priv, prof.server_pub, peer.psk, peer.allowed_ips, prof.keepalive, *prof.dns, *params.values()]
-    if any(isinstance(v, str) and ("\n" in v or "\r" in v) for v in vals):
+    # не только \n и \r: str.splitlines (и программы, что разбирают конфиг так же) делят и по \v, \f, \x1c–\x1e,
+    # \x85, U+2028, U+2029 — такой знак в I1 из резервной копии дал бы клиентам лишние строки конфига
+    if any(isinstance(v, str) and any(c in v for c in LINE_BREAKS) for v in vals):
         raise ServerConfError(Msg("err.bad_value"))
 
 

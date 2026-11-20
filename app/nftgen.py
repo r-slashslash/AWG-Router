@@ -411,7 +411,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     out.append("\tchain c_guard_post {\n\t\ttype filter hook postrouting priority filter; policy accept;\n"
                f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "lo" '
                f'oifname != "{config.IFACE_PREFIX}*" drop\n'
-               f"\t\tmeta mark & {EXIT_MASK:#x} == {config.SNIFF_OUT_BASE:#x} drop\n\t}}")
+               # все метки политик sniproxy.py, а не только первые 256 (у сотен клиентов со своими правилами их больше)
+               f"\t\tmeta mark {config.SNIFF_OUT_BASE:#x}-{config.QUIC_PASS_MARK - 1:#x} drop\n\t}}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]

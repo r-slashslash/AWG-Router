@@ -250,6 +250,19 @@ class ClientBotTest(unittest.TestCase):
         self.bot._set_commands(cfg(control=False, clients=True))          # управление выключили
         self.assertEqual(self.tg.last("deleteMyCommands"), {"scope": {"type": "chat", "chat_id": int(CHAT)}})
 
+    def test_menu_refused_does_not_stop_the_bot(self):
+        """Глубокая проверка 1.23.0: канал в «Chat ID» — Telegram отказывает в меню команд для канала, и раньше
+        исключение из setMyCommands обрывало опрос: бот не работал совсем. Отказ Telegram — без меню, но дальше;
+        сбой сети — снова на следующем опросе."""
+        c = cfg(control=True, clients=True)
+        self.tg.fail["setMyCommands"] = notify.NotifyError("Bad Request: can't change commands in channel chats", code=400)
+        self.bot._set_commands(c)                                         # не бросает
+        self.assertTrue(self.bot._st["cmds"].startswith("v2|"))           # и не повторяет каждый опрос
+        self.bot._st["cmds"] = ""
+        self.tg.fail["setMyCommands"] = notify.NotifyError("timeout", net=True)
+        with self.assertRaises(notify.NotifyError):
+            self.bot._set_commands(c)
+
     def test_language(self):
         for code_, lang in (("ru", "ru"), ("zh-hans", "zh"), ("fa", "fa"), ("de", "en"), (None, "en")):
             self.assertEqual(tgbot.client_lang({"language_code": code_}), lang)

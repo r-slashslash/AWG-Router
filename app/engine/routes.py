@@ -26,15 +26,18 @@ class RoutesMixin:
             u = Store.upstream(st, out[3:])
             if not u:
                 return "block"
+            known = u["id"] in self.health     # нет записи: проверки ещё не было (первый проход после запуска панели)
             h = self.health.get(u["id"], {})
             if u.get("enabled", True) and h.get("healthy"):
                 if not self.over_quota(u):
                     return u["num"]
                 return self.resolve(self.quota_target(u), st, depth + 1)
-            if u.get("enabled", True) and h.get("state") == "connecting":
+            if u.get("enabled", True) and (not known or h.get("state") == "connecting"):
                 # выход только что запущен и ещё не ответил (запуск и обновление панели, перезапуск сервера, правка
                 # выхода): обычно это доли секунды — блок, а не резерв, иначе с резервом «Напрямую» клиенты до
-                # следующего прохода шли бы мимо выхода. Не ответил за CONNECTING_SECS — резерв, как раньше
+                # следующего прохода шли бы мимо выхода. Не ответил за CONNECTING_SECS — резерв, как раньше.
+                # Выход без записи — тоже блок: правила до запуска туннелей (_hold_rules) ставятся раньше первой
+                # проверки, и с резервом «Напрямую» после запуска панели клиенты 1–2 с шли мимо выхода
                 return "block"
             return self.resolve(u.get("fallback") or "direct", st, depth + 1)
         return "block"

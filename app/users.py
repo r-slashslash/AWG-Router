@@ -167,7 +167,7 @@ def parse_extra_hosts(value) -> list[str]:
         if not h:
             continue
         try:
-            h = str(ipaddress.ip_address(h))
+            h = str(ipaddress.ip_address(h.replace("%", " ")))     # без зоны IPv6: в ней ipaddress пропускает любой текст
         except ValueError:
             if not _HOSTNAME.fullmatch(h):
                 raise UserError(Msg("srv.bad_extra_host", value=raw.strip()[:60])) from None
@@ -534,7 +534,7 @@ class ServerManager:
                 extra = settings_patch.get("extra_hosts", self.e.store.snapshot()["settings"].get("extra_hosts") or [])
                 if ch and ch not in extra:               # домен — только из дополнительных адресов
                     try:
-                        ch = str(ipaddress.ip_address(ch))
+                        ch = str(ipaddress.ip_address(ch.replace("%", " ")))     # зона IPv6 — отказ, см. выше
                     except ValueError:
                         raise UserError(Msg("srv.bad_client_host")) from None
                 settings_patch["client_host"] = ch

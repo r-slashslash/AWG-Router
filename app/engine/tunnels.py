@@ -392,6 +392,7 @@ class TunnelsMixin:
         now = time.time()
         eng = self.exit_engine()
         wait_engine = self.engine_pending()
+        self._waiting = set()                       # выходы AWG, которые этот проход не запустил, ожидая сервер
         if wait_engine:
             self._pre, self._pre_failed = {}, set()     # выходы AWG ждут сервер: разбирать имена незачем
         else:
@@ -431,6 +432,7 @@ class TunnelsMixin:
                 if f and now < f["next"]:
                     continue                            # пауза после неудачи (UP_PAUSES)
                 if wait_engine and pc.kind == "awg":
+                    self._waiting.add(uid)
                     continue                            # интерфейса сервера ещё нет: см. engine_pending
                 try:
                     self._start_up(t, uid, u, pc, h)
@@ -485,6 +487,11 @@ class TunnelsMixin:
                 self.health[uid] = {"state": "disabled"}
                 continue
             r = self.rt.get(uid)
+            if not r and uid in getattr(self, "_waiting", ()):
+                # ждёт подъёма сервера (engine_pending), а не упал: как «подключается» — блок, а не резерв, иначе с
+                # резервом «Напрямую» после перезапуска контейнера сервера на модуле ядра клиенты шли бы мимо выхода
+                self.health[uid] = {"state": "connecting", "waiting": True}
+                continue
             if not r:
                 self.health.setdefault(uid, {"state": "down"})
                 if self.health[uid].get("state") not in ("error",):

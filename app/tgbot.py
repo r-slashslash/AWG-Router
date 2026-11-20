@@ -1086,8 +1086,15 @@ class Bot:
         elif old.startswith("v2|") and old.split("|")[3] != c["chat_id"]:
             self._drop_chat_commands(c, old.split("|")[3])
         cmds = [{"command": k, "description": tr(c["lang"], "cmd_" + k, False)} for k in COMMANDS]
-        notify._call(c["token"], "setMyCommands",
-                     {"commands": cmds, "scope": {"type": "chat", "chat_id": int(c["chat_id"])}}, via=c["via"])
+        try:
+            notify._call(c["token"], "setMyCommands",
+                         {"commands": cmds, "scope": {"type": "chat", "chat_id": int(c["chat_id"])}}, via=c["via"])
+        except notify.NotifyError as e:
+            if e.net or e.code == 429 or e.code >= 500:
+                raise                       # Telegram недоступен или занят — попробовать снова на следующем опросе
+            # отказ самого Telegram: в канале меню команд не бывает («can't change commands in channel chats»),
+            # у группы, ставшей супергруппой, — старый номер. Без меню бот работает; иначе опрос не начинался вовсе
+            log.warning("telegram: no command menu for this chat: %s", e)
         self._st["cmds"] = sig
         self._save()
 

@@ -213,7 +213,8 @@ def tls_set(req):
         bad("tls.off")
     body = req.json()
     domain = str(body.get("domain") or "").strip().lower().rstrip(".")
-    if domain and not (checks.HOSTNAME_RE.fullmatch(domain) or tlsmgr._is_ip(domain)):
+    # «%» — зона IPv6 (fe80::1%eth0): ipaddress принимает в ней любой текст, а домен уходит в настройки веб-сервера
+    if domain and ("%" in domain or not (checks.HOSTNAME_RE.fullmatch(domain) or tlsmgr._is_ip(domain))):
         bad("tls.bad_domain")
     src = body.get("source")
     if src not in tlsconf.SOURCES:

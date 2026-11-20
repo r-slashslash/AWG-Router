@@ -5,6 +5,23 @@ it grows, so every user-visible change gets a new version.
 
 ## 1.23.0 — 2026-11-19
 
+- **No traffic past the exit while the panel starts** (found by the full audit; also in 1.22.0). The rules put in
+  before the tunnels start (`_hold_rules`) are built before the first health check, and `Engine.resolve` sent an exit
+  with no health record to its fallback: with the fallback Direct (the default), after every panel restart, update and
+  server reboot its clients went past the exit for 1–2 s (the test VPS: one probe past the exit each time; CI uses the
+  fallback Block). Now an exit with no record is a block, like a `connecting` one; an AWG exit that waits for the
+  server on the kernel module (`engine_pending`) is `connecting` too instead of `down`. `c_guard_post` drops every
+  sniproxy.py policy mark (0xd100–0xe0ff), not only the first 256.
+- **Fixes from the full audit.** Backups up to 24 MB are accepted by `/api/restore` and `/api/backup/decrypt`
+  (`backup.BACKUP_BODY`; a password-protected backup over ~3 MB hit the 4 MB request limit). Client config values
+  refuse every line break `str.splitlines` knows (U+2028 and others), not only `\n`/`\r`. A 2FA code in Persian,
+  Arabic-Indic or fullwidth digits is accepted (browser `codeDigits`, `totp.match`; before, the browser dropped them
+  and the API answered 500). The panel domain, extra addresses and the address in configs refuse an IPv6 zone (`%…`:
+  `ipaddress` takes any text there, and the domain goes into the web server's config). The self-signed certificate is
+  written to temporary files first and its CN is cut to 64 characters (a longer domain left a new key with the old
+  certificate, and the panel didn't start again); a key that doesn't match its certificate is regenerated instead of
+  stopping the panel. A refused `setMyCommands` (a channel in Chat ID) no longer stops the bot's polling. Turning 2FA
+  off syncs its folder. The test for repeated top-level names covers `theme.js` and `qrcode.js`.
 - **Rules in their own window, lists inside rules.** The Routing tab has no separate Lists section any more. A rule
   opens in a window (**+ Add rule**, or a click on the rule row; `ruleWindow` in `js/routing.js`, a second `dialog`
   `#modal2` so it also opens over the client window): name, lists — an existing one or a new list made right in the window,

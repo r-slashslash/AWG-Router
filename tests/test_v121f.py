@@ -222,7 +222,8 @@ class GuardTest(unittest.TestCase):
         out = t.split("chain c_guard_post {")[1].split("}")[0]
         self.assertIn("type filter hook postrouting priority filter", out)
         self.assertIn(f'meta mark & 0xffffff00 == {config.MARK_BASE:#x} oifname != "lo" oifname != "awgr*" drop', out)
-        self.assertIn(f"meta mark & 0xffffff00 == {config.SNIFF_OUT_BASE:#x} drop", out)
+        # все метки политик sniproxy.py (Г5 глубокой проверки 1.23.0: больше 256 политик — метки выше 0xd1ff)
+        self.assertIn(f"meta mark {config.SNIFF_OUT_BASE:#x}-{config.QUIC_PASS_MARK - 1:#x} drop", out)
 
     def test_masks_cover_all_marks(self):
         """Метки выходов 1…MAX_UPSTREAMS и политик sniproxy.py попадают под маску, другие метки — нет."""

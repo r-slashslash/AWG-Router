@@ -109,10 +109,15 @@ def backup_loop() -> None:
         engine.stop_ev.wait(900)
 
 
+# Копия больше обычного предела запроса (web.MAX_BODY, 4 МБ): тысяча клиентов с историей трафика или большие ручные
+# списки — 4–5 МБ, а зашифрованная в base64 ещё на треть больше. Только эти два адреса и только после входа
+BACKUP_BODY = 24 * 1024 * 1024
+
+
 @app.post("/api/backup/decrypt")
 def decrypt_backup(req):
     """Зашифрованная копия из Telegram → JSON для обычного восстановления."""
-    body = req.json()
+    body = req.json(BACKUP_BODY)
     try:
         data = base64.b64decode(str(body.get("data") or ""), validate=True)
     except (ValueError, binascii.Error):
@@ -357,7 +362,7 @@ def clean_server_files(srv: dict, kind: str) -> tuple[awgserver.ServerConf, dict
 
 @app.post("/api/restore")
 def restore_backup(req):
-    body = req.json()
+    body = req.json(BACKUP_BODY)
     b = body.get("backup")
     if not isinstance(b, dict) or b.get("format") != BACKUP_FORMAT or not isinstance(b.get("state"), dict):
         bad("err.backup_format")

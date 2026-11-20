@@ -132,7 +132,8 @@ class PanelScriptsTest(unittest.TestCase):
 
     def test_top_level_names_unique(self):
         seen, dup = {}, []
-        for p in panel_js.files() + [os.path.join(ROOT, "app", "static", "i18n.js")]:
+        # theme.js и qrcode.js — тоже обычные <script> панели в одном глобальном окружении (глубокая проверка 1.23.0)
+        for p in panel_js.files() + [os.path.join(ROOT, "app", "static", f) for f in ("i18n.js", "theme.js", "qrcode.js")]:
             for n in self.top_names(read(os.path.relpath(p, ROOT))):
                 if n in seen:
                     dup.append(f"{n}: {seen[n]}, {os.path.basename(p)}")

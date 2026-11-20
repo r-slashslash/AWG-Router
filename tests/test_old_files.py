@@ -140,7 +140,7 @@ class OldFilesTest(unittest.TestCase):
 
     def test_restore_end_to_end(self):
         """Настоящий «Восстановить из файла» (с сервером AWG) на самой старой и самой новой копии."""
-        R = lambda body: type("R", (), {"json": lambda self: body})()
+        R = lambda body: type("R", (), {"json": lambda self, *a: body})()
         if panel.engine.target is None:
             with mock.patch.object(lists, "_fetch", side_effect=OSError("offline")):
                 panel.engine.reconcile()

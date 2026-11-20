@@ -126,7 +126,11 @@ class TLSManager:
             return False
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        ctx.load_cert_chain(cert, key)
+        try:
+            ctx.load_cert_chain(cert, key)
+        except (ssl.SSLError, OSError) as e:      # ключ не от этого сертификата и т. п.: не падать, а выпустить заново
+            log.warning("TLS: %s certificate is not usable: %s", kind, e)
+            return False
         with self._lock:
             changed = self.expires != exp or self.active != kind
             self._ctx, self.active, self.expires = ctx, kind, exp
@@ -165,11 +169,17 @@ class TLSManager:
         names = self.names() or [host]
         if not self._load(cert, key, "selfsigned") or not all(_san_matches(cert, n) for n in names):
             san = ",".join(f"IP:{n}" if _is_ip(n) else f"DNS:{n}" for n in names)
+            # во временные файлы, потом на место: openssl пишет ключ раньше сертификата, и сбой (CN длиннее 64 знаков)
+            # оставлял новый ключ при старом сертификате — следующий запуск панели падал на KEY_VALUES_MISMATCH.
+            # Имена — в subjectAltName, CN — только подпись (не длиннее 64 знаков, предел X.509)
+            tk, tc = key + ".new", cert + ".new"
             subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt",
                             "ec_paramgen_curve:prime256v1", "-nodes", "-days", "825",
-                            "-subj", f"/CN={host}", "-addext", f"subjectAltName={san}",
-                            "-keyout", key, "-out", cert], capture_output=True, timeout=30, check=True)
-            os.chmod(key, 0o600)
+                            "-subj", f"/CN={host[:64]}", "-addext", f"subjectAltName={san}",
+                            "-keyout", tk, "-out", tc], capture_output=True, timeout=30, check=True)
+            os.chmod(tk, 0o600)
+            os.replace(tc, cert)
+            os.replace(tk, key)
             self._load(cert, key, "selfsigned")
 
     # --------------------------------------------------------- свой сертификат

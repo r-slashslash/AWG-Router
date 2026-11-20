@@ -785,7 +785,7 @@ class ReviewFixesTest(unittest.TestCase):
         b = {"format": backup.BACKUP_FORMAT, "state": g}
         # фоновое обновление списков после восстановления не должно ходить в сеть из юнит-теста
         with mock.patch.object(panel.engine, "refresh_lists"):
-            backup.restore_backup(type("R", (), {"json": lambda self: {"backup": b}})())
+            backup.restore_backup(type("R", (), {"json": lambda self, *a: {"backup": b}})())
         return panel.store.snapshot()["settings"]
 
     def test_restore_ignores_old_server_address(self):

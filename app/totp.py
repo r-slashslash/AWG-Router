@@ -46,7 +46,8 @@ def code_at(secret: str, step: int) -> str:
 
 def match(secret: str, code: str, now: float | None = None, after: int = -1) -> int | None:
     """Номер интервала, которому соответствует код, или None. after — уже использованный интервал."""
-    code = "".join(ch for ch in str(code or "") if ch.isdigit())
+    # цифры любой записи (персидские ۱۲۳, арабские, полноширинные) — в ASCII: иначе compare_digest падал (500)
+    code = "".join(str(int(ch)) for ch in str(code or "") if ch.isdecimal())
     if len(code) != DIGITS:
         return None
     cur = int((time.time() if now is None else now) // STEP)
@@ -91,6 +92,7 @@ def save(d: dict | None) -> None:
         if d is None:
             try:
                 os.remove(PATH)
+                fsync_dir(os.path.dirname(PATH))     # после обрыва питания выключенная 2FA не должна вернуться
             except FileNotFoundError:
                 pass
             _cache = (None, None)

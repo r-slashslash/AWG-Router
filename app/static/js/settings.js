@@ -271,7 +271,7 @@ function showRestore(b) {
 }
 function modalAction(btnId, inputId, fn) {
   const go = async () => {
-    const code = $("#" + inputId).value.replace(/\D/g, "");
+    const code = codeDigits($("#" + inputId).value);
     if (code.length !== 6) { $("#" + inputId).focus(); return; }
     $("#" + btnId).disabled = true;
     try { await fn(code); }

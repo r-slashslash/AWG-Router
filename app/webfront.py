@@ -407,7 +407,7 @@ def self_test(webroot: str, host: str, tries: int = 6) -> tuple[bool, str]:
                     r = c.getresponse()
                     got = r.read(256).decode("utf-8", "replace").strip()
                     c.close()
-                except OSError as e:
+                except (OSError, ValueError) as e:         # ValueError: адрес, который http.client не принял
                     detail = f"{addr}: {e}"[:200]
                     if len(addrs) > 1:
                         addrs.remove(addr)      # адрес не отвечает изнутри — дальше пробуем следующий

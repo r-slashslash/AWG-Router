@@ -414,3 +414,82 @@ class DnsEncKeptTest(unittest.TestCase):
             self.assertEqual(backup.clean_backup_state(st)["settings"].get("panel_dns_enc"), want, upgraded)
         st = backup.clean_backup_state({"settings": {"panel_dns": False}, "upgraded": ["rule_names"]})
         self.assertNotIn("panel_dns_enc", st["settings"])               # DNS на сервере выключен — DoH по умолчанию
+
+
+# ------------------------------------------------------------------ Г1 (глубокая проверка 1.23.0): первый проход
+class FirstPassExitTest(unittest.TestCase):
+    """Г1: правила до запуска туннелей (_hold_rules) ставились раньше первой проверки выходов. Выход без записи
+    в health уходил на резерв, и с резервом «Напрямую» после запуска, обновления панели и перезагрузки сервера его
+    клиенты 1–2 с шли мимо выхода (так было и в 1.22.0; подтверждено на тестовом VPS). Так же — выход AWG, который
+    ждёт подъёма сервера на модуле ядра (engine_pending): он не упал, а ещё не запущен."""
+
+    def eng(self):
+        e = engine_mod.Engine.__new__(engine_mod.Engine)
+        e.rt, e.health = {}, {}
+        e.over_quota = lambda u: False
+        st = {"upstreams": [{"id": "u1", "num": 1, "name": "x", "enabled": True, "fallback": "direct"}]}
+        return e, st
+
+    def test_no_record_is_block(self):
+        e, st = self.eng()
+        self.assertEqual(e.resolve("up:u1", st), "block")              # проверки ещё не было
+        st["upstreams"][0]["enabled"] = False
+        self.assertEqual(e.resolve("up:u1", st), "direct")             # выключенный выход — резерв, как раньше
+        st["upstreams"][0]["enabled"] = True
+        e._update_health(mock.Mock(), st)                               # проверка была: туннеля нет — упал
+        self.assertEqual(e.health["u1"]["state"], "down")
+        self.assertEqual(e.resolve("up:u1", st), "direct")
+
+    def test_waiting_for_server_is_block(self):
+        e, st = self.eng()
+        e._waiting = {"u1"}                                             # _sync_upstreams не запустил: ждёт сервер
+        e._update_health(mock.Mock(), st)
+        self.assertEqual(e.health["u1"]["state"], "connecting")
+        self.assertEqual(e.resolve("up:u1", st), "block")
+        e._waiting = set()                                              # сервер поднялся, а выход не запустился
+        e._update_health(mock.Mock(), st)
+        self.assertEqual(e.resolve("up:u1", st), "direct")
+
+
+# ------------------------------------------------------------------ глубокая проверка 1.23.0: почти даром
+class AuditSmallFixesTest(unittest.TestCase):
+    def test_one_line_refuses_every_line_break(self):
+        """Г7: I1 из резервной копии с U+2028 проходил проверку «одна строка» (искала только \\n и \\r)."""
+        from app import awgserver
+        prof = awgserver.ClientProfile(host="203.0.113.5", port=51820, server_pub="pub", dns=["1.1.1.1"])
+        peer = awgserver.Peer(public_key="pk", allowed_ips="10.8.1.2/32")
+        awgserver._one_line(prof, peer, "priv", {"I1": "<b 0xf6ab3267fa>"})               # обычное — можно
+        for c in ("\n", "\r", " ", " ", "\x85", "\x0b", "\x0c", "\x1c"):
+            with self.assertRaises(awgserver.ServerConfError, msg=repr(c)):
+                awgserver._one_line(prof, peer, "priv", {"I1": "<b 0x01>" + c + "[Peer]"})
+            with self.assertRaises(awgserver.ServerConfError, msg=repr(c)):
+                awgserver._one_line(awgserver.ClientProfile(host="h" + c + "x", port=1, server_pub="p", dns=[]),
+                                    peer, "priv", {})
+
+    def test_totp_any_digits(self):
+        """Г9: код 2FA персидскими (۱۲۳) или полноширинными цифрами — тот же код; «²» — не цифра, а не ошибка 500."""
+        from app import totp
+        sec = "JBSWY3DPEHPK3PXP"
+        now = 1_700_000_000
+        code = totp.code_at(sec, int(now // totp.STEP))
+        fa = "".join(chr(0x6F0 + int(d)) for d in code)
+        wide = "".join(chr(0xFF10 + int(d)) for d in code)
+        for c in (code, fa, wide, code[:3] + " " + code[3:]):
+            self.assertIsNotNone(totp.match(sec, c, now=now), c)
+        self.assertIsNone(totp.match(sec, "²" * 6, now=now))
+
+    def test_backup_body_limit(self):
+        """Г2: копия больше 4 МБ (тысяча клиентов с историей, большие списки) не загружалась обратно: 413."""
+        from app.api import backup
+        from app import web
+        seen = []
+
+        class Req:
+            def json(self, limit=web.MAX_BODY):
+                seen.append(limit)
+                return {}
+        for fn in (backup.restore_backup, backup.decrypt_backup):
+            with self.assertRaises((ValueError, KeyError, TypeError, RuntimeError, OSError, LookupError, AttributeError, web.HTTPError)):
+                fn(Req())
+        self.assertEqual(seen, [backup.BACKUP_BODY] * 2)
+        self.assertGreater(backup.BACKUP_BODY, 4 * web.MAX_BODY)

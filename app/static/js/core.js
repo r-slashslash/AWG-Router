@@ -369,6 +369,13 @@ function applyStaticTexts() {
   bindLang("lang-top");
 }
 
+/** код 2FA: цифры любой записи (персидские ۱۲۳, арабские, полноширинные) — в ASCII, остальное прочь. Раньше
+    `\D` выбрасывал персидские цифры, и вход с кодом с персидской клавиатуры молча не проходил */
+function codeDigits(v) {
+  return String(v || "").replace(/[\u0660-\u0669\u06f0-\u06f9\uff10-\uff19]/g, (c) => String(c.charCodeAt(0) & 0xf))
+    .replace(/\D/g, "");
+}
+
 /* ================================================================ вход */
 function showLogin() {
   document.title = "AWG Router";       // адрес и название сервера — только после входа
@@ -386,7 +393,7 @@ $("#login-form").addEventListener("submit", async (e) => {
   $("#login-err").hidden = true;
   const codeWrap = $("#login-code-wrap");
   const body = { password: $("#login-pass").value };
-  if (!codeWrap.hidden) body.code = $("#login-code").value.replace(/\D/g, "");
+  if (!codeWrap.hidden) body.code = codeDigits($("#login-code").value);
   try {
     const r = await api("POST", "login", body);
     if (r && r.need_code) {
