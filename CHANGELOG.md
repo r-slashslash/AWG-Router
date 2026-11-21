@@ -32,6 +32,9 @@ it grows, so every user-visible change gets a new version.
   before the rename; `awg-router info` without root asks for sudo. The install mark older than the system boot is stale
   (`selfupdate.installer_running`). `tests/fixtures/old/1.22.0` added; `make_old.py` creates the country lists itself and
   keeps a rule's `dns`.
+- **The release build pins BuildKit and binfmt by digest** (full audit, Г8): `setup-buildx-action` (`driver-opts:
+  image=moby/buildkit:v0.35.1@sha256:…`) and `setup-qemu-action` (`image: tonistiigi/binfmt:qemu-v10.2.3@sha256:…`)
+  took their default tags, which can be moved to other code. Checked on a GitHub machine: amd64 + arm64 build.
 - **Fixes from the full audit.** Backups up to 24 MB are accepted by `/api/restore` and `/api/backup/decrypt`
   (`backup.BACKUP_BODY`; a password-protected backup over ~3 MB hit the 4 MB request limit). Client config values
   refuse every line break `str.splitlines` knows (U+2028 and others), not only `\n`/`\r`. A 2FA code in Persian,
