@@ -59,7 +59,7 @@ RUN git init -q . && git remote add origin https://github.com/heiher/hev-socks5-
  && make -C /src -j"$(nproc)" ENABLE_STATIC=1 \
  && install -D -m 0755 /src/bin/hev-socks5-tunnel /out/hev-socks5-tunnel
 
-FROM python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e
+FROM python:3.15-alpine@sha256:0f9552bb28711333da16915ec146f5e6bb44a7fdac9ced15dc17c2e0206346dd
 # по этой метке GHCR связывает готовый образ с репозиторием
 LABEL org.opencontainers.image.source="https://github.com/r-slashslash/AWG-Router"
 RUN apk add --no-cache iproute2 iproute2-tc nftables util-linux-misc procps-ng ca-certificates openssl bash
