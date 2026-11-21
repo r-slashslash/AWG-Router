@@ -14,7 +14,7 @@
 # Обновление до кода, который ещё не выпущен: E2E_TO_SRC — адрес архива кода (AWGR_SRC_URL, можно file://;
 # с IMAGES внутри — образы скачиваются, без — собираются здесь), E2E_TO_VERSION — версия этого кода.
 # Свой контейнер сервера AWG (E2E_MODE=container) с 1.22.0 обновляется вместе с панелью: проверяется, что
-# его образ сменился, а порт, интерфейс и клиенты сервера — те же.
+# его образ сменился (при E2E_FROM=latest — что остался тем же), а порт, интерфейс и клиенты сервера — те же.
 # Журналы — в $E2E_LOGS (по умолчанию /tmp/e2e-logs).
 set -uo pipefail
 
@@ -158,11 +158,17 @@ ok "the running panel is $ref"
 if [ -n "$box_before" ] && grep -q "refresh_own_server()" "$DIR/install.sh"; then
   for _ in $(seq 1 20); do docker exec amnezia-awg2 ip link show awg0 >/dev/null 2>&1 && break; sleep 1; done
   box_after=$(srv_box) || fail "the own AWG container is gone after the update"
-  [ "$(cut -d' ' -f1 <<<"$box_after")" != "$(cut -d' ' -f1 <<<"$box_before")" ] || fail "the own AWG container kept its old image"
   [ "$(cut -d' ' -f2 <<<"$box_after")" = "$(cut -d' ' -f2 <<<"$box_before")" ] || fail "the own AWG container has another port"
   [ "$(cut -d' ' -f3 <<<"$box_after")" = "$(cut -d' ' -f3 <<<"$box_before")" ] || fail "the own AWG container lost clients"
-  grep -q "AmneziaWG runs on the new image" "$LOGS/update.log" || fail "the installer did not report the new AWG image"
-  ok "own AWG container: new image ($(docker exec amnezia-awg2 cat /etc/alpine-release 2>/dev/null | sed 's/^/Alpine /')), same port and clients"
+  if [ "$FROM" = "$LATEST" ]; then
+    # обновление «на ту же версию»: образ сервера тот же, и refresh_own_server его справедливо не трогает
+    [ "$(cut -d' ' -f1 <<<"$box_after")" = "$(cut -d' ' -f1 <<<"$box_before")" ] || fail "the same version replaced the own AWG container"
+    ok "own AWG container: the same version keeps its image, port and clients"
+  else
+    [ "$(cut -d' ' -f1 <<<"$box_after")" != "$(cut -d' ' -f1 <<<"$box_before")" ] || fail "the own AWG container kept its old image"
+    grep -q "AmneziaWG runs on the new image" "$LOGS/update.log" || fail "the installer did not report the new AWG image"
+    ok "own AWG container: new image ($(docker exec amnezia-awg2 cat /etc/alpine-release 2>/dev/null | sed 's/^/Alpine /')), same port and clients"
+  fi
 fi
 err=$(jq_py 'd["engine"]["last_error"]' <<<"$s")
 [ "$err" = None ] || fail "the panel reports: $err"

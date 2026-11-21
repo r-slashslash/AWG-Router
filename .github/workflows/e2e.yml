@@ -97,13 +97,12 @@ jobs:
           curl -fsSL --retry 3 "https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${GITHUB_SHA}" \
             | tar -xz --strip-components=1 -C e2e-src
 
-      # прошлые версии без IMAGES собираются на месте, а сборка в России не проходит — поэтому здесь
-      # по умолчанию latest: установка последней версии и обновление на неё же, без сборки
-      - name: Install and update in Russia (AmneziaWG container)
-        run: |
-          from="${{ inputs.from || 'latest' }}"
-          [ "$from" = previous ] && from=latest
-          sudo E2E_MODE=container E2E_FROM="$from" E2E_CLEANUP=1 E2E_LOGS="$RUNNER_TEMP/e2e" bash e2e-src/tests/e2e/upgrade.sh
+      # прошлая версия → последняя, как на машинах GitHub: в архивах выпусков есть IMAGES, образы скачиваются
+      # с ghcr.io, ничего не собирается (раньше здесь было «последняя → она же», и обновления по сути не было)
+      - name: Upgrade ${{ inputs.from || 'previous' }} → latest in Russia (AmneziaWG container)
+        env:
+          E2E_FROM: ${{ inputs.from || 'previous' }}
+        run: sudo E2E_MODE=container E2E_FROM="$E2E_FROM" E2E_CLEANUP=1 E2E_LOGS="$RUNNER_TEMP/e2e" bash e2e-src/tests/e2e/upgrade.sh
 
       - name: Logs
         if: failure()
