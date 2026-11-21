@@ -185,9 +185,10 @@ class Request:
             if not isinstance(self._body, dict):
                 raise HTTPError(400, "err.bad_json")
             try:
-                # одиночная половинка пары UTF-16 («\\ud800») — не текст: запись в файл упала бы ошибкой 500
+                # одиночная половинка пары UTF-16 («\\ud800») — не текст: запись в файл упала бы ошибкой 500. Глубокая
+                # вложенность: Python 3.14+ разбирает её без RecursionError (предел — по стеку), а обратно не собирает
                 json.dumps(self._body, ensure_ascii=False).encode()
-            except UnicodeEncodeError:
+            except (UnicodeEncodeError, RecursionError):
                 self._body = None
                 raise HTTPError(400, "err.bad_json") from None
         return self._body

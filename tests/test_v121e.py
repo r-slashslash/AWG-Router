@@ -604,8 +604,9 @@ class ListFetchTest(unittest.TestCase):
                 lists._fetch("https://raw.example/l")
         import urllib.error
         alt = mock.Mock()
-        with mock.patch.object(lists, "_fetch_direct",
-                               side_effect=urllib.error.HTTPError("u", 404, "nf", {}, None)), \
+        err = urllib.error.HTTPError("u", 404, "nf", {}, io.BytesIO())
+        self.addCleanup(err.close)                  # Python 3.15 предупреждает о незакрытом теле ответа
+        with mock.patch.object(lists, "_fetch_direct", side_effect=err), \
                 mock.patch.object(lists, "alt_fetch", alt):
             with self.assertRaises(urllib.error.HTTPError):    # сайт ответил — через выход не пробуем
                 lists._fetch("https://raw.example/l")

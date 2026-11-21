@@ -370,9 +370,8 @@ def free_port():
             port = u2.getsockname()[1]
             u2.close()
             try:
-                t2 = socket.socket()
-                t2.bind(("127.0.0.1", port))
-                t2.close()
+                with socket.socket() as t2:         # и когда порт TCP занят: незакрытый сокет — ResourceWarning
+                    t2.bind(("127.0.0.1", port))
                 return port
             except OSError:
                 continue
