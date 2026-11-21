@@ -160,23 +160,27 @@ def delete(list_id: str) -> None:
 
 
 class Matcher:
-    """Проверка «домен в списке» для «проверки маршрута» (кэш по времени изменения файла)."""
-
-    def __init__(self):
-        self._cache: dict[str, tuple[float, set[str]]] = {}
-
-    def _load(self, list_id: str) -> set[str]:
-        p = path_for(list_id)
-        try:
-            m = os.path.getmtime(p)
-        except OSError:
-            return set()
-        c = self._cache.get(list_id)
-        if c and c[0] == m:
-            return c[1]
-        s = set(load(list_id))
-        self._cache[list_id] = (m, s)
-        return s
+    """Проверка «домен в списке» для «проверки маршрута»: файл списка читается построчно на каждую проверку, а не
+    держится в памяти множеством. Кэш множеств оставался в панели навсегда после первой проверки: список в
+    300 000 доменов — около 36 МБ на сервере с 1 ГБ (оптимизация 2026-11-21); чтение такого файла — доли секунды,
+    а проверку маршрута нажимают руками."""
 
     def match(self, list_id: str, name: str) -> str | None:
-        return matches(name, self._load(list_id))
+        """То же, что matches(name, set(load(list_id))): самая длинная запись — имя само или ближайший родитель."""
+        if len(name) > 254:
+            return None
+        labels = name.strip(".").lower().split(".")
+        want = {".".join(labels[i:]): i for i in range(len(labels))}
+        best: tuple[int, str] | None = None
+        try:
+            with open(path_for(list_id)) as f:
+                for line in f:
+                    s = line.strip()
+                    i = want.get(s) if s else None
+                    if i is not None and (best is None or i < best[0]):
+                        best = (i, s)
+                        if i == 0:
+                            break
+        except OSError:
+            return None
+        return best[1] if best else None

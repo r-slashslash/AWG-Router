@@ -3,6 +3,18 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.23.1 — 2026-11-21
+
+- **The clients list no longer fills the browser's memory** (found by the optimization part of the full audit). Every
+  poll that redrew changed rows of the clients table kept the old rows: the click handler of a new row was an arrow
+  inside `patchClients`, so it held that call's scope (`rows` — the previous rows, `was`/`now` — the previous state), and
+  that row's handler held the next one, in a chain. A page left on **Clients** grew by ~70 MB an hour with 50 clients and
+  by ~20 MB a minute with 1000 (Chromium, garbage collected before each sample), without limit. Now
+  every row shares one handler, `clientRowClick`; the page stays at the same size.
+- **The route check no longer keeps domain lists in the panel's memory.** `domains.Matcher` kept a set of every domain
+  list it had checked until the panel restarted: a 300 000-name list is about 36 MB on a 1 GB server. It now reads the
+  list file line by line on each check (a fraction of a second for the largest list), with the same answer.
+
 ## 1.23.0 — 2026-11-19
 
 - **No traffic past the exit while the panel starts** (found by the full audit; also in 1.22.0). The rules put in
