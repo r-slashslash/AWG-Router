@@ -166,7 +166,7 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
     // перерисовка по таймеру (quiet), а человек сейчас в выборе списка — не пересоздаём его под рукой
     const pick = $("#rw-pick", box);
     if (!(quiet && pick.contains(document.activeElement))) {
-      pick.innerHTML = `<select class="add-list" id="rw-add" aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.length ? `<optgroup label="${esc(t("rw.ready"))}">${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))}</option>`).join("")}</optgroup>` : ""}<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup></select>`;
+      pick.innerHTML = `<select class="add-list" id="rw-add" aria-label="${esc(t("re.add_list"))}"><option value="">${esc(t("re.add_list"))}</option>${addable.length ? `<optgroup label="${esc(t("rw.ready"))}">${addable.map((l) => `<option value="${esc(l.id)}">${esc(listName(l.id))} · ${esc(t("ls.kind." + l.kind))}</option>`).join("")}</optgroup>` : ""}<optgroup label="${esc(t("re.new_list"))}">${kinds.map((k) => `<option value="new:${k}">＋ ${esc(t("ls.new." + k))}</option>`).join("")}</optgroup></select>`;
     }
     drawDns(dom);
     $$("[data-rm]", box).forEach((b) => b.onclick = () => { r.lists = r.lists.filter((x) => x !== b.dataset.rm); drawLists(); });

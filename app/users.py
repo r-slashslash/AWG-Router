@@ -147,7 +147,9 @@ def check_mtu(v) -> int:
 def check_keepalive(v) -> str:
     """PersistentKeepalive клиентов: секунды или диапазон «15-25» (панель выбирает число в нём); "" — сама."""
     ka = str(v if v is not None else "").strip()
-    if ka and not re.fullmatch(r"[0-9]{1,5}(-[0-9]{1,5})?", ka):
+    m = re.fullmatch(r"([0-9]{1,5})(?:-([0-9]{1,5}))?", ka) if ka else None
+    # предел WireGuard — 65535 с; «35-25» (от большего к меньшему) — тоже ошибка, а не конфиг, который телефон не примет
+    if ka and (not m or int(m.group(1)) > 65535 or (m.group(2) and not int(m.group(1)) <= int(m.group(2)) <= 65535)):
         raise UserError(Msg("srv.bad_keepalive"))
     return ka
 

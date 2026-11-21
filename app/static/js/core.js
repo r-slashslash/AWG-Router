@@ -129,6 +129,17 @@ async function api(method, path, body, timeoutMs = 0, headers = null) {
 
 /** Поле формы, о котором ошибка сервера (field в ответе; у полей — data-field): рамка, фокус, прокрутка к
  *  нему. Выделение снимается, как только поле правят. Поле скрыто (другой тип выхода) — только сообщение. */
+/** поле-число, в котором набрано не число («1e», «1-»): браузер отдаёт его как пустое, и лимит молча снимался бы.
+    Есть такое — подсветить, сказать и не сохранять (глубокая проверка 1.23.0) */
+function badNumber(ids) {
+  const el = ids.map((id) => $("#" + id)).find((x) => x && x.validity && x.validity.badInput);
+  if (!el) return false;
+  el.classList.add("invalid");
+  el.addEventListener("input", () => el.classList.remove("invalid"), { once: true });
+  el.focus();
+  toast(t("err.bad_value"), true);
+  return true;
+}
 function markField(err, root = document) {
   if (!err || !err.field || !root) return;
   const els = [...root.querySelectorAll("[data-field]")]
@@ -193,7 +204,7 @@ function outChip(v, extra = "") {
   if (typeof v === "string" && v.startsWith("up:")) {
     const u = upstreamById(v.slice(3));
     if (!u) return `<span class="line block">${esc(t("out.deleted"))}</span>`;
-    return `<span class="line" style="--c:${lineVar(u)}"><bdi>${esc(u.name)}</bdi>${extra}</span>`;
+    return `<span class="line" style="--c:${lineVar(u)}" title="${esc(u.name)}"><bdi>${esc(u.name)}</bdi>${extra}</span>`;
   }
   return `<span class="line">${esc(v)}</span>`;
 }
@@ -426,6 +437,24 @@ let pollFails = 0;
 let stateSeq = 0, stateShown = 0;
 let pendingS = null;                              // состояние из опроса, пока открыто окно (см. refresh)
 let listsBusy = false;
+/** набранное, но не сохранённое в полях вкладки (значение не то, с каким поле нарисовано), кроме полей блока skip */
+function typedFields(skip) {
+  return $$("#main input[id], #main select[id], #main textarea[id]").filter((el) => !(skip && skip.contains(el)) && (
+    el.type === "checkbox" || el.type === "radio" ? el.checked !== el.defaultChecked
+      : el.tagName === "SELECT" ? el.value !== ([...el.options].find((o) => o.defaultSelected) || el.options[0] || {}).value
+        : el.type !== "file" && el.value !== el.defaultValue))
+    .map((el) => [el.id, el.type === "checkbox" || el.type === "radio" ? el.checked : el.value]);
+}
+/** сохранили один блок вкладки — перерисовать её, вернув набранное в других блоках: на «Системе» «Сохранить» в
+    «Настройках» стирало несохранённое в Telegram и наоборот (глубокая проверка 1.23.0) */
+async function refreshKeep(btn) {
+  const keep = typedFields(btn && (btn.closest(".panel") || btn.parentElement));
+  await refresh();
+  for (const [id, v] of keep) {
+    const el = $("#" + id);
+    if (el) { if (typeof v === "boolean") el.checked = v; else el.value = v; }
+  }
+}
 async function refresh(auto = false) {
   const seq = ++stateSeq;
   let same = false;

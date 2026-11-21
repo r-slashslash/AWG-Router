@@ -87,7 +87,7 @@ bind.system = () => {
   $("#s-save").onclick = async () => {
     try {
       await api("PUT", "settings", { on_stop: onStop, panel_name: $("#s-name").value.trim() });
-      toast(t("toast.settings_saved")); refresh();
+      toast(t("toast.settings_saved")); refreshKeep($("#s-save"));
     }
     catch (e) { toast(e.message, true); }
   };

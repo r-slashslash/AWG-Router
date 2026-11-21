@@ -89,7 +89,7 @@ function bindTelegram() {
   $("#tg-save").onclick = busy("#tg-save", async () => {
     await api("PUT", "telegram", body());
     toast(t("tg.saved"));
-    refresh();
+    refreshKeep($("#tg-save"));
   });
   $("#tg-test").onclick = busy("#tg-test", async () => {
     await api("POST", "telegram/test", body());

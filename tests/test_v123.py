@@ -542,3 +542,20 @@ class InstallerMarkTest(unittest.TestCase):
                 self.assertTrue(selfupdate.installer_running())         # установщик идёт 10 минут
             with mock.patch.object(selfupdate.hostnet, "uptime", return_value=120):
                 self.assertFalse(selfupdate.installer_running())        # а сервер загрузился 2 минуты назад
+
+
+class AuditGroupOneTest(unittest.TestCase):
+    def test_render_one_pass(self):
+        """Имя клиента «{date}» в уведомлении не заменяется датой следующего параметра."""
+        from app import notify
+        out = notify.render("en", "client_expiring", name="{date}", date="2026-12-01", days=3)
+        self.assertIn("{date}", out)
+        self.assertIn("2026-12-01", out)
+
+    def test_keepalive_limits(self):
+        from app import users
+        for ok in ("", "25", "15-25", "0", "65535"):
+            users.check_keepalive(ok)
+        for bad in ("99999", "65536", "35-25", "25-65536", "abc"):
+            with self.assertRaises(users.UserError, msg=bad):
+                users.check_keepalive(bad)

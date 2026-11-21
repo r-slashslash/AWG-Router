@@ -32,6 +32,13 @@ it grows, so every user-visible change gets a new version.
   before the rename; `awg-router info` without root asks for sudo. The install mark older than the system boot is stale
   (`selfupdate.installer_running`). `tests/fixtures/old/1.22.0` added; `make_old.py` creates the country lists itself and
   keeps a rule's `dns`.
+- **Small things from the full audit** (owner 2026-11-21, group 1). Outdated texts (`ls.saved_busy`, `rt.leave`,
+  `bk.enc_hint`); ready lists in a rule window show their kind; `badNumber` stops a save when a number field holds
+  no number (the browser gave "" and the limit was removed); a long exit name ends with an ellipsis (`.line > bdi`),
+  no sideways scroll on phones; `refreshKeep` keeps typed fields of other blocks of System after a block's save;
+  `srvKeepTyped` asks to save typed Server fields before Generate, an engine switch, Hide and Restart; the bot's
+  "+10 GB" shows `1010`, not `1e+03`; `notify.render` substitutes in one pass (a client named `{date}`);
+  PersistentKeepalive over 65535 or a reversed range is refused.
 - **The release build pins BuildKit and binfmt by digest** (full audit, Г8): `setup-buildx-action` (`driver-opts:
   image=moby/buildkit:v0.35.1@sha256:…`) and `setup-qemu-action` (`image: tonistiigi/binfmt:qemu-v10.2.3@sha256:…`)
   took their default tags, which can be moved to other code. Checked on a GitHub machine: amd64 + arm64 build.

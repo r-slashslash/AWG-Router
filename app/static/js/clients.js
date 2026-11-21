@@ -505,6 +505,7 @@ function editClient(pk, section = null) {
   showView();
 
   $("#c-save").onclick = async () => {
+    if (badNumber(["c-quota", "c-rd", "c-ru"])) return;
     try {
       const name = $("#c-name").value.trim();
       if (name && name !== c.name) await api("PUT", "users/" + encodeURIComponent(pk), { name });

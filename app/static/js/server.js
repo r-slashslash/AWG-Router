@@ -243,6 +243,7 @@ let engChoosing = false;   // выбор движка отправлен и ещ
 async function engChoose(v) {
   const E = S.awg_engine || {};
   if (v === E.server) return;
+  if (srvKeepTyped()) return;
   if (!confirm(t(v === "go" ? "eng.to_go_confirm" : "eng.to_kernel_confirm"))) return;
   $$("[data-eng-choose]").forEach((x) => x.disabled = true);
   engChoosing = true;
@@ -308,6 +309,7 @@ function engInstallHtml(E, m) {
 
 async function engAction(act, b) {
   if (act === "open") { goTab("server"); setTimeout(() => { const el = $("#engine"); if (el) el.scrollIntoView(); }, 50); return; }
+  if ((act === "hide" || act === "restart") && srvKeepTyped()) return;
   if (act === "hide") {
     try { await api("PUT", "engine", { hidden: S.awg_engine.notice }); await refresh(); } catch (e) { toast(e.message, true); }
     return;
@@ -399,13 +401,25 @@ function clientHostHint(val) {
 }
 function srvDirty() {
   if (!SRV || !srvDraft) return false;
+  return Object.keys(SRV.params).some((k) => (srvDraft[k] || "") !== (SRV.params[k] || "")) || srvFieldsDirty();
+}
+/** набранное в полях адреса, порта, MTU, DNS (не параметры маскировки): перерисовка вкладки его стирает */
+function srvFieldsDirty() {
+  if (!SRV) return false;
   const pdns = $("#s-pdns");
-  return Object.keys(SRV.params).some((k) => (srvDraft[k] || "") !== (SRV.params[k] || "")) ||
-    (pdns && pdns.checked !== !!SRV.panel_dns) ||
+  return (pdns && pdns.checked !== !!SRV.panel_dns) ||
     ($("#s-domf") && $("#s-domf").checked !== !!SRV.dom_filter) ||
     ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
+}
+/** кнопка, после которой вкладка «Сервер» перерисуется: несохранённое в полях — «Сначала сохраните» (глубокая проверка
+    1.23.0: «Сгенерировать новые» и выбор движка молча стирали набранный адрес и DNS) */
+function srvKeepTyped(all = true) {
+  if (tab !== "server" || !(all ? srvDirty() : srvFieldsDirty())) return false;
+  toast(t("srv.save_first"), true);
+  flashBar($("#s-bar"));
+  return true;
 }
 async function loadServer() {
   try { SRV = await api("GET", "server"); } catch (e) { SRV = { exists: false, error: e.message }; }
@@ -477,6 +491,7 @@ bind.server = () => {
     finally { b.disabled = false; refresh(); }
   };
   $("#s-gen").onclick = async () => {
+    if (srvKeepTyped(false)) return;              // параметры маскировки в черновике сохранятся, поля — нет
     if (!confirm(t("srv.generate_confirm"))) return;
     const r = await api("POST", "server/generate", {});
     srvDraft = { ...srvDraft, ...r.params };

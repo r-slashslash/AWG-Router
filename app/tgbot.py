@@ -1776,7 +1776,7 @@ class Bot:
         L = (self.ops.snapshot().get("limits") or {}).get(pk) or {}
         quota = int((L.get("quota") or 0) + 10 * GB)
         self.ops.apply_limits(pk, L.get("expires"), quota, L.get("period") or "month")
-        gb = f"{quota / GB:.3g}"
+        gb = f"{quota / GB:.2f}".rstrip("0").rstrip(".")        # не «1e+03» при лимите от 1000 ГБ
         self.ops.audit(Msg("tg.act_gb", name=self._name(x), gb=gb))
         return tr(c["lang"], "ok_gb", False, name=self._name(x), gb=gb)
 

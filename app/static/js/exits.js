@@ -256,6 +256,7 @@ async function editUpstream(id) {
   };
   draw();
   $("#u-save").onclick = async () => {
+    if (badNumber(["u-quota", "u-rd", "u-ru"])) return;
     const body = { name: $("#u-name").value.trim(), fallback: $("#u-fb").value,
       quota_gb: $("#u-quota").value.trim(), quota_action: $("#u-qa").value,
       rate_down: $("#u-rd").value.trim() || null, rate_up: $("#u-ru").value.trim() || null };

@@ -10,6 +10,7 @@ import email.utils
 import http.client
 import json
 import logging
+import re
 import os
 import queue
 import subprocess
@@ -327,8 +328,8 @@ def public_view(c: dict) -> dict:
 def render(lang: str, key: str, host: str = "", **params) -> str:
     tx = TEXTS.get(lang) or TEXTS["en"]
     body = tx.get(key) or TEXTS["en"][key]
-    for k, v in params.items():
-        body = body.replace("{" + k + "}", str(v))
+    # за один проход: «{date}» в имени клиента раньше заменялся датой следующего параметра
+    body = re.sub(r"\{(\w+)\}", lambda m: str(params[m.group(1)]) if m.group(1) in params else m.group(0), body)
     return (f"AWG Router · {host}\n" if host else "AWG Router\n") + body
 
 

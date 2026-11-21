@@ -97,7 +97,7 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0; }
 /* строка правила: что ловит правило — выход (на широком экране сразу за списками, как «Всё остальное — …»; на
    телефоне — у правого края, и туда же, если строка переносится); своё название — серой строкой сверху */
 .rule-sum { padding-inline-start: 0; list-style: none; }
-.rule-sum li { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: baseline; }
+.rule-sum li { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 6px; align-items: baseline; }
 .rule-sum .rule-n { grid-column: 1; grid-row: 2; font-variant-numeric: tabular-nums; }
 .rule-sum .rule-name { grid-column: 2; grid-row: 1; }
 .rule-sum .rule-row { grid-column: 2; grid-row: 2; }
@@ -221,10 +221,12 @@ textarea.short { min-height: 64px; }
 .line {
   --c: var(--direct);
   display: inline-flex; align-items: center; gap: 7px; padding-block: 2px; padding-inline: 4px 10px;
-  border-radius: 999px; font-size: .86rem; font-weight: 550; white-space: nowrap;
+  border-radius: 999px; font-size: .86rem; font-weight: 550; white-space: nowrap; max-width: 100%;
   background: color-mix(in srgb, var(--c) 13%, var(--surface)); color: var(--ink);
   border: 1px solid color-mix(in srgb, var(--c) 32%, transparent);
 }
+/* длинное имя выхода (до 40 знаков) на телефоне — многоточие, а не прокрутка страницы вбок; полное имя — в title */
+.line > bdi { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .line::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--c); flex: none; margin-inline-start: 2px; }
 .line.direct::before { background: none; border: 2px solid var(--c); width: 8px; height: 8px; }
 .line.block { --c: var(--block); }
