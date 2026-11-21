@@ -311,14 +311,7 @@ textarea.short { min-height: 64px; }
   /* «Напрямую вместо X» не сжимает имя клиента до пары букв: подпись переносится под выход */
   .table.responsive td[data-m="right"] { max-width: 48vw; }
   .table.responsive td[data-m="right"] .line.fallback { flex-wrap: wrap; white-space: normal; row-gap: 0; }
-  /* width: 1% таблицы в карточке — 1% колонки (полпикселя): кнопки строки вылезали за правый край экрана */
-  .table.responsive td.acts { width: auto; }
 }
-.uses .use { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: .86rem; }
-.uses .use + .use { margin-top: 4px; }
-.uses .use.off { opacity: .55; }
-.uses .line { font-size: .8rem; }
-@media (max-width: 760px) { .table.responsive td.uses { color: var(--ink-2); } }
 
 /* ---------- exits ---------- */
 .exit { display: grid; grid-template-columns: 6px minmax(0, 1fr); border-radius: var(--r); overflow: hidden; margin-bottom: 12px; }
@@ -351,18 +344,8 @@ select.rule-pos { appearance: none; -webkit-appearance: none; width: 100%; min-h
   text-align: center; text-align-last: center; border: 1px dashed var(--rule-strong) !important; border-radius: 6px; background: none !important;
   font-weight: 600; font-size: .9rem; color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }
 select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: var(--muted) !important; }
-.rule-lists { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 38px; }
-.rule-comment { border: 0 !important; padding: 2px 0 !important; min-height: 0 !important; font-size: .86rem; color: var(--muted); background: none !important; }
-/* свой DNS правила по сайтам — строка «Свой DNS для этих сайтов: [поле]» под подписью правила */
-.rule-dns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: .86rem; color: var(--muted); }
-.rule-dns input { flex: 1 1 160px; min-width: 0; min-height: 30px; padding: 4px 8px; font-size: .86rem; font-variant-numeric: tabular-nums; }
 .rule-ctl { display: flex; align-items: center; gap: 2px; padding-top: 4px; }
-.chip { display: inline-flex; align-items: center; gap: 4px; padding-block: 3px; padding-inline: 10px 4px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--rule); font-size: .87rem; }
-.chip button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 1rem; line-height: 1; }
-.chip button:hover { color: var(--bad); }
 .add-list { width: auto !important; max-width: 100%; min-height: 30px !important; padding-block: 3px !important; padding-inline: 8px 28px !important; font-size: .86rem; border-style: dashed !important; }
-.rule-then { display: grid; gap: 4px; }
-.rule-then label { font-size: .8rem; color: var(--muted); }
 .default-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(170px, 230px) auto; gap: 10px; align-items: center; padding: 12px; border-radius: 9px; border: 1px dashed var(--rule-strong); }
 /* строка правила (1.23.0): номер, что ловит правило и выход (нажатие — окно правила), включение и место */
 .rule.rule-item { grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; }
@@ -385,7 +368,7 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .rw-form-title { font-weight: 600; margin-bottom: 10px; }
 @media (max-width: 680px) {
   .rule, .default-row { grid-template-columns: 30px minmax(0, 1fr); }
-  .rule-then, .default-row > :nth-child(3) { grid-column: 2; }
+  .default-row > :nth-child(3) { grid-column: 2; }
   .rule-ctl { grid-column: 2; padding-top: 0; }
   .rule.rule-item { grid-template-columns: 30px minmax(0, 1fr); }
   .rule-item .rule-ctl { grid-column: 2; }
@@ -410,8 +393,6 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .trace-out ol { margin: 8px 0 0; padding-inline-start: 20px; color: var(--ink-2); }
 
 /* ---------- lists ---------- */
-.list-row-src { font-size: .84rem; color: var(--muted); word-break: break-all; }
-.cc { display: inline-grid; place-items: center; min-width: 30px; height: 22px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--rule); font-weight: 600; font-size: .78rem; margin-inline-end: 8px; }
 .add-row { display: flex; gap: 8px; flex-wrap: wrap; }
 /* «Обновлять списки каждые, ч» под заголовком раздела списков */
 .ls-hours { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: .88rem; color: var(--ink-2); }
@@ -429,7 +410,6 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .soon-bar { margin: -2px 0 12px; }
 .btn[aria-pressed="true"] { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, var(--surface)); }
 @media (max-width: 560px) { .section-head > .add-row { flex-wrap: wrap; } }
-.table td.acts { text-align: end; width: 1%; }
 
 /* ---------- events ---------- */
 .events { list-style: none; margin: 0; padding: 0; }
@@ -528,7 +508,7 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 input:disabled { background: var(--surface-2); color: var(--muted); }
 
 /* длинные имена без пробелов не должны раздвигать страницу */
-.events li > *, .track-title h3, .exit h3, td, .modal h2, .rule .chips { overflow-wrap: anywhere; min-width: 0; }
+.events li > *, .track-title h3, .exit h3, td, .modal h2 { overflow-wrap: anywhere; min-width: 0; }
 
 /* ---------- безопасность и уведомления ---------- */
 .tg-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 28px; }

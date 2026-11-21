@@ -56,7 +56,6 @@ function fmtTime(ts) {
   return d.toDateString() === now.toDateString() ? time
     : dateFmt({ day: "numeric", month: "short" }).format(d) + dtSep() + time;
 }
-function fmtCompact(n) { return numFmt({ notation: "compact", maximumSignificantDigits: 3 }).format(Number(n)); }
 let _regions = null;
 function countryName(cc) {
   try {

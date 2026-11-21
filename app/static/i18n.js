@@ -49,9 +49,9 @@ const I18N = {
     "cl.empty": "Клиентов пока нет.",
     "cl.title": "Клиенты", "cl.subtitle": "Нажмите на клиента, чтобы выбрать для него выход или свои правила",
     "cl.search": "Поиск по имени или IP", "cl.col_name": "Имя", "cl.col_ip": "IP в VPN",
-    "cl.col_activity": "Активность", "cl.col_traffic": "Трафик", "cl.col_exit": "Выход по умолчанию",
+    "cl.col_activity": "Активность", "cl.col_exit": "Выход по умолчанию",
     "cl.unnamed": "Без имени", "cl.custom_tag": "свои правила", "cl.online": "в сети", "cl.manual": "назначен вручную",
-    "cl.modal_title": "Клиент «{name}»", "cl.key": "ключ",
+    "cl.key": "ключ",
     "cl.default_exit": "Выход по умолчанию", "cl.default_exit_hint": "Куда идёт трафик, если ни одно правило не сработало.",
     "cl.rules": "Правила по спискам", "cl.rules_global": "Общие правила", "cl.rules_own": "Свои правила",
     "cl.no_global": "Общих правил нет.", "cl.note": "Заметка", "cl.note_ph": "Например: «только YouTube через Европу»",
@@ -89,10 +89,7 @@ const I18N = {
     "toast.exit_saved": "Выход сохранён", "toast.exit_added": "Выход добавлен, туннель поднимается…",
     
     "ls.kind.country": "Страна", "ls.kind.asn": "Автономные системы", "ls.kind.url": "По ссылке", "ls.kind.manual": "Вручную",
-    "ls.col_updated": "Обновление",
     "n.networks": { one: "{n} сеть", few: "{n} сети", many: "{n} сетей", other: "{n} сети" },
-    "n.addresses": { one: "{n} адрес", few: "{n} адреса", many: "{n} адресов", other: "{n} адреса" },
-    "n.in_rules": { one: "в {n} правиле", few: "в {n} правилах", many: "в {n} правилах", other: "в {n} правилах" },
     "ls.not_loaded": "не загружен", "ls.updated": "обновлён {time}", "ls.refresh": "Обновить сейчас",
     "ls.refreshed": "«{name}» обновлён",
     "ls.cc": "Код страны",
@@ -143,7 +140,7 @@ const I18N = {
     "sys.not_checked": "ещё не проверялось",
     "err.too_many_upstreams": "Слишком много выходных серверов (максимум {max})", "err.too_large": "Слишком большой запрос",
     "err.bad_json": "Некорректный запрос", "err.method": "Метод не поддерживается", "err.not_found": "Не найдено",
-    "err.internal": "Внутренняя ошибка: {detail}", "err.json_required": "Нужен JSON", "err.cross_site": "Запрос не со страницы панели: откройте панель по её адресу и повторите", "err.auth": "Требуется вход",
+    "err.internal": "Внутренняя ошибка: {detail}", "err.json_required": "Нужен JSON", "err.cross_site": "Запрос не со страницы панели: откройте панель по её адресу и повторите",
     "err.bad_outbound": "Некорректный выход", "err.unknown_outbound": "Неизвестный выход: {value}",
     "err.bad_rules": "Некорректные правила", "err.rule_no_lists": "В правиле не выбран ни один список",
     "err.unknown_list": "Неизвестный список: {id}", "err.name_required": "Укажите название",
@@ -219,9 +216,9 @@ const I18N = {
     "cl.empty": "No clients yet.",
     "cl.title": "Clients", "cl.subtitle": "Tap a client to choose its exit or give it its own rules",
     "cl.search": "Search by name or IP", "cl.col_name": "Name", "cl.col_ip": "VPN IP",
-    "cl.col_activity": "Activity", "cl.col_traffic": "Traffic", "cl.col_exit": "Default exit",
+    "cl.col_activity": "Activity", "cl.col_exit": "Default exit",
     "cl.unnamed": "Unnamed", "cl.custom_tag": "own rules", "cl.online": "online", "cl.manual": "set manually",
-    "cl.modal_title": "Client “{name}”", "cl.key": "key",
+    "cl.key": "key",
     "cl.default_exit": "Default exit", "cl.default_exit_hint": "Where traffic goes when no rule matches.",
     "cl.rules": "List rules", "cl.rules_global": "Shared rules", "cl.rules_own": "Own rules",
     "cl.no_global": "There are no shared rules.", "cl.note": "Note", "cl.note_ph": "For example: “only YouTube via Europe”",
@@ -259,10 +256,7 @@ const I18N = {
     "toast.exit_saved": "Exit saved", "toast.exit_added": "Exit added, bringing the tunnel up…",
     
     "ls.kind.country": "Country", "ls.kind.asn": "Autonomous systems", "ls.kind.url": "From URL", "ls.kind.manual": "Manual",
-    "ls.col_updated": "Updated",
     "n.networks": { one: "{n} network", other: "{n} networks" },
-    "n.addresses": { one: "{n} address", other: "{n} addresses" },
-    "n.in_rules": { one: "in {n} rule", other: "in {n} rules" },
     "ls.not_loaded": "not loaded", "ls.updated": "updated {time}", "ls.refresh": "Refresh now",
     "ls.refreshed": "“{name}” refreshed",
     "ls.cc": "Country code",
@@ -312,7 +306,7 @@ const I18N = {
     "sys.not_checked": "not checked yet",
     "err.too_many_upstreams": "Too many exit servers (maximum {max})", "err.too_large": "Request too large",
     "err.bad_json": "Malformed request", "err.method": "Method not supported", "err.not_found": "Not found",
-    "err.internal": "Internal error: {detail}", "err.json_required": "JSON required", "err.cross_site": "The request did not come from the panel’s page: open the panel at its address and try again", "err.auth": "Sign-in required",
+    "err.internal": "Internal error: {detail}", "err.json_required": "JSON required", "err.cross_site": "The request did not come from the panel’s page: open the panel at its address and try again",
     "err.bad_outbound": "Invalid exit", "err.unknown_outbound": "Unknown exit: {value}",
     "err.bad_rules": "Invalid rules", "err.rule_no_lists": "A rule has no lists selected",
     "err.unknown_list": "Unknown list: {id}", "err.name_required": "Enter a name",
@@ -388,9 +382,9 @@ const I18N = {
     "cl.empty": "还没有客户端。",
     "cl.title": "客户端", "cl.subtitle": "点击客户端可为其选择出口或设置专属规则",
     "cl.search": "按名称或 IP 搜索", "cl.col_name": "名称", "cl.col_ip": "VPN IP",
-    "cl.col_activity": "活动", "cl.col_traffic": "流量", "cl.col_exit": "默认出口",
+    "cl.col_activity": "活动", "cl.col_exit": "默认出口",
     "cl.unnamed": "未命名", "cl.custom_tag": "专属规则", "cl.online": "在线", "cl.manual": "手动指定",
-    "cl.modal_title": "客户端「{name}」", "cl.key": "密钥",
+    "cl.key": "密钥",
     "cl.default_exit": "默认出口", "cl.default_exit_hint": "没有任何规则匹配时流量的去向。",
     "cl.rules": "列表规则", "cl.rules_global": "全局规则", "cl.rules_own": "专属规则",
     "cl.no_global": "没有全局规则。", "cl.note": "备注", "cl.note_ph": "例如：「仅 YouTube 走欧洲」",
@@ -428,10 +422,7 @@ const I18N = {
     "toast.exit_saved": "出口已保存", "toast.exit_added": "出口已添加，正在建立隧道…",
     
     "ls.kind.country": "国家", "ls.kind.asn": "自治系统", "ls.kind.url": "来自链接", "ls.kind.manual": "手动",
-    "ls.col_updated": "更新",
     "n.networks": { other: "{n} 个网段" },
-    "n.addresses": { other: "{n} 个地址" },
-    "n.in_rules": { other: "用于 {n} 条规则" },
     "ls.not_loaded": "未加载", "ls.updated": "更新于 {time}", "ls.refresh": "立即更新",
     "ls.refreshed": "「{name}」已更新",
     "ls.cc": "国家代码",
@@ -481,7 +472,7 @@ const I18N = {
     "sys.not_checked": "尚未检查",
     "err.too_many_upstreams": "出口服务器过多（最多 {max} 个）", "err.too_large": "请求过大",
     "err.bad_json": "请求格式错误", "err.method": "不支持该方法", "err.not_found": "未找到",
-    "err.internal": "内部错误：{detail}", "err.json_required": "需要 JSON", "err.cross_site": "请求并非来自面板页面：请通过面板地址打开面板后重试", "err.auth": "需要登录",
+    "err.internal": "内部错误：{detail}", "err.json_required": "需要 JSON", "err.cross_site": "请求并非来自面板页面：请通过面板地址打开面板后重试",
     "err.bad_outbound": "无效的出口", "err.unknown_outbound": "未知的出口：{value}",
     "err.bad_rules": "规则无效", "err.rule_no_lists": "有规则未选择任何列表",
     "err.unknown_list": "未知的列表：{id}", "err.name_required": "请输入名称",
@@ -557,9 +548,9 @@ const I18N = {
     "cl.empty": "هنوز کلاینتی وجود ندارد.",
     "cl.title": "کلاینت‌ها", "cl.subtitle": "روی یک کلاینت بزنید تا خروجی یا قوانین اختصاصی‌اش را انتخاب کنید",
     "cl.search": "جستجو بر اساس نام یا IP", "cl.col_name": "نام", "cl.col_ip": "IP در VPN",
-    "cl.col_activity": "فعالیت", "cl.col_traffic": "ترافیک", "cl.col_exit": "خروجی پیش‌فرض",
+    "cl.col_activity": "فعالیت", "cl.col_exit": "خروجی پیش‌فرض",
     "cl.unnamed": "بدون نام", "cl.custom_tag": "قوانین اختصاصی", "cl.online": "آنلاین", "cl.manual": "تعیین دستی",
-    "cl.modal_title": "کلاینت «{name}»", "cl.key": "کلید",
+    "cl.key": "کلید",
     "cl.default_exit": "خروجی پیش‌فرض", "cl.default_exit_hint": "وقتی هیچ قانونی مطابقت ندارد، ترافیک به این خروجی می‌رود.",
     "cl.rules": "قوانین فهرست‌ها", "cl.rules_global": "قوانین مشترک", "cl.rules_own": "قوانین اختصاصی",
     "cl.no_global": "قانون مشترکی وجود ندارد.", "cl.note": "یادداشت", "cl.note_ph": "مثلاً: «فقط یوتیوب از طریق اروپا»",
@@ -597,10 +588,7 @@ const I18N = {
     "toast.exit_saved": "خروجی ذخیره شد", "toast.exit_added": "خروجی اضافه شد، تونل در حال راه‌اندازی است…",
     
     "ls.kind.country": "کشور", "ls.kind.asn": "سیستم‌های خودمختار", "ls.kind.url": "از لینک", "ls.kind.manual": "دستی",
-    "ls.col_updated": "به‌روزرسانی",
     "n.networks": { one: "{n} شبکه", other: "{n} شبکه" },
-    "n.addresses": { one: "{n} آدرس", other: "{n} آدرس" },
-    "n.in_rules": { one: "در {n} قانون", other: "در {n} قانون" },
     "ls.not_loaded": "بارگذاری نشده", "ls.updated": "به‌روزشده {time}", "ls.refresh": "به‌روزرسانی اکنون",
     "ls.refreshed": "«{name}» به‌روز شد",
     "ls.cc": "کد کشور",
@@ -650,7 +638,7 @@ const I18N = {
     "sys.not_checked": "هنوز بررسی نشده",
     "err.too_many_upstreams": "تعداد سرورهای خروجی بیش از حد است (حداکثر {max})", "err.too_large": "درخواست خیلی بزرگ است",
     "err.bad_json": "درخواست نامعتبر است", "err.method": "این متد پشتیبانی نمی‌شود", "err.not_found": "پیدا نشد",
-    "err.internal": "خطای داخلی: {detail}", "err.json_required": "JSON لازم است", "err.cross_site": "درخواست از صفحهٔ پنل نیامده است: پنل را با نشانی خودش باز کنید و دوباره امتحان کنید", "err.auth": "ورود لازم است",
+    "err.internal": "خطای داخلی: {detail}", "err.json_required": "JSON لازم است", "err.cross_site": "درخواست از صفحهٔ پنل نیامده است: پنل را با نشانی خودش باز کنید و دوباره امتحان کنید",
     "err.bad_outbound": "خروجی نامعتبر", "err.unknown_outbound": "خروجی ناشناخته: {value}",
     "err.bad_rules": "قوانین نامعتبر", "err.rule_no_lists": "برای یک قانون هیچ فهرستی انتخاب نشده",
     "err.unknown_list": "فهرست ناشناخته: {id}", "err.name_required": "نام را وارد کنید",
@@ -704,7 +692,7 @@ Object.assign(I18N.ru, {
   "cl.disable_hint": "Устройство перестанет подключаться, адрес и настройки сохранятся.",
   "cl.enable_hint": "Устройство снова сможет подключаться с тем же конфигом.",
   "cl.disable_btn": "Отключить", "cl.enable_btn": "Включить",
-  "cl.delete": "Удалить клиента", 
+  "cl.delete": "Удалить клиента",
   "cl.delete_confirm": "Удалить клиента «{name}»?",
   "toast.client_added": "Клиент «{name}» создан", "toast.client_deleted": "Клиент удалён",
   "toast.client_disabled": "Клиент отключён", "toast.client_enabled": "Клиент включён", "toast.copied": "Скопировано",
@@ -816,7 +804,7 @@ Object.assign(I18N.en, {
   "cl.disable_hint": "The device stops connecting; its address and settings are kept.",
   "cl.enable_hint": "The device can connect again with the same config.",
   "cl.disable_btn": "Disable", "cl.enable_btn": "Enable",
-  "cl.delete": "Delete client", 
+  "cl.delete": "Delete client",
   "cl.delete_confirm": "Delete client “{name}”?",
   "toast.client_added": "Client “{name}” created", "toast.client_deleted": "Client deleted",
   "toast.client_disabled": "Client disabled", "toast.client_enabled": "Client enabled", "toast.copied": "Copied",
@@ -928,7 +916,7 @@ Object.assign(I18N.zh, {
   "cl.disable_hint": "设备将无法连接，地址和设置会保留。",
   "cl.enable_hint": "设备可使用原配置重新连接。",
   "cl.disable_btn": "停用", "cl.enable_btn": "启用",
-  "cl.delete": "删除客户端", 
+  "cl.delete": "删除客户端",
   "cl.delete_confirm": "删除客户端「{name}」？",
   "toast.client_added": "已创建客户端「{name}」", "toast.client_deleted": "客户端已删除",
   "toast.client_disabled": "客户端已停用", "toast.client_enabled": "客户端已启用", "toast.copied": "已复制",
@@ -1040,7 +1028,7 @@ Object.assign(I18N.fa, {
   "cl.disable_hint": "دستگاه دیگر وصل نمی‌شود؛ آدرس و تنظیمات حفظ می‌شوند.",
   "cl.enable_hint": "دستگاه با همان پیکربندی دوباره وصل می‌شود.",
   "cl.disable_btn": "غیرفعال کردن", "cl.enable_btn": "فعال کردن",
-  "cl.delete": "حذف کلاینت", 
+  "cl.delete": "حذف کلاینت",
   "cl.delete_confirm": "کلاینت «{name}» حذف شود؟",
   "toast.client_added": "کلاینت «{name}» ساخته شد", "toast.client_deleted": "کلاینت حذف شد",
   "toast.client_disabled": "کلاینت غیرفعال شد", "toast.client_enabled": "کلاینت فعال شد", "toast.copied": "کپی شد",
@@ -2052,19 +2040,15 @@ Object.assign(I18N.fa, {
 // метка новой версии в строке состояния
 Object.assign(I18N.ru, {
   "status.update": "доступна {version}",
-  "status.updating": "обновляется…",
 });
 Object.assign(I18N.en, {
   "status.update": "{version} available",
-  "status.updating": "updating…",
 });
 Object.assign(I18N.zh, {
   "status.update": "可更新到 {version}",
-  "status.updating": "正在更新…",
 });
 Object.assign(I18N.fa, {
   "status.update": "نسخهٔ {version} آماده است",
-  "status.updating": "در حال به‌روزرسانی…",
 });
 
 /* 1.8.0: Telegram через выход */
@@ -2358,7 +2342,6 @@ Object.assign(I18N.ru, {
 
 
 
-  "ex.config_socks": "Или прокси SOCKS5: socks5://логин:пароль@адрес:порт (или адрес:порт:логин:пароль).",
   "ex.working_socks": "работает · ответ прокси {ms} мс", "ex.socks_user": "Логин", "ex.socks_noauth": "без логина",
   "cfg.socks_bad": "Не похоже на адрес прокси SOCKS5", "cfg.socks_port": "Неверный порт прокси",
   "cfg.socks_host": "Неверный адрес прокси", "cfg.socks_auth": "Неверный логин или пароль прокси",
@@ -2379,7 +2362,7 @@ Object.assign(I18N.ru, {
   "ev.dns_died": "DNS на сервере остановился — перезапуск",
   "ev.dns_failed": "DNS на сервере не запустился: {detail}",
   "ls.sni_error": "Не работает: обработчик правил по доменам не запустился (подробности в журнале)",
-  "re.dns": "Свой DNS для этих сайтов", "re.dns_ph": "необязательно, например 77.88.8.8", "re.dns_hint": "Свой DNS спрашивается тем же путём, что и сайты правила, обычным DNS без шифрования; до двух адресов.", "re.dns_off": "Свой DNS работает, когда включён «DNS на сервере» (вкладка «Сервер»).", "err.rule_dns_v4": "Свой DNS правила — только IPv4: {value}", "err.rule_dns_many": "Свой DNS правила — не больше {n} адресов", "err.rule_dns_self": "{value} — это сам DNS на сервере: своим DNS правила он ничего не даст. Оставьте поле пустым или впишите другой DNS.", 
+  "re.dns": "Свой DNS для этих сайтов", "re.dns_ph": "необязательно, например 77.88.8.8", "re.dns_hint": "Свой DNS спрашивается тем же путём, что и сайты правила, обычным DNS без шифрования; до двух адресов.", "re.dns_off": "Свой DNS работает, когда включён «DNS на сервере» (вкладка «Сервер»).", "err.rule_dns_v4": "Свой DNS правила — только IPv4: {value}", "err.rule_dns_many": "Свой DNS правила — не больше {n} адресов", "err.rule_dns_self": "{value} — это сам DNS на сервере: своим DNS правила он ничего не даст. Оставьте поле пустым или впишите другой DNS.",
   "err.rule_mixed_domains": "Списки доменов и списки адресов нельзя смешивать в одном правиле",
   "err.exit_kind_change": "Тип выхода не меняется: удалите выход и добавьте новый", "err.list_kind_change": "Вид списка не меняется: создайте новый список",
   "sni.no_addr": "у интерфейса {iface} нет IPv4-адреса",
@@ -2395,7 +2378,7 @@ Object.assign(I18N.ru, {
   "ex.route_sites_hint": "По одному домену на строку, поддомены тоже идут через выход. Определяются по имени сайта в соединении (HTTPS и HTTP).",
   "ex.route_dlists": "Списки доменов", "ex.route_nlists": "Списки сетей (страны, ASN, адреса)",
   "ex.route_default": "Весь остальной трафик — тоже через этот выход (выход по умолчанию)",
-  "re.new_list": "Создать список", 
+  "re.new_list": "Создать список",
   "ev.sni_failed": "Обработчик правил по доменам не запустился: {detail}",
 });
 Object.assign(I18N.en, {
@@ -2419,7 +2402,6 @@ Object.assign(I18N.en, {
 
 
 
-  "ex.config_socks": "Or a SOCKS5 proxy: socks5://login:password@host:port (or host:port:login:password).",
   "ex.working_socks": "working · proxy answers in {ms} ms", "ex.socks_user": "Login", "ex.socks_noauth": "no login",
   "cfg.socks_bad": "This doesn't look like a SOCKS5 proxy address", "cfg.socks_port": "Invalid proxy port",
   "cfg.socks_host": "Invalid proxy address", "cfg.socks_auth": "Invalid proxy login or password",
@@ -2440,7 +2422,7 @@ Object.assign(I18N.en, {
   "ev.dns_died": "DNS on the server stopped — restarting",
   "ev.dns_failed": "DNS on the server did not start: {detail}",
   "ls.sni_error": "Not working: the domain rule handler did not start (see the event log)",
-  "re.dns": "Own DNS for these sites", "re.dns_ph": "optional, e.g. 9.9.9.9", "re.dns_hint": "The own DNS is asked the same way the rule's sites go, as plain DNS without encryption; up to two addresses.", "re.dns_off": "Own DNS works when “DNS on the server” is on (Server tab).", "err.rule_dns_v4": "A rule's own DNS is IPv4 only: {value}", "err.rule_dns_many": "A rule's own DNS: at most {n} addresses", "err.rule_dns_self": "{value} is the DNS on the server itself: as a rule's own DNS it does nothing. Leave the field empty or enter another DNS.", 
+  "re.dns": "Own DNS for these sites", "re.dns_ph": "optional, e.g. 9.9.9.9", "re.dns_hint": "The own DNS is asked the same way the rule's sites go, as plain DNS without encryption; up to two addresses.", "re.dns_off": "Own DNS works when “DNS on the server” is on (Server tab).", "err.rule_dns_v4": "A rule's own DNS is IPv4 only: {value}", "err.rule_dns_many": "A rule's own DNS: at most {n} addresses", "err.rule_dns_self": "{value} is the DNS on the server itself: as a rule's own DNS it does nothing. Leave the field empty or enter another DNS.",
   "err.rule_mixed_domains": "Domain lists and address lists can't be mixed in one rule",
   "err.exit_kind_change": "An exit's type can't change: delete the exit and add a new one", "err.list_kind_change": "A list's kind can't change: create a new list",
   "sni.no_addr": "interface {iface} has no IPv4 address",
@@ -2456,7 +2438,7 @@ Object.assign(I18N.en, {
   "ex.route_sites_hint": "One domain per line; subdomains go through the exit too. Matched by the site name in the connection (HTTPS and HTTP).",
   "ex.route_dlists": "Domain lists", "ex.route_nlists": "Network lists (countries, ASNs, addresses)",
   "ex.route_default": "All other traffic through this exit too (default exit)",
-  "re.new_list": "Create a list", 
+  "re.new_list": "Create a list",
   "ev.sni_failed": "The domain rule handler did not start: {detail}",
 });
 Object.assign(I18N.zh, {
@@ -2480,7 +2462,6 @@ Object.assign(I18N.zh, {
 
 
 
-  "ex.config_socks": "也可以是 SOCKS5 代理：socks5://用户名:密码@地址:端口（或 地址:端口:用户名:密码）。",
   "ex.working_socks": "正常 · 代理响应 {ms} 毫秒", "ex.socks_user": "用户名", "ex.socks_noauth": "无需登录",
   "cfg.socks_bad": "这看起来不是 SOCKS5 代理地址", "cfg.socks_port": "代理端口无效",
   "cfg.socks_host": "代理地址无效", "cfg.socks_auth": "代理用户名或密码无效",
@@ -2501,7 +2482,7 @@ Object.assign(I18N.zh, {
   "ev.dns_died": "服务器上的 DNS 已停止——正在重启",
   "ev.dns_failed": "服务器上的 DNS 未能启动：{detail}",
   "ls.sni_error": "未生效：域名规则处理程序未能启动（详见事件日志）",
-  "re.dns": "这些网站的专用 DNS", "re.dns_ph": "可选，例如 223.5.5.5", "re.dns_hint": "专用 DNS 的查询与规则中的网站走同一路径，使用不加密的普通 DNS；最多两个地址。", "re.dns_off": "专用 DNS 需开启「服务器上的 DNS」（服务器标签页）后才生效。", "err.rule_dns_v4": "规则的专用 DNS 只能是 IPv4：{value}", "err.rule_dns_many": "规则的专用 DNS 最多 {n} 个地址", "err.rule_dns_self": "{value} 就是服务器上的 DNS 本身：用作规则的专用 DNS 没有任何作用。请留空或填写其他 DNS。", 
+  "re.dns": "这些网站的专用 DNS", "re.dns_ph": "可选，例如 223.5.5.5", "re.dns_hint": "专用 DNS 的查询与规则中的网站走同一路径，使用不加密的普通 DNS；最多两个地址。", "re.dns_off": "专用 DNS 需开启「服务器上的 DNS」（服务器标签页）后才生效。", "err.rule_dns_v4": "规则的专用 DNS 只能是 IPv4：{value}", "err.rule_dns_many": "规则的专用 DNS 最多 {n} 个地址", "err.rule_dns_self": "{value} 就是服务器上的 DNS 本身：用作规则的专用 DNS 没有任何作用。请留空或填写其他 DNS。",
   "err.rule_mixed_domains": "同一条规则中不能混用域名列表和地址列表",
   "err.exit_kind_change": "出口类型不能更改：请删除该出口并添加新出口", "err.list_kind_change": "列表类型不能更改：请新建列表",
   "sni.no_addr": "接口 {iface} 没有 IPv4 地址",
@@ -2517,7 +2498,7 @@ Object.assign(I18N.zh, {
   "ex.route_sites_hint": "每行一个域名，子域名也经此出口。按连接中的网站名称匹配（HTTPS 和 HTTP）。",
   "ex.route_dlists": "域名列表", "ex.route_nlists": "网络列表（国家、ASN、地址）",
   "ex.route_default": "其余所有流量也经此出口（默认出口）",
-  "re.new_list": "新建列表", 
+  "re.new_list": "新建列表",
   "ev.sni_failed": "域名规则处理程序未能启动：{detail}",
 });
 Object.assign(I18N.fa, {
@@ -2541,7 +2522,6 @@ Object.assign(I18N.fa, {
 
 
 
-  "ex.config_socks": "یا پراکسی SOCKS5: ‎socks5://نام:رمز@نشانی:درگاه‎ (یا نشانی:درگاه:نام:رمز).",
   "ex.working_socks": "فعال · پاسخ پراکسی {ms} میلی‌ثانیه", "ex.socks_user": "نام کاربری", "ex.socks_noauth": "بدون نام کاربری",
   "cfg.socks_bad": "این شبیه نشانی پراکسی SOCKS5 نیست", "cfg.socks_port": "درگاه پراکسی نامعتبر است",
   "cfg.socks_host": "نشانی پراکسی نامعتبر است", "cfg.socks_auth": "نام کاربری یا رمز پراکسی نامعتبر است",
@@ -2562,7 +2542,7 @@ Object.assign(I18N.fa, {
   "ev.dns_died": "DNS روی سرور متوقف شد — راه‌اندازی مجدد",
   "ev.dns_failed": "DNS روی سرور اجرا نشد: {detail}",
   "ls.sni_error": "کار نمی‌کند: پردازشگر قانون‌های دامنه راه‌اندازی نشد (جزئیات در گزارش رویدادها)",
-  "re.dns": "DNS ویژهٔ این سایت‌ها", "re.dns_ph": "اختیاری، مثلاً 178.22.122.100", "re.dns_hint": "DNS ویژه از همان راهی پرسیده می‌شود که سایت‌های این قانون می‌روند، با DNS معمولی و بدون رمزگذاری؛ حداکثر دو نشانی.", "re.dns_off": "DNS ویژه وقتی کار می‌کند که «DNS روی سرور» روشن باشد (زبانهٔ سرور).", "err.rule_dns_v4": "DNS ویژهٔ قانون فقط IPv4 است: {value}", "err.rule_dns_many": "DNS ویژهٔ قانون: حداکثر {n} نشانی", "err.rule_dns_self": "{value} همان DNS روی سرور است: به‌عنوان DNS ویژهٔ قانون کاری نمی‌کند. خانه را خالی بگذارید یا DNS دیگری بنویسید.", 
+  "re.dns": "DNS ویژهٔ این سایت‌ها", "re.dns_ph": "اختیاری، مثلاً 178.22.122.100", "re.dns_hint": "DNS ویژه از همان راهی پرسیده می‌شود که سایت‌های این قانون می‌روند، با DNS معمولی و بدون رمزگذاری؛ حداکثر دو نشانی.", "re.dns_off": "DNS ویژه وقتی کار می‌کند که «DNS روی سرور» روشن باشد (زبانهٔ سرور).", "err.rule_dns_v4": "DNS ویژهٔ قانون فقط IPv4 است: {value}", "err.rule_dns_many": "DNS ویژهٔ قانون: حداکثر {n} نشانی", "err.rule_dns_self": "{value} همان DNS روی سرور است: به‌عنوان DNS ویژهٔ قانون کاری نمی‌کند. خانه را خالی بگذارید یا DNS دیگری بنویسید.",
   "err.rule_mixed_domains": "فهرست دامنه و فهرست نشانی را نمی‌توان در یک قانون ترکیب کرد",
   "err.exit_kind_change": "نوع خروجی تغییر نمی‌کند: خروجی را حذف کنید و یکی تازه بیفزایید", "err.list_kind_change": "نوع فهرست تغییر نمی‌کند: فهرست تازه‌ای بسازید",
   "sni.no_addr": "رابط {iface} نشانی IPv4 ندارد",
@@ -2578,7 +2558,7 @@ Object.assign(I18N.fa, {
   "ex.route_sites_hint": "در هر خط یک دامنه؛ زیردامنه‌ها هم از این خروجی می‌روند. بر اساس نام سایت در اتصال (HTTPS و HTTP).",
   "ex.route_dlists": "فهرست‌های دامنه", "ex.route_nlists": "فهرست‌های شبکه (کشورها، ASN، نشانی‌ها)",
   "ex.route_default": "بقیهٔ ترافیک هم از این خروجی (خروجی پیش‌فرض)",
-  "re.new_list": "ساختن فهرست", 
+  "re.new_list": "ساختن فهرست",
   "ev.sni_failed": "پردازشگر قانون‌های دامنه راه‌اندازی نشد: {detail}",
 });
 
