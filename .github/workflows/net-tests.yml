@@ -13,7 +13,8 @@
 # что попадут в образ следующего релиза. pyroute2 и nftables ставятся только на машину CI (в панель
 # не попадают: там по-прежнему только стандартная библиотека).
 # Задание lint: проверка кода — Python (ruff, ruff.toml) и скрипты интерфейса (eslint, eslint.config.mjs):
-# неизвестные имена и явные ошибки. Ставятся только на машину CI.
+# неизвестные имена и явные ошибки. Ставятся только на машину CI. И юнит-тесты на версии Python образа панели: ветку
+# до «да» проверяет этот workflow, а в песочнице сессии своя версия Python (смена 3.13 → 3.15, PR #45).
 # Идут на каждом пуше в main перед черновиком релиза (release.yml, задание net) и вручную.
 name: Network tests
 
@@ -33,7 +34,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
-          python-version: "3.13"
+          python-version: "3.15"
 
       - name: Python (ruff)
         run: |
@@ -45,6 +46,9 @@ jobs:
           node --version
           npx --yes eslint@10.1.0 app/static
 
+      - name: Unit tests (the image's Python)
+        run: python -W always::ResourceWarning -m unittest discover tests
+
   net:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -53,7 +57,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
-          python-version: "3.13"
+          python-version: "3.15"
 
       - name: Tools (nftables, pyroute2)
         run: |
@@ -135,7 +139,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
-          python-version: "3.13"
+          python-version: "3.15"
 
       - name: Tools (pyroute2, awg, amneziawg-go)
         run: |

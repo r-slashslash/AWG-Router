@@ -311,6 +311,17 @@ class ProjectRulesTest(unittest.TestCase):
         for k in ("AWG_GO_REF", "AWG_GO_SHA", "AWG_TOOLS_REF", "AWG_TOOLS_SHA"):
             self.assertEqual(panel[k], server[k], k)
 
+    def test_tests_run_on_the_image_python(self):
+        """Python в образе панели (FROM python:3.X-alpine) и python-version у setup-python в release.yml и net-tests.yml —
+        одна версия: PR Dependabot меняет только Dockerfile (#45), и тесты шли бы на одной версии, а панель у людей — на
+        другой."""
+        image = re.search(r"^FROM python:(\d+\.\d+)-alpine@", read("Dockerfile"), re.M)
+        self.assertIsNotNone(image)
+        for n in ("release.yml", "net-tests.yml"):
+            got = re.findall(r'python-version:\s*"?([\d.]+)"?', read(".github", "workflows", n))
+            self.assertTrue(got, n)
+            self.assertEqual(set(got), {image.group(1)}, n)
+
     def test_static_loads_nothing_from_other_hosts(self):
         """Браузер не обращается к сторонним хостам: страницы, стили и скрипты панели ничего не грузят с
         чужих адресов (ссылки для перехода по нажатию и адреса в комментариях — можно)."""
