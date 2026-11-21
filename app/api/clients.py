@@ -153,7 +153,7 @@ def share_page(req, token):
     share.js сам пишет «ссылка не действует» на языке человека (раньше тот видел служебный JSON). По ответу не
     отличить, была ли такая ссылка: страница одна на все неверные адреса."""
     with open(SHARE_HTML, "rb") as f:
-        return Page(f.read(), status=200 if _share_exists(token) else 404)
+        return Page(app.versioned(f.read()), status=200 if _share_exists(token) else 404)
 
 
 @app.get("/s/api/{token}", public=True)

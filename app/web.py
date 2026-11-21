@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import errno
 import gzip
+import hashlib
 import ipaddress
 import json
 import logging
@@ -47,6 +48,14 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "form-action 'self'")
 _gz_cache: dict[str, tuple[str, bytes]] = {}     # путь файла статики → (ETag, сжатое тело)
 _gz_lock = threading.Lock()
+# Адреса статики в страницах — с отпечатком всех её файлов (static/v-<отпечаток>/…, App.static_tag): такой файл
+# браузер берёт из своего кэша без перепроверки, пока отпечаток тот же. Раньше каждое открытие панели перепроверяло
+# 13 файлов (ответ 304): по связи с задержкой 300 мс — 1,6 с (оптимизация 2026-11-21). Новый выпуск или правка файла —
+# новый отпечаток, новые адреса. Файл манифеста — без отпечатка: адрес манифеста — часть установленного приложения.
+STATIC_TAG = re.compile(r"v-([0-9a-f]{12})/")
+STATIC_TAG_TTL = 2.0       # с: отпечаток считается заново не чаще (обход папки статики)
+IMMUTABLE = "private, max-age=31536000, immutable"
+_STATIC_REF = re.compile(rb'((?:src|href)=")(static/|/s/assets/)(?!manifest\.webmanifest")')
 
 
 def gzip_static(path: str, etag: str, body: bytes) -> bytes:
@@ -200,6 +209,36 @@ class App:
         self.public_files: set[str] = set()                  # какие файлы отдавать по public_static
         self.index_file: str | None = None
         self.public: set = set()                             # обработчики без проверки входа
+        self._tag: tuple[float, str] | None = None           # (когда посчитан, отпечаток статики)
+
+    def static_tag(self) -> str:
+        """Отпечаток статики: имена, время изменения и размеры всех её файлов (STATIC_TAG). Считается заново не чаще
+        STATIC_TAG_TTL: его спрашивает каждый запрос файла с отпечатком в адресе."""
+        now = time.monotonic()
+        hit = self._tag
+        if hit and now - hit[0] < STATIC_TAG_TTL:
+            return hit[1]
+        h = hashlib.sha256()
+        root = self.static[1] if self.static else ""
+        for d, dirs, names in os.walk(root):
+            dirs.sort()
+            for n in sorted(names):
+                p = os.path.join(d, n)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                h.update(f"{os.path.relpath(p, root)}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
+        tag = h.hexdigest()[:12]
+        self._tag = (now, tag)
+        return tag
+
+    def versioned(self, html: bytes) -> bytes:
+        """Страница с отпечатком статики в адресах её файлов (`static/…`, `/s/assets/…` → `…/v-<отпечаток>/…`)."""
+        if not self.static:
+            return html
+        mark = b"v-" + self.static_tag().encode() + b"/"
+        return _STATIC_REF.sub(lambda m: m.group(1) + m.group(2) + mark, html)
 
     def route(self, method: str, pattern: str, public: bool = False):
         # /lists/{lid} → именованные группы; {pk:path} — с косыми чертами
@@ -323,13 +362,19 @@ class App:
                     for mount in (app.static, app.public_static):
                         if mount and path.startswith(mount[0] + "/") and self.command in ("GET", "HEAD"):
                             rel = path[len(mount[0]) + 1:]
+                            # адрес с отпечатком статики (App.versioned): нынешний — файл в кэш браузера надолго;
+                            # прежний (страница открыта до обновления) — тот же файл, как без отпечатка
+                            tagged = STATIC_TAG.match(rel)
+                            if tagged:
+                                rel = rel[tagged.end():]
                             if mount is app.public_static and rel not in app.public_files:
                                 raise HTTPError(404, "err.not_found")
-                            return self._static(mount[1], rel)
+                            return self._static(mount[1], rel,
+                                                keep=bool(tagged) and tagged.group(1) == app.static_tag())
                     if app.index_file and self.command in ("GET", "HEAD"):
                         if path == app.base + "/" or path == "/" and not app.base:
                             with open(app.index_file, "rb") as f:
-                                body = f.read()
+                                body = app.versioned(f.read())
                             return self._send(200, body, "text/html; charset=utf-8",
                                               [("Cache-Control", "no-store")])
                         if app.base and path == app.base:
@@ -377,7 +422,8 @@ class App:
                     except Exception:  # noqa: BLE001
                         pass
 
-            def _static(self, root: str, rel: str):
+            def _static(self, root: str, rel: str, keep: bool = False):
+                """keep — в адресе нынешний отпечаток статики: файл не перепроверяется (IMMUTABLE)."""
                 root = os.path.realpath(root)
                 try:
                     p = os.path.realpath(os.path.join(root, rel))
@@ -391,7 +437,7 @@ class App:
                     ctype += "; charset=utf-8"
                 st = os.stat(p)
                 etag = f'"{int(st.st_mtime)}-{st.st_size}"'
-                hdrs = [("Cache-Control", "no-cache"), ("ETag", etag)]
+                hdrs = [("Cache-Control", IMMUTABLE if keep else "no-cache"), ("ETag", etag)]
                 # браузер перепроверяет файл, но не скачивает заново, если он не менялся
                 if self.headers.get("If-None-Match") == etag:
                     self.send_response(304)
