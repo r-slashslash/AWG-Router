@@ -11,9 +11,20 @@ it grows, so every user-visible change gets a new version.
   that row's handler held the next one, in a chain. A page left on **Clients** grew by ~70 MB an hour with 50 clients and
   by ~20 MB a minute with 1000 (Chromium, garbage collected before each sample), without limit. Now
   every row shares one handler, `clientRowClick`; the page stays at the same size.
+- **The panel opens faster over a slow link.** Pages refer to their scripts, styles, fonts and icons as
+  `static/v-<tag>/…` (and `/s/assets/v-<tag>/…` on a client's page), the tag being a hash of the names, times and sizes
+  of all static files (`App.static_tag`); such files are sent with `private, max-age=31536000, immutable`, so the
+  browser no longer asks about each of them every time the panel is opened. Another tag, or none, keeps `no-cache` with
+  the ETag as before; an update gives a new tag. Opening the panel again over a 300 ms link: 1.7 s with 16 requests →
+  1.35 s with 3.
 - **The route check no longer keeps domain lists in the panel's memory.** `domains.Matcher` kept a set of every domain
   list it had checked until the panel restarted: a 300 000-name list is about 36 MB on a 1 GB server. It now reads the
   list file line by line on each check (a fraction of a second for the largest list), with the same answer.
+- **Python 3.15** in the panel image (Dependabot, #45) and in the tests (`setup-python` in `release.yml` and
+  `net-tests.yml`; a rule test keeps them the same). The `lint` job of `net-tests.yml` now runs the unit tests too, so a
+  branch is checked on the image's Python before it reaches `main`. Found that way: Python 3.14+ parses 100 000 nested
+  JSON objects without `RecursionError` (the limit is the C stack), and the check after it in `Request.json` raised one
+  instead — such a request body was a 500, it is 400 again.
 
 ## 1.23.0 — 2026-11-19
 

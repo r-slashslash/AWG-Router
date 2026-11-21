@@ -155,7 +155,8 @@ domain rules become a block.
 - `/api/state` is polled every few seconds, so keep it small (the clients' live speed, `speeds`, and CPU and memory come with every answer, outside the tag); load big data with separate requests,
   and read the state once per request (`store.snapshot()` copies all of it). The server keeps connections
   open (HTTP/1.1) and compresses text responses from `web.GZIP_MIN` bytes; static files are compressed once per
-  version (`web.gzip_static`). Public routes (`/s/…`) read the state with `store.peek`, without a copy.
+  version (`web.gzip_static`). Pages refer to static files as `static/v-<tag>/…` (`App.static_tag`: a hash of the names,
+  times and sizes of all of them), sent as `immutable`: the browser keeps them until an update changes the tag. Public routes (`/s/…`) read the state with `store.peek`, without a copy.
 - Requests that change something must come from the panel's own page (`api.auth.same_origin`: `Sec-Fetch-Site`,
   or `Origin`): the `SameSite=Strict` cookie is also sent from other pages of the same site.
 
