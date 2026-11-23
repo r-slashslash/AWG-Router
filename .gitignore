@@ -18,5 +18,7 @@ __pycache__/
 CLAUDE.md
 DEVELOPMENT.md
 OWNER-NOTES.md
+docs/superpowers/
+.superpowers/
 # готовые образы релиза: файл появляется только в архиве релиза (release.yml)
 /IMAGES

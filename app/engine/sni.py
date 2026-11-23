@@ -11,7 +11,7 @@ import time
 
 from .. import config, domains, lists, nftgen, shaping, system
 from ..i18n import Msg
-from .common import APP_DIR, LOG_DIR, RUN_DIR, HelperRT, _sha, _trim_log, log
+from .common import APP_DIR, LOG_DIR, RUN_DIR, HelperRT, _sha, _trim_log, log, server_ifaces
 
 SNIPROXY = os.path.join(APP_DIR, "sniproxy.py")
 SNI_CONF = os.path.join(RUN_DIR, "sni.json")
@@ -70,11 +70,12 @@ class SniMixin:
         return config.MARK_BLOCK
 
     # ---------------------------------------------- правила по доменам (sniproxy.py)
-    def tunnel_addr(self, t: system.Target) -> tuple[str, str] | None:
+    def tunnel_addr(self, t: system.Target, iface: str | None = None) -> tuple[str, str] | None:
         """Адрес сервера в туннеле (на нём слушает sniproxy.py) и подсеть клиентов."""
+        ifn = iface or t.iface
         if config.DRY_RUN:
-            return "10.8.1.1", "10.8.1.0/24"
-        p = t.ns(["ip", "-j", "-4", "addr", "show", "dev", t.iface], check=False)
+            return ("10.8.2.1", "10.8.2.0/24") if ifn == "wg0" and t.iface != "wg0" else ("10.8.1.1", "10.8.1.0/24")
+        p = t.ns(["ip", "-j", "-4", "addr", "show", "dev", ifn], check=False)
         try:
             for x in json.loads(p.stdout or "[]"):
                 for a in x.get("addr_info") or []:
@@ -84,6 +85,15 @@ class SniMixin:
         except (ValueError, TypeError):
             pass
         return None
+
+    def tunnel_addrs(self, t: system.Target) -> list[tuple[str, str]]:
+        """Адреса и подсети всех активных интерфейсов WireGuard сервера."""
+        out = []
+        for ifn in server_ifaces(t):
+            la = self.tunnel_addr(t) if ifn == t.iface else self.tunnel_addr(t, ifn)
+            if la:
+                out.append(la)
+        return out
 
     def _sni_target(self, st: dict, out: str) -> dict:
         """Куда sniproxy.py ведёт соединение с совпавшим доменом: выход SOCKS5 — командой CONNECT
@@ -179,14 +189,14 @@ class SniMixin:
         (а не транзитные). Файрвол на iptables (ufw и т. п.) их бы отбросил: разрешаем порт на
         интерфейсе клиентов. op: "add" | "del"; ports — [(протокол, порт)], по умолчанию порт
         sniproxy.py. Нет iptables — ничего не делаем."""
-        ifn = t.iface
         cmds = []
-        for proto, port in ports or [("tcp", int(config.SNI_PROXY_PORT))]:
-            rule = f"INPUT -i {ifn} -p {proto} --dport {int(port)} -j ACCEPT"
-            if op == "add":
-                cmds.append(f"{{ iptables -C {rule} 2>/dev/null || iptables -I {rule}; }}")
-            else:
-                cmds.append(f"while iptables -C {rule} 2>/dev/null; do iptables -D {rule}; done")
+        for ifn in server_ifaces(t):
+            for proto, port in ports or [("tcp", int(config.SNI_PROXY_PORT))]:
+                rule = f"INPUT -i {ifn} -p {proto} --dport {int(port)} -j ACCEPT"
+                if op == "add":
+                    cmds.append(f"{{ iptables -C {rule} 2>/dev/null || iptables -I {rule}; }}")
+                else:
+                    cmds.append(f"while iptables -C {rule} 2>/dev/null; do iptables -D {rule}; done")
         try:
             t.native(["sh", "-c", "command -v iptables >/dev/null 2>&1 || exit 0; " + "; ".join(cmds)],
                      check=False, timeout=30)
@@ -215,12 +225,12 @@ class SniMixin:
             self._stop_sni()
             self.sni_state = None
             return None
-        la = self.tunnel_addr(t)
-        if not la:
+        addrs = self.tunnel_addrs(t)
+        if not addrs:
             self._stop_sni()
             self.sni_state = {"state": "error", "error": Msg("sni.no_addr", iface=t.iface)}
             return None
-        listen, net = la
+        listen, net = addrs[0]
         if config.DRY_RUN:
             self.sni_state = {"state": "on", "listen": listen}
             return config.SNI_PROXY_PORT
@@ -238,7 +248,9 @@ class SniMixin:
                  if shaping.mbit(u.get("rate_up")) or shaping.mbit(u.get("rate_down"))}
         shared = self._sni_shared(st, rates)
         self._sni_shared_devs = {d["dev"] for dirs in shared.values() for d in dirs.values()}
-        cfg = {"listen": listen, "port": config.SNI_PROXY_PORT, "clients": net, "stats": SNI_STATS, "beat": SNI_BEAT,
+        cfg = {"listen": listen, "listen_addrs": [ip for ip, _ in addrs],
+               "port": config.SNI_PROXY_PORT, "clients": net, "clients_nets": [n for _, n in addrs],
+               "stats": SNI_STATS, "beat": SNI_BEAT,
                "lists": files, "cidrs": cidrs, "rates": rates, "shared": shared,
                "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
                "quic": {"queue": config.QUIC_QUEUE, "pass": config.QUIC_PASS_MARK, "block": config.MARK_BLOCK},
@@ -249,7 +261,7 @@ class SniMixin:
                             for n, m in marks.items()}}
         mt = {lid: os.path.getmtime(p) if os.path.exists(p) else 0 for lid, p in {**files, **cidrs}.items()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
-        key = f"{t.key}|{listen}|{config.SNI_PROXY_PORT}"
+        key = f"{t.key}|{'|'.join(ip for ip, _ in addrs)}|{config.SNI_PROXY_PORT}"
         d = self.sni
         if d and (d.key != key or d.proc.poll() is not None or self._sni_hung()):
             if d.key == key:

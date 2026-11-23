@@ -26,12 +26,13 @@ from ..i18n import Msg, msg_of
 from ..store import TEXT_KINDS, Store
 from ..traffic import Traffic
 from ..users import ServerManager
-from .common import DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, UpRT, _sha, log
+from .common import DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, UpRT, _sha, log, server_ifaces
 from .diag import DiagMixin
 from .dns import DnsMixin
 from .routes import RoutesMixin
 from .server import ServerMixin
 from .sni import SniMixin
+from .socks_srv import SocksProxyMixin
 from .speed import SpeedMixin
 from .tunnels import TunnelsMixin
 
@@ -45,7 +46,7 @@ CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
 
 
-class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMixin, DiagMixin):
+class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, SocksProxyMixin, ServerMixin, SpeedMixin, DiagMixin):
     def __init__(self, store: Store):
         self.store = store
         self.lock = threading.RLock()
@@ -112,6 +113,9 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self.dns: HelperRT | None = None        # dnsproxy.py — DNS панели для клиентов
         self.dns_state: dict | None = None      # для интерфейса: state, listen, error
         self._dns_retry = 0.0
+        self.socks_srv: HelperRT | None = None  # socksproxy.py — входящий SOCKS5-прокси
+        self.socks_state: dict | None = None    # для интерфейса: state, port, users, error
+        self._socks_retry = 0.0
         self._socks_res: dict[str, dict] = {}   # uid → результат последней проверки прокси
         self._socks_busy: set[str] = set()
         self._rr_busy: set[str] = set()          # выходы, у которых сейчас заново разбирается имя
@@ -422,13 +426,15 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 self._stop_all()
                 self._stop_sni()
                 self._stop_dns()
+                self._stop_socks()
                 self.target = t
                 self.applied_hash = None
                 self._shape = {}
                 self._sysctl(t)
             elif t.kind == "host" and not config.DRY_RUN:
                 # интерфейс сервера на хосте пересоздаётся при перезапуске службы — с настройкой по умолчанию
-                t.ns(["sysctl", "-qw", f"net.ipv4.conf.{t.iface}.rp_filter=2"], check=False)
+                for ifn in server_ifaces(t):
+                    t.ns(["sysctl", "-qw", f"net.ipv4.conf.{ifn}.rp_filter=2"], check=False)
 
             if self._masking_checked != t.key:
                 self._masking_checked = t.key
@@ -483,6 +489,11 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             except Exception as e:  # noqa: BLE001
                 log.exception("dnsproxy")
                 self.dns_state = {"state": "error", "error": msg_of(e)}
+            try:
+                self._sync_socks(t, st)
+            except Exception as e:  # noqa: BLE001
+                log.exception("socksproxy")
+                self.socks_state = {"state": "error", "error": msg_of(e)}
 
             if self._quic_key != t.key:              # другое ядро (новая цель) — проверить заново
                 self._quic_key, self._quic_nft = t.key, None
@@ -553,6 +564,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             self._stop_all()
             self._stop_sni()
             self._stop_dns()
+            self._stop_socks()
             if t:
                 self._clear_shaping(t)
                 self._drop_hold(t)
@@ -586,6 +598,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             with self.lock:
                 self._stop_all()
                 self._stop_dns()        # клиенты переходят на второй DNS из конфига (сервер из настроек)
+                self._stop_socks()
                 if self.sni:
                     self._stop_sni()
                     t = self.target

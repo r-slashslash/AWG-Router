@@ -202,7 +202,9 @@ def put_client(req, pk):
         before = routing.rule_lists(old.get("rules") if old.get("rules_mode") == "custom" else [])
         c = {**checks.client_policy(st, body, engine.dns_listen()),
              "name": next((x.get("name") for x in engine.clients if x["public_key"] == pk), "")}
-        if c["outbound"] == "inherit" and c["rules_mode"] == "inherit" and not c["note"]:
+        if old.get("proto") == "wg":
+            c["proto"] = "wg"
+        if c["outbound"] == "inherit" and c["rules_mode"] == "inherit" and not c["note"] and c.get("proto") != "wg":
             st["clients"].pop(pk, None)
         else:
             st["clients"][pk] = c
@@ -271,7 +273,10 @@ def _client_name(v) -> str:
 def add_user(req):
     body = req.json()
     host = _client_host_value(body.get("host"))           # проверка до создания: отказ — без клиента
-    pk = user_errors(lambda: engine.srv.add_client(_client_name(body.get("name"))))
+    proto = body.get("proto") if body.get("proto") is not None else "awg"
+    if not isinstance(proto, str):
+        bad("err.bad_value")
+    pk = user_errors(lambda: engine.srv.add_client(_client_name(body.get("name")), proto=proto))
     if host:
         store.mutate(lambda st: st.setdefault("chost", {}).__setitem__(pk, host))
     engine.reconcile_soon()
@@ -307,9 +312,12 @@ def put_client_host(req, pk):
 def edit_user(req, pk):
     body = req.json()
     _pk(pk)
-    if body.get("name") is not None:
-        name = _client_name(body["name"])
-        user_errors(lambda: engine.srv.update_client(pk, name=name))
+    name = _client_name(body["name"]) if body.get("name") is not None else None
+    proto = body.get("proto")
+    if proto is not None and not isinstance(proto, str):
+        bad("err.bad_value")
+    if name is not None or proto is not None:
+        user_errors(lambda: engine.srv.update_client(pk, name=name, proto=proto))
     if body.get("enabled") is not None:
         set_client_enabled(pk, checks.flag(body["enabled"]))
     engine.reconcile_soon()

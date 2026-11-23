@@ -346,6 +346,8 @@ class Proxy:
         self.conf_path = conf_path
         self.cfg: dict = {}
         self.net = None
+        self.nets: tuple = ()
+        self.self_addrs: set[str] = set()
         self.cache: dict[tuple, tuple[float, int, bytes, list[int]]] = {}
         self.cache_bytes = 0
         self.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
@@ -368,10 +370,15 @@ class Proxy:
     def load(self) -> None:
         with open(self.conf_path) as f:
             cfg = json.load(f)
-        self.net = ipaddress.ip_network(cfg["clients"]) if cfg.get("clients") else None
+        raw_nets = cfg.get("clients_nets") or ([cfg["clients"]] if cfg.get("clients") else [])
+        self.nets = tuple(ipaddress.ip_network(n) for n in raw_nets)
+        self.net = self.nets[0] if self.nets else None
         self.up_port = int(cfg.get("upstream_port") or PORT)     # не 53 — только в тестах
         # адрес этого DNS: свой DNS правила с ним спрашивал бы сам себя (domain_route его пропускает)
-        self.self_addr = cfg.get("listen") if self.up_port == int(cfg.get("port") or PORT) else None
+        same_port = self.up_port == int(cfg.get("port") or PORT)
+        addrs = cfg.get("listen_addrs") or ([cfg["listen"]] if cfg.get("listen") else [])
+        self.self_addrs = set(addrs) if same_port else set()
+        self.self_addr = cfg.get("listen") if same_port else None
         old = self.cfg
         self.cfg = cfg
         if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")):
@@ -413,7 +420,7 @@ class Proxy:
         for rule in (self.dom.get("policies") or {}).get(pol) or ():
             if any(match(name, self.dom_lists.get(lid) or ()) for lid in rule[0]):
                 if len(rule) >= 4:
-                    own = () if rule[1] is None else tuple(s for s in rule[2] or () if s != self.self_addr)
+                    own = () if rule[1] is None else tuple(s for s in rule[2] or () if s not in self.self_addrs)
                     return rule[1], own, bool(rule[3])
                 return rule[1], (), True
         return None
@@ -480,7 +487,10 @@ class Proxy:
 
     def allowed(self, ip: str) -> bool:
         try:
-            return self.net is None or ipaddress.ip_address(ip) in self.net
+            addr = ipaddress.ip_address(ip)
+            if self.nets:
+                return any(addr in n for n in self.nets)
+            return self.net is None or addr in self.net
         except ValueError:
             return False
 
@@ -600,7 +610,7 @@ class Proxy:
         mode = "plain" if servers else (self.cfg.get("encrypt") or "plain")
         servfail = None
         for server in servers or self.cfg.get("upstreams") or []:
-            if not servers and mode == "plain" and server == self.self_addr:
+            if not servers and mode == "plain" and server in self.self_addrs:
                 continue        # общий сервер = адрес этого DNS: спрашивал бы сам себя по кругу (Г20 проверки 1.23.0)
             qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
             out = struct.pack("!H", qid) + query[2:]
@@ -760,18 +770,26 @@ class UDPServer(asyncio.DatagramProtocol):
 async def main(conf_path: str) -> None:
     proxy = Proxy(conf_path)
     loop = asyncio.get_running_loop()
-    listen, port = proxy.cfg["listen"], int(proxy.cfg.get("port") or PORT)
-    await loop.create_datagram_endpoint(lambda: UDPServer(proxy), local_addr=(listen, port))
-    server = await asyncio.start_server(proxy.handle_tcp, listen, port, reuse_address=True)
+    addrs = proxy.cfg.get("listen_addrs") or [proxy.cfg["listen"]]
+    port = int(proxy.cfg.get("port") or PORT)
+    servers = []
+    for listen in addrs:
+        await loop.create_datagram_endpoint(lambda: UDPServer(proxy), local_addr=(listen, port))
+        servers.append(await asyncio.start_server(proxy.handle_tcp, listen, port, reuse_address=True))
     stop = asyncio.Event()
     loop.add_signal_handler(signal.SIGHUP, proxy.load)
     loop.add_signal_handler(signal.SIGUSR1, proxy.resync)
     loop.add_signal_handler(signal.SIGTERM, stop.set)
     loop.add_signal_handler(signal.SIGINT, stop.set)
-    print(f"dnsproxy: {listen}:{port}", flush=True)
+    print(f"dnsproxy: {','.join(addrs)}:{port}", flush=True)
     proxy.stats_loop()
-    async with server:
+    try:
         await stop.wait()
+    finally:
+        for s in servers:
+            s.close()
+        for s in servers:
+            await s.wait_closed()
 
 
 if __name__ == "__main__":

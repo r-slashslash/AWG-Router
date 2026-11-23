@@ -235,6 +235,9 @@ def del_upstream(req, uid):
                 bad("err.bad_outbound")
             Store.replace_outbound(st, target, new, u.get("fallback"))
         st["upstreams"] = [x for x in st["upstreams"] if x["id"] != uid]
+        for su in (st.get("socks_users") or {}).values():
+            if su.get("exit") == target:
+                su["exit"] = "direct"
         bal = st["routing"].get("balance")
         if bal and uid in (bal.get("skip") or []):
             bal["skip"] = [x for x in bal["skip"] if x != uid]

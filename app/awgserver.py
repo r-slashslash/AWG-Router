@@ -428,9 +428,9 @@ def _one_line(prof: ClientProfile, peer: Peer, priv: str, params: dict[str, str]
 
 
 def client_conf(sc: ServerConf, prof: ClientProfile, peer: Peer, priv: str,
-                override: dict[str, str] | None = None) -> str:
+                override: dict[str, str] | None = None, wg_only: bool = False) -> str:
     """override — свои параметры клиента поверх серверных (I1–I5; пустое значение — убрать)."""
-    params = {**sc.params(), **(override or {})}
+    params = {} if wg_only else {**sc.params(), **(override or {})}
     _one_line(prof, peer, priv, params)
     lines = ["[Interface]", f"Address = {peer.ip}/32"]
     if prof.dns:
@@ -445,8 +445,11 @@ def client_conf(sc: ServerConf, prof: ClientProfile, peer: Peer, priv: str,
     if peer.psk:
         lines.append(f"PresharedKey = {peer.psk}")
     host = f"[{prof.host}]" if ":" in prof.host else prof.host
+    keepalive = str(prof.keepalive)
+    if wg_only and "-" in keepalive:
+        keepalive = keepalive.split("-", 1)[0].strip()
     lines += ["AllowedIPs = 0.0.0.0/0, ::/0", f"Endpoint = {host}:{prof.port}",
-              f"PersistentKeepalive = {prof.keepalive}", ""]
+              f"PersistentKeepalive = {keepalive}", ""]
     return "\n".join(lines)
 
 
@@ -526,6 +529,11 @@ def new_server(priv: str, port: int, subnet: str, params: dict[str, str], wan_ma
         up, down = nat_hooks(str(net.network))
         sc.iface += [("PostUp", up), ("PostDown", down)]
     return sc
+
+
+def new_wg_server(private_key: str, port: int, subnet: str, wan_masq: bool = True) -> ServerConf:
+    """Конфиг классического WireGuard (wg0) без параметров обфускации AWG."""
+    return new_server(private_key, port, subnet, {}, wan_masq=wan_masq, amnezia_style=False)
 
 
 HOOK_KEYS = ("PreUp", "PostUp", "PreDown", "PostDown")
