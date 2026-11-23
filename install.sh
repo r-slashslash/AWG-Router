@@ -101,6 +101,9 @@ fetch_code() {
     fetch_code "$_target" || exit 1
     _args=()
     for a in "$@"; do [ "$a" = "--update" ] || _args+=("$a"); done
+    # curl | bash: read the rest of this script off the pipe first, or curl ends the install with
+    # "curl: (23) Failure writing output to destination" (bash parsed this whole block already)
+    [ -n "$_src" ] || cat >/dev/null
     exec bash "$_target/install.sh" ${_args[@]+"${_args[@]}"} </dev/null
   fi
 }

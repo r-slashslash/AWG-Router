@@ -25,6 +25,9 @@ it grows, so every user-visible change gets a new version.
   built from ASCII glyphs; an address that doesn't fit gets smaller, then is cut with "…". If a word is missing (texts
   changed without running the tool) or anything fails, the bot sends the screen as text as before — now with
   "VPN server" and "Exits online" and without "Host". `AtlasTest` fails until the tool is run again.
+- A new install with `curl … | bash` no longer ends with `curl: (23) Failure writing output to destination`: the
+  installer restarts from its downloaded copy (`exec … </dev/null`) and left the rest of itself unread in the pipe; now
+  it reads it off first. The install itself was fine.
 
 ## 1.23.1 — 2026-11-21
 
