@@ -114,7 +114,7 @@ def _state_view() -> dict:
     return {
         "demo": config.DRY_RUN,
         "target": {"container": t.container, "kind": t.kind, "pid": t.pid, "iface": t.iface,
-                   "conf": t.conf_path, "exists": t.exists} if t else None,
+                   "conf": t.conf_path, "exists": t.exists, "wg": t.wg_exists()} if t else None,
         "panel": {"url": panel_url(), "access": "ssh" if config.PANEL_HOST.startswith("127.") else "public",
                   "tls": tls.status(), "mode": config.AWG_MODE, "ip": engine.srv.public_host(st)},
         "target_error": engine.target_error,
@@ -147,6 +147,19 @@ def _state_view() -> dict:
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         "lists": [{**routing.list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),
+        "socks_proxy": {
+            **(st["settings"].get("socks_proxy") or {"enabled": False, "port": 1080}),
+            "runtime": engine.socks_state,
+            "users": [
+                {
+                    "username": name,
+                    "exit": u.get("exit", "direct"),
+                    "enabled": u.get("enabled", True),
+                    "effective": engine.resolve(u.get("exit", "direct"), st),
+                }
+                for name, u in sorted((st.get("socks_users") or {}).items())
+            ],
+        },
         "clients": rows,
         "events": engine.events[-40:][::-1],
         "country_codes": lists.COUNTRY_CODES,

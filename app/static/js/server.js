@@ -149,7 +149,9 @@ function viewServer() {
       ${PARAM_GROUPS.map(([g, keys]) => `<fieldset class="pgroup"><legend>${esc(t(g))}</legend>${g === "srv.g_sig" ? sigTemplate(d) : ""}<div class="pgrid" style="--cols:${Math.min(keys.length, 4)}">${keys.map(param).join("")}</div></fieldset>`).join("")}
     </div>
   </section>
+  ${wgSection()}
   ${shapingSection()}
+  ${socksSection()}
   ${engineSection()}`;
 }
 const KERNEL_CMD = "sudo awg-router install-kernel";
@@ -355,6 +357,23 @@ function engWatch() {
   };
   tick();
 }
+/** параллельный классический WireGuard (wg0) */
+function wgSection() {
+  const w = SRV.wg || { enabled: false, port: 51820, subnet: "10.8.2.0/24", subnet_locked: false };
+  return `
+  <section class="section">
+    <div class="section-head"><div><h2>${esc(t("srv.wg_title"))}</h2><p class="muted small">${esc(t("srv.wg_hint"))}</p></div></div>
+    <div class="panel panel-pad">
+      <div class="field">
+        <label class="check"><input type="checkbox" id="s-wg-on" ${w.enabled ? "checked" : ""}><span>${esc(t("srv.wg_enable"))}</span></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>${esc(t("srv.wg_port"))}</span><input type="number" data-field="wg.port" id="s-wg-port" min="1" max="65535" value="${w.port || 51820}"></label>
+        <label class="field"><span>${esc(t("srv.wg_subnet"))}</span><input type="text" data-field="wg.subnet" id="s-wg-subnet" dir="ltr" value="${esc(w.subnet || "10.8.2.0/24")}" ${w.subnet_locked ? "disabled" : ""}></label>
+      </div>
+    </div>
+  </section>`;
+}
 /** общее ограничение скорости клиентов (своё сохранение, без перезапуска интерфейса) */
 function shapingSection() {
   const sh = S.settings.shaping || {};
@@ -369,6 +388,33 @@ function shapingSection() {
       </div>
       <p class="small muted" style="margin-top:-6px">${esc(t("sh.hint"))}</p>
       <button class="btn primary" id="sh-save">${esc(t("btn.save"))}</button>
+    </div>
+  </section>`;
+}
+/** публичный входящий SOCKS5-прокси */
+function socksSection() {
+  const sp = S.socks_proxy || { enabled: false, port: 1080, runtime: {} };
+  const rt = sp.runtime || {};
+  const badge = sp.enabled
+    ? `<span class="state"><span class="dot ${rt.state === "on" ? "ok" : rt.state === "error" ? "bad" : ""}"></span>${esc(t(rt.state === "on" ? "sp.on" : rt.state === "error" ? "sp.err" : "sp.starting"))}</span>`
+    : `<span class="state"><span class="dot"></span>${esc(t("st.disabled"))}</span>`;
+  const errHtml = rt.state === "error" && rt.error
+    ? `<div class="banner bad" style="margin-bottom:12px">${esc(tm(rt.error))}</div>` : "";
+  return `
+  <section class="section">
+    <div class="section-head">
+      <div><h2>${esc(t("sp.title"))}</h2><p class="muted small">${esc(t("sp.subtitle"))}</p></div>
+      ${badge}
+    </div>
+    <div class="panel panel-pad">
+      ${errHtml}
+      <div class="field">
+        <label class="check"><input type="checkbox" id="sp-en" ${sp.enabled ? "checked" : ""}><span>${esc(t("sp.enable"))}</span></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>${esc(t("sp.port"))}</span><input type="number" id="sp-port" min="1" max="65535" dir="ltr" value="${esc(String(sp.port || 1080))}"></label>
+      </div>
+      <button class="btn primary" id="sp-save">${esc(t("btn.save"))}</button>
     </div>
   </section>`;
 }
@@ -407,9 +453,12 @@ function srvDirty() {
 function srvFieldsDirty() {
   if (!SRV) return false;
   const pdns = $("#s-pdns");
+  const wgon = $("#s-wg-on");
+  const w = SRV.wg || {};
   return (pdns && pdns.checked !== !!SRV.panel_dns) ||
     ($("#s-domf") && $("#s-domf").checked !== !!SRV.dom_filter) ||
-    ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
+    (wgon && wgon.checked !== !!w.enabled) ||
+    ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr", "#s-wg-port", "#s-wg-subnet"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
 }
@@ -458,12 +507,26 @@ bind.server = () => {
     } catch (e) { toast(e.message, true); }
     b.disabled = false;
   };
+  if ($("#sp-save")) $("#sp-save").onclick = async () => {
+    const b = $("#sp-save"); b.disabled = true;
+    try {
+      await api("PUT", "socks/settings", {
+        enabled: $("#sp-en").checked,
+        port: Number($("#sp-port").value.trim()),
+      });
+      await refresh();
+      toast(t("sp.saved"));
+      loadServer();
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+    finally { b.disabled = false; }
+  };
   const showBar = () => { $("#s-bar").hidden = !srvDirty(); };
-  ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
+  ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr", "#s-wg-port", "#s-wg-subnet"].forEach((sel) => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar; el.onchange = showBar;
   });
   ["#s-pdns", "#s-domf"].forEach((sel) => { if ($(sel)) $(sel).onchange = showBar; });
+  if ($("#s-wg-on")) $("#s-wg-on").onchange = showBar;
 
   const syncTpl = () => {
     const sel = $("#s-cps"); if (!sel) return;
@@ -516,6 +579,13 @@ bind.server = () => {
     if (appMade && !confirm(t("srv.confirm_port_app", { n: appMade }))) return;
     const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, extra_hosts: $("#s-extra").value, client_dns: $("#s-dns").value,
       panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
+    if ($("#s-wg-on")) {
+      body.wg = {
+        enabled: $("#s-wg-on").checked,
+        port: +$("#s-wg-port").value,
+        subnet: $("#s-wg-subnet").value.trim(),
+      };
+    }
     if (Object.keys(changed).length) body.params = changed;
     body.port = port;
     if (!SRV.subnet_locked) body.address = addr;

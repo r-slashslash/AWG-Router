@@ -532,3 +532,39 @@ def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:
         # @имя можно освободить и занять другому: управление — только из чата с числовым ID
         c["control"] = c["control"] and ready and not c["chat_id"].startswith("@")
     return c
+
+
+# ------------------------------------------------------- входящий SOCKS5-прокси
+SOCKS_USER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def validate_socks_username(v) -> str:
+    """Имя пользователя входящего SOCKS5-прокси: 1–64 символа [A-Za-z0-9_.-]."""
+    if not isinstance(v, str) or not SOCKS_USER_RE.match(v):
+        bad("err.bad_value", field="username")
+    return v
+
+
+def validate_socks_password(v) -> str:
+    """Пароль входящего SOCKS5-прокси: от 8 символов, до 255 байт UTF-8 без управляющих символов."""
+    if (
+        not isinstance(v, str)
+        or len(v) < 8
+        or len(v.encode("utf-8")) > 255
+        or any(ord(c) < 32 or ord(c) == 0x7F for c in v)
+    ):
+        bad("err.bad_value", field="password")
+    return v
+
+
+def validate_socks_port(v) -> int:
+    """TCP-порт входящего SOCKS5-прокси: целое число 1–65535."""
+    if isinstance(v, (bool, float)):
+        bad("srv.bad_port", field="port")
+    try:
+        port = int(v)
+    except (TypeError, ValueError, OverflowError):
+        bad("srv.bad_port", field="port")
+    if not 1 <= port <= 65535:
+        bad("srv.bad_port", field="port")
+    return port

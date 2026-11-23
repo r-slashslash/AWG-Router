@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import base64
 import glob
 import hashlib
 import http.client
@@ -18,6 +19,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -237,6 +239,22 @@ class Target:
     def clients_table_path(self) -> str:
         return f"{self.dir}/clientsTable"
 
+    def conf_path_for(self, iface: str) -> str:
+        """Путь к конфигу указанного серверного интерфейса."""
+        return self.conf_path if iface == self.iface else f"{self.dir}/{iface}.conf"
+
+    def clients_table_for(self, iface: str) -> str:
+        """Путь к clientsTable указанного серверного интерфейса."""
+        return self.clients_table_path if iface == self.iface else f"{self.dir}/{iface}.clientsTable"
+
+    def wg_exists(self) -> bool:
+        """Есть ли параллельный классический интерфейс wg0 (конфиг на диске)."""
+        return self.iface != "wg0" and os.path.exists(self.host_path(self.conf_path_for("wg0")))
+
+    def server_ifaces(self) -> list[str]:
+        """Активные интерфейсы WireGuard сервера: основной (self.iface) и классический wg0, если включён."""
+        return [self.iface, "wg0"] if self.wg_exists() and self.iface != "wg0" else [self.iface]
+
     def host_path(self, p: str) -> str:
         return f"/proc/{self.pid}/root{p}"
 
@@ -273,25 +291,66 @@ class Target:
         return "awg"
 
     def dump(self) -> dict:
+        return self.dump_iface(self.iface)
+
+    def dump_iface(self, iface: str) -> dict[str, dict]:
+        """Считать активных пиров указанного серверного интерфейса."""
         errors = []
         for b in dict.fromkeys([self.awg_bin, "awg", "wg"]):
             try:
-                return _parse_dump(self.native([b, "show", self.iface, "dump"], timeout=10).stdout)
+                return _parse_dump(self.native([b, "show", iface, "dump"], timeout=10).stdout)
             except Exception as e:  # noqa: BLE001
                 errors.append(str(e))
         raise SysError("awg show: " + " | ".join(errors)[:300])
 
     def sync(self, sc: awgserver.ServerConf) -> None:
         """Применить пиры и параметры без перезапуска интерфейса."""
+        self.sync_iface(self.iface, sc)
+
+    def sync_iface(self, iface: str, sc: awgserver.ServerConf) -> None:
+        """Применить пиры и параметры указанного интерфейса без перезапуска."""
         tmp = self.sync_tmp
         self.write_file(tmp, sc.stripped())
         try:
-            self.native([self.awg_bin, "syncconf", self.iface, tmp], timeout=20)
+            if iface == "wg0":
+                errors = []
+                for b in dict.fromkeys([self.awg_bin, "awg", "wg"]):
+                    try:
+                        self.native([b, "syncconf", iface, tmp], timeout=20)
+                        return
+                    except Exception as e:  # noqa: BLE001
+                        errors.append(str(e))
+                raise SysError("awg syncconf: " + " | ".join(errors)[:300])
+            self.native([self.awg_bin, "syncconf", iface, tmp], timeout=20)
         finally:
             try:
                 os.remove(self.host_path(tmp))
             except OSError:
                 pass
+
+    def _wg_genkey(self) -> str:
+        return local_awg(["genkey"])
+
+    def _write_wg_files(self, port: int, subnet: str) -> None:
+        priv = self._wg_genkey()
+        sc = awgserver.new_wg_server(priv, port, subnet, wan_masq=(self.kind == "host"))
+        self.write_file(self.conf_path_for("wg0"), sc.render())
+        self.write_file(self.clients_table_for("wg0"), "[]")
+
+    def _remove_wg_files(self) -> None:
+        for p in (self.conf_path_for("wg0"), self.clients_table_for("wg0")):
+            try:
+                os.remove(self.host_path(p))
+            except FileNotFoundError:
+                pass
+
+    def enable_wg(self, port: int, subnet: str) -> None:
+        """Создать и поднять параллельный классический интерфейс wg0."""
+        raise NotImplementedError
+
+    def disable_wg(self) -> None:
+        """Остановить и удалить параллельный классический интерфейс wg0."""
+        raise NotImplementedError
 
     sync_tmp = "/tmp/awgr-sync.conf"
 
@@ -347,6 +406,18 @@ class ContainerTarget(Target):
         psk = (self.read_file(f"{self.dir}/wireguard_psk.key") or "").strip()
         return psk if awgserver.KEY_RE.match(psk) else local_awg(["genpsk"])
 
+    def enable_wg(self, port: int, subnet: str) -> None:
+        self._write_wg_files(port, subnet)
+        try:
+            self.native(["awg-quick", "up", self.conf_path_for("wg0")], timeout=60)
+        except Exception:
+            self._remove_wg_files()
+            raise
+
+    def disable_wg(self) -> None:
+        self.native(["awg-quick", "down", self.conf_path_for("wg0")], check=False, timeout=30)
+        self._remove_wg_files()
+
 
 class HostTarget(Target):
     kind = "host"
@@ -392,6 +463,27 @@ class HostTarget(Target):
             self.native(["systemctl", "start", unit], timeout=60)
         else:
             self.native(["awg-quick", "up", self.iface], timeout=60)
+
+    def enable_wg(self, port: int, subnet: str) -> None:
+        self._write_wg_files(port, subnet)
+        try:
+            unit = "awg-quick@wg0"
+            if self.native(["systemctl", "cat", unit], check=False).returncode == 0:
+                self.native(["systemctl", "enable", "--now", unit], timeout=60)
+            else:
+                self.native(["awg-quick", "up", "wg0"], timeout=60)
+            open_firewall_udp(self, port)
+        except Exception:
+            self._remove_wg_files()
+            raise
+
+    def disable_wg(self) -> None:
+        unit = "awg-quick@wg0"
+        if self.native(["systemctl", "cat", unit], check=False).returncode == 0:
+            self.native(["systemctl", "disable", "--now", unit], check=False, timeout=60)
+        else:
+            self.native(["awg-quick", "down", "wg0"], check=False, timeout=30)
+        self._remove_wg_files()
 
 
 # ============================================================= поиск цели
@@ -761,14 +853,30 @@ def init_host_server(t: HostTarget, port: int, subnet: str, params: dict[str, st
     t.exists = True
 
 
-def open_firewall_udp(t: HostTarget, port: int) -> None:
-    """Если на хосте включён ufw — открыть UDP-порт сервера."""
+def _firewall_port(t: Target, port: int, proto: str, allow: bool = True) -> None:
+    """Если на хосте включён ufw — открыть или закрыть порт (udp или tcp)."""
     try:
         p = t.native(["ufw", "status"], check=False)
     except OSError:
         return
-    if p.returncode == 0 and "Status: active" in p.stdout:
-        t.native(["ufw", "allow", f"{port}/udp"], check=False)
+    if p and p.returncode == 0 and "Status: active" in p.stdout:
+        cmd = ["ufw", "allow", f"{int(port)}/{proto}"] if allow else ["ufw", "delete", "allow", f"{int(port)}/{proto}"]
+        t.native(cmd, check=False)
+
+
+def open_firewall_udp(t: HostTarget, port: int) -> None:
+    """Если на хосте включён ufw — открыть UDP-порт сервера."""
+    _firewall_port(t, port, "udp", allow=True)
+
+
+def open_firewall_tcp(t: Target, port: int) -> None:
+    """Если на хосте включён ufw — открыть TCP-порт."""
+    _firewall_port(t, port, "tcp", allow=True)
+
+
+def close_firewall_tcp(t: Target, port: int) -> None:
+    """Если на хосте включён ufw — закрыть TCP-порт."""
+    _firewall_port(t, port, "tcp", allow=False)
 
 
 # Порты, на которые не попадает случайный порт AmneziaWG: другие VPN, VoIP, STUN, обнаружение в
@@ -812,8 +920,8 @@ class DemoTarget(Target):
         if cmd[:1] == ["ip"] and "-j" in cmd:
             out = "[]"
         if len(cmd) > 3 and cmd[1] == "show" and cmd[-1] == "dump":
-            if cmd[2] == self.iface:
-                out = self._server_dump()
+            if cmd[2] in (self.iface, "wg0"):
+                out = self._server_dump(cmd[2])
             else:
                 hs = int(self.handshakes.get(cmd[2], time.time() - 20))
                 out = ("priv\tpub\t0\toff\n"
@@ -843,8 +951,19 @@ class DemoTarget(Target):
     def psk_for_new_client(self) -> str:
         return (self.read_file(f"{self.dir}/wireguard_psk.key") or "").strip()
 
-    def _server_dump(self) -> str:
-        sc = awgserver.parse(self.read_file(self.conf_path) or "")
+    def _wg_genkey(self) -> str:
+        return base64.b64encode(secrets.token_bytes(32)).decode()
+
+    def enable_wg(self, port: int, subnet: str) -> None:
+        self._write_wg_files(port, subnet)
+        self.log.append(f"wg0 up ({port}, {subnet})")
+
+    def disable_wg(self) -> None:
+        self._remove_wg_files()
+        self.log.append("wg0 down")
+
+    def _server_dump(self, iface: str | None = None) -> str:
+        sc = awgserver.parse(self.read_file(self.conf_path_for(iface or self.iface)) or "")
         now = time.time()
         grow = int(now - self.born)
         lines = ["priv\tpub\t47823\toff"]
@@ -905,3 +1024,6 @@ class DemoTarget(Target):
         self.write_file(self.conf_path, sc.render())
         self.write_file(f"{self.dir}/wireguard_psk.key", psk + "\n")
         self.write_file(self.clients_table_path, awgserver.render_clients_table(rows))
+
+
+FakeTarget = DemoTarget

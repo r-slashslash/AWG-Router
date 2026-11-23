@@ -504,6 +504,7 @@ class Conf:
     shared: dict[tuple[str, int], dict]             # общий предел туннеля и посредника: {"iface", "cap", "tc"}
     net: ipaddress.IPv4Network | ipaddress.IPv6Network   # адреса клиентов, которых посредник обслуживает
     files: dict = field(default_factory=dict)       # разобранные списки для следующего load (_cached)
+    client_nets: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()
 
 
 def _positive(v) -> bool:
@@ -563,8 +564,9 @@ def load(path: str, prev: dict | None = None) -> Conf:
             d = (dirs or {}).get(str(i)) if isinstance(dirs, dict) else None
             if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list) and _positive(d.get("cap")):
                 shared[(out, i)] = d
-    net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
-    return Conf(cfg, lists, nets, rates, shared, net, files)
+    raw_nets = cfg.get("clients_nets") or [cfg.get("clients") or "0.0.0.0/0"]
+    client_nets = tuple(ipaddress.ip_network(n, strict=False) for n in raw_nets)
+    return Conf(cfg, lists, nets, rates, shared, client_nets[0], files, client_nets)
 
 
 # --------------------------------------------------------------- посредник
@@ -606,6 +608,7 @@ class Sniffer:
         ссылку на него, и с новым баком предел выхода делился бы надвое.
         -> настройки tc выходов, которые больше не делятся: их туннелям нужно вернуть весь предел."""
         self.cfg, self.lists, self.nets, self.net, self.files = c.cfg, c.lists, c.nets, c.net, c.files
+        self.client_nets = c.client_nets or (c.net,)
         old_buckets = self.buckets
         self.buckets = {k: b if (b := old_buckets.get(k)) and b.cap == r else Bucket(r)
                         for k, r in c.rates.items()}
@@ -792,6 +795,11 @@ class Sniffer:
             raise
         return out
 
+    def _allowed(self, peer: str) -> bool:
+        addr = ipaddress.ip_address(peer)
+        nets = getattr(self, "client_nets", None) or (self.net,)
+        return any(addr in n for n in nets)
+
     async def client(self, sock: socket.socket) -> None:
         """Одно перенаправленное соединение: имя сайта, выбор пути, пересылка через splice."""
         sock.setblocking(False)
@@ -800,7 +808,7 @@ class Sniffer:
         peer = "?"                  # для журнала, если клиент пропал раньше, чем узнали его адрес
         try:
             peer = sock.getpeername()[0]
-            if ipaddress.ip_address(peer) not in self.net:
+            if not self._allowed(peer):
                 return
             raw = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
             dport = struct.unpack("!H", raw[2:4])[0]
@@ -947,17 +955,19 @@ class Sniffer:
 
     async def serve(self) -> None:
         loop = asyncio.get_running_loop()
-        host, port = self.cfg["listen"], int(self.cfg.get("port") or 10443)
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind((host, port))
-        listener.listen(1024)
-        listener.setblocking(False)
-        accepting = asyncio.ensure_future(self.accept_loop(listener))
-        accepting.add_done_callback(self.accept_stopped)
+        hosts = self.cfg.get("listen_addrs") or [self.cfg["listen"]]
+        port = int(self.cfg.get("port") or 10443)
+        for host in hosts:
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((host, port))
+            listener.listen(1024)
+            listener.setblocking(False)
+            accepting = asyncio.ensure_future(self.accept_loop(listener))
+            accepting.add_done_callback(self.accept_stopped)
         loop.add_signal_handler(signal.SIGHUP, self.on_hup)
         loop.add_signal_handler(signal.SIGTERM, loop.stop)
-        log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
+        log(f"listening on {','.join(hosts)}:{port}, {len(self.lists)} domain lists")
         self.open_queue()
         asyncio.ensure_future(self.share_loop())
         n = 0

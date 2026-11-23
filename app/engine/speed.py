@@ -7,7 +7,17 @@ import time
 
 from .. import config, shaping, system
 from ..i18n import Msg
-from .common import RUN_DIR
+from .common import RUN_DIR, server_ifaces
+
+
+def _ifb_sources(t: system.Target, ifb: str) -> list[str]:
+    """ifb → интерфейсы, входящий трафик которых он ограничивает (awgq0 → [awg0, wg0], awgqN → [awgrN])."""
+    m = re.fullmatch(re.escape(shaping.IFB_PREFIX) + r"(\d+)", ifb)
+    if not m:
+        return []
+    if m.group(1) == "0":
+        return list(dict.fromkeys([*server_ifaces(t), "wg0"]))
+    return [f"{config.IFACE_PREFIX}{int(m.group(1))}"]
 
 
 class SpeedMixin:
@@ -23,14 +33,11 @@ class SpeedMixin:
                 clients[c["ip"]] = {"down": L.get("rate_down"), "up": L.get("rate_up")}
         exits = [{"num": r.num, "iface": r.iface, "down": u.get("rate_down"), "up": u.get("rate_up")}
                  for u in st["upstreams"] if (r := self.rt.get(u["id"])) and r.target_key == t.key]
-        return shaping.plan(t.iface, st["settings"].get("shaping") or {}, clients, exits)
+        return shaping.plan(server_ifaces(t), st["settings"].get("shaping") or {}, clients, exits)
 
     def _ifb_source(self, t: system.Target, ifb: str) -> str | None:
-        """ifb → интерфейс, входящий трафик которого он ограничивает (awgq0 → awg0, awgqN → awgrN)."""
-        m = re.fullmatch(re.escape(shaping.IFB_PREFIX) + r"(\d+)", ifb)
-        if not m:
-            return None
-        return t.iface if m.group(1) == "0" else f"{config.IFACE_PREFIX}{int(m.group(1))}"
+        srcs = _ifb_sources(t, ifb)
+        return srcs[0] if srcs else None
 
     def _sync_shaping(self, t: system.Target, st: dict) -> None:
         """Держит очереди tc такими, как в настройках ограничения скорости. Ничего не задано — tc
@@ -61,14 +68,17 @@ class SpeedMixin:
         links = self._links(t) or set()
         # лишнее: сначала перенаправление, потом сам ifb (пакеты в пропавший ifb отбрасывались бы)
         for l in sorted(links):
-            src = self._ifb_source(t, l)
-            if not src or ingress.get(src) == l:
+            srcs = _ifb_sources(t, l)
+            if not srcs or all(ingress.get(s) == l for s in srcs):
                 continue
-            if src in ing and src not in ingress:
-                t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
-            t.ns(["ip", "link", "del", l], check=False)
-            self._shape.pop("ing:" + src, None)
-            self._shape.pop(l, None)
+            for src in srcs:
+                if src in ing and src not in ingress:
+                    t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
+                if src not in ingress:
+                    self._shape.pop("ing:" + src, None)
+            if not any(ingress.get(s) == l for s in srcs):
+                t.ns(["ip", "link", "del", l], check=False)
+                self._shape.pop(l, None)
         for dev in ours - set(roots):
             t.ns(["tc", "qdisc", "del", "dev", dev, "root"], check=False)
             self._shape.pop(dev, None)
@@ -84,7 +94,7 @@ class SpeedMixin:
             t.ns(["ip", "link", "set", ifb, "up"], check=False)
         for dev, cmds in roots.items():
             h = shaping.digest(cmds)
-            if dev not in links and dev != t.iface:
+            if dev not in links and dev not in server_ifaces(t):
                 continue                              # ifb не создался — ошибка уже есть
             if dev in ours and self._shape.get(dev) == h:
                 continue
@@ -145,10 +155,11 @@ class SpeedMixin:
             return
         ours, ing = shaping.parse_qdiscs(q.stdout)
         for l in sorted(self._links(t) or ()):
-            src = self._ifb_source(t, l)
-            if src:
-                if src in ing:
-                    t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
+            srcs = _ifb_sources(t, l)
+            if srcs:
+                for src in srcs:
+                    if src in ing:
+                        t.ns(["tc", "qdisc", "del", "dev", src, "ingress"], check=False)
                 t.ns(["ip", "link", "del", l], check=False)
         for dev in ours:
             t.ns(["tc", "qdisc", "del", "dev", dev, "root"], check=False)

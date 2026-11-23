@@ -11,6 +11,7 @@ import ipaddress
 import logging
 import re
 import secrets
+import shlex
 import time
 
 from . import awgserver, config, cps, hostnet, system
@@ -61,6 +62,17 @@ def profile_dns(s: dict, sc: ServerConf, live: str | None = None) -> list[str]:
 
 DEFAULT_MTU = 1376
 NAME_MAX = 60
+PROTOS = ("awg", "wg")
+
+
+def client_proto(st: dict, pk: str) -> str:
+    """Протокол клиента: 'wg' (классический WireGuard) или 'awg' (AmneziaWG, по умолчанию)."""
+    return "wg" if (st.get("clients") or {}).get(pk, {}).get("proto") == "wg" else "awg"
+
+
+def iface_for(t: system.Target, proto: str) -> str:
+    """Интерфейс сервера для протокола клиента."""
+    return "wg0" if proto == "wg" else getattr(t, "iface", "awg0")
 
 
 class UserError(MsgError):
@@ -193,11 +205,12 @@ class ServerManager:
             raise UserError(Msg("srv.no_server"))
         return t
 
-    def load(self, t: system.Target) -> tuple[ServerConf, list[dict]]:
-        text = t.read_file(t.conf_path)
+    def load(self, t: system.Target, iface: str | None = None) -> tuple[ServerConf, list[dict]]:
+        iface = iface or t.iface
+        text = t.read_file(t.conf_path_for(iface))
         if text is None:
             raise UserError(Msg("srv.no_server"))
-        return awgserver.parse(text), awgserver.parse_clients_table(t.read_file(t.clients_table_path))
+        return awgserver.parse(text), awgserver.parse_clients_table(t.read_file(t.clients_table_for(iface)))
 
     def server_pub(self, sc: ServerConf) -> str:
         priv = sc.get("PrivateKey")
@@ -237,54 +250,80 @@ class ServerManager:
         d = getattr(self.e, "dns_state", None) or {}
         return d.get("listen") if d.get("state") == "on" else None
 
-    def profile(self, st: dict, sc: ServerConf, pk: str | None = None) -> awgserver.ClientProfile:
+    def _dns_live_for(self, sc: ServerConf, iface: str | None = None) -> str | None:
+        """Адрес, на котором сейчас слушает DNS панели для указанного серверного конфига."""
+        live = self._dns_live()
+        if not live:
+            return None
+        target_iface = getattr(getattr(self.e, "target", None), "iface", None)
+        if iface is not None and target_iface is not None and iface != target_iface:
+            return panel_dns_addr(sc)
+        if sc.network:
+            try:
+                if ipaddress.ip_address(live) not in sc.network.network:
+                    return panel_dns_addr(sc)
+            except ValueError:
+                pass
+        return live
+
+    def profile(self, st: dict, sc: ServerConf, pk: str | None = None,
+                iface: str | None = None) -> awgserver.ClientProfile:
         s = st["settings"]
         params = sc.params()
         return awgserver.ClientProfile(
             host=self.client_host(st, pk) or "SERVER_IP",
             port=sc.port,
             server_pub=self.server_pub(sc),
-            dns=profile_dns(s, sc, self._dns_live()),
+            dns=profile_dns(s, sc, self._dns_live_for(sc, iface)),
             mtu=int(s.get("client_mtu") or DEFAULT_MTU),
             keepalive=s.get("client_keepalive") or awgserver.default_keepalive(params),
         )
 
     def list_clients(self, t: system.Target) -> list[dict]:
-        """Клиенты для движка и интерфейса: конфиг + clientsTable + живые данные."""
-        sc, rows = self.load(t)
-        names = {r["clientId"]: r.get("userData") or {} for r in rows}
-        try:
-            live = t.dump()
-        except Exception as e:  # noqa: BLE001
-            log.warning("%s", e)
-            live = {}
+        """Клиенты для движка и интерфейса: конфиги (awg0 + wg0) + clientsTable + живые данные."""
+        ifaces = t.server_ifaces()
         keys = self.e.store.snapshot().get("keys", {})
         out = []
-        for p in sc.peers:
-            ud = names.get(p.public_key, {})
-            out.append({
-                "public_key": p.public_key, "ip": p.ip, "enabled": p.enabled,
-                "name": ud.get("clientName") or "", "created": ud.get("creationDate") or "",
-                "live": live.get(p.public_key) if p.enabled else None,
-                "has_config": p.public_key in keys,
-            })
+        primary = getattr(t, "iface", "awg0")
+        for iface in ifaces:
+            sc, rows = self.load(t) if iface == primary else self.load(t, iface)
+            proto = "wg" if iface == "wg0" and t.iface != "wg0" else "awg"
+            names = {r["clientId"]: r.get("userData") or {} for r in rows}
+            try:
+                live = t.dump_iface(iface)
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s", e)
+                live = {}
+            for p in sc.peers:
+                ud = names.get(p.public_key, {})
+                out.append({
+                    "public_key": p.public_key, "ip": p.ip, "enabled": p.enabled,
+                    "proto": proto,
+                    "name": ud.get("clientName") or "", "created": ud.get("creationDate") or "",
+                    "live": live.get(p.public_key) if p.enabled else None,
+                    "has_config": p.public_key in keys,
+                })
         return out
 
     # ------------------------------------------------------------ применение
     def _write(self, t: system.Target, sc: ServerConf, rows: list[dict] | None = None,
-               restart: bool = False, port: tuple[int, int] | None = None) -> None:
+               restart: bool = False, port: tuple[int, int] | None = None,
+               iface: str | None = None) -> None:
         """port — (прежний, новый) при смене порта: контейнер для него пересоздаётся (Target.change_port)."""
-        old_conf = t.read_file(t.conf_path)
-        old_rows = t.read_file(t.clients_table_path) if rows is not None else None
-        t.write_file(t.conf_path, sc.render())
+        iface = iface or t.iface
+        conf_path = t.conf_path_for(iface)
+        table_path = t.clients_table_for(iface)
+        old_conf = t.read_file(conf_path)
+        old_rows = t.read_file(table_path) if rows is not None else None
+        t.write_file(conf_path, sc.render())
         if rows is not None:
-            t.write_file(t.clients_table_path, awgserver.render_clients_table(rows), 0o644)
+            t.write_file(table_path, awgserver.render_clients_table(rows), 0o644)
         if port:
             try:
                 t.change_port(port[0], port[1], old_conf)
             except system.SysError:
                 if t.kind != "container":           # контейнер сам вернул прежний конфиг вместе с собой
-                    self._put_back(t, old_conf, None)
+                    self._put_back(t, old_conf, None, iface)
                     t.restart()
                 raise UserError(Msg("srv.port_failed", port=port[1])) from None
             self.e.trigger()
@@ -293,11 +332,14 @@ class ServerManager:
             t.restart()
         else:
             try:
-                t.sync(sc)
+                if iface == t.iface:
+                    t.sync(sc)
+                else:
+                    t.sync_iface(iface, sc)
             except Exception:
                 # Интерфейс остался прежним — прежними возвращаем и файлы: иначе панель показывала бы клиента
                 # отключённым (или удалённым), а его пир работал бы дальше до перезапуска сервера.
-                self._put_back(t, old_conf, old_rows)
+                self._put_back(t, old_conf, old_rows, iface)
                 raise
             try:
                 self.e.clients = self.list_clients(t)
@@ -306,23 +348,29 @@ class ServerManager:
         self.e.trigger()
 
     @staticmethod
-    def _put_back(t: system.Target, conf: str | None, rows: str | None) -> None:
+    def _put_back(t: system.Target, conf: str | None, rows: str | None, iface: str | None = None) -> None:
+        iface = iface or t.iface
         try:
             if conf is not None:
-                t.write_file(t.conf_path, conf)
+                t.write_file(t.conf_path_for(iface), conf)
             if rows is not None:
-                t.write_file(t.clients_table_path, rows, 0o644)
+                t.write_file(t.clients_table_for(iface), rows, 0o644)
         except OSError as e:
             log.warning("could not put the server config back: %s", e)
 
     # ---------------------------------------------------------------- клиенты
-    def add_client(self, name: str) -> str:
+    def add_client(self, name: str, proto: str = "awg") -> str:
         name = (name or "").strip()[:NAME_MAX]
         if not name:
             raise UserError(Msg("err.name_required"))
+        if proto not in PROTOS:
+            raise UserError(Msg("err.bad_value"))
         with self.e.lock:
             t = self._target()
-            sc, rows = self.load(t)
+            if proto == "wg" and not t.wg_exists():
+                raise UserError(Msg("srv.wg_disabled"))
+            iface = iface_for(t, proto)
+            sc, rows = self.load(t, iface)
             priv, pub = system.genkey() if not config.DRY_RUN else _demo_keypair()
             ip = sc.next_ip()
             sc.peers.append(awgserver.Peer(pub, t.psk_for_new_client(), f"{ip}/32"))
@@ -335,26 +383,44 @@ class ServerManager:
                 st.setdefault("await_first", {})[pub] = time.time()
                 # личная ссылка (и приглашение в бота по тому же ключу) — сразу у каждого нового клиента (1.22.0)
                 st.setdefault("shares", {})[secrets.token_urlsafe(18)] = {"pk": pub, "created": time.time()}
+                if proto == "wg":
+                    st.setdefault("clients", {}).setdefault(pub, {})["proto"] = "wg"
 
             def undo(st):
                 st.get("keys", {}).pop(pub, None)
+                st.get("await_first", {}).pop(pub, None)
                 st["shares"] = {k: v for k, v in st.get("shares", {}).items() if v.get("pk") != pub}
+                if proto == "wg":
+                    st.get("clients", {}).pop(pub, None)
             self.e.store.mutate(keep)
             try:
-                self._write(t, sc, rows)
+                self._write(t, sc, rows, iface=iface)
             except Exception:
                 self.e.store.mutate(undo)
                 raise
             self.e.event("info", Msg("ev.user_added", name=name, ip=ip))
             return pub
 
-    def update_client(self, pk: str, name: str | None = None, enabled: bool | None = None) -> None:
+    def _find_peer(self, t: system.Target, pk: str, preferred_iface: str) -> tuple[str, ServerConf, list[dict], awgserver.Peer]:
+        ifaces = [preferred_iface] + [i for i in (t.server_ifaces() if hasattr(t, "server_ifaces") else []) if i != preferred_iface]
+        primary = getattr(t, "iface", "awg0")
+        for iface in ifaces:
+            sc, rows = self.load(t) if iface == primary else self.load(t, iface)
+            p = sc.peer(pk)
+            if p:
+                return iface, sc, rows, p
+        raise UserError(Msg("err.not_found"))
+
+    def update_client(self, pk: str, name: str | None = None, enabled: bool | None = None,
+                      proto: str | None = None) -> None:
+        if proto is not None and proto not in PROTOS:
+            raise UserError(Msg("err.bad_value"))
         with self.e.lock:
             t = self._target()
-            sc, rows = self.load(t)
-            p = sc.peer(pk)
-            if not p:
-                raise UserError(Msg("err.not_found"))
+            st = self.e.store.snapshot()
+            cur_proto = client_proto(st, pk)
+            old_iface, sc, rows, p = self._find_peer(t, pk, iface_for(t, cur_proto))
+            actual_proto = "wg" if old_iface == "wg0" and t.iface != "wg0" else "awg"
             if name is not None:
                 name = name.strip()[:NAME_MAX]
                 if not name:
@@ -368,10 +434,69 @@ class ServerManager:
             switched = enabled is not None and p.enabled != bool(enabled)
             if switched:
                 p.enabled = bool(enabled)
-            self._write(t, sc, rows)
+
+            def set_proto(s):
+                c = dict((s.get("clients") or {}).get(pk) or {})
+                if proto == "wg":
+                    c["proto"] = "wg"
+                    s.setdefault("clients", {})[pk] = c
+                else:
+                    c.pop("proto", None)
+                    if c.get("outbound", "inherit") == "inherit" and c.get("rules_mode", "inherit") == "inherit" and not c.get("note"):
+                        s.get("clients", {}).pop(pk, None)
+                    else:
+                        s.setdefault("clients", {})[pk] = c
+
+            new_iface = iface_for(t, proto) if proto is not None else old_iface
+            if proto is not None and new_iface != old_iface:
+                if proto == "wg" and not t.wg_exists():
+                    raise UserError(Msg("srv.wg_disabled"))
+                old_new_conf = t.read_file(t.conf_path_for(new_iface))
+                old_new_rows = t.read_file(t.clients_table_for(new_iface))
+                old_old_conf = t.read_file(t.conf_path_for(old_iface))
+                old_old_rows = t.read_file(t.clients_table_for(old_iface))
+                old_new_sc = awgserver.parse(old_new_conf) if old_new_conf else None
+                old_old_sc = awgserver.parse(old_old_conf) if old_old_conf else None
+                new_sc, new_rows = self.load(t, new_iface)
+                new_ip = new_sc.next_ip()
+                new_sc.peers.append(awgserver.Peer(p.public_key, p.psk, f"{new_ip}/32", enabled=p.enabled))
+                row = next((r for r in rows if r["clientId"] == pk), None)
+                if row:
+                    new_rows.append(row)
+                sc.peers = [x for x in sc.peers if x.public_key != pk]
+                rows = [r for r in rows if r["clientId"] != pk]
+
+                self._write(t, new_sc, new_rows, iface=new_iface)
+                try:
+                    self._write(t, sc, rows, iface=old_iface)
+                except Exception:
+                    self._put_back(t, old_new_conf, old_new_rows, new_iface)
+                    if old_new_sc is not None:
+                        try:
+                            t.sync_iface(new_iface, old_new_sc)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    raise
+                try:
+                    self.e.store.mutate(set_proto)
+                except Exception:
+                    self._put_back(t, old_new_conf, old_new_rows, new_iface)
+                    self._put_back(t, old_old_conf, old_old_rows, old_iface)
+                    for ifc, osc in ((new_iface, old_new_sc), (old_iface, old_old_sc)):
+                        if osc is not None:
+                            try:
+                                t.sync_iface(ifc, osc)
+                            except Exception:  # noqa: BLE001
+                                pass
+                    raise
+                cname = self._name(new_rows, pk)
+            else:
+                if proto is not None and (proto != cur_proto or proto != actual_proto):
+                    self.e.store.mutate(set_proto)
+                self._write(t, sc, rows, iface=old_iface)
+                cname = self._name(rows, pk)
             if switched:        # после записи: о несостоявшемся отключении журнал и Telegram не сообщают
-                self.e.event("info", Msg("ev.user_enabled" if p.enabled else "ev.user_disabled",
-                                         name=self._name(rows, pk)))
+                self.e.event("info", Msg("ev.user_enabled" if p.enabled else "ev.user_disabled", name=cname))
 
     def set_enabled_many(self, wanted: dict[str, bool]) -> set[str]:
         """Включить или выключить многих клиентов одной записью файлов сервера и одним awg syncconf (сроки и
@@ -381,19 +506,23 @@ class ServerManager:
             return set()
         with self.e.lock:
             t = self._target()
-            sc, rows = self.load(t)
+            ifaces = t.server_ifaces()
             done, switched = set(), []
-            for pk, on in wanted.items():
-                p = sc.peer(pk)
-                if not p:
-                    continue
-                if p.enabled != bool(on):
-                    p.enabled = bool(on)
-                    switched.append(p)
-                done.add(pk)
-            if switched:
-                self._write(t, sc, rows)
-            for p in switched:     # после записи: о несостоявшемся отключении журнал и Telegram не сообщают
+            for iface in ifaces:
+                sc, rows = self.load(t, iface)
+                iface_switched = []
+                for pk, on in wanted.items():
+                    p = sc.peer(pk)
+                    if not p:
+                        continue
+                    if p.enabled != bool(on):
+                        p.enabled = bool(on)
+                        iface_switched.append((p, rows))
+                    done.add(pk)
+                if iface_switched:
+                    self._write(t, sc, rows, iface=iface)
+                    switched.extend(iface_switched)
+            for p, rows in switched:     # после записи: о несостоявшемся отключении журнал и Telegram не сообщают
                 self.e.event("info", Msg("ev.user_enabled" if p.enabled else "ev.user_disabled",
                                          name=self._name(rows, p.public_key)))
             return done
@@ -401,13 +530,12 @@ class ServerManager:
     def delete_client(self, pk: str) -> None:
         with self.e.lock:
             t = self._target()
-            sc, rows = self.load(t)
-            if not sc.peer(pk):
-                raise UserError(Msg("err.not_found"))
+            st = self.e.store.snapshot()
+            iface, sc, rows, _ = self._find_peer(t, pk, iface_for(t, client_proto(st, pk)))
             name = self._name(rows, pk)
             sc.peers = [p for p in sc.peers if p.public_key != pk]
             rows = [r for r in rows if r["clientId"] != pk]
-            self._write(t, sc, rows)
+            self._write(t, sc, rows, iface=iface)
 
             def forget(st):
                 st.get("keys", {}).pop(pk, None)
@@ -425,23 +553,23 @@ class ServerManager:
         # прочитать «половину» нельзя. С блокировкой выдача конфига — и личная страница клиента /s/ —
         # ждала бы конца прохода движка, а он с запуском туннелей длится секунды.
         t = self._target()
-        sc, rows = self.load(t)
         st = self.e.store.snapshot()
-        p = sc.peer(pk)
+        proto = client_proto(st, pk)
+        iface, sc, rows, p = self._find_peer(t, pk, iface_for(t, proto))
         priv = st.get("keys", {}).get(pk)
-        if not p:
-            raise UserError(Msg("err.not_found"))
         if not priv:
             raise UserError(Msg("usr.no_key"))
-        prof = self.profile(st, sc, pk)
-        override = cps.for_client(st.get("cps", {}).get(pk))      # свои I1–I5 клиента
-        conf = awgserver.client_conf(sc, prof, p, priv, override)
+        prof = self.profile(st, sc, pk) if iface == getattr(t, "iface", "awg0") else self.profile(st, sc, pk, iface=iface)
+        wg_only = proto == "wg"
+        override = None if wg_only else cps.for_client(st.get("cps", {}).get(pk))      # свои I1–I5 клиента
+        conf = awgserver.client_conf(sc, prof, p, priv, override, wg_only=wg_only)
         name = self._name(rows, pk) or p.ip
         # Название подключения — 8 цифр клиента (conf_label), и в имени файла, и в vpn:// для AmneziaVPN: ни
         # имени клиента, ни адреса сервера (его приложение и так показывает; issue #7). В .conf и QR названия
         # нет вовсе: приложения AmneziaWG берут его из имени файла или спрашивают. name — только для панели.
         return {"name": name, "conf": conf, "filename": conf_filename(pk),
-                "link": awgserver.vpn_link(sc, prof, p, priv, conf, conf_label(pk), override),
+                "proto": proto,
+                "link": None if wg_only else awgserver.vpn_link(sc, prof, p, priv, conf, conf_label(pk), override),
                 "warn_host": not self.client_host(st, pk)}
 
     @staticmethod
@@ -461,8 +589,22 @@ class ServerManager:
         s = st["settings"]
         params = sc.params()
         net = sc.network
+        wg_on = t.wg_exists()
+        wg_port = config.WG_INIT_PORT or 51820
+        wg_subnet = config.WG_INIT_SUBNET or "10.8.2.0/24"
+        wg_locked = False
+        if wg_on:
+            try:
+                wg_sc, _ = self.load(t, "wg0")
+                wg_port = wg_sc.port
+                if wg_sc.network:
+                    wg_subnet = str(wg_sc.network.network)
+                wg_locked = bool(wg_sc.peers)
+            except Exception:  # noqa: BLE001
+                pass
         return {
             "exists": True, "kind": t.kind, "iface": t.iface, "conf": t.conf_path,
+            "wg": {"enabled": wg_on, "port": wg_port, "subnet": wg_subnet, "subnet_locked": wg_locked},
             # подсеть, а не адрес сервера с маской: на хосте в Address стоит 10.8.1.1/24 (сервер — первый адрес),
             # у AmneziaVPN — 10.8.1.0/24, и «10.8.1.1/24» в поле «Подсеть» выглядело ошибкой (#26)
             "port": sc.port, "address": str(net.network) if net else "",
@@ -576,8 +718,6 @@ class ServerManager:
                 new_port = (sc.port, port)
                 sc.set("ListenPort", str(port))
                 restart = True
-                if isinstance(t, system.HostTarget):
-                    system.open_firewall_udp(t, port)
             drop_nat = None
             if body.get("address") and not self._same_subnet(body["address"], sc):
                 if sc.peers:
@@ -598,6 +738,17 @@ class ServerManager:
                         awgserver.retarget_nat(sc, old_net, str(i.network)):
                     drop_nat = old_net
                 restart = True
+            wg_plan = None
+            if "wg" in body:
+                wg_plan = self._plan_wg(t, sc, body.get("wg"))
+            elif t.wg_exists() and t.iface != "wg0":
+                wg_sc, _ = self.load(t, "wg0")
+                if wg_sc.port == sc.port:
+                    raise UserError(Msg("srv.wg_port_conflict"))
+                if wg_sc.network is not None and sc.network is not None and wg_sc.network.network.overlaps(sc.network.network):
+                    raise UserError(Msg("srv.wg_subnet_overlap"))
+            if new_port and isinstance(t, system.HostTarget):
+                system.open_firewall_udp(t, port)
             host_before = self.client_host(self.e.store.snapshot())
             dns_before = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live())
             if settings_patch:
@@ -625,9 +776,98 @@ class ServerManager:
                     t.native(["sh", "-c", awgserver.drop_nat_cmd(drop_nat)], check=False, timeout=30)
                 self.e.event("info" if not restart else "warn",
                              Msg("ev.server_restarted" if restart else "ev.server_updated"))
+                if restart and t.kind == "container" and not config.DRY_RUN and not isinstance(t, system.FakeTarget) and wg_plan is not None:
+                    t = system.discover()
+            wg_changed = self._apply_wg(t, wg_plan) if wg_plan is not None else False
+            if wg_changed and not changed_conf:
+                self.e.trigger()
             return {"restarted": restart and changed_conf,
                     "server_side_changed": awgserver.server_side_changed(old, sc.params()),
-                    "host_changed": host_changed, "dns_changed": dns_changed}
+                    "host_changed": host_changed, "dns_changed": dns_changed,
+                    "wg_changed": wg_changed}
+
+    def _plan_wg(self, t: system.Target, awg_sc: ServerConf, wg: dict) -> dict:
+        if not isinstance(wg, dict):
+            raise UserError(Msg("err.bad_value"))
+        was_on = t.wg_exists()
+        want_on = check_flag(wg["enabled"]) if "enabled" in wg else was_on
+        if not want_on:
+            if not was_on:
+                return {"action": "noop"}
+            wg_sc, _ = self.load(t, "wg0")
+            if wg_sc.peers:
+                raise UserError(Msg("srv.wg_has_clients"))
+            return {"action": "disable"}
+        cur_port = config.WG_INIT_PORT or 51820
+        cur_subnet = config.WG_INIT_SUBNET or "10.8.2.0/24"
+        wg_sc = None
+        if was_on:
+            wg_sc, _ = self.load(t, "wg0")
+            cur_port = wg_sc.port
+            if wg_sc.network:
+                cur_subnet = str(wg_sc.network.network)
+        raw_p = wg.get("port")
+        if raw_p is None or raw_p == "":
+            wg_port = cur_port
+        else:
+            if isinstance(raw_p, bool) or not (isinstance(raw_p, int) or (isinstance(raw_p, str) and raw_p.strip().isdigit())):
+                raise UserError(Msg("srv.bad_port"))
+            wg_port = int(raw_p)
+        if not 1 <= wg_port <= 65535:
+            raise UserError(Msg("srv.bad_port"))
+        if wg_port in system.AWG_RESERVED:
+            raise UserError(Msg("srv.port_dns", port=wg_port))
+        if wg_port == awg_sc.port:
+            raise UserError(Msg("srv.wg_port_conflict"))
+        raw_sub = wg.get("subnet") or cur_subnet
+        try:
+            wg_iface = ipaddress.ip_interface(str(raw_sub))
+        except ValueError:
+            raise UserError(Msg("srv.bad_subnet")) from None
+        if wg_iface.version != 4 or wg_iface.network.prefixlen > 29:
+            raise UserError(Msg("srv.bad_subnet"))
+        wg_net = wg_iface.network
+        if awg_sc.network is not None and wg_net.overlaps(awg_sc.network.network):
+            raise UserError(Msg("srv.wg_subnet_overlap"))
+        if not was_on:
+            return {"action": "enable", "port": wg_port, "subnet": str(wg_net)}
+        changed = False
+        if str(wg_net) != cur_subnet:
+            if wg_sc.peers:
+                raise UserError(Msg("srv.subnet_locked"))
+            wg_sc.set("Address", f"{next(wg_net.hosts())}/{wg_net.prefixlen}")
+            changed = True
+        if wg_port != cur_port:
+            wg_sc.set("ListenPort", str(wg_port))
+            changed = True
+        if not changed:
+            return {"action": "noop"}
+        return {"action": "update", "sc": wg_sc, "port": wg_port if wg_port != cur_port else None}
+
+    def _apply_wg(self, t: system.Target, plan: dict) -> bool:
+        act = plan["action"]
+        if act == "noop":
+            return False
+        if act == "disable":
+            t.disable_wg()
+            return True
+        if act == "enable":
+            t.enable_wg(plan["port"], plan["subnet"])
+            return True
+        wg_sc = plan["sc"]
+        if plan["port"] and isinstance(t, system.HostTarget):
+            system.open_firewall_udp(t, plan["port"])
+        t.write_file(t.conf_path_for("wg0"), wg_sc.render())
+        if not config.DRY_RUN and not isinstance(t, system.FakeTarget):
+            if t.kind == "container":
+                p = shlex.quote(t.conf_path_for("wg0"))
+                t.native(["sh", "-c", f"awg-quick down {p} 2>/dev/null || true; awg-quick up {p}"], timeout=60)
+            else:
+                t.native(["sh", "-c", "systemctl restart awg-quick@wg0 2>/dev/null || (awg-quick down wg0 2>/dev/null || true; awg-quick up wg0)"], timeout=60)
+        return True
+
+    def _update_wg(self, t: system.Target, awg_sc: ServerConf, wg: dict) -> bool:
+        return self._apply_wg(t, self._plan_wg(t, awg_sc, wg))
 
     def upgrade_masking(self, t: system.Target) -> None:
         """Один раз на сервер: старый I1 AmneziaVPN → новый DNS-ответ icloud.com."""

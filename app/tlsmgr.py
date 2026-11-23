@@ -32,6 +32,7 @@ log = logging.getLogger("awgr.tls")
 TLS_DIR = os.path.join(config.DATA_DIR, "tls")
 ACME_DIR = os.path.join(config.DATA_DIR, "acme")
 ACME_PROFILE = os.environ.get("ACME_PROFILE", "shortlived")
+ACME_PROFILE_EXPLICIT = "ACME_PROFILE" in os.environ
 CUSTOM_CHECK = 300            # с, как часто смотреть, не сменил ли certbot файлы своего сертификата
 ALT_RETRY = 24 * 3600         # с: Let's Encrypt не проверил второй адрес — столько не просим его снова
 
@@ -109,15 +110,24 @@ class TLSManager:
     def context(self) -> ssl.SSLContext | None:
         return self._ctx
 
+    def use_dns_challenge(self, host: str | None = None) -> bool:
+        """True if Cloudflare DNS-01 challenge can be used (token set and host is a domain, not IP)."""
+        h = self.host() if host is None else host
+        return bool(config.CF_DNS_API_TOKEN and h and not _is_ip(h))
+
     def status(self) -> dict:
         c = tlsconf.load()
         web = c.get("web")
+        dns_cf = self.use_dns_challenge()
         return {"mode": self.mode, "source": self.source(), "active": self.active, "expires": self.expires,
                 "error": self.error, "host": self.host(), "last_try": self.last_try, "busy": self.busy,
                 "domain": tlsconf.domain(c), "cert": c.get("cert") or "", "key": c.get("key") or "",
                 "web": {k: web.get(k) for k in ("kind", "process", "where", "container", "file", "host")}
                 if web else None,
-                "port80": self.port80}
+                "port80": self.port80,
+                "challenge": "dns-01" if dns_cf else "http-01",
+                "dns_provider": "cloudflare" if dns_cf else None,
+                "dns_configured": bool(config.CF_DNS_API_TOKEN)}
 
     # ------------------------------------------------------------ загрузка
     def _load(self, cert: str, key: str, kind: str) -> bool:
@@ -215,31 +225,37 @@ class TLSManager:
             self.error = "no public address"
             return False
         names = self._want()
-        web = tlsconf.load().get("web")
+        dns_cf = self.use_dns_challenge(host)
+        web = None if dns_cf else tlsconf.load().get("web")
         if web and web.get("host") == host:
             names = [host]          # блок веб-сервера отвечает только на основной адрес (server_name)
         if keep and len(names) < 2:
             return False
         cmd = ["lego", "run", "--accept-tos", "--path", ACME_DIR, "--server", config.ACME_SERVER,
-               "--key-type", "ec256", "--http", "--no-random-sleep"]
-        if web and web.get("host") == host:
-            cmd += ["--http.webroot", webfront.host_path(web["webroot"])]
+               "--key-type", "ec256"]
+        if dns_cf:
+            cmd += ["--dns", "cloudflare", "--no-random-sleep"]
             self.port80 = None
         else:
-            busy = config.ACME_HTTP_PORT == 80 and (config.DRY_RUN or webfront.listeners())
-            if busy:
-                det = webfront.detect()
-                self.port80 = webfront.public(det)
-                self.error = Msg("tls.port80", server=det.get("process") or "?")
-                self.last_try = time.time()
-                return False
-            self.port80 = None
-            cmd += ["--http.address", f":{config.ACME_HTTP_PORT}"]
+            cmd += ["--http", "--no-random-sleep"]
+            if web and web.get("host") == host:
+                cmd += ["--http.webroot", webfront.host_path(web["webroot"])]
+                self.port80 = None
+            else:
+                busy = config.ACME_HTTP_PORT == 80 and (config.DRY_RUN or webfront.listeners())
+                if busy:
+                    det = webfront.detect()
+                    self.port80 = webfront.public(det)
+                    self.error = Msg("tls.port80", server=det.get("process") or "?")
+                    self.last_try = time.time()
+                    return False
+                self.port80 = None
+                cmd += ["--http.address", f":{config.ACME_HTTP_PORT}"]
         if config.DRY_RUN:
             self.error = "demo: no Let's Encrypt"
             self.last_try = time.time()
             return False
-        if ACME_PROFILE:
+        if ACME_PROFILE and (not dns_cf or ACME_PROFILE_EXPLICIT):
             cmd += ["--profile", ACME_PROFILE]
         if config.ACME_EMAIL:
             cmd += ["--email", config.ACME_EMAIL]
@@ -262,7 +278,9 @@ class TLSManager:
             cmd = cmd + ["-d", n]
         self.last_try = time.time()
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+            use_dns = self.use_dns_challenge(names[0] if names else None)
+            env = {**os.environ, "CF_DNS_API_TOKEN": config.CF_DNS_API_TOKEN} if use_dns else None
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=240, env=env)
         except (OSError, subprocess.TimeoutExpired) as e:
             self.error = str(e)[:300]
             log.warning("lego: %s", e)

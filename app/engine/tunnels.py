@@ -14,7 +14,7 @@ from .. import awgconf, config, cps, limits, nftgen, socks, system
 from ..i18n import Msg, msg_of
 from ..store import Store
 from ..traffic import month_key
-from .common import KERNEL_MIN, LOG_DIR, RUN_DIR, UpRT, _sha, log
+from .common import KERNEL_MIN, LOG_DIR, RUN_DIR, UpRT, _sha, log, server_ifaces
 
 SOCK_DIR = "/var/run/amneziawg"
 RERESOLVE_AFTER = 30     # туннель с именем в Endpoint не отвечает столько секунд после запуска — разбираем заново
@@ -59,9 +59,19 @@ class TunnelsMixin:
         th.join(CLIENT_SPEED_WAIT)
         return s["rates"]
 
+    def _server_dump(self, t: system.Target) -> dict:
+        """Сводка пиров по всем активным интерфейсам сервера (awg0 и, если включён, wg0)."""
+        live = dict(t.dump())
+        for ifn in server_ifaces(t)[1:]:
+            try:
+                live.update(t.dump_iface(ifn))
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s", e)
+        return live
+
     def _speed_sample(self, s: dict, t, now: float) -> None:
         try:
-            live = t.dump()
+            live = self._server_dump(t)
         except Exception:  # noqa: BLE001  — сервер перезапускается или не отвечает: скорость подождёт
             live = None
         with _speed_lock:
@@ -666,13 +676,13 @@ class TunnelsMixin:
         counters = None
         if p.returncode == 0:
             try:
-                counters = nftgen.parse_acct(json.loads(p.stdout or "{}"), t.iface)
+                counters = nftgen.parse_acct(json.loads(p.stdout or "{}"), server_ifaces(t))
             except ValueError:
                 counters = None
         if counters is None:
             path = os.path.join(RUN_DIR, "acct.nft")
             with open(path, "w") as f:
-                f.write(nftgen.acct_ruleset(t.iface))
+                f.write(nftgen.acct_ruleset(server_ifaces(t)))
             r = t.ns(["nft", "-f", path], check=False, timeout=60)
             if r.returncode != 0:
                 err = (r.stderr or r.stdout or "").strip()[-300:]

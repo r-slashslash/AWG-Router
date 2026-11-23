@@ -156,11 +156,14 @@ function tlsModal() {
     const d = $("#tls-domain").value.trim().toLowerCase() || "example.com";
     return { cert: `/etc/letsencrypt/live/${d}/fullchain.pem`, key: `/etc/letsencrypt/live/${d}/privkey.pem` };
   };
+  const isIp = (v) => /^\d{1,3}(\.\d{1,3}){3}$/.test(v) || v.includes(":");
   const seg = () => {
     $$("#tls-src button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === src));
     $("#tls-files").hidden = src !== "custom";
     const p = paths();
-    $("#tls-src-hint").innerHTML = src === "custom" ? th("tls.custom_hint", { cert: `<bdi dir="ltr">${esc(p.cert)}</bdi>`, key: `<bdi dir="ltr">${esc(p.key)}</bdi>` }) : esc(t("tls.le_hint"));
+    const dom = $("#tls-domain").value.trim();
+    const leHint = T.dns_configured && dom && !isIp(dom) ? t("tls.le_dns_hint") : t("tls.le_hint");
+    $("#tls-src-hint").innerHTML = src === "custom" ? th("tls.custom_hint", { cert: `<bdi dir="ltr">${esc(p.cert)}</bdi>`, key: `<bdi dir="ltr">${esc(p.key)}</bdi>` }) : esc(leHint);
     $("#tls-cert").placeholder = p.cert; $("#tls-key").placeholder = p.key;
   };
   $$("#tls-src button").forEach((b) => b.onclick = () => { src = b.dataset.v; seg(); });

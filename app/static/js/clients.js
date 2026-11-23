@@ -50,13 +50,14 @@ function viewClients() {
       </div>
     </div>`;
   if (serverMissing()) return `<section class="section">${head}<div class="panel empty"><p>${esc(t("srv.missing"))}</p><button class="btn primary" data-goto="server">${esc(t("srv.create_title"))}</button></div></section>`;
-  if (!S.clients.length) return `<section class="section">${head}<div class="panel empty"><p>${esc(t("cl.empty"))}</p><p class="small">${esc(t("cl.empty_hint2"))}</p></div></section>`;
+  if (!S.clients.length) return `<section class="section">${head}<div class="panel empty"><p>${esc(t("cl.empty"))}</p><p class="small">${esc(t("cl.empty_hint2"))}</p></div></section>${socksProxySection()}`;
   const rowList = sortedClients().map((c) => {
     const live = c.live || {};
     const age = live.handshake ? S.now - live.handshake : null;
     const online = c.enabled && age != null && age < 180;
     const p = c.policy;
     const tags = (!c.enabled ? `<span class="tag tag-off">${esc(t("cl.disabled_tag"))}</span>` : "") +
+      `<span class="tag">${esc(t(c.proto === "wg" ? "cl.wg_tag" : "cl.awg_tag"))}</span>` +
       (p.rules_mode === "custom" ? `<span class="tag">${esc(t("cl.custom_tag"))}</span>` : "") +
       (p.note ? `<span class="tag"><bdi>${esc(p.note)}</bdi></span>` : "") +
       (c.cps ? `<span class="tag" title="${esc(t("cl.cps"))}">${esc(cpsTag(c.cps))}</span>` : "") + limitTags(c);
@@ -84,7 +85,7 @@ function viewClients() {
       <thead><tr><th>${esc(t("cl.col_name"))}</th><th>${esc(t("cl.col_ip"))}</th><th>${esc(t("cl.col_activity"))}</th><th>${esc(t("cl.col_month"))}</th><th>${esc(t("cl.col_exit"))}</th></tr></thead>
       <tbody id="cl-rows">${ROWS_MARK}</tbody>
     </table></div>
-  </section>`;
+  </section>${socksProxySection()}`;
   const html = shell.replace(ROWS_MARK, () => rows);
   clientParts = { shell, rows: rowList, order: rowList.map((r) => r[0]).join(","), html, banner: "" };
   return html;
@@ -206,6 +207,7 @@ bind.clients = () => {
   if (add) add.onclick = addClient;
   $$("[data-goto]").forEach((b) => b.onclick = () => goTab(b.dataset.goto));
   $$("tr[data-pk]").forEach((tr) => tr.onclick = clientRowClick);
+  bindSocksProxy();
 };
 
 function goTab(name) {
@@ -232,20 +234,36 @@ function hostSelect(id, cur, hint = "cl.host_hint") {
     <span class="hint">${esc(t(hint))}</span></label>`;
 }
 
+function protoField(id, cur = "awg") {
+  const wgOn = !!(S.target && S.target.wg);
+  return `<div class="field"><span>${esc(t("cl.proto"))}</span>
+    <div class="seg" id="${id}">
+      <button type="button" data-v="awg" aria-pressed="${cur !== "wg"}">${esc(t("cl.proto_awg"))}</button>
+      <button type="button" data-v="wg" aria-pressed="${cur === "wg"}" ${wgOn || cur === "wg" ? "" : "disabled"}>${esc(t("cl.proto_wg"))}</button>
+    </div>
+    <span class="hint">${esc(t(wgOn ? "cl.proto_hint" : "cl.proto_wg_off"))}</span>
+  </div>`;
+}
+
 function addClient() {
+  let proto = "awg";
   openModal(t("cl.add_title"), `
     <label class="field"><span>${esc(t("cl.name"))}</span>
       <input type="text" id="n-name" maxlength="60" placeholder="${esc(t("cl.name_ph"))}" autofocus>
       <span class="hint">${esc(t("cl.add_hint"))}</span>
-    </label>${hostSelect("n-host", "", "cl.host_new_hint")}`,
+    </label>${protoField("n-proto", proto)}${hostSelect("n-host", "", "cl.host_new_hint")}`,
   `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="n-save">${esc(t("cl.create"))}</button>`);
+  $$("#n-proto button").forEach((b) => b.onclick = () => {
+    proto = b.dataset.v;
+    $$("#n-proto button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === proto));
+  });
   const go = async () => {
     const name = $("#n-name").value.trim();
     if (!name) { $("#n-name").focus(); return; }
     if ($("#n-save").disabled) return;          // второй Enter, пока первый запрос идёт, — не второй клиент
     $("#n-save").disabled = true;
     try {
-      const body = { name };
+      const body = { name, proto };
       if ($("#n-host") && $("#n-host").value) body.host = $("#n-host").value;
       const r = await api("POST", "users", body);
       await refresh();
@@ -339,6 +357,7 @@ function editClient(pk, section = null) {
   const c = S.clients.find((x) => x.public_key === pk);
   if (!c) return;
   const draft = { outbound: c.policy.outbound, rules_mode: c.policy.rules_mode, note: c.policy.note,
+    proto: c.proto || "awg",
     rules: structuredClone(c.policy.rules_mode === "custom" ? c.policy.rules : S.routing.rules) };
   let view = section || (c.has_config ? "connect" : "route");
   const L = c.limits || {};
@@ -363,6 +382,7 @@ function editClient(pk, section = null) {
     </div>
     <div id="c-pane-manage" class="c-pane">
       <label class="field"><span>${esc(t("cl.name"))}</span><input type="text" id="c-name" maxlength="60" value="${esc(c.name)}"></label>
+      ${protoField("c-proto", draft.proto)}
       ${trafficHtml(c)}
       <div class="row2">
         <label class="field"><span>${esc(t("cl.expires"))}</span>
@@ -400,6 +420,7 @@ function editClient(pk, section = null) {
   };
   const loadCps = async () => {
     const box = $("#c-cps-box");
+    if ((c.proto || "awg") === "wg") { box.innerHTML = ""; return; }
     let info;
     try { info = await api("GET", "cps"); } catch { return; }
     const cur = c.cps ? c.cps.preset : "server";
@@ -459,13 +480,13 @@ function editClient(pk, section = null) {
           <div class="connect-actions">
             <p class="small muted" style="margin-top:0">${esc(t("cl.qr_hint"))}</p>
             <button class="btn" id="c-dl">${esc(t("cl.download"))}</button>
-            <button class="btn" id="c-link">${esc(t("cl.copy_link"))}</button>
+            ${cfg.link && cfg.proto !== "wg" ? `<button class="btn" id="c-link">${esc(t("cl.copy_link"))}</button>` : ""}
             <button class="btn ghost" id="c-copy">${esc(t("cl.copy_conf"))}</button>
             <details class="small"><summary>${esc(t("cl.show_conf"))}</summary><pre class="code" dir="ltr">${esc(cfg.conf)}</pre></details>
           </div>
         </div>`;
       $("#c-dl").onclick = () => download(cfg.filename, cfg.conf);
-      $("#c-link").onclick = () => copyText(cfg.link);
+      if ($("#c-link")) $("#c-link").onclick = () => copyText(cfg.link);
       $("#c-copy").onclick = () => copyText(cfg.conf);
     } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
   };
@@ -509,11 +530,18 @@ function editClient(pk, section = null) {
   drawMode();
   showView();
 
+  $$("#c-proto button").forEach((b) => b.onclick = () => {
+    draft.proto = b.dataset.v;
+    $$("#c-proto button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === draft.proto));
+  });
   $("#c-save").onclick = async () => {
     if (badNumber(["c-quota", "c-rd", "c-ru"])) return;
     try {
       const name = $("#c-name").value.trim();
-      if (name && name !== c.name) await api("PUT", "users/" + encodeURIComponent(pk), { name });
+      const patch = {};
+      if (name && name !== c.name) patch.name = name;
+      if (draft.proto !== (c.proto || "awg")) patch.proto = draft.proto;
+      if (Object.keys(patch).length) await api("PUT", "users/" + encodeURIComponent(pk), patch);
       const exp = $("#c-exp").value ? Math.floor(new Date($("#c-exp").value + "T23:59:59").getTime() / 1000) : null;
       const q = $("#c-quota").value.trim();
       const per = $("#c-period").value;
@@ -581,4 +609,145 @@ function bindClientLinks(c, reopen) {
       await reopen();
     } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); renew.disabled = false; }
   };
+}
+
+/* ======================================================== входящий SOCKS5 */
+function socksProxySection() {
+  const sp = S.socks_proxy || { enabled: false, port: 1080, runtime: null, users: [] };
+  const rt = sp.runtime || {};
+  const badge = !sp.enabled
+    ? `<span class="state"><span class="dot"></span>${esc(t("st.disabled"))}</span>`
+    : rt.state === "error"
+      ? `<span class="state"><span class="dot bad"></span>${esc(t("st.error"))}</span>`
+      : rt.state === "on"
+        ? `<span class="state"><span class="dot ok"></span>${esc(t("sp.running", { port: sp.port }))}</span>`
+        : `<span class="state"><span class="dot warn"></span>${esc(t("st.connecting"))}</span>`;
+  const users = sp.users || [];
+  const rows = users.map((u) => `
+    <tr>
+      <td><bdi>${esc(u.username)}</bdi></td>
+      <td data-m="sub">${effChip(u.effective, u.exit)}</td>
+      <td data-m="sub"><span class="state"><span class="dot ${u.enabled ? "ok" : ""}"></span>${esc(t(u.enabled ? "sp.on" : "st.disabled"))}</span></td>
+      <td data-m="right" class="nowrap">
+        <button type="button" class="btn sm" data-sp-copy="${esc(u.username)}">${esc(t("sp.copy"))}</button>
+        <button type="button" class="btn sm" data-sp-edit="${esc(u.username)}">${esc(t("sp.edit"))}</button>
+      </td>
+    </tr>`).join("");
+  const body = users.length
+    ? `<div class="panel"><table class="table responsive">
+        <thead><tr><th>${esc(t("sp.col_user"))}</th><th>${esc(t("cl.col_exit"))}</th><th>${esc(t("sp.col_status"))}</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`
+    : `<div class="panel panel-pad"><p class="muted small" style="margin:0">${esc(t("sp.empty"))}</p></div>`;
+  return `
+  <section class="section" id="socks-proxy-sec">
+    <div class="section-head">
+      <div><h2>${esc(t("sp.title"))}</h2><p class="muted small">${esc(t("sp.subtitle"))}</p></div>
+      <div class="add-row" style="align-items:center">${badge}<button type="button" class="btn primary" id="sp-add">${esc(t("sp.add"))}</button></div>
+    </div>
+    ${body}
+  </section>`;
+}
+
+function socksUri(u) {
+  const host = u.host || (S.panel && S.panel.ip) || location.hostname;
+  return `socks5://${encodeURIComponent(u.username)}:${encodeURIComponent(u.password)}@${host}:${u.port || 1080}`;
+}
+
+function socksExitOptions(selected) {
+  const opts = [["direct", t("out.direct")], ...S.upstreams.map((u) => ["up:" + u.id, u.name])];
+  return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(l)}</option>`).join("");
+}
+
+function bindSocksProxy() {
+  const add = $("#sp-add");
+  if (add) add.onclick = () => openSocksUserModal(null);
+  $$("[data-sp-copy]").forEach((b) => b.onclick = async () => {
+    try {
+      const u = await api("GET", "socks/users/" + encodeURIComponent(b.dataset.spCopy) + "/uri");
+      copyText(socksUri(u));
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+  });
+  $$("[data-sp-edit]").forEach((b) => b.onclick = () => {
+    const u = ((S.socks_proxy && S.socks_proxy.users) || []).find((x) => x.username === b.dataset.spEdit);
+    if (u) openSocksUserModal(u);
+  });
+}
+
+function socksRandStr(len = 10) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const limit = 256 - (256 % chars.length);
+  const buf = new Uint8Array(len * 2);
+  let out = "";
+  while (out.length < len) {
+    crypto.getRandomValues(buf);
+    for (let i = 0; i < buf.length && out.length < len; i++) {
+      if (buf[i] < limit) out += chars[buf[i] % chars.length];
+    }
+  }
+  return out;
+}
+
+function openSocksUserModal(u) {
+  const isNew = !u;
+  openModal(t(isNew ? "sp.add_title" : "sp.edit_title"), `
+    <label class="field"><span>${esc(t("sp.username"))}</span>
+      <input type="text" id="sp-u" value="${esc(u ? u.username : "")}" ${isNew ? "autofocus" : "disabled"} dir="ltr" autocomplete="off">
+    </label>
+    <label class="field"><span>${esc(t("sp.password"))}</span>
+      <input type="password" id="sp-p" value="" placeholder="${esc(isNew ? "" : t("sp.password_keep"))}" dir="ltr" autocomplete="new-password">
+    </label>
+    ${isNew ? `<div class="field"><button type="button" class="btn sm" id="sp-gen">${esc(t("sp.generate"))}</button></div>` : ""}
+    <label class="field"><span>${esc(t("cl.col_exit"))}</span>
+      <select id="sp-ex" dir="auto">${socksExitOptions(u ? u.exit : "direct")}</select>
+    </label>
+    <label class="check"><input type="checkbox" id="sp-uen" ${!u || u.enabled ? "checked" : ""}><span>${esc(t("sp.user_enabled"))}</span></label>
+  `, `${isNew ? "" : `<button type="button" class="btn bad" id="sp-udel">${esc(t("btn.delete"))}</button>`}
+    <button type="button" class="btn" data-close>${esc(t("btn.cancel"))}</button>
+    <button type="button" class="btn primary" id="sp-usave">${esc(t("btn.save"))}</button>`);
+
+  if (isNew && $("#sp-gen")) {
+    $("#sp-gen").onclick = () => {
+      $("#sp-u").value = socksRandStr(10);
+      const pEl = $("#sp-p");
+      pEl.type = "text";
+      pEl.value = socksRandStr(16);
+    };
+  }
+
+  $("#sp-usave").onclick = async () => {
+    const btn = $("#sp-usave");
+    btn.disabled = true;
+    try {
+      const body = {
+        exit: $("#sp-ex").value,
+        enabled: $("#sp-uen").checked,
+      };
+      const pw = $("#sp-p").value;
+      if (isNew) {
+        body.username = $("#sp-u").value.trim();
+        body.password = pw;
+        await api("POST", "socks/users", body);
+      } else {
+        if (pw) body.password = pw;
+        await api("PUT", "socks/users/" + encodeURIComponent(u.username), body);
+      }
+      closeModal();
+      await refresh();
+      toast(t("sp.user_saved"));
+    } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); btn.disabled = false; }
+  };
+
+  if (!isNew && $("#sp-udel")) {
+    $("#sp-udel").onclick = async () => {
+      if (!confirm(t("sp.delete_confirm", { name: u.username }))) return;
+      $("#sp-udel").disabled = true;
+      try {
+        await api("DELETE", "socks/users/" + encodeURIComponent(u.username));
+        closeModal();
+        await refresh();
+        toast(t("sp.user_deleted"));
+      } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); $("#sp-udel").disabled = false; }
+    };
+  }
 }

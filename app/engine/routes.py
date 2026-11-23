@@ -8,6 +8,7 @@ import time
 from .. import config, nftgen, shaping, system
 from ..i18n import Msg
 from ..store import Store
+from .common import server_ifaces
 
 ROUTES_EVERY = 60                                # маршруты таблиц выходов ставятся заново не реже, с
 
@@ -164,7 +165,7 @@ class RoutesMixin:
         gp, cps = self._policies(st)
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
-        return nftgen.generate(t.iface, lst, [] if hold else self._up_list(st), gp, cps, sniff_port,
+        return nftgen.generate(server_ifaces(t), lst, [] if hold else self._up_list(st), gp, cps, sniff_port,
                                frozenset() if hold else self.bal_nums,
                                dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
                                strict=sniff_port is None and self.strict(st), slots=self._sniff_slots)
@@ -275,7 +276,8 @@ class RoutesMixin:
             # На хосте all / default — это проверка обратного пути у всех его интерфейсов (её мог включить
             # администратор): мягкая проверка нужна только интерфейсу сервера и туннелям выходов (им она
             # ставится при запуске). Действует большее из all и своего значения, поэтому своего хватает.
-            kvs.append(f"net.ipv4.conf.{t.iface}.rp_filter=2")
+            for ifn in server_ifaces(t):
+                kvs.append(f"net.ipv4.conf.{ifn}.rp_filter=2")
         else:
             kvs += ["net.ipv4.conf.all.rp_filter=2", "net.ipv4.conf.default.rp_filter=2"]
         for kv in kvs:

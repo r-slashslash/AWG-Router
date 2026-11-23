@@ -2,21 +2,24 @@
 движка), правила «до панели» рядом с конфигом сервера."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 import os
 import time
 
 from .. import config, hostnet, kernelmod, system
 from ..i18n import Msg, msg_of
-from .common import KERNEL_MIN, RUN_DIR, log
+from .common import KERNEL_MIN, RUN_DIR, log, server_ifaces
 
 V6_TABLE = "awgr6"
 
 
-def v6_ruleset(iface: str) -> str:
+def v6_ruleset(iface: str | Sequence[str]) -> str:
     """Таблица ip6 панели: IPv6 из интерфейса клиентов дальше не пересылается (см. Engine._sync_v6)."""
+    ifaces = [iface] if isinstance(iface, str) else list(iface)
+    expr = f'"{ifaces[0]}"' if len(ifaces) == 1 else "{ " + ", ".join(f'"{w}"' for w in ifaces) + " }"
     return (f"table ip6 {V6_TABLE}\nflush table ip6 {V6_TABLE}\ntable ip6 {V6_TABLE} {{\n"
             "\tchain forward {\n\t\ttype filter hook forward priority filter - 1; policy accept;\n"
-            f'\t\tiifname "{iface}" reject with icmpv6 type admin-prohibited\n\t}}\n}}\n')
+            f'\t\tiifname {expr} reject with icmpv6 type admin-prohibited\n\t}}\n}}\n')
 
 SERVER_GRACE = 30        # с: столько интерфейса сервера в контейнере может не быть, прежде чем панель его поднимет
 SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытками поднять сервер, если не помогает, с
@@ -197,13 +200,14 @@ class ServerMixin:
         Отдельная таблица и без ошибки прохода: в сети без IPv6 её может не быть, а правила IPv4 важнее."""
         if config.DRY_RUN:
             return
-        key = (t.key, t.iface)
+        ifaces = tuple(server_ifaces(t))
+        key = (t.key, ifaces)
         if getattr(self, "_v6_key", None) == key and t.ns(
                 ["nft", "list", "table", "ip6", V6_TABLE], check=False).returncode == 0:
             return
         path = os.path.join(RUN_DIR, "ruleset6.nft")
         with open(path, "w") as f:
-            f.write(v6_ruleset(t.iface))
+            f.write(v6_ruleset(ifaces))
         p = t.ns(["nft", "-f", path], check=False)
         if p.returncode == 0:
             self._v6_key = key
@@ -211,11 +215,14 @@ class ServerMixin:
             self._v6_key = ("failed",) + key            # в журнал — один раз на цель
             log.info("IPv6 of clients: no ip6 table here: %s", (p.stderr or "").strip()[:200])
 
-    def _hold_path(self, t: system.Target) -> str | None:
+    def _hold_path(self, t: system.Target, iface: str | None = None) -> str | None:
         """Где лежит файл правил «до панели» (HOLD_FILE) — там, где его применит сам сервер при запуске:
         на хосте — служба awg-quick (system.UNIT_TEXT), в контейнере — только в нашем (awg-server/start.sh);
         в контейнере приложения AmneziaVPN его никто не применит, и писать туда незачем."""
-        path = os.path.join(os.path.dirname(t.conf_path), system.HOLD_NAME.format(iface=t.iface))
+        ifn = iface or t.iface
+        conf_p = getattr(t, "wg_conf_path", None) if ifn == "wg0" and t.iface != "wg0" else None
+        conf_dir = os.path.dirname(conf_p or t.conf_path)
+        path = os.path.join(conf_dir, system.HOLD_NAME.format(iface=ifn))
         if t.kind == "host":
             return path
         if t.kind != "container":
@@ -234,31 +241,37 @@ class ServerMixin:
         if config.DRY_RUN:
             return
         restore = st["settings"].get("on_stop") == "restore"
+        ifaces = tuple(server_ifaces(t))
         # strict меняет эти правила, даже когда посредник работает и применённые правила те же
-        key = (self.applied_hash, restore, t.key, self.strict(st))
+        key = (self.applied_hash, restore, t.key, self.strict(st), ifaces)
         if key == self._hold_key:
             return
         try:
-            path = self._hold_path(t)
-            if path:
+            rules = None if restore else self.build_ruleset(t, st, None, hold=True)
+            for ifn in ifaces:
+                path = self._hold_path(t, ifn)
+                if not path:
+                    continue
                 if restore:
                     try:
                         os.unlink(t.host_path(path))
                     except FileNotFoundError:
                         pass
                 else:
-                    t.write_file(path, self.build_ruleset(t, st, None, hold=True), 0o600)
+                    t.write_file(path, rules, 0o600)
             self._hold_key = key
         except Exception as e:  # noqa: BLE001  — не мешает работе: сработает при следующем применении
             log.warning("rules before the panel starts: %s", e)
 
     def _drop_hold(self, t: system.Target) -> None:
         """Убрать файл правил «до панели» (удаление панели): иначе сервер ставил бы их и без неё."""
-        try:
-            os.unlink(t.host_path(os.path.join(os.path.dirname(t.conf_path),
-                                               system.HOLD_NAME.format(iface=t.iface))))
-        except OSError:
-            pass
+        for ifn in dict.fromkeys([*server_ifaces(t), "wg0"]):
+            conf_p = getattr(t, "wg_conf_path", None) if ifn == "wg0" and t.iface != "wg0" else None
+            conf_dir = os.path.dirname(conf_p or t.conf_path)
+            try:
+                os.unlink(t.host_path(os.path.join(conf_dir, system.HOLD_NAME.format(iface=ifn))))
+            except OSError:
+                pass
         self._hold_key = None
 
     def restart_server(self, why: str = "server_restart") -> None:

@@ -154,7 +154,7 @@ function render() {
           <div class="qr-box">${qrImage(cfg.conf)}</div>
           <div class="connect-actions">
             <button class="btn" id="s-dl">${esc(t("cl.download"))}</button>
-            <button class="btn" id="s-link">${esc(t("cl.copy_link"))}</button>
+            ${cfg.link ? `<button class="btn" id="s-link">${esc(t("cl.copy_link"))}</button>` : ""}
             <button class="btn ghost" id="s-copy">${esc(t("cl.copy_conf"))}</button>
             <details class="small"><summary>${esc(t("cl.show_conf"))}</summary><pre class="code" dir="ltr">${esc(cfg.conf)}</pre></details>
           </div>
@@ -163,7 +163,7 @@ function render() {
     </section>`;
   if (cfg) {
     $("#s-dl").onclick = () => download(cfg.filename, cfg.conf);
-    $("#s-link").onclick = () => copyText(cfg.link);
+    if ($("#s-link")) $("#s-link").onclick = () => copyText(cfg.link);
     $("#s-copy").onclick = () => copyText(cfg.conf);
   }
 }

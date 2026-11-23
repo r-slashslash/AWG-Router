@@ -857,7 +857,7 @@ class Bot:
             caption += "\n" + tr(L, "cfg_qr_big")
         notify.send_document(c["token"], cid, cfg.get("filename") or "awg.conf", cfg["conf"].encode(), caption,
                              c["via"], html=True)
-        if cfg.get("link"):
+        if cfg.get("link") and cfg.get("proto") != "wg":
             notify.send(c["token"], cid, tr(L, "cfg_link") + "\n<code>" + html.escape(cfg["link"]) + "</code>",
                         c["via"], html=True)
 
@@ -1816,7 +1816,7 @@ class Bot:
             caption += "\n" + tr(L, "cfg_qr_big")
         notify.send_document(c["token"], c["chat_id"], cfg.get("filename") or "awg.conf",
                              cfg["conf"].encode(), caption, c["via"], html=True)
-        if cfg.get("link"):
+        if cfg.get("link") and cfg.get("proto") != "wg":
             self._send(c, tr(L, "cfg_link") + "\n<code>" + html.escape(cfg["link"]) + "</code>")
         self.ops.audit(Msg("tg.act_config", name=name))
 

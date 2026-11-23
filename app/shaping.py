@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 import hashlib
 import ipaddress
 import json
@@ -120,24 +121,28 @@ def redirect(dev: str, ifb: str) -> list[str]:
             f"filter add dev {dev} parent ffff: protocol all prio 1 matchall action mirred egress redirect dev {ifb}"]
 
 
-def plan(wg_iface: str, total: dict, clients: dict[str, dict], exits: list[dict]) -> dict:
+def plan(wg_iface: str | Sequence[str], total: dict, clients: dict[str, dict], exits: list[dict]) -> dict:
     """Что должно стоять на интерфейсах.
 
     total — {"down", "up"} в Мбит/с (общий лимит клиентов); clients — {IP: {"down", "up"}};
     exits — [{"num", "iface", "down", "up"}] запущенных выходов.
     → {"roots": {интерфейс: [команды]}, "ingress": {интерфейс: ifb}}: корневые очереди (на ifb
     тоже) и перенаправления входящего трафика. Ничего не задано — пустые словари."""
+    ifaces = [wg_iface] if isinstance(wg_iface, str) else list(wg_iface)
     roots: dict[str, list[str]] = {}
     ingress: dict[str, str] = {}
     td, tu = mbit((total or {}).get("down")), mbit((total or {}).get("up"))
-    down = client_tree(wg_iface, td, {ip: mbit(c.get("down")) for ip, c in clients.items()}, "dst")
-    if down:
-        roots[wg_iface] = down
+    down_clients = {ip: mbit(c.get("down")) for ip, c in clients.items()}
+    for ifn in ifaces:
+        down = client_tree(ifn, td, down_clients, "dst")
+        if down:
+            roots[ifn] = down
     ifb = ifb_for(0)
     up = client_tree(ifb, tu, {ip: mbit(c.get("up")) for ip, c in clients.items()}, "src")
     if up:
         roots[ifb] = up
-        ingress[wg_iface] = ifb
+        for ifn in ifaces:
+            ingress[ifn] = ifb
     for e in exits:
         dev = e["iface"]
         if mbit(e.get("up")):

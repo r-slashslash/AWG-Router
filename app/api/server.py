@@ -20,7 +20,8 @@ SERVER_FIELDS = {"srv.bad_host": "public_host", "srv.bad_extra_host": "extra_hos
                  "srv.bad_mtu": "client_mtu", "srv.bad_keepalive": "client_keepalive",
                  "srv.bad_dns_enc": "panel_dns_enc", "srv.bad_port": "port", "srv.port_failed": "port",
                  "srv.port_dns": "port", "srv.bad_subnet": "address",
-                 "srv.subnet_locked": "address", "srv.subnet_container": "address"}
+                 "srv.subnet_locked": "address", "srv.subnet_container": "address",
+                 "srv.wg_port_conflict": "wg.port", "srv.wg_subnet_overlap": "wg.subnet"}
 PARAM_ERRORS = ("srv.bad_param", "srv.bad_int", "srv.bad_range", "srv.bad_bool", "srv.bad_key", "srv.bad_junk")
 
 
@@ -244,7 +245,7 @@ def tls_set(req):
     tls.reconfigure()
     write_status()
     return {"ok": True, "tls": tls.status(), "url": panel_url(), "warn": warn,
-            "web": _need_web(host) if src == "letsencrypt" else None}
+            "web": _need_web(host) if src == "letsencrypt" and not tls.use_dns_challenge(host) else None}
 
 
 @app.get("/api/tls/web")

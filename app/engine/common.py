@@ -22,6 +22,12 @@ def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
 
 
+def server_ifaces(t) -> list[str]:
+    """Активные интерфейсы WireGuard сервера: основной (t.iface) и классический wg0, если включён."""
+    wg = getattr(t, "wg_exists", None)
+    return [t.iface, "wg0"] if callable(wg) and wg() is True and t.iface != "wg0" else [t.iface]
+
+
 LOG_MAX, LOG_KEEP = 5 * 2**20, 2**20     # журнал помощника больше LOG_MAX — при запуске остаётся его хвост LOG_KEEP
 
 

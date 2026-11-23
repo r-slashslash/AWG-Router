@@ -45,7 +45,9 @@ DEFAULT_STATE = {
     "shares": {},     # личные ссылки клиентов: токен → {pk, created}
     "cps": {},        # свои I1–I5 клиента: pk → {preset: имя шаблона | "custom", values}
     "chost": {},      # свой адрес сервера в конфиге клиента: pk → адрес из host_choices (с 1.21.0, #37)
-    "settings": {"list_update_hours": 24},
+    "settings": {
+        "list_update_hours": 24,
+    },
 }
 
 ID_RE = re.compile(r"^[a-z0-9_]{1,24}$")
@@ -114,7 +116,25 @@ class Store:
         if any(isinstance(l, dict) and l.get("kind") in TEXT_KINDS and l.get("source")
                for l in self.state.get("lists") or []):
             changed = True              # state.json до 1.21.0: тексты списков — в свои файлы (_write)
-        s = self.state.get("settings") or {}
+        if "socks_users" in self.state and not isinstance(self.state.get("socks_users"), dict):
+            self.state["socks_users"] = {}
+            changed = True
+        s = self.state.get("settings")
+        if not isinstance(s, dict):
+            s = self.state["settings"] = copy.deepcopy(DEFAULT_STATE["settings"])
+            changed = True
+        elif "socks_proxy" in s:
+            if not isinstance(s.get("socks_proxy"), dict):
+                s["socks_proxy"] = {"enabled": False, "port": 1080}
+                changed = True
+            else:
+                sp = s["socks_proxy"]
+                if "enabled" not in sp:
+                    sp["enabled"] = False
+                    changed = True
+                if "port" not in sp:
+                    sp["port"] = 1080
+                    changed = True
         if s.get("panel_dns") and "panel_dns_enc" not in s:
             s["panel_dns_enc"] = dns_enc
             changed = True

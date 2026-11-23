@@ -20,6 +20,9 @@ HOST_AWG_DIR = os.environ.get("HOST_AWG_DIR", "/etc/amnezia/amneziawg")
 # Создать сервер на хосте при первом запуске (ставит установщик): UDP-порт
 AWG_INIT_PORT = int(os.environ.get("AWG_INIT_PORT", "0") or 0)
 AWG_INIT_SUBNET = os.environ.get("AWG_INIT_SUBNET", "10.8.1.0/24")
+# Параллельный классический WireGuard (wg0): порт и подсеть по умолчанию
+WG_INIT_PORT = int(os.environ.get("WG_INIT_PORT", "0") or 0)
+WG_INIT_SUBNET = os.environ.get("WG_INIT_SUBNET", "10.8.2.0/24")
 
 # Адрес сервера для клиентских конфигов и сертификата (IP или домен)
 PUBLIC_HOST = os.environ.get("PUBLIC_HOST", "").strip()
@@ -30,6 +33,7 @@ TLS_DOMAIN = os.environ.get("TLS_DOMAIN", "").strip()       # пусто = PUBLI
 ACME_EMAIL = os.environ.get("ACME_EMAIL", "").strip()
 ACME_SERVER = os.environ.get("ACME_SERVER", "https://acme-v02.api.letsencrypt.org/directory")
 ACME_HTTP_PORT = int(os.environ.get("ACME_HTTP_PORT", "80"))
+CF_DNS_API_TOKEN = os.environ.pop("CF_DNS_API_TOKEN", "").strip()
 # Корень файловой системы хоста, как его видит панель (pid: host). Пусто — свой корень (демо, тесты)
 HOST_ROOT = os.environ.get("HOST_ROOT", "" if DRY_RUN else "/proc/1/root").rstrip("/")
 

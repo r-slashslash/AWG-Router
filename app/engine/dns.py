@@ -125,19 +125,21 @@ class DnsMixin:
                 self._input_rule(t, "del", [("udp", DNS_PORT), ("tcp", DNS_PORT)])
             self.dns_state = None
             return
-        la = self.tunnel_addr(t)
-        if not la:
+        addrs = self.tunnel_addrs(t)
+        if not addrs:
             self._stop_dns()
             self.dns_state = {"state": "error", "error": Msg("dns.no_addr", iface=t.iface)}
             return
-        listen, net = la
+        listen, net = addrs[0]
         if config.DRY_RUN:
             self.dns_state = {"state": "on", "listen": listen, "encrypt": dns_encrypt(st["settings"])}
             return
         default, routes = self.dns_routes(st)
         dom = self.dns_domains(st, self.dom_filter(st))
         enc = dns_encrypt(st["settings"])
-        cfg = {"listen": listen, "port": DNS_PORT, "clients": net, "stats": DNS_STATS,
+        cfg = {"listen": listen, "listen_addrs": [ip for ip, _ in addrs],
+               "port": DNS_PORT, "clients": net, "clients_nets": [n for _, n in addrs],
+               "stats": DNS_STATS,
                "upstreams": client_dns(st["settings"]), "encrypt": enc,
                "default": default, "routes": routes, "dom": dom,
                # запасной DNS для пути «напрямую»: шифрованный DNS из России, Китая и Ирана часто не проходит, а
@@ -145,7 +147,7 @@ class DnsMixin:
                "direct_fallback": countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else []}
         mt = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in dom["lists"].values()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
-        key = f"{t.key}|{listen}"
+        key = f"{t.key}|{'|'.join(ip for ip, _ in addrs)}"
         d = self.dns
         if d and (d.key != key or d.proc.poll() is not None or self._dns_hung()):
             if d.key == key:

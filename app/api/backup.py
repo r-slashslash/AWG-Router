@@ -8,10 +8,11 @@ import json
 import logging
 import os
 import re
+import shlex
 import threading
 import time
 
-from .. import (awgconf, awgserver, checks, cps, notify,
+from .. import (awgconf, awgserver, checks, config, cps, notify,
                 system, users)
 from ..checks import bad
 from ..i18n import Msg, msg_of, to_json
@@ -49,7 +50,10 @@ def make_backup() -> dict:
     if t and t.exists:
         files = {}
         with engine.lock:
-            for name in (os.path.basename(t.conf_path),) + SERVER_FILES:
+            names = [os.path.basename(t.conf_path), *SERVER_FILES]
+            if t.wg_exists() and t.iface != "wg0":
+                names += ["wg0.conf", "wg0.clientsTable"]
+            for name in names:
                 text = t.read_file(f"{t.dir}/{name}")
                 if text is not None:
                     files[name] = text
@@ -241,7 +245,10 @@ def clean_backup_state(new: dict) -> dict:
         at(f, lambda: checks.client_key(pk))
         if not isinstance(c, dict):
             fail(f)
-        st["clients"][pk] = {**at(f, lambda: checks.client_policy(st, c)), "name": str(c.get("name") or "")[:60]}
+        pol = at(f, lambda: checks.client_policy(st, c))
+        if c.get("proto") == "wg":
+            pol["proto"] = "wg"
+        st["clients"][pk] = {**pol, "name": str(c.get("name") or "")[:60]}
 
     # закрытые ключи клиентов
     for pk, priv in obj("keys").items():
@@ -292,6 +299,22 @@ def clean_backup_state(new: dict) -> dict:
         st["shares"][tok] = {"pk": at("shares", lambda: checks.client_key(sh.get("pk"))),
                              "created": sh.get("created") if checks.number(sh.get("created")) else None}
 
+    # пользователи входящего SOCKS5-прокси
+    if "socks_users" in new:
+        su_map = {}
+        for uname, su in obj("socks_users").items():
+            at("socks_users", lambda: checks.validate_socks_username(uname))
+            f = f"socks_users.{uname}"
+            if not isinstance(su, dict):
+                fail(f)
+            pw = at(f + ".password", lambda: checks.validate_socks_password(su.get("password")))
+            ex = at(f + ".exit", lambda: checks.outbound(st, su.get("exit", "direct")))
+            if ex == "block":
+                fail(f + ".exit")
+            en = at(f + ".enabled", lambda: checks.flag(su.get("enabled"), True))
+            su_map[uname] = {"password": pw, "exit": ex, "enabled": en}
+        st["socks_users"] = su_map
+
     # настройки: только известные поля. Адрес сервера, второй адрес, адрес для клиентов и название сервера во
     # вкладке — этого сервера, а не из копии (restore_state), поэтому из копии не берутся
     s, out = obj("settings"), st["settings"]
@@ -323,6 +346,19 @@ def clean_backup_state(new: dict) -> dict:
             fail("settings.telegram")
         out["telegram"] = at("settings.telegram", lambda: checks.telegram(st, notify.defaults(), tg, backup=True),
                              sub=("via",))
+    if "socks_proxy" in s:
+        from .socks import _busy_tcp_ports
+
+        sp = s["socks_proxy"]
+        if not isinstance(sp, dict):
+            fail("settings.socks_proxy")
+        sp_port = at("settings.socks_proxy.port", lambda: checks.validate_socks_port(sp.get("port", 1080)))
+        if sp_port in _busy_tcp_ports():
+            fail("settings.socks_proxy.port")
+        out["socks_proxy"] = {
+            "enabled": at("settings.socks_proxy.enabled", lambda: checks.flag(sp.get("enabled"), False)),
+            "port": sp_port,
+        }
     Store.drop_auto_comments_once(st, new)    # копия до 1.21.0: правила из окна выхода с его именем
     Store.client_bot_once(st, new)            # копия до 1.22.0: бот только для уведомлений — без приглашений
     Store.bot_switch_once(st, new)            # копия до 1.23.0: бот без уведомлений, но с управлением — включён
@@ -357,6 +393,20 @@ def clean_server_files(srv: dict, kind: str) -> tuple[awgserver.ServerConf, dict
     if isinstance(files.get("clientsTable"), str):
         out["clientsTable"] = awgserver.render_clients_table(
             awgserver.parse_clients_table(files["clientsTable"]))
+    if srv.get("conf") != "wg0.conf" and isinstance(files.get("wg0.conf"), str):
+        wg_sc = awgserver.parse(files["wg0.conf"])
+        if not awgconf.KEY_RE.match(wg_sc.get("PrivateKey")) or not wg_sc.network:
+            bad("err.backup_format")
+        if not awgserver.foreign_ok(files["wg0.conf"], wg_sc):
+            bad(Msg("err.backup_field", field="server.wg0.conf"))
+        for p in wg_sc.peers:
+            if not awgconf.KEY_RE.match(p.public_key) or (p.psk and not awgconf.KEY_RE.match(p.psk)):
+                bad(Msg("err.backup_field", field="server.peers"))
+        awgserver.safe_hooks(wg_sc, kind == "host")
+        out["wg0.conf"] = wg_sc.render()
+        if isinstance(files.get("wg0.clientsTable"), str):
+            out["wg0.clientsTable"] = awgserver.render_clients_table(
+                awgserver.parse_clients_table(files["wg0.clientsTable"]))
     return sc, out
 
 
@@ -382,6 +432,11 @@ def restore_backup(req):
             bad("err.backup_kind")
         sc, srv_files = clean_server_files(srv, t.kind)
 
+    has_wg = ("wg0.conf" in srv_files) if sc is not None else bool(t and t.wg_exists())
+    if not has_wg:
+        for c in new.get("clients", {}).values():
+            c.pop("proto", None)
+
     store.mutate(lambda st: restore_state(st, new))
     engine.traffic.replace(b.get("traffic") or {})
     restarted = False
@@ -393,10 +448,25 @@ def restore_backup(req):
             awgserver.upgrade_i1(sc)                  # старый I1 AmneziaVPN в копии
             t.write_file(t.conf_path, sc.render())
             for name, text in srv_files.items():
-                t.write_file(f"{t.dir}/{name}", text, 0o644 if name == "clientsTable" else 0o600)
+                mode = 0o644 if name in ("clientsTable", "wg0.clientsTable") else 0o600
+                t.write_file(f"{t.dir}/{name}", text, mode)
             if isinstance(t, system.HostTarget):
                 system.open_firewall_udp(t, sc.port)
+            if "wg0.conf" not in srv_files and t.wg_exists() and t.iface != "wg0":
+                t.disable_wg()
             t.restart()
+            if "wg0.conf" in srv_files:
+                wg_sc = awgserver.parse(srv_files["wg0.conf"])
+                if isinstance(t, system.HostTarget):
+                    system.open_firewall_udp(t, wg_sc.port)
+                if not config.DRY_RUN and not isinstance(t, system.FakeTarget):
+                    if t.kind == "container":
+                        t = system.discover()
+                        if not t.iface_exists("wg0"):
+                            p = shlex.quote(t.conf_path_for("wg0"))
+                            t.native(["sh", "-c", f"awg-quick down {p} 2>/dev/null || true; awg-quick up {p}"], timeout=60)
+                    else:
+                        t.native(["sh", "-c", "systemctl restart awg-quick@wg0 2>/dev/null || (awg-quick down wg0 2>/dev/null || true; awg-quick up wg0)"])
             restarted = True
         engine.event("warn", Msg("ev.restored_server"))
     else:

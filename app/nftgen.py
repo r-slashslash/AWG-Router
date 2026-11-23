@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 import itertools
 
 from . import config
@@ -29,12 +30,21 @@ ACCT_TABLE = "awgr_acct"
 ACCT_VER = 1
 
 
-def acct_marker(wg_iface: str) -> str:
+def _ifaces_expr(wg_iface: str | Sequence[str]) -> tuple[list[str], str]:
+    """Список активных интерфейсов сервера и выражение nftables для iifname/oifname."""
+    ifaces = [wg_iface] if isinstance(wg_iface, str) else list(wg_iface)
+    if len(ifaces) == 1:
+        return ifaces, f'"{ifaces[0]}"'
+    return ifaces, "{ " + ", ".join(f'"{w}"' for w in ifaces) + " }"
+
+
+def acct_marker(wg_iface: str | Sequence[str]) -> str:
     """Метка в комментарии правила: по ней видно, что таблица учёта наша и актуальна."""
-    return f"awgr-acct {ACCT_VER} {wg_iface}"
+    ifaces, _ = _ifaces_expr(wg_iface)
+    return f"awgr-acct {ACCT_VER} {','.join(ifaces)}"
 
 
-def acct_ruleset(wg_iface: str) -> str:
+def acct_ruleset(wg_iface: str | Sequence[str]) -> str:
     """Отдельная таблица учёта трафика по выходам.
 
     Только считает: никаких меток, маршрутов и запретов, поэтому на маршрутизацию не
@@ -44,7 +54,7 @@ def acct_ruleset(wg_iface: str) -> str:
     c_forward, поэтому заблокированный трафик (reject там) сюда не доходит.
     Счётчик задан в правиле, а не в наборе: так работает и на ядрах до 5.11."""
     T = ACCT_TABLE
-    w = wg_iface
+    _, expr = _ifaces_expr(wg_iface)
     sets = "".join(f"""\tset {name} {{
 \t\ttype ipv4_addr . ifname
 \t\tsize 65535
@@ -56,14 +66,14 @@ delete table ip {T}
 table ip {T} {{
 {sets}\tchain c_acct {{
 \t\ttype filter hook forward priority filter + 10; policy accept;
-\t\tiifname "{w}" oifname != "{w}" update @up {{ ip saddr . oifname counter }} comment "{acct_marker(w)}"
-\t\toifname "{w}" iifname != "{w}" update @down {{ ip daddr . iifname counter }}
+\t\tiifname {expr} oifname != {expr} update @up {{ ip saddr . oifname counter }} comment "{acct_marker(wg_iface)}"
+\t\toifname {expr} iifname != {expr} update @down {{ ip daddr . iifname counter }}
 \t}}
 }}
 """
 
 
-def parse_acct(data: dict, wg_iface: str) -> dict[tuple[str, str], list[int]] | None:
+def parse_acct(data: dict, wg_iface: str | Sequence[str]) -> dict[tuple[str, str], list[int]] | None:
     """`nft -j list table ip awgr_acct` → {(ip, интерфейс): [от клиента, к клиенту]}.
     None — таблица не наша или устарела (нужно пересоздать)."""
     items = data.get("nftables") if isinstance(data, dict) else None
@@ -248,7 +258,7 @@ def sniff_marks(policies: dict, slots: dict | None = None) -> dict[str, int]:
     return {n: config.SNIFF_OUT_BASE + new[keys[n]] for n in names}
 
 
-def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
+def generate(wg_iface: str | Sequence[str], lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
              quic: bool = False, strict: bool = False, slots: dict | None = None) -> str:
@@ -262,6 +272,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     strict — правила по доменам сейчас не действуют (sniff_port None), а выбрано «тогда блокировать»:
     у клиентов с правилами по доменам весь трафик (кроме местных сетей и самого сервера) — в блок."""
     T = config.NFT_TABLE
+    _, iface_expr = _ifaces_expr(wg_iface)
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
     policies, client_map = layout(global_policy, client_policies, up_nums, balance)
@@ -298,7 +309,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                  f"ct mark set meta mark | {config.QUIC_CT_BIT:#x} accept\n") if quic else ""
     out.append(f"""\tchain c_prerouting {{
 \t\ttype filter hook prerouting priority mangle; policy accept;
-\t\tiifname != "{wg_iface}" return
+\t\tiifname != {iface_expr} return
 \t\tip daddr @local4 return
 {quic_line}\t\tip saddr vmap @clients
 \t\tgoto p_global
@@ -323,7 +334,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         "\tchain c_forward {",
         "\t\ttype filter hook forward priority filter; policy accept;",
         # служебный адрес облака (169.254.169.254): link-local входит в local4 и шёл бы с самого сервера при любом выходе
-        f'\t\tiifname "{wg_iface}" ip daddr {LINK_LOCAL} reject with icmp type admin-prohibited',
+        f'\t\tiifname {iface_expr} ip daddr {LINK_LOCAL} reject with icmp type admin-prohibited',
         f"\t\tmeta mark {config.MARK_BLOCK:#x} reject with icmp type admin-prohibited",
         # страховка: пакет с меткой выхода уходит не в туннель (ip rule этой метки ещё нет или уже нет —
         # основная таблица) — отказ, а не путь мимо выхода
@@ -362,7 +373,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         restore = ", ".join(f"{m | config.QUIC_CT_BIT:#x}" for m in live)
         out.append(f"""\tchain c_quic {{
 \t\ttype filter hook prerouting priority mangle - 5; policy accept;
-\t\tiifname != "{wg_iface}" return
+\t\tiifname != {iface_expr} return
 \t\tudp dport != 443 return
 \t\tip daddr @local4 return
 \t\tct mark {{ {restore} }} meta mark set ct mark & {keep:#x} accept
@@ -374,7 +385,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         # TCP 80/443 клиентов с правилами по доменам — в sniproxy.py на адресе сервера в туннеле
         out.append(f"""\tchain c_sniff {{
 \t\ttype nat hook prerouting priority dstnat; policy accept;
-\t\tiifname "{wg_iface}" meta mark {config.SNIFF_MARK:#x} meta l4proto tcp redirect to :{int(sniff_port)}
+\t\tiifname {iface_expr} meta mark {config.SNIFF_MARK:#x} meta l4proto tcp redirect to :{int(sniff_port)}
 \t}}""")
         # соединения sniproxy.py без совпадения по домену: обычные правила политики клиента
         # (метка политики → цепочка q_*; смена метки в type route — новый выбор маршрута)
