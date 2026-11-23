@@ -3,6 +3,29 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.24.0 — 2026-11-23
+
+- **The bot's main menu is a picture with live numbers** (owner's request). Instead of the logo with a caption, the menu
+  message is a PNG drawn by the panel (`app/tgcard.py`): the VPN server's address (`client_host`, the one in clients'
+  configs; it was "Host", the panel's `public_host`), **exits online** of the enabled ones (green — all, orange — some,
+  red — none, "none" without exits; online is what the exits screen marks 🟢: healthy and under its quota), the panel
+  version, clients, clients online and all-time traffic. The caption is empty (a note such as "Backup sent" stays there).
+  **Refresh** draws it again; the same numbers keep the picture and only edit the caption. Other screens (Clients,
+  Exits, Panel…) keep the menu picture above their text, as they kept the logo.
+- **Server → Status is a picture too**, in the same list style: a green "Running" or red "AmneziaWG server unavailable"
+  mark, panel version (with "1.24.1 available"), AWG version, engine, IPv4, IPv6, DNS on the server (with its counters or
+  "DNS servers don't answer" under the name), uptime, RAM, clients online and traffic this month. The **Host** line is
+  gone. The picture replaces the menu's in the same message (`editMessageMedia`, `notify.edit_photo`); the next screen
+  puts the menu picture back by its `file_id`, without an upload.
+- How it is drawn: the standard library has no fonts, so `tools/tgcard_atlas.py` renders every fixed word of the
+  pictures in Chrome (Golos Text and Vazirmatn from `app/static/fonts`, Noto Sans CJK SC for Chinese; Persian already
+  shaped and right to left), the ASCII characters and the icons, and writes their alpha masks to `app/tgcard.atlas`
+  (~520 KB). The panel only lays them out and colours them with `bytes.translate`: ~15 ms for the menu and ~20 ms for the
+  status on one core; the atlas is read per picture, nothing stays in memory. Values (addresses, numbers, versions) are
+  built from ASCII glyphs; an address that doesn't fit gets smaller, then is cut with "…". If a word is missing (texts
+  changed without running the tool) or anything fails, the bot sends the screen as text as before — now with
+  "VPN server" and "Exits online" and without "Host". `AtlasTest` fails until the tool is run again.
+
 ## 1.23.1 — 2026-11-21
 
 - **The clients list no longer fills the browser's memory** (found by the optimization part of the full audit). Every

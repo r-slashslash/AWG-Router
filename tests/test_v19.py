@@ -51,6 +51,10 @@ class FakeTG:
             if method == "sendPhoto":
                 r["photo"] = [{"file_id": "small"}, {"file_id": f"photo-{self.next_id}"}]
             return r
+        if method == "editMessageMedia":           # 1.24.0: картинка меню и «Состояния» — на месте
+            self.next_id += 1
+            return {"message_id": int(p.get("message_id") or 0),
+                    "photo": [{"file_id": "small"}, {"file_id": f"photo-{self.next_id}"}]}
         return True
 
     @staticmethod
@@ -67,12 +71,19 @@ class FakeTG:
             p[m.group(1).decode()] = json.loads(v) if m.group(1) == b"reply_markup" else v
         return p
 
-    # экраны меню: текстом или (1.13.0) подписью к фото с логотипом; подпись — в "text"
+    # экраны меню: текстом или (1.13.0) подписью к фото; подпись — в "text". С 1.24.0 картинка меняется и на
+    # месте (editMessageMedia), подпись тогда — в media
     SENT = ("sendMessage", "sendPhoto")
-    EDITS = ("editMessageText", "editMessageCaption")
+    EDITS = ("editMessageText", "editMessageCaption", "editMessageMedia")
+
+    @staticmethod
+    def _media(p):
+        m = p.get("media")
+        return json.loads(m) if isinstance(m, str) else (m or {})
 
     def screens(self, kinds=SENT + EDITS):
-        return [{**p, "text": p.get("text") or p.get("caption") or ""} for m, p in self.calls if m in kinds]
+        return [{**p, "text": p.get("text") or p.get("caption") or self._media(p).get("caption") or ""}
+                for m, p in self.calls if m in kinds]
 
     def screen(self):
         return self.screens()[-1]
@@ -239,7 +250,9 @@ class BotTest(unittest.TestCase):
     def test_status_and_clients(self):
         self.run_updates(msg("/status"), msg("/clients@my_bot", uid=2))
         status, clients = self.tg.texts()[-2:]
-        self.assertIn("Panel version", status)
+        # 1.24.0: «Состояние» — картинка без подписи (её строки — в test_v124), клиенты — текстом
+        self.assertEqual([m for m in self.tg.methods() if m in self.tg.SENT][-2:], ["sendPhoto", "sendMessage"])
+        self.assertEqual(status, "")
         self.assertIn("Clients", clients)
         cbs = [b["callback_data"] for row in self.tg.last("sendMessage")["reply_markup"]["inline_keyboard"]
                for b in row]

@@ -546,21 +546,27 @@ def _send_file(method: str, field: str, token: str, chat_id: str, filename: str,
         return _send_file_once(method, field, token, new, filename, data, caption, via, markup, html, ctype)
 
 
-def _send_file_once(method: str, field: str, token: str, chat_id: str, filename: str, data: bytes,
-                    caption: str, via: str, markup: dict | None, html: bool, ctype: str) -> dict:
+def _multipart(fields: list[tuple[str, str]], field: str, filename: str, data: bytes, ctype: str) -> tuple[bytes, str]:
+    """Тело multipart/form-data: текстовые поля и один файл. Возвращает (тело, Content-Type)."""
     boundary = "awgr" + uuid.uuid4().hex
-    fields = [("chat_id", chat_id), ("caption", caption[:1000])]
-    if markup:
-        fields.append(("reply_markup", json.dumps(markup, ensure_ascii=False)))
-    if html:
-        fields.append(("parse_mode", "HTML"))
     parts = []
     for k, v in fields:
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
     parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
                  f'Content-Type: {ctype}\r\n\r\n'.encode() + data + b"\r\n")
     parts.append(f"--{boundary}--\r\n".encode())
-    return _post(token, method, b"".join(parts), f"multipart/form-data; boundary={boundary}", 120, via)
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def _send_file_once(method: str, field: str, token: str, chat_id: str, filename: str, data: bytes,
+                    caption: str, via: str, markup: dict | None, html: bool, ctype: str) -> dict:
+    fields = [("chat_id", chat_id), ("caption", caption[:1000])]
+    if markup:
+        fields.append(("reply_markup", json.dumps(markup, ensure_ascii=False)))
+    if html:
+        fields.append(("parse_mode", "HTML"))
+    body, btype = _multipart(fields, field, filename, data, ctype)
+    return _post(token, method, body, btype, 120, via)
 
 
 def send_document(token: str, chat_id: str, filename: str, data: bytes, caption: str,
@@ -572,6 +578,24 @@ def send_photo(token: str, chat_id: str, png: bytes, caption: str, via: str = "d
                html: bool = False, markup: dict | None = None, filename: str = "qr.png") -> dict:
     return _send_file("sendPhoto", "photo", token, chat_id, filename, png, caption, via, markup, html=html,
                       ctype="image/png")
+
+
+def edit_photo(token: str, chat_id: str, message_id, png: bytes | None, caption: str, markup: dict | None,
+               via: str = "direct", fid: str = "", filename: str = "card.png") -> dict:
+    """editMessageMedia (1.24.0): другая картинка в том же сообщении — меню и «Состояние» бота. png — загрузить
+    файл, fid — уже загруженный (file_id). Подпись — разметка HTML."""
+    media = {"type": "photo", "media": fid or "attach://card", "caption": caption[:1000], "parse_mode": "HTML"}
+    if fid:
+        p = {"chat_id": chat_id, "message_id": message_id, "media": media}
+        if markup:
+            p["reply_markup"] = markup
+        return _call(token, "editMessageMedia", p, via=via)
+    fields = [("chat_id", str(chat_id)), ("message_id", str(message_id)),
+              ("media", json.dumps(media, ensure_ascii=False))]
+    if markup:
+        fields.append(("reply_markup", json.dumps(markup, ensure_ascii=False)))
+    body, btype = _multipart(fields, "card", filename, png or b"", "image/png")
+    return _post(token, "editMessageMedia", body, btype, 120, via)
 
 
 # Шифрование копии: openssl есть в образе, а AES в стандартной библиотеке Python нет.

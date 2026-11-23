@@ -25,7 +25,7 @@ import struct  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
 
-from app import awgconf, config, dnsproxy, engine, system, tgbot, users  # noqa: E402
+from app import awgconf, config, dnsproxy, engine, system, tgbot, tgcard, users  # noqa: E402
 
 KEY = "A" * 42 + "E="
 
@@ -585,7 +585,9 @@ class BotStatusTest(unittest.TestCase):
         b.ops.clients.return_value = []
         b._show = mock.Mock()
         b._back_server = lambda c: []
-        b.show_status({"lang": "ru"}, None)
+        # 1.24.0: «Состояние» — картинка (её строки — test_v124); здесь — текст, который уходит без картинки
+        with mock.patch.object(tgcard, "status", side_effect=tgcard.CardError("test")):
+            b.show_status({"lang": "ru"}, None)
         return b._show.call_args.args[1]
 
     def test_addresses(self):

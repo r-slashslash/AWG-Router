@@ -15,7 +15,7 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import hostnet, lists, notify, tgbot  # noqa: E402
+from app import hostnet, lists, notify, tgbot, tgcard  # noqa: E402
 from app.traffic import FORMAT, Traffic, month_key  # noqa: E402
 from tests.test_v19 import FakeTG, button, cfg, msg  # noqa: E402
 from app import panel  # noqa: E402
@@ -166,11 +166,19 @@ class BotMenuV113Test(unittest.TestCase):
         return [b.get("callback_data") or b.get("url") for row in p["reply_markup"]["inline_keyboard"] for b in row]
 
     def test_menu_header(self):
-        p = self.tg.screen()
+        """1.24.0: цифры меню — на картинке, подписи нет; картинку не нарисовать — те же строки текстом."""
+        self.assertEqual(self.tg.screen()["text"], "")
         n = len(panel.engine.clients)
+        d = self.bot._menu_info()
+        self.assertEqual((d["clients"], d["version"]), (n, version.VERSION))
+        with mock.patch.object(tgcard, "menu", side_effect=tgcard.CardError("no atlas")):
+            self.upd(msg("/start", uid=60))
+        p = self.tg.screen()
         self.assertIn(f"Clients: {n}\n", p["text"])
-        for line in ("Host:", "Panel version: " + version.VERSION, "Clients online:", "Total traffic:"):
+        for line in ("VPN server:", "Exits online:", "Panel version: " + version.VERSION, "Clients online:",
+                     "Total traffic:"):
             self.assertIn(line, p["text"])
+        self.assertNotIn("Host:", p["text"])
         self.assertNotIn("remote", p["text"])
 
     def test_server_screen(self):
@@ -178,10 +186,18 @@ class BotMenuV113Test(unittest.TestCase):
         self.assertEqual(self.cbs(p), ["st", "ex", "m"])
 
     def test_status_lines(self):
+        """1.24.0: «Состояние» — картинка на месте меню, без подписи; без картинки — текст, и без «Хост»."""
+        mid = self.bot._panel_msgs[0]
         p = self.press("st")
-        for line in ("Panel › Server", "Host:", "Panel version:", "AWG version:", "IPv4:", "IPv6:",
+        self.assertEqual(self.tg.methods()[-2], "editMessageMedia")
+        self.assertEqual((str(p["message_id"]), p["text"]), (str(mid), ""))   # в multipart поля — строки
+        self.assertEqual(self.cbs(p)[-2:], ["st", "sv"])
+        with mock.patch.object(tgcard, "status", side_effect=tgcard.CardError("no atlas")):
+            p = self.press("st")
+        for line in ("Panel › Server", "Panel version:", "AWG version:", "IPv4:", "IPv6:",
                      "Server uptime:", "RAM:", "Clients online:", "Traffic this month:", "Status:"):
             self.assertIn(line, p["text"])
+        self.assertNotIn("Host:", p["text"])
         self.assertEqual(self.cbs(p)[-2:], ["st", "sv"])
 
     def test_exits_list_and_exit_screen(self):
@@ -215,18 +231,22 @@ class BotMenuV113Test(unittest.TestCase):
         mid = self.bot._panel_msgs[0]
         p = self.press("m")
         self.assertEqual(p.get("message_id"), mid)
-        self.assertIn("Total traffic", p["text"])
+        self.assertEqual(p["text"], "")                              # 1.24.0: цифры — на картинке
 
     def test_menu_is_logo_photo(self):
-        """Меню — фото с логотипом, информация в подписи; файл загружается один раз."""
+        """Меню — фото, файл загружается один раз. 1.24.0: фото — картинка с цифрами, подписи нет; та же картинка
+        дальше — по file_id. Логотип с подписью — только если картинку не нарисовать."""
         m, p = next((m, p) for m, p in reversed(self.tg.calls) if m == "sendPhoto")
         self.assertIn("multipart", p)                               # первый раз — сам файл
-        self.assertIn("Total traffic", p["caption"])
+        self.assertEqual(p["caption"], "")
         self.assertEqual(self.bot._st["photo"], self.bot._panel_msgs[0])
         self.upd(msg("/start", uid=50))
         p = self.tg.last("sendPhoto")
         self.assertNotIn("multipart", p)                            # дальше — по file_id
         self.assertTrue(p["photo"].startswith("photo-"))
+        with mock.patch.object(tgcard, "menu", side_effect=tgcard.CardError("no atlas")):
+            self.upd(msg("/start", uid=51))
+        self.assertIn("Total traffic", self.tg.last("sendPhoto")["caption"])
         with open(tgbot.LOGO, "rb") as f:
             self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
 

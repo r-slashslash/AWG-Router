@@ -57,14 +57,21 @@ class BotTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- меню
     def test_start_is_short(self):
-        # 1.13.0: шапка — хост, версия, клиенты, в сети и трафик за всё время
+        # 1.13.0: шапка — хост, версия, клиенты, в сети и трафик за всё время. 1.24.0: всё это — на картинке, подписи
+        # нет; текстом (картинку не нарисовать) — VPN-сервер, выходы онлайн, версия, клиенты, в сети, трафик
+        from app import tgcard
         for lang, title in (("ru", "Общий трафик"), ("en", "Total traffic")):
             self.c["lang"] = lang
             self.run_updates(msg("/start", uid=len(self.tg.calls) + 1))
             p = self.sent()[-1]
-            self.assertEqual(p["text"].count("\n"), 4, p["text"])   # подпись под логотипом: 5 строк
+            self.assertEqual(p["text"], "")
+            self.assertIn("inline_keyboard", p["reply_markup"])
+            with mock.patch.object(tgcard, "menu", side_effect=tgcard.CardError("no atlas")):
+                self.run_updates(msg("/start", uid=len(self.tg.calls) + 1))
+            p = self.sent()[-1]
+            self.assertEqual(p["text"].count("\n"), 5, p["text"])   # подпись под логотипом: 6 строк
             self.assertIn(title, p["text"])
-            self.assertIn(telegram.bot_ops.panel()["host"], p["text"])   # адрес сервера
+            self.assertIn(telegram.bot_ops.vpn_host(), p["text"])   # адрес, к которому подключаются клиенты
             self.assertIn("inline_keyboard", p["reply_markup"])
 
     def test_menu_layout_in_every_language(self):

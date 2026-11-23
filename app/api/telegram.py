@@ -172,6 +172,7 @@ bot_ops = SimpleNamespace(
     apply_limits=clients.apply_limits,
     add_client=lambda name: user_errors(lambda: engine.srv.add_client(name)),
     delete_client=clients.delete_user,
+    vpn_host=lambda: store.peek(engine.srv.client_host),   # «VPN-сервер» на картинке меню — адрес из конфигов
     panel=lambda: {"url": panel_url(), "ssh": config.PANEL_HOST.startswith("127."), "port": config.PANEL_PORT,
                    "host": engine.srv.public_host(store.snapshot()),
                    "user": config.SSH_USER, "sport": config.SSH_PORT},

@@ -86,7 +86,7 @@ class BotTest(unittest.TestCase):
         """Часы сервера на час впереди: свежая команда не считается устаревшей."""
         notify.clock_skew = 3600
         self.run_updates(msg("/status", date=int(time.time() - 3600)))
-        self.assertTrue(any("Panel version" in t for t in self.tg.texts()))
+        self.assertEqual(self.bot._st.get("pic"), "status")     # 1.24.0: «Состояние» — картинкой
         self.assertEqual(self.bot.view()["skew"], 3600)
 
     def test_really_old_still_skipped(self):
@@ -166,7 +166,7 @@ class ControlWithoutNotificationsTest(unittest.TestCase):
         # 1.23.0: «Включить бот» — главный выключатель; уведомления — галочки событий, без них управление работает
         self.run_loop_once(cfg(enabled=True, control=True, events={k: False for k in notify.KINDS}))
         self.assertIn("getUpdates", self.tg.methods())
-        self.assertTrue(any("Total traffic" in t for t in self.tg.texts()))
+        self.assertEqual(self.bot._st.get("pic"), "menu")       # меню пришло (1.24.0 — картинкой)
         self.assertEqual(self.bot.state, "ok")
 
     def test_bot_off_means_no_control(self):
@@ -249,7 +249,7 @@ class NoDuplicateMenuTest(unittest.TestCase):
         self.tg.updates = [msg("/start"), msg("/help", uid=2)]
         self.bot.poll_once(cfg(), timeout=0)
         start, full = self.tg.sent()[-2:]
-        self.assertIn("Total traffic", start["text"])
+        self.assertEqual((start["text"], start["multipart"] > 0), ("", True))   # 1.24.0: меню — картинка
         self.assertIn("/clients", full["text"])
         for p in (start, full):
             self.assertNotIn("keyboard", p["reply_markup"])

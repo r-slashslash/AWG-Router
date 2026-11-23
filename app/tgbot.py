@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import collections
+import hashlib
 import html
 import json
 import logging
@@ -21,7 +22,7 @@ import re
 import threading
 import time
 
-from . import config, limits, notify, qr, uitext
+from . import config, limits, notify, qr, tgcard, uitext
 from .i18n import Msg
 
 log = logging.getLogger("awgr.tgbot")
@@ -40,7 +41,6 @@ _LOGO_SUM: list[str] = []
 def logo_sum() -> str:
     """Отпечаток картинки меню (один раз за запуск): по нему видно, что file_id в Telegram — от прежней."""
     if not _LOGO_SUM:
-        import hashlib
         try:
             with open(LOGO, "rb") as f:
                 _LOGO_SUM.append(hashlib.sha256(f.read()).hexdigest()[:16])
@@ -119,7 +119,18 @@ TEXTS = {
         "gone": "Такого клиента больше нет.", "gone_exit": "Такого выхода больше нет.",
         "fail": "⚠️ Не получилось: {error}",
         "unknown": "Не знаю такой команды. /help — что я умею.",
-        "start": "🌍 Хост: <code>{host}</code>\n🏷 Версия панели: {version}\n👥 Клиенты: {clients}\n🟢 Клиенты онлайн: {online}\n📶 Общий трафик: {traffic}",
+        "start": "🌍 VPN-сервер: <code>{host}</code>\n🌐 Выходы онлайн: {exits}\n🏷 Версия панели: {version}\n👥 Клиенты: {clients}\n🟢 Клиенты онлайн: {online}\n📶 Общий трафик: {traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "VPN-сервер", "pc_exits": "Выходы онлайн", "pc_version": "Версия панели",
+        "pc_clients": "Клиенты", "pc_online": "Клиенты онлайн", "pc_traffic": "Общий трафик",
+        "pc_of": "{n} из {total}", "pc_none": "нет", "ps_awg": "Версия AWG", "ps_engine": "Движок",
+        "ps_kernel": "модуль ядра {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "определяется…",
+        "ps_v4_fail": "не определён", "ps_v6_none": "на сервере нет", "ps_dns": "DNS на сервере",
+        "ps_dns_off": "выключен", "ps_dns_err": "не работает",
+        "ps_dns_err_sub": "подробности в панели, вкладка «Сервер»", "ps_dns_upfail": "серверы DNS не отвечают",
+        "ps_uptime": "Время работы сервера", "ps_ram": "RAM", "ps_online": "Клиентов онлайн",
+        "ps_month": "Трафик за месяц", "ps_ok": "Работает", "ps_bad": "Сервер AmneziaWG недоступен",
+        "ps_upd": "доступна {version}",
         "b_menu": "‹ Меню", "bk_done": "💾 Копия отправлена (файл выше).", "cfg_done": "📱 Конфиг отправлен (QR и файл выше).",
         "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
         "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
@@ -131,7 +142,7 @@ TEXTS = {
         "ok_deleted": "🗑 «{name}» удалён",
         "b_server": "🗄 Сервер", "b_back_server": "‹ Сервер",
         "b_back_exits": "‹ Выходы", "sv_title": "🗄 <b>Сервер</b>\n<code>{host}</code>",
-        "st_title": "📊 <b>Панель › Сервер</b>", "st_host": "🌍 Хост: <code>{host}</code>",
+        "st_title": "📊 <b>Панель › Сервер</b>",
         "st_panel": "🏷 Версия панели: {version}", "st_panel_up": "🏷 Версия панели: {version} (доступна {latest})",
         "st_awg": "🛡 Версия AWG: {version}", "st_engine_kernel": "⚙️ Движок: модуль ядра {version}", "st_engine_go": "⚙️ Движок: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Время работы сервера: {time}",
@@ -232,7 +243,17 @@ TEXTS = {
         "gone": "This client no longer exists.", "gone_exit": "This exit no longer exists.",
         "fail": "⚠️ That didn't work: {error}",
         "unknown": "I don't know this command. /help — what I can do.",
-        "start": "🌍 Host: <code>{host}</code>\n🏷 Panel version: {version}\n👥 Clients: {clients}\n🟢 Clients online: {online}\n📶 Total traffic: {traffic}",
+        "start": "🌍 VPN server: <code>{host}</code>\n🌐 Exits online: {exits}\n🏷 Panel version: {version}\n👥 Clients: {clients}\n🟢 Clients online: {online}\n📶 Total traffic: {traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "VPN server", "pc_exits": "Exits online", "pc_version": "Panel version",
+        "pc_clients": "Clients", "pc_online": "Clients online", "pc_traffic": "Total traffic",
+        "pc_of": "{n} of {total}", "pc_none": "none", "ps_awg": "AWG version", "ps_engine": "Engine",
+        "ps_kernel": "kernel module {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "detecting…",
+        "ps_v4_fail": "not detected", "ps_v6_none": "none on the server", "ps_dns": "DNS on the server",
+        "ps_dns_off": "off", "ps_dns_err": "not working", "ps_dns_err_sub": "details in the panel, Server tab",
+        "ps_dns_upfail": "DNS servers don't answer", "ps_uptime": "Server uptime", "ps_ram": "RAM",
+        "ps_online": "Clients online", "ps_month": "Traffic this month", "ps_ok": "Running",
+        "ps_bad": "AmneziaWG server unavailable", "ps_upd": "{version} available",
         "b_menu": "‹ Menu", "bk_done": "💾 Backup sent (the file is above).", "cfg_done": "📱 Config sent (QR and file above).",
         "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
         "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
@@ -244,7 +265,7 @@ TEXTS = {
         "ok_deleted": "🗑 “{name}” deleted",
         "b_server": "🗄 Server", "b_back_server": "‹ Server",
         "b_back_exits": "‹ Exits", "sv_title": "🗄 <b>Server</b>\n<code>{host}</code>",
-        "st_title": "📊 <b>Panel › Server</b>", "st_host": "🌍 Host: <code>{host}</code>",
+        "st_title": "📊 <b>Panel › Server</b>",
         "st_panel": "🏷 Panel version: {version}", "st_panel_up": "🏷 Panel version: {version} ({latest} available)",
         "st_awg": "🛡 AWG version: {version}", "st_engine_kernel": "⚙️ Engine: kernel module {version}", "st_engine_go": "⚙️ Engine: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Server uptime: {time}",
@@ -343,7 +364,15 @@ TEXTS = {
         "gone": "该客户端已不存在。", "gone_exit": "该出口已不存在。",
         "fail": "⚠️ 操作失败：{error}",
         "unknown": "不认识这个命令。/help — 我能做什么。",
-        "start": "🌍 主机：<code>{host}</code>\n🏷 面板版本：{version}\n👥 客户端：{clients}\n🟢 在线客户端：{online}\n📶 总流量：{traffic}",
+        "start": "🌍 VPN 服务器：<code>{host}</code>\n🌐 在线出口：{exits}\n🏷 面板版本：{version}\n👥 客户端：{clients}\n🟢 在线客户端：{online}\n📶 总流量：{traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "VPN 服务器", "pc_exits": "在线出口", "pc_version": "面板版本", "pc_clients": "客户端", "pc_online": "在线客户端",
+        "pc_traffic": "总流量", "pc_of": "{n} / {total}", "pc_none": "无", "ps_awg": "AWG 版本", "ps_engine": "引擎",
+        "ps_kernel": "内核模块 {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "正在检测…", "ps_v4_fail": "未检测到",
+        "ps_v6_none": "服务器上没有", "ps_dns": "服务器上的 DNS", "ps_dns_off": "已关闭", "ps_dns_err": "未运行",
+        "ps_dns_err_sub": "详情见面板的「服务器」选项卡", "ps_dns_upfail": "DNS 服务器无响应", "ps_uptime": "服务器运行时间", "ps_ram": "内存",
+        "ps_online": "在线客户端", "ps_month": "本月流量", "ps_ok": "运行中", "ps_bad": "AmneziaWG 服务器不可用",
+        "ps_upd": "可更新至 {version}",
         "b_menu": "‹ 菜单", "bk_done": "💾 备份已发送（文件在上方）。", "cfg_done": "📱 配置已发送（二维码和文件在上方）。",
         "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
         "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
@@ -354,7 +383,7 @@ TEXTS = {
         "ok_deleted": "🗑 “{name}”已删除",
         "b_server": "🗄 服务器", "b_back_server": "‹ 服务器",
         "b_back_exits": "‹ 出口", "sv_title": "🗄 <b>服务器</b>\n<code>{host}</code>",
-        "st_title": "📊 <b>面板 › 服务器</b>", "st_host": "🌍 主机：<code>{host}</code>",
+        "st_title": "📊 <b>面板 › 服务器</b>",
         "st_panel": "🏷 面板版本：{version}", "st_panel_up": "🏷 面板版本：{version}（可更新至 {latest}）",
         "st_awg": "🛡 AWG 版本：{version}", "st_engine_kernel": "⚙️ 引擎：内核模块 {version}", "st_engine_go": "⚙️ 引擎：amneziawg-go", "st_v4": "🌐 IPv4：<code>{ip}</code>",
         "st_v6": "🌐 IPv6：<code>{ip}</code>", "st_uptime": "⏱ 服务器运行时间：{time}",
@@ -455,7 +484,17 @@ TEXTS = {
         "gone": "این کلاینت دیگر وجود ندارد.", "gone_exit": "این خروجی دیگر وجود ندارد.",
         "fail": "⚠️ انجام نشد: {error}",
         "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
-        "start": "🌍 میزبان: <code>{host}</code>\n🏷 نسخهٔ پنل: {version}\n👥 کلاینت‌ها: {clients}\n🟢 کلاینت‌های آنلاین: {online}\n📶 ترافیک کل: {traffic}",
+        "start": "🌍 سرور VPN: <code>{host}</code>\n🌐 خروجی‌های آنلاین: {exits}\n🏷 نسخهٔ پنل: {version}\n👥 کلاینت‌ها: {clients}\n🟢 کلاینت‌های آنلاین: {online}\n📶 ترافیک کل: {traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "سرور VPN", "pc_exits": "خروجی‌های آنلاین", "pc_version": "نسخهٔ پنل",
+        "pc_clients": "کلاینت‌ها", "pc_online": "کلاینت‌های آنلاین", "pc_traffic": "ترافیک کل",
+        "pc_of": "{n} از {total}", "pc_none": "ندارد", "ps_awg": "نسخهٔ AWG", "ps_engine": "موتور",
+        "ps_kernel": "ماژول هسته {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "در حال تشخیص…",
+        "ps_v4_fail": "تشخیص داده نشد", "ps_v6_none": "روی سرور نیست", "ps_dns": "DNS روی سرور",
+        "ps_dns_off": "خاموش", "ps_dns_err": "کار نمی‌کند", "ps_dns_err_sub": "جزئیات در پنل، زبانهٔ «سرور»",
+        "ps_dns_upfail": "سرورهای DNS پاسخ نمی‌دهند", "ps_uptime": "مدت کارکرد سرور", "ps_ram": "RAM",
+        "ps_online": "کلاینت‌های آنلاین", "ps_month": "ترافیک این ماه", "ps_ok": "در حال کار",
+        "ps_bad": "سرور AmneziaWG در دسترس نیست", "ps_upd": "نسخهٔ {version} موجود است",
         "b_menu": "منو ›", "bk_done": "💾 پشتیبان فرستاده شد (فایل بالاتر است).", "cfg_done": "📱 پیکربندی فرستاده شد (QR و فایل بالاتر است).",
         "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
         "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
@@ -467,7 +506,7 @@ TEXTS = {
         "ok_deleted": "🗑 «{name}» حذف شد",
         "b_server": "🗄 سرور", "b_back_server": "سرور ›",
         "b_back_exits": "خروجی‌ها ›", "sv_title": "🗄 <b>سرور</b>\n<code>{host}</code>",
-        "st_title": "📊 <b>پنل › سرور</b>", "st_host": "🌍 میزبان: <code>{host}</code>",
+        "st_title": "📊 <b>پنل › سرور</b>",
         "st_panel": "🏷 نسخهٔ پنل: {version}", "st_panel_up": "🏷 نسخهٔ پنل: {version} (نسخهٔ {latest} موجود است)",
         "st_awg": "🛡 نسخهٔ AWG: {version}", "st_engine_kernel": "⚙️ موتور: ماژول هسته {version}", "st_engine_go": "⚙️ موتور: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
         "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ مدت کارکرد سرور: {time}",
@@ -519,7 +558,8 @@ def tr(lang: str, key: str, html_safe: bool = True, **params) -> str:
     return re.sub(r"\{(\w+)\}", fill, s)
 
 
-def fmt_size(n: int | float, lang: str) -> str:
+def size_parts(n: int | float, lang: str) -> tuple[str, str]:
+    """Размер → (число, ключ единицы): «44,5» и u_gb. Картинке (tgcard) число и единица нужны порознь."""
     n = float(n or 0)
     if n >= 1024 ** 4:
         v, u = n / 1024 ** 4, "u_tb"
@@ -530,6 +570,11 @@ def fmt_size(n: int | float, lang: str) -> str:
     s = f"{v:.0f}" if v >= 100 or u == "u_mb" else f"{v:.1f}".rstrip("0").rstrip(".")
     if lang == "ru":
         s = s.replace(".", ",")
+    return s, u
+
+
+def fmt_size(n: int | float, lang: str) -> str:
+    s, u = size_parts(n, lang)
     return f"{s} {tr(lang, u)}"
 
 
@@ -1153,6 +1198,8 @@ class Bot:
             self._st["photo"] = r["message_id"]
         else:
             self._st.pop("photo", None)
+            self._st.pop("pic", None)          # в сообщении-меню больше нет картинки
+            self._st.pop("pic_sum", None)
         self._save()
 
     def _send_logo(self, c: dict, caption: str, markup: dict | None) -> dict:
@@ -1165,6 +1212,7 @@ class Bot:
                 r = notify._call(c["token"], "sendPhoto", {"chat_id": c["chat_id"], "photo": fid, "caption": caption,
                                                            "parse_mode": "HTML", "reply_markup": markup},
                                  via=c["via"])
+                self._st["pic"] = "logo"
                 self._set_panel(c, r, photo=True)
                 return r
             except notify.NotifyError as e:
@@ -1180,12 +1228,113 @@ class Bot:
             self._st["logo"] = sizes[-1]["file_id"]
             self._st["logo_bot"] = c["token"].split(":", 1)[0]
             self._st["logo_sum"] = logo_sum()
+        self._st["pic"] = "logo"
         self._set_panel(c, r, photo=True)
         return r
 
     def _is_photo(self, msg: dict | None) -> bool:
         mid = (msg or {}).get("message_id")
         return bool((msg or {}).get("photo")) or (mid is not None and mid == self._st.get("photo"))
+
+    # ------------------------------------------------------------- картинки (1.24.0)
+    def _menu_info(self) -> dict:
+        """Цифры главного меню: адрес VPN-сервера (как в конфигах клиентов), выходы онлайн из включённых,
+        версия, клиенты и общий трафик."""
+        s = self.ops.status()
+        clients = self.ops.clients()
+        now = time.time()
+        ups = [u for u in self.ops.snapshot().get("upstreams") or [] if u.get("enabled", True)]
+        vpn = getattr(self.ops, "vpn_host", None)
+        tv = s.get("server_traffic") or {}
+        return {"host": (vpn() if vpn else "") or self.ops.panel().get("host") or "—",
+                "exits": (sum(1 for u in ups if self._exit_icon(u) == "🟢"), len(ups)),
+                "version": (s.get("version") or {}).get("current") or self.ops.version,
+                "clients": len(clients), "online": sum(1 for x in clients if self._online(x, now)),
+                "bytes": tv.get("total_rx", 0) + tv.get("total_tx", 0)}
+
+    @staticmethod
+    def _card(lang: str, kind: str, d: dict) -> bytes | None:
+        """PNG меню или «Состояния»; не вышло (нет атласа, слова) — None, и экран уходит текстом, как до 1.24.0."""
+        lang = lang if lang in TEXTS else "en"
+        try:
+            if kind == "menu":
+                return tgcard.menu(TEXTS[lang], lang, {**d, "traffic": size_parts(d["bytes"], lang)})
+            return tgcard.status(TEXTS[lang], lang, d)
+        except Exception as e:  # noqa: BLE001 — картинка не должна ломать меню
+            log.warning("telegram %s picture: %s", kind, e)
+            return None
+
+    def _got_card(self, c: dict, kind: str, total: str, r) -> None:
+        """Запомнить, какая картинка в сообщении-меню; у меню — и file_id, чтобы вернуть её без загрузки."""
+        self._st["pic"] = kind
+        self._st["pic_sum"] = total
+        sizes = (r or {}).get("photo") if isinstance(r, dict) else None
+        if kind == "menu" and sizes and isinstance(sizes, list) and isinstance(sizes[-1], dict) \
+                and sizes[-1].get("file_id"):
+            self._st["menu_pic"] = {"fid": sizes[-1]["file_id"], "sum": total, "bot": c["token"].split(":", 1)[0]}
+        self._save()
+
+    def _show_card(self, c: dict, kind: str, png: bytes, caption: str, markup: dict | None, msg: dict | None,
+                   move: bool = False) -> None:
+        """Экран-картинка: в сообщении-меню меняется сама картинка (editMessageMedia), иначе — новое сообщение.
+        Та же картинка уже стоит — меняются только подпись и кнопки; та же картинка меню — уходит по file_id."""
+        total = hashlib.sha256(png).hexdigest()[:16]
+        mid = (msg or {}).get("message_id")
+        bot = c["token"].split(":", 1)[0]
+        if not move and mid and mid in self._panel_msgs and self._is_photo(msg):
+            try:
+                if self._st.get("pic") == kind and self._st.get("pic_sum") == total:
+                    notify._call(c["token"], "editMessageCaption",
+                                 {"chat_id": c["chat_id"], "message_id": mid, "caption": caption, "parse_mode": "HTML",
+                                  "reply_markup": markup or {"inline_keyboard": []}}, via=c["via"])
+                    return
+                r = notify.edit_photo(c["token"], c["chat_id"], mid, png, caption, markup, c["via"],
+                                      filename=f"awg-router-{kind}.png")
+                self._got_card(c, kind, total, r)
+                return
+            except notify.NotifyError as e:
+                if "not modified" in str(e):
+                    return
+                if "url" in str(e).lower():
+                    raise                   # кнопку «Панель» не приняли — решает show_menu
+                log.info("telegram: picture not replaced in place (%s), sending anew", e)
+        mp = self._st.get("menu_pic") or {}
+        if kind == "menu" and mp.get("sum") == total and mp.get("bot") == bot:
+            try:
+                r = notify._call(c["token"], "sendPhoto", {"chat_id": c["chat_id"], "photo": mp["fid"], "caption": caption,
+                                                           "parse_mode": "HTML", "reply_markup": markup}, via=c["via"])
+                self._st["pic"], self._st["pic_sum"] = kind, total
+                self._set_panel(c, r, photo=True)
+                return
+            except notify.NotifyError as e:
+                if "url" in str(e).lower():
+                    raise
+                log.info("telegram: menu picture file_id refused (%s), uploading again", e)
+        r = notify.send_photo(c["token"], c["chat_id"], png, caption, c["via"], html=True, markup=markup,
+                              filename=f"awg-router-{kind}.png")
+        self._got_card(c, kind, total, r)
+        self._set_panel(c, r, photo=True)
+
+    def _menu_back(self, c: dict, mid, text: str, markup: dict | None) -> bool:
+        """Экран, который не картинка, ушёл из «Состояния»: в сообщение возвращается картинка меню (по file_id,
+        если она того же бота, иначе рисуется заново) с текстом экрана в подписи. False — не вышло."""
+        mp = self._st.get("menu_pic") or {}
+        try:
+            if mp.get("fid") and mp.get("bot") == c["token"].split(":", 1)[0]:
+                notify.edit_photo(c["token"], c["chat_id"], mid, None, text, markup, c["via"], fid=mp["fid"])
+                self._st["pic"], self._st["pic_sum"] = "menu", mp.get("sum")
+                self._save()
+                return True
+            png = self._card(c["lang"], "menu", self._menu_info())
+            if png is None:
+                return False
+            r = notify.edit_photo(c["token"], c["chat_id"], mid, png, text, markup, c["via"],
+                                  filename="awg-router-menu.png")
+            self._got_card(c, "menu", hashlib.sha256(png).hexdigest()[:16], r)
+            return True
+        except notify.NotifyError as e:
+            log.info("telegram: menu picture not restored (%s)", e)
+            return False
 
     def _delete(self, c: dict, mid) -> None:
         try:
@@ -1199,6 +1348,10 @@ class Bot:
         photo = self._is_photo(msg)
         # меню-фото: экраны меняют подпись под логотипом; слишком длинный экран — текстом
         if mid and mid in self._panel_msgs and not (photo and len(_plain(text)) > CAPTION_MAX):
+            # над остальными экранами — картинка меню (1.24.0): из «Состояния» она возвращается
+            if photo and self._st.get("pic") not in (None, "menu", "logo") and \
+                    self._menu_back(c, mid, text, markup or {"inline_keyboard": []}):
+                return
             p = {"chat_id": c["chat_id"], "message_id": mid, "parse_mode": "HTML",
                  "reply_markup": markup or {"inline_keyboard": []}}
             if photo:
@@ -1482,17 +1635,18 @@ class Bot:
         не нравится), — экран со ссылкой."""
         # адрес сервера — видно, какой это сервер, если ботов несколько
         L = c["lang"]
-        s = self.ops.status()
-        clients = self.ops.clients()
-        now = time.time()
-        tv = s.get("server_traffic") or {}
-        text = tr(L, "start", host=self.ops.panel().get("host") or "—",
-                  version=(s.get("version") or {}).get("current") or self.ops.version,
-                  clients=len(clients), online=sum(1 for x in clients if self._online(x, now)),
-                  traffic=fmt_size(tv.get("total_rx", 0) + tv.get("total_tx", 0), L))
+        d = self._menu_info()
+        up, total = d["exits"]
+        # картинка с цифрами (1.24.0), подпись — только заметка («Копия отправлена»); текст — если картинки нет
+        png = self._card(L, "menu", d)
+        text = tr(L, "start", host=d["host"], exits=tr(L, "pc_of", n=up, total=total) if total else tr(L, "pc_none"),
+                  version=d["version"], clients=d["clients"], online=d["online"], traffic=fmt_size(d["bytes"], L))
         text += f"\n\n{note}" if note else ""
 
         def show(c_, t_, m_):
+            if png is not None:
+                self._show_card(c_, "menu", png, note, m_, msg, move)
+                return
             mid = (msg or {}).get("message_id")
             if not move and mid in self._panel_msgs and self._is_photo(msg):
                 self._show(c_, t_, m_, msg)          # меню уже фото — меняем подпись на месте
@@ -1557,7 +1711,6 @@ class Bot:
         mem = h.get("memory")
         tv = s.get("server_traffic") or {}
         lines = [tr(L, "st_title"),
-                 tr(L, "st_host", host=s.get("host") or "—"),
                  tr(L, "st_panel_up", version=cur, latest=v["latest"]) if upd else tr(L, "st_panel", version=cur),
                  tr(L, "st_awg", version=h.get("awg") or "—"),
                  *self._engine_line(L, h.get("engine")),
@@ -1574,7 +1727,19 @@ class Bot:
         if upd:
             rows.append([(tr(L, "b_update", False, version=v["latest"]), "up")])
         rows.append([(tr(L, "b_refresh"), "st")] + self._back_server(c))
-        self._show(c, "\n".join(lines), kb(*rows), msg)
+        e = h.get("engine") or {}
+        png = self._card(L, "status", {
+            "ok": bool(s.get("server_ok")), "version": cur, "latest": v["latest"] if upd else None,
+            "awg": h.get("awg"), "engine": ("kernel", e.get("version")) if e.get("server") == "kernel" else
+            ("go",) if e.get("server") == "go" else None,
+            "v4": h.get("v4"), "v4_state": h.get("v4_state"), "v6": h.get("v6"), "dns": h.get("dns"),
+            "uptime": h.get("uptime"), "memory": (size_parts(mem[0], L), size_parts(mem[1], L)) if mem else None,
+            "online": online, "total": len(clients),
+            "month": size_parts(tv.get("month_rx", 0) + tv.get("month_tx", 0), L)})
+        if png is not None:
+            self._show_card(c, "status", png, "", kb(*rows), msg)
+        else:
+            self._show(c, "\n".join(lines), kb(*rows), msg)
 
     @staticmethod
     def _engine_line(L: str, e: dict | None) -> list[str]:

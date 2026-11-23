@@ -51,7 +51,7 @@ class BotUiTest(unittest.TestCase):
     def test_start_opens_full_menu(self):
         """/start — меню кнопками в одном сообщении (1.12.0), без клавиатуры внизу экрана."""
         self.run_updates(msg("/start"))
-        self.assertIn("Total traffic", self.sent()[-1]["text"])
+        self.assertEqual(self.bot._st.get("pic"), "menu")       # 1.24.0: меню — картинка с цифрами
         self.assertNotIn("keyboard", self.sent()[-1]["reply_markup"])
         m = self.menu()
         self.assertEqual([[t for t, _ in row] for row in m],
@@ -72,7 +72,7 @@ class BotUiTest(unittest.TestCase):
         self.assertNotIn("kbd", self.bot._st)
         self.assertIn("Clients", self.sent()[-1]["text"])
         self.run_updates(msg("📊 Состояние", uid=2))          # надпись на другом языке тоже понятна
-        self.assertIn("Panel version", self.sent()[-1]["text"])
+        self.assertEqual(self.bot._st.get("pic"), "status")     # 1.24.0: «Состояние» — картинкой
         self.run_updates(msg("🧭 Route", uid=3))
         self.assertTrue(self.sent()[-1]["reply_markup"]["force_reply"])
         self.run_updates(msg("192.168.0.5", uid=4, reply_to_message={"message_id": self.tg.next_id}))
@@ -86,7 +86,7 @@ class BotUiTest(unittest.TestCase):
 
     def test_old_menu_button(self):
         self.run_updates(msg("☰ Меню"))           # кнопка из 1.10.0
-        self.assertIn("Total traffic", self.sent()[-1]["text"])
+        self.assertEqual(self.bot._st.get("pic"), "menu")
         self.assertIn("inline_keyboard", self.sent()[-1]["reply_markup"])
 
     def test_menu_button_cancels_question(self):

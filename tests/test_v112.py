@@ -608,7 +608,7 @@ class BotMenuTest(unittest.TestCase):
         n_sent = len(self.tg.sent())
         for i, data in enumerate(("cl:0", "c:" + self.pk, "cl:0", "m", "st", "m", "ex", "m")):
             self.press(data, uid=i + 2)
-            self.assertEqual(self.tg.edited()["message_id"], mid, data)
+            self.assertEqual(str(self.tg.edited()["message_id"]), str(mid), data)   # multipart — строкой
         self.assertEqual(len(self.tg.sent()), n_sent)                      # ни одного нового сообщения
         self.assertEqual(self.menu_id(), mid)
 
