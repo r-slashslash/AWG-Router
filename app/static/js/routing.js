@@ -48,6 +48,9 @@ function ruleRowsHtml(rules, tr = "", pk = "") {
       // обработчик правил по доменам не запустился — правила по доменам не работают
       + (r.lists.some(isDomainList) && S.sni && S.sni.state === "error" ? `<div class="small warn-text">⚠ ${esc(t("ls.sni_error"))}</div>` : "");
     const what = r.lists.length ? r.lists.map(listLabel).join(s) : `<span class="muted">${esc(t("rw.no_lists"))}</span>`;
+    // месячный лимит правила исчерпан (1.24.0): до нового месяца трафик правила идёт по «Когда лимит исчерпан»
+    const over = r.quota && r.quota_hit === S.month && r.quota_action && r.quota_action !== "notify"
+      ? `<div class="small warn-text">📦 ${th("rq.over", { gb: fmtNum(+(r.quota / 1024 ** 3).toFixed(3)), to: outChip(r.quota_action) })}</div>` : "";
     return `<div class="rule rule-item ${r.enabled === false ? "off" : ""}" data-i="${i}">
       ${rules.length > 1
     // место правила: выбрать номер — правило встаёт туда (на телефоне удобнее, чем жать ↑ ↓ много раз)
@@ -57,7 +60,7 @@ function ruleRowsHtml(rules, tr = "", pk = "") {
         ${r.comment ? `<span class="rule-title"><bdi>${esc(r.comment)}</bdi></span>` : ""}
         <span class="rule-line"><span class="rule-what">${what}</span> <span aria-hidden="true">—</span> ${ruleOutChip(r)}${r.balance && r.balance.length && tr === "c" ? ` <span class="small muted nowrap" data-rbal-c="${esc(r.id)}"></span>` : ""}</span>
         ${tr === "g" ? `<span class="small muted rule-tr" data-rtr="${esc(r.id)}"></span>` : ""}${tr === "c" ? `<span class="small muted rule-tr" data-rtr-c="${esc(r.id)}"${pk ? ` data-rtr-pk="${esc(pk)}"` : ""}></span>` : ""}
-        ${warn}
+        ${over}${warn}
       </button>
       <div class="rule-ctl">
         <label class="switch" title="${esc(t("re.enabled"))}"><input type="checkbox" data-en ${r.enabled !== false ? "checked" : ""} aria-label="${esc(t("re.enabled"))}"><span></span></label>
@@ -161,6 +164,13 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0, pick = null
       <label class="field" style="margin-bottom:0"><span>${esc(t("bal.fallback"))}</span>
         <select id="rw-bal-fb">${outOptions(r.balance_fb || "block")}</select><span class="hint">${esc(t("rbal.fb_hint"))}</span></label>
     </div>
+    ${S.rule_traffic && S.rule_traffic.state === "ok" || r.quota ? `<div class="row2">
+      <label class="field"><span>${esc(t("rq.quota"))}</span>
+        <input type="number" id="rw-quota" data-field="rule_quota_${at}" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${r.quota ? +(r.quota / 1024 ** 3).toFixed(3) : ""}"></label>
+      <label class="field"><span>${esc(t("ex.quota_action"))}</span>
+        <select id="rw-qa" data-field="rule_quota_action_${at}">${quotaOptions({ id: null, quota_action: r.quota_action || "notify" })}</select></label>
+    </div>
+    <p class="small muted" style="margin:-6px 0 14px">${esc(t("rq.hint", { time: monthResetLocal() }))}</p>` : ""}
     <label class="check"><input type="checkbox" id="rw-en" ${r.enabled !== false ? "checked" : ""}><span>${esc(t("re.enabled"))}</span></label>
     ${top && r.id && S.rule_traffic && S.rule_traffic.state === "ok" ? `<div class="field by-exit rw-top" id="rw-top" hidden><span>${esc(t("rw.top"))}</span><div class="rw-top-list"></div></div>` : ""}`;
   const foot = `${del ? `<button class="btn danger left" id="rw-del">${esc(t("re.delete"))}</button>` : ""}
@@ -180,6 +190,13 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0, pick = null
   m.addEventListener("close", () => { clearTimeout(timer); dropNewLists(made.splice(0)); }, { once: true });
   const keep = () => {
     r.comment = $("#rw-name").value.trim(); r.enabled = $("#rw-en").checked;
+    // месячный лимит правила (1.24.0): ГБ из поля — сервер переводит в байты; пусто — без лимита
+    if ($("#rw-quota", m)) {
+      const q = $("#rw-quota", m).value.trim();
+      delete r.quota;
+      r.quota_gb = q === "" ? null : q;
+      r.quota_action = $("#rw-qa", m).value;
+    }
     if ($("#rw-out").value === "balance") {
       // балансировка в правиле (1.24.0): выходы — в порядке вкладки «Выходы»; outbound — первый (для панели до 1.24.0)
       r.balance = $$("[data-rbal]", m).filter((x) => x.checked).map((x) => x.dataset.rbal);

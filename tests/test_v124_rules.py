@@ -441,5 +441,89 @@ class RuleBalanceTest(unittest.TestCase):
         self.assertEqual(b.exit_rate, {"u1": [1.0, 1.0]})
 
 
+class RuleQuotaTest(unittest.TestCase):
+    """Месячный лимит правила: как у выхода — что делать, когда исчерпан, события 90 % и «исчерпан»."""
+
+    def setUp(self):
+        legacy_lists(panel.store)
+        self.e = panel.engine
+        self.st0 = panel.store.snapshot()
+        self.racct = self.e.racct_state
+        self.e.racct_state = "ok"
+
+    def tearDown(self):
+        panel.store.mutate(lambda s: s.update(routing=self.st0["routing"]))
+        self.e.racct_state = self.racct
+        self.e.traffic.rules.pop("r_q", None)
+
+    def test_check(self):
+        """Вход: лимит из окна правила в ГБ и действие. Ожидание: в правиле байты и действие; лимит без действия —
+        «только сообщить»; неизвестный выход в действии — ошибка у поля."""
+        st = panel.store.snapshot()
+        r = checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "quota_gb": "1.5",
+                               "quota_action": "block"}])[0]
+        self.assertEqual((r["quota"], r["quota_action"]), (int(1.5 * 1024 ** 3), "block"))
+        r = checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "quota_gb": 2}])[0]
+        self.assertEqual(r["quota_action"], "notify")
+        self.assertNotIn("quota", checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "quota_gb": ""}])[0])
+        with self.assertRaises(HTTPError):
+            checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "quota_gb": 1, "quota_action": "up:nope"}])
+
+    def test_over_quota_routes_by_action_and_events(self):
+        """Вход: правило «напрямую» с лимитом 1 ГБ и действием «блокировать», трафик правила 0,95 ГБ, затем 1,1 ГБ.
+        Ожидание: сначала событие 90 %, путь прежний; потом «исчерпан» — правило идёт в блок, отметка в правиле, и
+        повторного события нет."""
+        gb = 1024 ** 3
+        rule = {"id": "r_q", "lists": ["ru"], "outbound": "direct", "enabled": True, "comment": "Видео",
+                "quota": gb, "quota_action": "block"}
+        panel.store.mutate(lambda s: s["routing"].update(rules=[rule]))
+        mk = month_key()
+        self.e.traffic.rules["r_q"] = {"months": {mk: [0, int(0.95 * gb)]}}
+        events = []
+        with mock.patch.object(self.e, "event", side_effect=lambda lv, m: events.append(m.key)):
+            self.e._rule_quotas(panel.store.snapshot())
+            st = panel.store.snapshot()
+            self.assertEqual(self.e.rule_out(st, st["routing"]["rules"][0], None), ("direct", False))
+            self.e.traffic.rules["r_q"] = {"months": {mk: [0, int(1.1 * gb)]}}
+            self.e._rule_quotas(panel.store.snapshot())
+            self.e._rule_quotas(panel.store.snapshot())
+        st = panel.store.snapshot()
+        self.assertEqual(events, ["ev.rule_quota_warn", "ev.rule_quota_block"])
+        self.assertEqual(st["routing"]["rules"][0]["quota_hit"], mk)
+        self.assertEqual(self.e.rule_out(st, st["routing"]["rules"][0], None), ("block", False))
+        gp, _ = self.e._policies(st)
+        self.assertEqual(gp["rules"][0][1], "block")
+
+
+class MonthlyReportTest(unittest.TestCase):
+    def test_once_per_month_and_text(self):
+        """Вход: первый проход после обновления, затем новый месяц. Ожидание: сначала только запомнить месяц (за неполный
+        месяц итогов нет); в новом месяце — одна сводка с итогом сервера и выходами, повторный проход ничего не шлёт;
+        по умолчанию «Итоги месяца» выключены."""
+        from app import notify
+        e = panel.engine
+        self.assertFalse(notify.defaults()["events"]["monthly"])
+        sent = []
+        n = mock.Mock(report=lambda kind, build: sent.append((kind, build("ru"))) or True)
+        old_n, old_r = e.notifier, e.traffic.reported
+        self.addCleanup(setattr, e, "notifier", old_n)
+        self.addCleanup(setattr, e.traffic, "reported", old_r)
+        e.notifier, e.traffic.reported = n, None
+        st = panel.store.snapshot()
+        with mock.patch("app.engine.tunnels.month_key", return_value="2026-11"):
+            e._monthly_report(st)
+        self.assertEqual((sent, e.traffic.reported), ([], "2026-10"))
+        e.traffic.server.setdefault("months", {})["2026-11"] = [3 * 1024 ** 3, 30 * 1024 ** 3]
+        with mock.patch("app.engine.tunnels.month_key", return_value="2026-12"):
+            e._monthly_report(st)
+            e._monthly_report(st)
+        self.assertEqual(len(sent), 1)
+        kind, text = sent[0]
+        self.assertEqual(kind, "monthly")
+        self.assertIn("📊 Итоги за ноябрь 2026", text)
+        self.assertIn("Всего: ↓ 30 ГБ ↑ 3 ГБ", text)
+        self.assertEqual(e.traffic.reported, "2026-11")
+
+
 if __name__ == "__main__":
     unittest.main()

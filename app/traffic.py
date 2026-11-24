@@ -126,6 +126,7 @@ class Traffic:
         self.racct: dict[str, list[int]] = {}  # последние значения счётчиков awgr_racct: {"ip|номер": [rx, tx]}
         self.racct_synced = False
         self.rrecent: dict[tuple[str, str], list[int]] = {}   # прирост по (правило, клиент) — для балансировки в правиле
+        self.reported: str | None = None       # за какой месяц уже были «Итоги месяца» в Telegram (1.24.0)
         # прирост по (выход, клиент) с прошлого take_recent(): по нему считается текущая скорость
         # выходов (балансировка, карточки выходов); в файл не пишется
         self.recent: dict[tuple[str, str | None], list[int]] = {}
@@ -146,6 +147,7 @@ class Traffic:
                           if isinstance(k, str) and RACCT_KEY_RE.match(k) and _pair(x)} \
                 if isinstance(d.get("racct"), dict) else {}
             self.racct_synced = isinstance(d.get("racct"), dict)
+            self.reported = d["report"] if isinstance(d.get("report"), str) and MONTH_RE.match(d["report"]) else None
             if isinstance(d.get("server"), dict):
                 self.server = self._clean_server(d["server"])
             else:
@@ -375,7 +377,7 @@ class Traffic:
                 with open(tmp, "w") as f:
                     json.dump({"_v": FORMAT, "clients": self.data, "outs": self.outs, "acct": self.acct,
                                "sni": self.sni, "server": self.server, "rules": self.rules,
-                               "racct": self.racct}, f)
+                               "racct": self.racct, "report": self.reported}, f)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp, self.path)
@@ -536,6 +538,12 @@ class Traffic:
             rows = [(pk, list(v)) for pk, d in self.data.items()
                     if (v := (((d.get("by_rule") or {}).get(mk) or {}).get(rid))) and sum(v)]
         return sorted(rows, key=lambda x: -sum(x[1]))[:n]
+
+    def mark_reported(self, mk: str) -> None:
+        with self.lock:
+            self.reported = mk
+            self._dirty = True
+        self.save()
 
     def server_view(self) -> dict:
         """Трафик всего сервера: за текущий месяц и за всё время."""

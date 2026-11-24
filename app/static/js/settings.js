@@ -2,7 +2,7 @@
 "use strict";
 
 /* ===================================================== уведомления в Telegram */
-const TG_KINDS = ["exit", "server", "system", "clients", "login", "tls", "update"];
+const TG_KINDS = ["exit", "server", "system", "clients", "login", "tls", "update", "monthly"];   // monthly — 1.24.0, выключено
 function viewTelegram() {
   const c = S.settings.telegram || {};
   const ev = c.events || {};

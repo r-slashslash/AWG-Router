@@ -100,10 +100,24 @@ class RoutesMixin:
         """Ключ балансировки правила: общее правило — его id, своё правило клиента — «клиент|id»."""
         return f"{pk}|{r['id']}" if own else r["id"]
 
+    def rule_used(self, r: dict, pk: str | None, own: bool) -> int:
+        """Трафик правила за месяц (оба направления) для его лимита: общее правило — по всем клиентам с общими
+        правилами, своё правило клиента — только его."""
+        if own and pk:
+            return sum(self.traffic.client_rules(pk).get(r["id"]) or [0, 0])
+        return self.traffic.rule_used(r["id"])
+
+    def rule_over(self, r: dict, pk: str | None, own: bool) -> bool:
+        """Месячный лимит правила исчерпан (1.24.0), и его трафик должен уйти по quota_action (не «только сообщить»)."""
+        q = r.get("quota")
+        return bool(q) and (r.get("quota_action") or "notify") != "notify" and self.rule_used(r, pk, own) >= q
+
     def rule_out(self, st: dict, r: dict, pk: str | None, own: bool = False) -> tuple[str, bool]:
         """Выход правила для клиента в терминах настроек и «держать открытые соединения на выходе» (Sticky). С
         балансировкой — назначенный ей выход; рабочих выходов нет — резерв правила (balance_fb), а пока какой-то из
-        отмеченных выходов только подключается — блок."""
+        отмеченных выходов только подключается — блок. Лимит правила исчерпан — его quota_action до нового месяца."""
+        if self.rule_over(r, pk, own):
+            return r["quota_action"], False
         if not r.get("balance"):
             return r["outbound"], False
         g = self.rule_group(r, pk, own)

@@ -785,6 +785,95 @@ class TunnelsMixin:
         return bool(q) and self.quota_target(u) is not None and \
             self.traffic.out_used(u["id"]) >= q
 
+    def _rule_quotas(self, st: dict) -> None:
+        """События месячных лимитов правил (1.24.0): 90 %, исчерпан, новый месяц — как у выходов (_exit_quotas).
+        Отметки — в самом правиле (quota_hit, quota_warned), чтобы не повторять событие после перезапуска панели.
+        Свои правила клиента считаются по его трафику, в событии — и имя клиента."""
+        if self.racct_state != "ok":
+            return
+        mk = month_key()
+        patches: dict[tuple, dict] = {}
+        names = {c["public_key"]: c.get("name") or c.get("ip") or c["public_key"][:8] for c in self.clients}
+        found = [(None, r) for r in st["routing"]["rules"]]
+        for pk, cp in st["clients"].items():
+            if cp.get("rules_mode") == "custom":
+                found += [(pk, r) for r in cp.get("rules") or []]
+        for pk, r in found:
+            q = r.get("quota")
+            if not q or not r.get("id"):
+                continue
+            used = self.rule_used(r, pk, pk is not None)
+            gb = float(f"{q / limits.GB:.3g}")
+            name = r.get("comment") or ", ".join(r.get("lists") or [])
+            if pk:
+                name = f"{names.get(pk, pk[:8])}: {name}"
+            to = r.get("quota_action") or "notify"
+            p = {}
+            if used >= q and r.get("quota_hit") != mk:
+                p["quota_hit"] = p["quota_warned"] = mk
+                if to == "notify":
+                    self.event("warn", Msg("ev.rule_quota_notify", name=name, gb=gb))
+                elif to in ("direct", "block"):
+                    self.event("warn", Msg(f"ev.rule_quota_{to}", name=name, gb=gb))
+                else:
+                    u = Store.upstream(st, to[3:])
+                    self.event("warn", Msg("ev.rule_quota", name=name, gb=gb, to=u["name"] if u else "?"))
+            elif q * 0.9 <= used < q and r.get("quota_warned") != mk:
+                p["quota_warned"] = mk
+                self.event("warn", Msg("ev.rule_quota_warn", name=name, gb=gb))
+            if r.get("quota_hit") and r["quota_hit"] != mk and used < q and "quota_hit" not in p:
+                p["quota_hit"] = None
+                if to != "notify":
+                    self.event("info", Msg("ev.rule_quota_reset", name=name))
+            if p:
+                patches[(pk, r["id"])] = p
+        if patches:
+            def fn(s):
+                rules = [(None, x) for x in s["routing"]["rules"]]
+                for pk, cp in s["clients"].items():
+                    rules += [(pk, x) for x in cp.get("rules") or []]
+                for pk, x in rules:
+                    p = patches.get((pk, x.get("id")))
+                    if p:
+                        x.update({k: v for k, v in p.items() if v is not None})
+                        for k in [k for k, v in p.items() if v is None]:
+                            x.pop(k, None)
+            self.store.mutate(fn)
+
+    def _monthly_report(self, st: dict) -> None:
+        """«Итоги месяца» в Telegram (1.24.0, галочка «Итоги месяца»): в первый проход нового месяца — трафик сервера,
+        выходов и общих правил за прошлый. Один раз на месяц (traffic.reported); первый запуск после обновления только
+        запоминает месяц — за неполный месяц итогов не шлём."""
+        mk = month_key()
+        y, m = map(int, mk.split("-"))
+        prev = f"{y - 1}-12" if m == 1 else f"{y}-{m - 1:02d}"
+        if self.traffic.reported in (prev, mk):
+            return
+        if self.traffic.reported is not None and self.notifier:
+            from .. import notify, tgbot
+            srv = (self.traffic.server.get("months") or {}).get(prev) or [0, 0]
+            exits = [(u["name"], self.traffic.out_month(u["id"], prev)) for u in st["upstreams"]]
+            exits.append((None, self.traffic.out_month("direct", prev)))
+            rules = self.traffic.rules_month(prev)
+            names = {r["id"]: r.get("comment") or ", ".join(r.get("lists") or [])
+                     for r in st["routing"]["rules"] if r.get("id")}
+
+            def build(lang: str) -> str:
+                tx = notify.TEXTS.get(lang) or notify.TEXTS["en"]
+                pair = lambda v: f"↓ {tgbot.fmt_size(v[1], lang)} ↑ {tgbot.fmt_size(v[0], lang)}"  # noqa: E731
+                lines = [tx["monthly"].replace("{month}", notify.month_title(prev, lang)), f"{tx['monthly_total']}: {pair(srv)}"]
+                rows = [(n or tx["monthly_direct"], v) for n, v in exits if sum(v)]
+                if rows:
+                    lines += ["", tx["monthly_exits"] + ":"] + [f"• {n} — {pair(v)}" for n, v in rows]
+                top = sorted(((names[k], v) for k, v in rules.items() if k in names and sum(v)), key=lambda x: -sum(x[1]))
+                if "_default" in rules and sum(rules["_default"]):
+                    top = top[:5] + [(tx["monthly_default"], rules["_default"])]
+                if top:
+                    lines += ["", tx["monthly_rules"] + ":"] + [f"• {n} — {pair(v)}" for n, v in top[:6]]
+                return "\n".join(lines)
+            self.notifier.report("monthly", build)
+        self.traffic.mark_reported(prev)
+
     def _exit_quotas(self, st: dict) -> None:
         """События квот выходов: 90 %, исчерпана, новый месяц. Отметки — в state, чтобы
         не повторять событие после перезапуска панели."""

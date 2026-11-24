@@ -119,13 +119,13 @@ def nft(ns, text):
     assert p.returncode == 0, p.stderr
 
 
-def panel_apply(global_policy, clients, upstream_alive=True, labels=False):
+def panel_apply(global_policy, clients, upstream_alive=True, labels=False, balance=frozenset()):
     """То, что делает engine.reconcile() внутри контейнера Amnezia. labels — учёт трафика по правилам (1.24.0)."""
     for k in ("all", "default", "awgr1"):
         sysctl("amz", f"net.ipv4.conf.{k}.rp_filter", 2)
     ups = [{"num": 1, "snat": "10.8.1.3", "mtu": 1280}] if upstream_alive else []
     nft("amz", nftgen.generate("awg0", {"ru": ["77.88.0.0/18", "5.3.0.0/16"]}, ups,
-                               global_policy, clients, labels=labels))
+                               global_policy, clients, balance, labels=labels))
     with NetNS("amz") as ip:
         table = config.TABLE_BASE + 1
         if not ip.get_rules(priority=config.RULE_PRIO_BASE + 1):
@@ -249,6 +249,10 @@ def main():
         r2 = racct()
         results += [check("учёт по правилам: счётчики пережили новую основную таблицу и новые строки",
                           r2.get(("10.8.1.2", 0), [0, 0])[1] >= r[("10.8.1.2", 0)][1] > 0)]
+        # балансировка в правиле (1.24.0): правило по адресам ведёт в Sticky-выход — соединение держится на выходе
+        panel_apply({"rules": [(["ru"], nftgen.Sticky(1))], "default": "direct"}, {}, balance={1})
+        results += [expect("балансировка в правиле: RU через выход группы", "russian", "UP1 from 10.8.1.3"),
+                    expect("балансировка в правиле: остальное напрямую", "foreign", "DIRECT from 172.20.0.2")]
         panel_apply({"rules": [], "default": 1}, {})
         results += [expect("без правил: RU тоже через выход", "russian", "UP1")]
         # туннель исчез (упал amneziawg-go): маршрут по таблице → unreachable, утечки нет

@@ -38,7 +38,22 @@ fallback_on = None
 PATH_RETRY = 600         # с: бот идёт запасным путём — выбранный пробуется снова раз в столько секунд
 LANGS = ("ru", "en", "zh", "fa")
 # категории событий, которые можно включать по отдельности
-KINDS = ("exit", "server", "system", "clients", "login", "tls", "update")
+KINDS = ("exit", "server", "system", "clients", "login", "tls", "update", "monthly")
+# «Итоги месяца» (1.24.0) — по желанию: у всех, и у тех, кто обновился, выключено
+OFF_KINDS = ("monthly",)
+MONTHS = {
+    "ru": "январь февраль март апрель май июнь июль август сентябрь октябрь ноябрь декабрь".split(),
+    "en": "January February March April May June July August September October November December".split(),
+    "fa": "ژانویه فوریه مارس آوریل مه ژوئن ژوئیه اوت سپتامبر اکتبر نوامبر دسامبر".split(),
+}
+
+
+def month_title(mk: str, lang: str) -> str:
+    """«2026-11» → «ноябрь 2026» / «November 2026» / «2026年11月»."""
+    y, m = mk.split("-")
+    if lang == "zh":
+        return f"{y}年{int(m)}月"
+    return f"{(MONTHS.get(lang) or MONTHS['en'])[int(m) - 1]} {y}"
 
 TEXTS = {
     "ru": {
@@ -52,6 +67,18 @@ TEXTS = {
         "exit_quota_notify": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. Трафик продолжает идти через него.",
         "exit_quota_warn": "⚠️ Выход «{name}»: израсходовано 90% лимита {gb} ГБ за месяц.",
         "exit_quota_reset": "✅ Выход «{name}» снова используется: начался новый месяц.",
+        "rule_quota": "📦 Правило «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца его трафик идёт через «{to}».",
+        "rule_quota_direct": "📦 Правило «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца его трафик идёт напрямую.",
+        "rule_quota_block": "📦 Правило «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца его трафик заблокирован.",
+        "rule_quota_notify": "📦 Правило «{name}»: исчерпан лимит {gb} ГБ за месяц. Трафик идёт как раньше.",
+        "rule_quota_warn": "⚠️ Правило «{name}»: израсходовано 90% лимита {gb} ГБ за месяц.",
+        "rule_quota_reset": "✅ Правило «{name}» снова работает как обычно: начался новый месяц.",
+        "monthly": "📊 Итоги за {month}",
+        "monthly_total": "Всего",
+        "monthly_exits": "Выходы",
+        "monthly_rules": "Правила",
+        "monthly_direct": "Напрямую",
+        "monthly_default": "По умолчанию",
         "target_lost": "⚠️ Сервер AmneziaWG недоступен — проверьте контейнер или службу.",
         "target_back": "✅ Сервер AmneziaWG снова доступен.",
         "container_recovered": "🔁 Контейнер сервера AmneziaWG ({name}) остался выключенным после прерванной смены порта или обновления. Панель вернула его и запустила.",
@@ -99,6 +126,18 @@ TEXTS = {
         "exit_quota_notify": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Traffic still goes through it.",
         "exit_quota_warn": "⚠️ Exit “{name}”: 90% of the monthly {gb} GB limit is used.",
         "exit_quota_reset": "✅ Exit “{name}” is in use again: a new month has started.",
+        "rule_quota": "📦 Rule “{name}”: the monthly {gb} GB limit is used up. Until next month its traffic goes through “{to}”.",
+        "rule_quota_direct": "📦 Rule “{name}”: the monthly {gb} GB limit is used up. Until next month its traffic goes direct.",
+        "rule_quota_block": "📦 Rule “{name}”: the monthly {gb} GB limit is used up. Until next month its traffic is blocked.",
+        "rule_quota_notify": "📦 Rule “{name}”: the monthly {gb} GB limit is used up. Traffic goes as before.",
+        "rule_quota_warn": "⚠️ Rule “{name}”: 90% of the monthly {gb} GB limit is used.",
+        "rule_quota_reset": "✅ Rule “{name}” works as usual again: a new month has started.",
+        "monthly": "📊 Totals for {month}",
+        "monthly_total": "Total",
+        "monthly_exits": "Exits",
+        "monthly_rules": "Rules",
+        "monthly_direct": "Direct",
+        "monthly_default": "Default",
         "target_lost": "⚠️ The AmneziaWG server is unreachable — check the container or service.",
         "target_back": "✅ The AmneziaWG server is reachable again.",
         "container_recovered": "🔁 The AmneziaWG server container ({name}) was left off by an interrupted port change or update. The panel brought it back and started it.",
@@ -146,6 +185,18 @@ TEXTS = {
         "exit_quota_notify": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。流量仍经由它转发。",
         "exit_quota_warn": "⚠️ 出口“{name}”：本月 {gb} GB 限额已用掉 90%。",
         "exit_quota_reset": "✅ 出口“{name}”已重新启用：新的月份开始了。",
+        "rule_quota": "📦 规则“{name}”：本月 {gb} GB 流量限额已用完。下个月之前其流量经由“{to}”。",
+        "rule_quota_direct": "📦 规则“{name}”：本月 {gb} GB 流量限额已用完。下个月之前其流量直连。",
+        "rule_quota_block": "📦 规则“{name}”：本月 {gb} GB 流量限额已用完。下个月之前其流量被阻止。",
+        "rule_quota_notify": "📦 规则“{name}”：本月 {gb} GB 流量限额已用完。流量照常转发。",
+        "rule_quota_warn": "⚠️ 规则“{name}”：本月 {gb} GB 限额已用掉 90%。",
+        "rule_quota_reset": "✅ 规则“{name}”已恢复正常：新的月份开始了。",
+        "monthly": "📊 {month}汇总",
+        "monthly_total": "合计",
+        "monthly_exits": "出口",
+        "monthly_rules": "规则",
+        "monthly_direct": "直连",
+        "monthly_default": "默认",
         "target_lost": "⚠️ 无法访问 AmneziaWG 服务器——请检查容器或服务。",
         "target_back": "✅ AmneziaWG 服务器已恢复访问。",
         "container_recovered": "🔁 AmneziaWG 服务器容器（{name}）因端口更改或更新中断而一直处于停止状态。面板已将其恢复并启动。",
@@ -193,6 +244,18 @@ TEXTS = {
         "exit_quota_notify": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. ترافیک همچنان از آن می‌رود.",
         "exit_quota_warn": "⚠️ خروجی «{name}»: ۹۰٪ سقف ماهانهٔ {gb} گیگابایت مصرف شد.",
         "exit_quota_reset": "✅ خروجی «{name}» دوباره استفاده می‌شود: ماه تازه شروع شد.",
+        "rule_quota": "📦 قانون «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک آن از «{to}» می‌رود.",
+        "rule_quota_direct": "📦 قانون «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک آن مستقیم می‌رود.",
+        "rule_quota_block": "📦 قانون «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک آن مسدود است.",
+        "rule_quota_notify": "📦 قانون «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. ترافیک مثل قبل می‌رود.",
+        "rule_quota_warn": "⚠️ قانون «{name}»: ۹۰٪ سقف ماهانهٔ {gb} گیگابایت مصرف شد.",
+        "rule_quota_reset": "✅ قانون «{name}» دوباره عادی کار می‌کند: ماه تازه شروع شد.",
+        "monthly": "📊 جمع‌بندی {month}",
+        "monthly_total": "مجموع",
+        "monthly_exits": "خروجی‌ها",
+        "monthly_rules": "قانون‌ها",
+        "monthly_direct": "مستقیم",
+        "monthly_default": "پیش‌فرض",
         "target_lost": "⚠️ سرور AmneziaWG در دسترس نیست — کانتینر یا سرویس را بررسی کنید.",
         "target_back": "✅ سرور AmneziaWG دوباره در دسترس است.",
         "container_recovered": "🔁 کانتینر سرور AmneziaWG ({name}) پس از قطع شدن تغییر درگاه یا به‌روزرسانی خاموش مانده بود. پنل آن را برگرداند و راه‌اندازی کرد.",
@@ -244,6 +307,12 @@ ENGINE_EVENTS = {
     "ev.upstream_quota_block": ("exit", "exit_quota_block"),
     "ev.upstream_quota_warn": ("exit", "exit_quota_warn"),
     "ev.upstream_quota_reset": ("exit", "exit_quota_reset"),
+    "ev.rule_quota": ("exit", "rule_quota"),
+    "ev.rule_quota_direct": ("exit", "rule_quota_direct"),
+    "ev.rule_quota_block": ("exit", "rule_quota_block"),
+    "ev.rule_quota_notify": ("exit", "rule_quota_notify"),
+    "ev.rule_quota_warn": ("exit", "rule_quota_warn"),
+    "ev.rule_quota_reset": ("exit", "rule_quota_reset"),
     "ev.target_lost": ("server", "target_lost"),
     "ev.target_restarted": ("server", "target_restarted"),
     "ev.server_start_failed": ("server", "server_start_failed"),
@@ -292,7 +361,7 @@ BACKUP_PERIODS = {"off": 0, "daily": 86400, "weekly": 7 * 86400}
 def defaults() -> dict:
     # enabled — «Включить бот» (1.23.0): главный выключатель — уведомления, управление, клиенты и копии
     return {"enabled": False, "token": "", "chat_id": "", "lang": "en",
-            "events": {k: True for k in KINDS},
+            "events": {k: k not in OFF_KINDS for k in KINDS},
             # как ходить к api.telegram.org: direct | up:<id> (через выход, если Telegram заблокирован)
             "via": "direct",
             # управление из Telegram: команды и кнопки (только из этого чата), см. tgbot.py
@@ -718,6 +787,25 @@ class Notifier:
                                c["via"], markup, now))
         except queue.Full:
             log.warning("notify queue is full, message dropped")
+
+    def report(self, kind: str, build) -> bool:
+        """Сводка (итоги месяца, 1.24.0): build(язык бота) → текст. Как event — только при включённом боте и галочке
+        kind, без кнопок и без защиты от повторов (её держит тот, кто зовёт). → поставлено ли в очередь."""
+        st = self.store.snapshot()
+        c = cfg_of(st)
+        if not (c["enabled"] and c["token"] and c["chat_id"] and c["events"].get(kind)):
+            return False
+        try:
+            host = self.host_fn(st)
+        except Exception:  # noqa: BLE001
+            host = ""
+        try:
+            self.q.put_nowait((c["token"], c["chat_id"], (f"AWG Router · {host}\n" if host else "AWG Router\n")
+                               + build(c["lang"]), c["via"], None, time.time()))
+        except queue.Full:
+            log.warning("notify queue is full, message dropped")
+            return False
+        return True
 
     def engine_event(self, msg: Msg) -> None:
         """Событие движка (ev.*) → уведомление, если оно из нужных."""

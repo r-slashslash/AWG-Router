@@ -169,6 +169,16 @@ def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:
             with field(f"rule_balance_fb_{i}"):
                 fb = outbound(st, r.get("balance_fb") or "block")
             out[-1].update(outbound="up:" + ids[0], balance=ids, balance_fb=fb)
+        # месячный лимит правила (1.24.0): как у выхода — что делать, когда исчерпан; отметки событий — месяц
+        with field(f"rule_quota_{i}"):
+            q = quota_gb(r.get("quota_gb")) if "quota_gb" in r else quota(r.get("quota"))
+        if q:
+            with field(f"rule_quota_action_{i}"):
+                qa = quota_action(st, r.get("quota_action"), None)
+            out[-1].update(quota=q, quota_action=qa)
+            for k in ("quota_hit", "quota_warned"):
+                if isinstance(r.get(k), str) and re.match(r"^\d{4}-\d{2}$", r[k]):
+                    out[-1][k] = r[k]
         # свой DNS — только у правила по сайтам (адрес сайта из списка сетей до ответа DNS не известен);
         # поле пишется, только если задано: состояние и копии без него — как до 1.22.0
         if Store.lst(st, ls[0])["kind"] == "domains":
@@ -524,7 +534,7 @@ def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:
     ev = body.get("events")
     if isinstance(ev, dict):
         one = (lambda k: forgive(lambda: flag(ev[k]), c["events"].get(k, True))) if backup else (lambda k: flag(ev[k]))
-        c["events"] = {k: one(k) if k in ev else c["events"].get(k, True) for k in notify.KINDS}
+        c["events"] = {k: one(k) if k in ev else c["events"].get(k, k not in notify.OFF_KINDS) for k in notify.KINDS}
     for k in ("enabled", "control", "clients", "client_notify", "fallback"):
         if k in body:
             c[k] = soft(lambda: flag(body[k]), k)

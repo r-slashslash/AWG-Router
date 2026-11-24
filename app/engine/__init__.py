@@ -480,6 +480,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 if not config.DRY_RUN:
                     self._sni_account()
                 self._exit_quotas(st)
+                self._rule_quotas(st)
+                self._monthly_report(st)
             except Exception:  # noqa: BLE001
                 log.exception("exit traffic")
             self.balancer.feed(self.traffic.take_recent(), time.time())
