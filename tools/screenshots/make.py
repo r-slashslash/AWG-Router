@@ -173,7 +173,7 @@ def build(api: Api, rules: bool = True) -> dict:
                                         "period": "month", "rate_down": 10, "rate_up": 5})
     api("PUT", "settings", {"shaping": {"down": 900, "up": 200}})
     api("PUT", f"limits/{q('Anna MacBook')}", {"quota_gb": 150, "period": "month"})
-    return {"pk": pk, "nl": nl, "de": de, "us": us}
+    return {"pk": pk, "nl": nl, "de": de, "us": us, "rules": [r["id"] for r in api("GET", "state")["routing"]["rules"]]}
 
 
 def write_traffic(data_dir: str, ids: dict) -> None:
@@ -199,6 +199,9 @@ def write_traffic(data_dir: str, ids: dict) -> None:
         total = [total[0] + int(tu * GB), total[1] + int(td * GB)]
         month = [month[0] + int(mu * GB), month[1] + int(md * GB)]
     out["server"] = {"total": total, "months": {mk: month}}
+    # трафик по правилам за месяц (1.24.0): USA proxy, домены России, Россия, Office и «По умолчанию» (балансировка)
+    by_rule = dict(zip(ids["rules"], ((21.4, 2.4), (63.8, 7.1), (95.2, 10.6), (12.2, 1.7))))
+    out["rules"] = {k: {"months": {mk: pair(d, u)}} for k, (d, u) in {**by_rule, "_default": (164.1, 18.5)}.items()}
     with open(os.path.join(data_dir, "traffic.json"), "w") as f:
         json.dump(out, f)
 
