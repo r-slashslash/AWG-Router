@@ -207,7 +207,7 @@ async def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return buf
 
 
-async def _connect_any(host: str, port: int) -> socket.socket:
+async def _connect_any(host: str, port: int, mark: int = 0) -> socket.socket:
     """Подключение к прокси. Панель передаёт адрес, а если не смогла его разрешить, то имя; у имени
     может быть несколько адресов (IPv4 и IPv6), поэтому они пробуются по очереди. Адрес, который
     не подходит сети сервера (IPv6 без IPv6), тоже просто пропускается."""
@@ -220,6 +220,8 @@ async def _connect_any(host: str, port: int) -> socket.socket:
             err = e
             continue
         try:
+            if mark:
+                s.setsockopt(socket.SOL_SOCKET, SO_MARK, mark)
             s.setblocking(False)
             await loop.sock_connect(s, addr)
             return s
@@ -238,10 +240,11 @@ async def send_all(sock: socket.socket, data: bytes) -> None:
     await asyncio.wait_for(asyncio.get_running_loop().sock_sendall(sock, data), CONNECT_TIMEOUT)
 
 
-async def socks_connect(s: dict, host: str | None, ip: str, port: int) -> socket.socket:
+async def socks_connect(s: dict, host: str | None, ip: str, port: int, mark: int = 0) -> socket.socket:
     """Соединение через прокси: CONNECT по имени (или по адресу, если имени нет).
-    Возвращает сырой сокет: дальше поток идёт через splice, как и на прямом пути."""
-    sock = await asyncio.wait_for(_connect_any(s["ip"], int(s["port"])), CONNECT_TIMEOUT)
+    Возвращает сырой сокет: дальше поток идёт через splice, как и на прямом пути.
+    mark — номер ограничения скорости правила (биты RULE_LIM_MASK; 0 — нет): по нему nftables ограничивает ответы."""
+    sock = await asyncio.wait_for(_connect_any(s["ip"], int(s["port"]), mark), CONNECT_TIMEOUT)
     try:
         user, pw = (s.get("user") or "").encode(), (s.get("password") or "").encode()
         await send_all(sock, b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")
@@ -309,6 +312,11 @@ def keepalive(sock: socket.socket) -> None:
 SHARE_EVERY = 1.0          # как часто делить предел выхода между туннелем и посредником, с
 TC_REFRESH = 10.0          # долю туннеля повторяем не реже (панель могла пересоздать очередь)
 SHARE_SMOOTH = 0.5         # сглаживание скоростей при делении
+
+
+def _lim(v) -> int:
+    """Номер ограничения скорости правила из настроек → биты метки RULE_LIM_MASK (0x00FF0000); чужое — 0."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 and not v & ~0x00FF0000 else 0
 
 
 def share(cap: float, other: float) -> float:
@@ -625,7 +633,8 @@ class Sniffer:
         return self.decide_rule(client, name)[:2]
 
     def decide_rule(self, client: str, name: str | None) -> tuple[dict, str | None, int | None]:
-        """decide и номер совпавшего правила в политике клиента (учёт трафика по правилам, 1.24.0; None — без него)."""
+        """decide и номер совпавшего правила в политике клиента (учёт трафика по правилам, 1.24.0; None — без него).
+        Номер ограничения скорости правила — в to["lim"] (биты метки; нет ключа — без ограничения)."""
         pol = self.policy(client)
         if not pol:
             # клиента нет в настройках (панель только что их сменила, а nftables ещё прежние): его путь не
@@ -769,15 +778,19 @@ class Sniffer:
 
     def miss(self, client: str, ip: str) -> tuple[str | None, int | None]:
         """miss_out и номер правила по адресам (или «По умолчанию»), если панель его дала (учёт по правилам)."""
+        return self.miss_rule(client, ip)[:2]
+
+    def miss_rule(self, client: str, ip: str) -> tuple[str | None, int | None, int]:
+        """miss и номер ограничения скорости этого правила по адресам (биты метки, 0 — нет)."""
         acct = self.policy(client).get("acct") or {}
         try:
             for r in acct.get("rules") or []:
                 lids, out = r[0], r[1]
                 if any(ip in self.nets[lid] for lid in lids if lid in self.nets):
-                    return out, (r[2] if len(r) > 2 else None)
+                    return out, (r[2] if len(r) > 2 else None), _lim(r[3] if len(r) > 3 else 0)
         except (ValueError, TypeError, IndexError):
-            return None, None
-        return acct.get("default"), acct.get("slot")
+            return None, None, 0
+        return acct.get("default"), acct.get("slot"), 0
 
     def counter(self, client: str, out: str | None, slot: int | None = None) -> list | None:
         """Байты по «клиент|выход» и (учёт по правилам) «клиент|выход|номер правила»."""
@@ -786,13 +799,15 @@ class Sniffer:
         key = f"{client}|{out}" if not isinstance(slot, int) or isinstance(slot, bool) else f"{client}|{out}|{slot}"
         return self.bytes.setdefault(key, [0, 0])
 
-    async def open_upstream(self, to: dict, name: str | None, dip: str, dport: int, data: bytes) -> socket.socket:
+    async def open_upstream(self, to: dict, name: str | None, dip: str, dport: int, data: bytes,
+                            lim: int = 0) -> socket.socket:
         """Соединение с сайтом по решению decide (через SOCKS5 или с меткой выхода) и отправка
-        первых байт клиента, прочитанных ради имени сайта."""
+        первых байт клиента, прочитанных ради имени сайта. lim — номер ограничения скорости правила в битах метки:
+        rl_lab в nftables ставит по нему метку соединения и снимает биты до выбора маршрута."""
         if to.get("socks"):
-            out = await socks_connect(to["socks"], name, dip, dport)
+            out = await socks_connect(to["socks"], name, dip, dport, lim)
         else:
-            out = await direct_socket(dip, dport, int(to.get("mark") or 0))
+            out = await direct_socket(dip, dport, int(to.get("mark") or 0) | lim)
         try:
             no_delay(out)
             keepalive(out)
@@ -841,9 +856,17 @@ class Sniffer:
                 return
             no_delay(sock)
             keepalive(sock)
-            cnt = self.counter(peer, to.get("acct"), slot) if lid else self.counter(peer, *self.miss(peer, dip))
+            if lid:
+                cnt, lim = self.counter(peer, to.get("acct"), slot), _lim(to.get("lim"))
+            else:
+                mo, ms, lim = self.miss_rule(peer, dip)
+                cnt = self.counter(peer, mo, ms)
+            if lim:
+                # ограничение скорости правила: метка сокета к клиенту даёт номер ограничения соединению клиента
+                # (nftables ограничивает по нему то, что приходит от клиента), к сайту — ответам сайта
+                sock.setsockopt(socket.SOL_SOCKET, SO_MARK, lim)
             act = [time.monotonic()]
-            out = await self.open_upstream(to, name, dip, dport, data)
+            out = await self.open_upstream(to, name, dip, dport, data, lim)
             if cnt is not None:
                 cnt[0] += len(data)
             # через прокси — мимо туннеля выхода: его ограничение скорости — здесь; с меткой

@@ -237,7 +237,16 @@ class SniMixin:
         def slot(p: dict, key: str, i: int) -> int | None:
             ks = p.get(key) if lab else None
             return ks[i] if ks and i < len(ks) else None
-        acct = lambda p: {"rules": [[l, self._acct_label(st, o), *([k] if (k := slot(p, "slots", i)) is not None else [])]
+        # ограничение скорости правила (1.24.0): номер в битах RULE_LIM_MASK меток сокетов посредника — только когда в
+        # ядре уже стоит набор с rl_lab, которая их снимает (иначе такие сокеты отбросит c_guard_post)
+        rlim = lab and getattr(self, "_rlim_key", None) == t.key
+
+        def lim(p: dict, key: str, i: int) -> int:
+            js = p.get(key) if rlim else None
+            j = js[i] if js and i < len(js) else None
+            return (int(j) + 1) << config.RULE_LIM_SHIFT if j is not None else 0
+        acct = lambda p: {"rules": [[l, self._acct_label(st, o), *([k] if (k := slot(p, "slots", i)) is not None else []),
+                                     *([b] if (b := lim(p, "lims", i)) and k is not None else [])]
                                     for i, (l, o) in enumerate(p["rules"])],
                           "default": self._acct_label(st, p["default"]),
                           **({"slot": config.RULE_DEFAULT_SLOT} if lab and p.get("slots") is not None else {})}
@@ -248,7 +257,7 @@ class SniMixin:
             m = self._quic_mark(st, o)
             k = slot(p, "dslots", i)
             if qlab and m and m != config.MARK_BLOCK and k is not None:
-                m |= (int(k) + 1) << config.QUIC_SLOT_SHIFT
+                m |= ((int(k) + 1) << config.QUIC_SLOT_SHIFT) | lim(p, "dlims", i)
             return m
         # ограничения скорости выходов SOCKS5 для соединений через прокси (байт/с; 0 — нет)
         bps = lambda v: int((shaping.mbit(v) or 0) * 125_000)
@@ -263,7 +272,8 @@ class SniMixin:
                "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o),
                                                       "qmark": qmark(policies[n], i, o),
                                                       **({"slot": k} if (k := slot(policies[n], "dslots", i)) is not None
-                                                         else {})}
+                                                         else {}),
+                                                      **({"lim": b} if (b := lim(policies[n], "dlims", i)) else {})}
                                                      for i, (l, o) in enumerate(policies[n]["domain"])],
                                 "acct": acct(policies[n])}
                             for n, m in marks.items()}}

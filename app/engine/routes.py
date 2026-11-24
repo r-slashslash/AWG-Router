@@ -229,6 +229,50 @@ class RoutesMixin:
             log.info("rule traffic: no conntrack labels here: %s", (p.stderr or p.stdout or "").strip()[-200:])
         return p.returncode == 0
 
+    def limits_on(self) -> bool:
+        """Ограничение скорости правил (1.24.0) действует: метки соединений есть, а ядро не отказало в «limit»."""
+        return self.labels_on() and getattr(self, "_rlim_ok", None) is not False
+
+    def rule_limits(self, st: dict) -> dict[str, tuple[int, float | None, float | None]]:
+        """Ограничения скорости правил: {ключ правила (rule_group): (номер j, к клиентам, от клиентов — Мбит/с)}.
+        Номер у правила тот же, пока оно с ограничением (_rlim_ids между проходами): метка j остаётся на открытых
+        соединениях, и новое правило на освободившемся номере ограничивало бы их чужим пределом. Номер ушедшего правила
+        занимается снова не раньше следующего прохода. Больше RULE_LIM_MAX правил — у лишних ограничения нет."""
+        if not self.limits_on():
+            return {}
+        want: list[tuple[str, float | None, float | None]] = []
+
+        def add(key: str, r: dict) -> None:
+            d, u = shaping.mbit(r.get("rate_down")), shaping.mbit(r.get("rate_up"))
+            if (d or u) and r.get("enabled", True) and r.get("lists"):
+                want.append((key, d, u))
+        for r in st["routing"]["rules"]:
+            if r.get("id"):
+                add(r["id"], r)
+        for pk in sorted(c["public_key"] for c in self.clients if c.get("ip")):
+            cp = st["clients"].get(pk) or {}
+            if cp.get("rules_mode") == "custom":
+                for r in cp.get("rules") or []:
+                    if r.get("id"):
+                        add(f"{pk}|{r['id']}", r)
+        prev = getattr(self, "_rlim_ids", None)
+        if prev is None:
+            prev = self._rlim_ids = {}
+        busy = set(prev.values())
+        ids = {k: prev[k] for k, _, _ in want if k in prev}
+        free = (i for i in range(config.RULE_LIM_MAX) if i not in busy)
+        out = {}
+        for k, d, u in want:
+            if k not in ids:
+                j = next(free, None)
+                if j is None:
+                    continue
+                ids[k] = j
+            out[k] = (ids[k], d, u)
+        prev.clear()
+        prev.update(ids)
+        return out
+
     def _policies(self, st: dict, labels: bool | None = None) -> tuple[dict, dict]:
         """Общая и личные политики для nftables и sniproxy.py: правила по адресам — с выходом
         после резолва; правила со списками доменов — отдельно (их выход резолвит sniproxy-конфиг).
@@ -237,30 +281,37 @@ class RoutesMixin:
         dl = self.domain_lists(st)
         if labels is None:
             labels = self.labels_on()
+        rl = self.rule_limits(st) if labels else {}
 
         def conv(pol: dict, pk: str | None) -> dict:
-            ip_rules, dom, dns, slots, dslots = [], [], [], [], []
+            ip_rules, dom, dns, slots, dslots, lims, dlims = [], [], [], [], [], [], []
+            keep = False          # правило по сайтам с ограничением скорости или лимитом: посредник нужен, чтобы их считать
             for k, r in enumerate(pol["rules"]):
-                out, sticky = self.rule_out(st, r, pk, pol.get("own", False))
+                own = pol.get("own", False)
+                out, sticky = self.rule_out(st, r, pk, own)
+                lim = rl.get(self.rule_group(r, pk, own) if r.get("id") else "", (None,))[0]
                 if any(lid in dl for lid in r["lists"]):
                     dom.append(([lid for lid in r["lists"] if lid in dl], out))
                     dns.append((dom[-1][0], out, list(r.get("dns") or ())))
                     dslots.append(k)
+                    dlims.append(lim)
+                    keep = keep or lim is not None or bool(labels and r.get("quota"))
                 else:
                     eff = self.resolve(out, st)
                     # балансировка в правиле: соединение держится на выходе, пока тот среди рабочих (как у «По умолчанию»)
                     ip_rules.append((r["lists"], nftgen.Sticky(eff) if sticky and isinstance(eff, int)
                                      and eff in (getattr(self, "rbal_nums", None) or ()) else eff))
                     slots.append(k)
+                    lims.append(lim)
             default = self.resolve(self.default_out(st, pk, pol), st)
             # правила по доменам, которые ведут туда же, куда всё остальное, ничего не меняют —
             # но включили бы перехват всего HTTPS/HTTP клиента посредником. Только если и правила по
             # адресам ведут туда же: домен проверяется раньше них и мог бы увести сайт мимо правила по
             # адресу. Так готовые правила страны на новой установке («всё — напрямую») не включают перехват
             plain = int(default) if isinstance(default, int) else default
-            if dom and all(self.resolve(o, st) == plain for _, o in dom) and \
+            if dom and not keep and all(self.resolve(o, st) == plain for _, o in dom) and \
                     all((int(o) if isinstance(o, int) else o) == plain for _, o in ip_rules):
-                dom, dslots = [], []
+                dom, dslots, dlims = [], [], []
             if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
                 default = nftgen.Sticky(default)     # открытые соединения не переезжают
             # «dns» — все правила по сайтам по порядку со своим DNS (engine/dns.py), только если он у кого-то
@@ -269,6 +320,8 @@ class RoutesMixin:
                    "dns": dns if any(x[2] for x in dns) else []}
             if labels:
                 out["slots"], out["dslots"] = slots, dslots
+                if any(x is not None for x in lims + dlims):      # без ограничений ключи политик — прежние
+                    out["lims"], out["dlims"] = lims, dlims
             return out
 
         gp = conv(self.policy_for(st, None), None)
@@ -308,7 +361,13 @@ class RoutesMixin:
         return nftgen.generate(t.iface, lst, [] if hold else self._up_list(st), gp, cps, sniff_port,
                                frozenset() if hold else self.sticky_nums(),
                                dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
-                               strict=sniff_port is None and self.strict(st), slots=self._sniff_slots, labels=labels)
+                               strict=sniff_port is None and self.strict(st), slots=self._sniff_slots, labels=labels,
+                               limits=self.limit_rates(st) if labels else None)
+
+    def limit_rates(self, st: dict) -> dict[int, tuple[int, int]]:
+        """Ограничения скорости правил для nftgen: {номер j: (к клиентам, от клиентов) байт/с; 0 — без ограничения}."""
+        bps = lambda m: int(m * 125_000) if m else 0  # noqa: E731
+        return {j: (bps(d), bps(u)) for j, d, u in self.rule_limits(st).values()}
 
     @staticmethod
     def strict(st: dict) -> bool:

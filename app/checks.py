@@ -179,6 +179,12 @@ def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:
             for k in ("quota_hit", "quota_warned"):
                 if isinstance(r.get(k), str) and re.match(r"^\d{4}-\d{2}$", r[k]):
                     out[-1][k] = r[k]
+        # ограничение скорости правила (1.24.0): на всех его клиентов вместе, Мбит/с; поле — только если задано
+        for k in ("rate_down", "rate_up"):
+            with field(f"rule_{k}_{i}"):
+                v = rate(r.get(k))
+            if v:
+                out[-1][k] = v
         # свой DNS — только у правила по сайтам (адрес сайта из списка сетей до ответа DNS не известен);
         # поле пишется, только если задано: состояние и копии без него — как до 1.22.0
         if Store.lst(st, ls[0])["kind"] == "domains":

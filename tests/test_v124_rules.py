@@ -1,5 +1,6 @@
 """1.24.0: трафик по правилам (#54) — метки соединений, таблица учёта, хранение, посредник, API.
 python3 -m unittest tests.test_v124_rules"""
+import asyncio
 import json
 import os
 import shutil
@@ -81,12 +82,13 @@ class LabelsInRulesetTest(unittest.TestCase):
         вердикта и снимает биты номера до маршрутизации; в c_forward — отказ пакету клиента, если биты всё же дошли."""
         p = pol([], slots=[], domain=[(["yt"], "up:x")], dslots=[3])
         text = nftgen.generate("awg0", {}, [{"num": 1}], p, {}, sniff_port=10443, quic=True, labels=True)
-        strip = 0xFFFFFFFF ^ config.QUIC_SLOT_MASK
+        bits = config.QUIC_SLOT_MASK | config.RULE_LIM_MASK         # и номер ограничения скорости правила
+        strip = 0xFFFFFFFF ^ bits
         self.assertIn(f"meta mark & {config.QUIC_SLOT_MASK:#x} == {4 << config.QUIC_SLOT_SHIFT:#x} ct label set 3 "
                       f"meta mark set meta mark & {strip:#x} return", text)
-        self.assertIn(f"udp dport 443 meta mark & {config.QUIC_SLOT_MASK:#x} != 0x0 jump q_lab", text)
+        self.assertIn(f"udp dport 443 meta mark & {bits:#x} != 0x0 jump q_lab", text)
         self.assertLess(text.index("jump q_lab"), text.index("ct mark set meta mark |"))
-        self.assertIn(f'iifname "awg0" meta mark & {config.QUIC_SLOT_MASK:#x} != 0x0 reject', text)
+        self.assertIn(f'iifname "awg0" meta mark & {bits:#x} != 0x0 reject', text)
 
     def test_quic_strip_even_without_labels(self):
         """Вход: QUIC без учёта по правилам. Ожидание: q_lab всё равно снимает биты номера (вердикт посредника мог
@@ -493,6 +495,207 @@ class RuleQuotaTest(unittest.TestCase):
         self.assertEqual(self.e.rule_out(st, st["routing"]["rules"][0], None), ("block", False))
         gp, _ = self.e._policies(st)
         self.assertEqual(gp["rules"][0][1], "block")
+
+
+class RuleSpeedTest(unittest.TestCase):
+    """Ограничение скорости правила: общий «limit» nftables на правило и сторону, метки соединений, метки сокетов
+    посредника."""
+    LB, ANY = config.RULE_LIM_BASE, config.RULE_LIM_ANY
+
+    def setUp(self):
+        legacy_lists(panel.store)
+        self.e = panel.engine
+        self.st0 = panel.store.snapshot()
+        old = (self.e._labels, self.e._rlim_ok, dict(self.e._rlim_ids), self.e.clients)
+        self.e._labels, self.e._rlim_ok = True, None
+        self.e._rlim_ids.clear()
+
+        def back():
+            self.e._labels, self.e._rlim_ok, self.e.clients = old[0], old[1], old[3]
+            self.e._rlim_ids.clear()
+            self.e._rlim_ids.update(old[2])
+            panel.store.mutate(lambda s: s.update(routing=self.st0["routing"], clients=self.st0["clients"],
+                                                  lists=self.st0["lists"]))
+        self.addCleanup(back)
+        panel.store.mutate(lambda s: s["lists"].append({"id": "yt_t", "name": "", "kind": "domains",
+                                                         "source": "youtube.com"}))
+
+    def test_check(self):
+        """Вход: скорость из окна правила строкой, пусто, ноль и слишком много. Ожидание: число в правиле; пусто и ноль —
+        поля нет; вне предела — ошибка у поля правила."""
+        st = panel.store.snapshot()
+        r = checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "rate_down": "20", "rate_up": ""}])[0]
+        self.assertEqual(r["rate_down"], 20.0)
+        self.assertNotIn("rate_up", r)
+        self.assertNotIn("rate_down", checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "rate_down": 0}])[0])
+        with self.assertRaises(HTTPError) as c:
+            checks.rules(st, [{"lists": ["ru"], "outbound": "direct"}, {"lists": ["ru"], "outbound": "direct",
+                                                                         "rate_up": 10 ** 9}])
+        self.assertEqual(c.exception.field, "rule_rate_up_1")
+
+    def test_ruleset(self):
+        """Вход: правило по адресам с ограничением 0 (к клиентам 2,5 МБ/с) и правило без него. Ожидание: строка правила
+        ставит метки номера, ограничения и «есть ограничение»; «limit» с запасом в четверть секунды; отброс в forward и
+        input по сторонам; rl_lab снимает биты номера в метке сокета; без ограничений — только rl_lab (снимает биты),
+        без учёта — ничего, а защита от неснятых битов в c_guard_post — всегда."""
+        p = pol([(["ru"], 1), (["of"], "direct")], slots=[0, 1])
+        p["lims"], p["dlims"] = [0, None], []
+        lists = {"ru": ["5.0.0.0/8"], "of": ["10.20.0.0/16"]}
+        text = nftgen.generate("awg0", lists, [{"num": 1}], p, {}, labels=True, limits={0: (2_500_000, 0)})
+        self.assertIn(f"ip daddr @l_ru ct label set 0 ct label set {self.LB} ct label set {self.ANY} goto o_u1", text)
+        self.assertIn("ip daddr @l_of ct label set 1 goto o_direct", text)
+        self.assertIn("limit rl_0_d {\n\t\trate over 2500000 bytes/second burst 625000 bytes", text)
+        self.assertNotIn("rl_0_u", text)
+        self.assertIn(f'oifname "awg0" ct label {self.LB} limit name "rl_0_d" drop', text)
+        self.assertIn(f'iifname != "awg0" ct label {self.LB} limit name "rl_0_d" drop', text)
+        self.assertIn(f"ct label {self.ANY} jump rl_f", text)
+        self.assertIn(f"meta mark & {config.RULE_LIM_MASK:#x} == {1 << config.RULE_LIM_SHIFT:#x} ct label set {self.LB}",
+                      text)
+        self.assertIn("type route hook output priority mangle - 1", text)
+        guard = f"meta mark & {config.RULE_LIM_MASK:#x} != 0x0 drop"
+        bare = nftgen.generate("awg0", lists, [{"num": 1}], pol([(["ru"], 1)], slots=[0]), {}, labels=True)
+        self.assertIn("chain rl_lab {\n\t\tmeta mark set meta mark &", bare)
+        self.assertNotIn("limit name", bare)
+        plain = nftgen.generate("awg0", lists, [{"num": 1}], pol([(["ru"], 1)]), {}, limits={0: (1, 1)})
+        self.assertNotIn("rl_lab", plain)
+        self.assertNotIn("limit", plain)
+        for x in (text, bare, plain):
+            self.assertIn(guard, x)
+
+    def test_quic_verdict_bits(self):
+        """Вход: QUIC через очередь, правило по доменам с номером 2 и ограничением 5. Ожидание: q_lab ставит по битам
+        вердикта метки ограничения, снимает и их; c_forward отказывает пакету клиента с любыми неснятыми битами."""
+        p = pol([], slots=[], domain=[(["yt"], 1)], dslots=[2])
+        p["lims"], p["dlims"] = [], [5]
+        text = nftgen.generate("awg0", {}, [{"num": 1}], p, {}, sniff_port=10443, quic=True, labels=True,
+                               limits={5: (1_000_000, 1_000_000)})
+        bits = config.QUIC_SLOT_MASK | config.RULE_LIM_MASK
+        q = text[text.index("chain q_lab"):]
+        self.assertIn(f"== {6 << config.RULE_LIM_SHIFT:#x} ct label set {self.LB + 5} ct label set {self.ANY}", q)
+        self.assertIn(f"meta mark set meta mark & {0xFFFFFFFF ^ bits:#x} return", q)
+        self.assertIn(f"udp dport 443 meta mark & {bits:#x} != 0x0 jump q_lab", text)
+        self.assertIn(f'iifname "awg0" meta mark & {bits:#x} != 0x0 reject', text)
+
+    @unittest.skipUnless(shutil.which("nft") and os.geteuid() == 0, "nft -c — только от root")
+    def test_kernel_accepts(self):
+        """Вход: набор с ограничениями обеих сторон у двух правил и правилом по доменам. Ожидание: ядро и nft его
+        принимают (nft -c)."""
+        p = pol([(["ru"], "direct"), (["of"], 1)], slots=[0, 2], domain=[(["yt"], 1)], dslots=[1])
+        p["lims"], p["dlims"] = [0, 1], [2]
+        text = nftgen.generate("awg0", {"ru": ["5.0.0.0/8"], "of": ["10.20.0.0/16"]}, [{"num": 1, "snat": "10.9.0.2"}],
+                               p, {}, sniff_port=10443, labels=True,
+                               limits={0: (125_000, 125_000), 1: (0, 250_000), 2: (12_500_000, 0)})
+        with tempfile.NamedTemporaryFile("w", suffix=".nft", delete=False) as f:
+            f.write(text)
+        try:
+            r = subprocess.run(["nft", "-c", "-f", f.name], capture_output=True, text=True)
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_engine_numbers(self):
+        """Вход: общее правило с ограничением, своё правило клиента с ограничением, правило без него; затем общее
+        правило убрали и добавили другое. Ожидание: общее — общим клиентам, своё — своему; номер держится между
+        проходами; номер ушедшего правила новое получает не в том же проходе; без меток — ограничений нет."""
+        self.e.clients = [{"public_key": "PKG", "ip": "10.8.1.2"}, {"public_key": "PKC", "ip": "10.8.1.3"}]
+
+        def setup(s, gen):
+            s["routing"]["rules"] = gen
+            s["clients"]["PKC"] = {"rules_mode": "custom", "outbound": "inherit",
+                                   "rules": [{"id": "r_c", "lists": ["ru"], "outbound": "direct", "rate_up": 3}]}
+        panel.store.mutate(lambda s: setup(s, [
+            {"id": "r_a", "lists": ["ru"], "outbound": "direct", "rate_down": 10},
+            {"id": "r_b", "lists": ["ru"], "outbound": "block"}]))
+        st = panel.store.snapshot()
+        self.assertEqual(self.e.rule_limits(st), {"r_a": (0, 10.0, None), "PKC|r_c": (1, None, 3.0)})
+        self.assertEqual(self.e.limit_rates(st), {0: (1_250_000, 0), 1: (0, 375_000)})
+        gp, cps = self.e._policies(st)
+        self.assertEqual(gp["lims"], [0, None])
+        self.assertEqual(cps["10.8.1.3"]["lims"], [1])
+        panel.store.mutate(lambda s: setup(s, [{"id": "r_n", "lists": ["ru"], "outbound": "direct", "rate_down": 1}]))
+        st = panel.store.snapshot()
+        self.assertEqual(self.e.rule_limits(st)["PKC|r_c"][0], 1)
+        self.assertEqual(self.e.rule_limits(st)["r_n"][0], 2)
+        self.e._rlim_ok = False
+        self.assertEqual(self.e.rule_limits(st), {})
+        self.assertNotIn("lims", self.e._policies(st)[0])
+
+    def test_limited_site_rule_keeps_proxy(self):
+        """Вход: правило по сайтам ведёт туда же, куда «По умолчанию» (посредник был бы не нужен), но с ограничением.
+        Ожидание: правило остаётся — без посредника его трафик не узнать и не ограничить."""
+        self.e.clients = [{"public_key": "PKG", "ip": "10.8.1.2"}]
+        yt = "yt_t"
+
+        def setup(s, extra):
+            s["routing"]["rules"] = [{"id": "r_y", "lists": [yt], "outbound": "direct", **extra}]
+            s["routing"]["default"] = "direct"
+        panel.store.mutate(lambda s: setup(s, {}))
+        self.assertEqual(self.e._policies(panel.store.snapshot())[0]["domain"], [])
+        panel.store.mutate(lambda s: setup(s, {"rate_down": 5}))
+        gp = self.e._policies(panel.store.snapshot())[0]
+        self.assertEqual((len(gp["domain"]), gp["dlims"]), (1, [0]))
+
+    def test_proxy_marks_sockets(self):
+        """Вход: посредник, правило по доменам с номером ограничения в настройке; затем соединение без совпадения по
+        правилу по адресам с ограничением. Ожидание: метка сокета к клиенту — биты номера, к сайту — метка выхода с
+        ними же; без совпадения — номер правила по адресам; чужое значение — без ограничения."""
+        self.assertEqual(sniproxy._lim(0x00FF0000), 0x00FF0000)
+        self.assertEqual(config.RULE_LIM_MASK, 0x00FF0000)       # посредник не читает config: та же маска у себя
+        for bad in (True, -1, 0x01000000, "1"):
+            self.assertEqual(sniproxy._lim(bad), 0)
+        s = sniproxy.Sniffer.__new__(sniproxy.Sniffer)
+        s.cfg = {"client_policy": {}, "policies": {"p_global": {
+            "mark": 0xD100, "rules": [{"lists": ["yt"], "to": {"mark": 0x2001, "acct": "u1", "lim": 0x30000}, "slot": 0}],
+            "acct": {"rules": [[["ru"], "direct", 1, 0x20000]], "default": "u1", "slot": D}}}}
+        s.lists = {"yt": {"youtube.com"}}
+        s.nets = {"ru": sniproxy.Nets(["5.0.0.0/8"])}
+        s.net = sniproxy.ipaddress.ip_network("10.8.1.0/24")
+        s.stats = {"conns": 0, "active": 0, "matched": 0, "no_name": 0, "errors": 0, "by_list": {}}
+        s.bytes, s.buckets = {}, {}
+        self.assertEqual(s.miss_rule("10.8.1.2", "5.1.1.1"), ("direct", 1, 0x20000))
+        self.assertEqual(s.miss_rule("10.8.1.2", "8.8.8.8"), ("u1", D, 0))
+        for name, dip, want in (("www.youtube.com", "1.1.1.1", 0x30000), (None, "5.1.1.1", 0x20000)):
+            sock = mock.Mock()
+            sock.getpeername.return_value = ("10.8.1.2", 5)
+            sock.getsockname.return_value = ("10.8.1.1", 10443)
+            sock.getsockopt.return_value = b"\x02\x00\x01\xbb" + sniproxy.socket.inet_aton(dip) + bytes(8)
+
+            async def peek(sk, port, name=name):
+                return b"x", name
+            with mock.patch.object(sniproxy, "peek_name", peek), \
+                    mock.patch.object(s, "open_upstream", side_effect=OSError("stop")) as up:
+                asyncio.run(s.client(sock))
+            sock.setsockopt.assert_any_call(sniproxy.socket.SOL_SOCKET, sniproxy.SO_MARK, want)
+            self.assertEqual(up.call_args.args[-1], want)
+
+    def test_proxy_config_gated(self):
+        """Вход: настройка посредника при ограничении правила по доменам — до и после того, как в ядре встал набор с
+        rl_lab. Ожидание: номер ограничения в настройке (и в вердикте QUIC) — только после."""
+        yt = "yt_t"
+        self.e.clients = [{"public_key": "PKG", "ip": "10.8.1.2"}]
+        panel.store.mutate(lambda s: s["routing"].update(rules=[{"id": "r_y", "lists": [yt], "outbound": "block",
+                                                                 "rate_down": 5}], default="direct"))
+        st = panel.store.snapshot()
+        t = mock.Mock(key="tk", iface="awg0", pid=1)
+        seen = []
+
+        def grab(cfg):
+            seen.append(cfg["policies"]["p_global"]["rules"][0])
+        for key in (None, "tk"):
+            self.e._rlim_key = key
+            with mock.patch.object(self.e, "tunnel_addr", return_value=("10.8.1.1", "10.8.1.0/24")), \
+                    mock.patch("app.engine.sni.config.DRY_RUN", False), \
+                    mock.patch("app.engine.sni.json.dump", side_effect=lambda c, f: grab(c)), \
+                    mock.patch("app.engine.sni.os.replace"), mock.patch("app.engine.sni.os.open", return_value=-1), \
+                    mock.patch("app.engine.sni.os.fdopen", mock.mock_open()), \
+                    mock.patch("app.engine.sni.subprocess.Popen", side_effect=OSError("no")):
+                try:
+                    self.e._sync_sni(t, st)
+                except OSError:
+                    pass
+        self.e._rlim_key = None
+        self.assertNotIn("lim", seen[0])
+        self.assertEqual(seen[-1]["lim"], 1 << config.RULE_LIM_SHIFT)
 
 
 class MonthlyReportTest(unittest.TestCase):

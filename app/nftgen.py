@@ -209,6 +209,9 @@ def _policy_key(policy: dict) -> tuple:
     if policy.get("slots") is not None:
         # учёт по правилам (1.24.0): одинаковые правила в разном порядке — разные номера меток, значит разные политики
         key += (("slots", tuple(policy["slots"]), tuple(policy.get("dslots") or ())),)
+    if policy.get("lims") is not None:
+        # ограничения скорости правил (1.24.0): у одинаковых правил двух клиентов свои ограничения — свои политики
+        key += (("lims", tuple(policy["lims"]), tuple(policy.get("dlims") or ())),)
     return key
 
 
@@ -240,9 +243,11 @@ def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = Fa
     DOM_SET (режим «фильтр по DNS»): остальное идёт ядром, и HTTP/3 к ним работает.
     outs — свои цепочки выходов (для q_* в hook output).
     labels — учёт по правилам: совпавшее правило ставит соединению метку conntrack со своим номером в политике
-    (policy["slots"]), «По умолчанию» — RULE_DEFAULT_SLOT; по ним считает таблица racct_ruleset."""
+    (policy["slots"]), «По умолчанию» — RULE_DEFAULT_SLOT; по ним считает таблица racct_ruleset. У правила с
+    ограничением скорости (policy["lims"]) — ещё метки RULE_LIM_BASE + номер ограничения и RULE_LIM_ANY."""
     oc = outs or out_chain
     slots = policy.get("slots") if labels else None
+    lims = (policy.get("lims") or ()) if labels else ()
     lines = [f"\tchain {name} {{"]
     if sniff:
         pre = f"ip daddr @{DOM_SET} " if dom else ""
@@ -251,6 +256,8 @@ def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = Fa
         lines.append(f"\t\t{pre}tcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
     for i, (list_ids, out) in enumerate(policy["rules"]):
         lab = f"ct label set {int(slots[i])} " if slots is not None else ""
+        if i < len(lims) and lims[i] is not None:
+            lab += f"ct label set {config.RULE_LIM_BASE + int(lims[i])} ct label set {config.RULE_LIM_ANY} "
         for lid in list_ids:
             if lid in available:
                 lines.append(f"\t\tip daddr @l_{lid} {lab}goto {oc(out)}")
@@ -283,6 +290,9 @@ def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[i
         if slots is not None:
             out["slots"] = list(slots)
             out["dslots"] = list(policy.get("dslots") or ())
+        if policy.get("lims") is not None:
+            out["lims"] = list(policy["lims"])
+            out["dlims"] = list(policy.get("dlims") or ())
         return out
 
     gp = norm(global_policy)
@@ -321,10 +331,54 @@ def sniff_marks(policies: dict, slots: dict | None = None) -> dict[str, int]:
     return {n: config.SNIFF_OUT_BASE + new[keys[n]] for n in names}
 
 
+def _lim_label(j: int) -> str:
+    """Строка rl_lab/q_lab: номер ограничения j в битах RULE_LIM_MASK метки → метки соединения."""
+    return (f"\t\tmeta mark & {config.RULE_LIM_MASK:#x} == {(j + 1) << config.RULE_LIM_SHIFT:#x} "
+            f"ct label set {config.RULE_LIM_BASE + j} ct label set {config.RULE_LIM_ANY}\n")
+
+
+def _limit_chains(wg: str, limits: dict[int, tuple[int, int]], labels: bool) -> list[str]:
+    """Ограничение скорости правил (1.24.0). Предел — общий «limit» на правило и сторону; пакеты сверх него
+    отбрасываются там, куда приходят: от клиента (транзитные — forward, к sniproxy.py — input) и из сети (транзитные к
+    клиенту — forward, ответы сайтов посреднику — input). Потеря при приёме для отправителя — обычная потеря в сети:
+    TCP сбавляет скорость. Отбрасывать отправляемое самим сервером (ответы посредника клиенту) нельзя: потерянное в
+    своём же стеке TCP не считает потерей и ждёт таймера.
+    c_rlim_out (labels, даже без ограничений: на неё полагается номер в метках сокетов посредника, см. _rlim_key) —
+    номер ограничения из метки сокета sniproxy.py → метки соединения, биты снимаются; type route: с исходной меткой
+    маршрут выбирается заново, до c_output."""
+    out = []
+    if labels:
+        strip = 0xFFFFFFFF ^ config.RULE_LIM_MASK
+        out.append("\tchain rl_lab {\n" + "".join(_lim_label(j) for j in sorted(limits))
+                   + f"\t\tmeta mark set meta mark & {strip:#x}\n\t}}")
+        out.append("\tchain c_rlim_out {\n\t\ttype route hook output priority mangle - 1; policy accept;\n"
+                   f"\t\tmeta mark & {config.RULE_LIM_MASK:#x} != 0x0 jump rl_lab\n\t}}")
+    if not limits:
+        return out
+    fw, inp = [], []
+    for j, (down, up) in sorted(limits.items()):
+        lab = f"ct label {config.RULE_LIM_BASE + j}"
+        if up:
+            fw.append(f'\t\tiifname "{wg}" {lab} limit name "rl_{j}_u" drop')
+            inp.append(f'\t\tiifname "{wg}" {lab} limit name "rl_{j}_u" drop')
+        if down:
+            fw.append(f'\t\toifname "{wg}" {lab} limit name "rl_{j}_d" drop')
+            inp.append(f'\t\tiifname != "{wg}" {lab} limit name "rl_{j}_d" drop')
+    out.append("\tchain rl_f {\n" + "\n".join(fw) + "\n\t}")
+    out.append("\tchain rl_i {\n" + "\n".join(inp) + "\n\t}")
+    # до c_forward и до учёта (racct — filter + 11): отброшенное не считается
+    out.append("\tchain c_rlim_fwd {\n\t\ttype filter hook forward priority filter - 1; policy accept;\n"
+               f"\t\tct label {config.RULE_LIM_ANY} jump rl_f\n\t}}")
+    out.append("\tchain c_rlim_in {\n\t\ttype filter hook input priority filter - 1; policy accept;\n"
+               f"\t\tct label {config.RULE_LIM_ANY} jump rl_i\n\t}}")
+    return out
+
+
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
-             quic: bool = False, strict: bool = False, slots: dict | None = None, labels: bool = False) -> str:
+             quic: bool = False, strict: bool = False, slots: dict | None = None, labels: bool = False,
+             limits: dict[int, tuple[int, int]] | None = None) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
@@ -334,7 +388,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     блокируются: цепочка c_quic; без слушателя (bypass) пакет блокируется, как без очереди.
     strict — правила по доменам сейчас не действуют (sniff_port None), а выбрано «тогда блокировать»:
     у клиентов с правилами по доменам весь трафик (кроме местных сетей и самого сервера) — в блок.
-    labels — учёт трафика по правилам (1.24.0): правила политик ставят метку conntrack (ct label) со своим номером."""
+    labels — учёт трафика по правилам (1.24.0): правила политик ставят метку conntrack (ct label) со своим номером.
+    limits — ограничения скорости правил (1.24.0, только с labels): {номер j: (к клиентам, от клиентов) байт/с; 0 — нет}."""
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
@@ -352,6 +407,14 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         out.append(f"\tset {DOM_SET} {{\n\t\ttype ipv4_addr\n\t\tflags timeout\n\t}}")
     for lid in sorted(available):
         out.append(_set_block(f"l_{lid}", lists[lid]))
+    limits = {int(j): v for j, v in (limits or {}).items() if 0 <= int(j) < config.RULE_LIM_MAX} if labels else {}
+    for j, pair in sorted(limits.items()):
+        for d, bps in zip("du", pair):
+            if bps:
+                # burst — четверть секунды на этой скорости (не меньше 64 КБ): TCP через VPN с задержкой 100–200 мс
+                # с меньшим запасом не добирал бы до предела
+                out.append(f"\tlimit rl_{j}_{d} {{\n\t\trate over {int(bps)} bytes/second burst "
+                           f"{max(int(bps) // 4, 65536)} bytes\n\t}}")
 
     out.append("\tmap clients {")
     out.append("\t\ttype ipv4_addr : verdict")
@@ -366,7 +429,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     # решение запоминается в conntrack для остальных пакетов соединения. «Пропустить» тоже
     # запоминается (и идёт дальше, к обычным правилам политики): иначе пакеты после ответа сервера —
     # уже не «новые», в очередь не идут и без метки попали бы в строку блока QUIC политики
-    qlab = (f"\t\tudp dport 443 meta mark & {config.QUIC_SLOT_MASK:#x} != 0x0 jump q_lab\n") if quic else ""
+    bits = config.QUIC_SLOT_MASK | config.RULE_LIM_MASK
+    qlab = (f"\t\tudp dport 443 meta mark & {bits:#x} != 0x0 jump q_lab\n") if quic else ""
     quic_line = qlab + (f"\t\tudp dport 443 meta mark {config.QUIC_PASS_MARK:#x} "
                  f"ct mark set {config.QUIC_PASS_MARK | config.QUIC_CT_BIT:#x}\n"
                  f"\t\tudp dport 443 meta mark != 0x0 meta mark != {config.QUIC_PASS_MARK:#x} "
@@ -388,10 +452,12 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     if quic:
         # вердикт QUIC с номером правила (биты QUIC_SLOT_MASK; их ставит sniproxy.py, только когда этот набор уже
         # стоит) — метка соединения для учёта; биты снимаются всегда: с ними метка выхода не совпала бы с ip rule
-        strip = 0xFFFFFFFF ^ config.QUIC_SLOT_MASK
+        # (и номер ограничения скорости правила — биты RULE_LIM_MASK: метки RULE_LIM_BASE + j и RULE_LIM_ANY)
+        strip = 0xFFFFFFFF ^ bits
         qs = sorted({int(k) for n in marks for k in (policies[n].get("dslots") or ())}) if labels else []
-        lab = "".join(f"\t\tmeta mark & {config.QUIC_SLOT_MASK:#x} == {(k + 1) << config.QUIC_SLOT_SHIFT:#x} "
-                      f"ct label set {k} meta mark set meta mark & {strip:#x} return\n" for k in qs)
+        lab = "".join(_lim_label(j) for j in sorted(limits))
+        lab += "".join(f"\t\tmeta mark & {config.QUIC_SLOT_MASK:#x} == {(k + 1) << config.QUIC_SLOT_SHIFT:#x} "
+                       f"ct label set {k} meta mark set meta mark & {strip:#x} return\n" for k in qs)
         out.append(f"\tchain q_lab {{\n{lab}\t\tmeta mark set meta mark & {strip:#x}\n\t}}")
 
     out.append("\tchain o_direct {\n\t\taccept\n\t}")
@@ -410,7 +476,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         f'\t\tiifname "{wg_iface}" ip daddr {LINK_LOCAL} reject with icmp type admin-prohibited',
         f"\t\tmeta mark {config.MARK_BLOCK:#x} reject with icmp type admin-prohibited",
         # биты номера правила из вердикта QUIC снимает q_lab; дошли сюда — метка выхода не та, что у ip rule
-        f'\t\tiifname "{wg_iface}" meta mark & {config.QUIC_SLOT_MASK:#x} != 0x0 reject with icmp type admin-prohibited',
+        f'\t\tiifname "{wg_iface}" meta mark & {bits:#x} != 0x0 reject with icmp type admin-prohibited',
         # страховка: пакет с меткой выхода уходит не в туннель (ip rule этой метки ещё нет или уже нет —
         # основная таблица) — отказ, а не путь мимо выхода
         f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "{config.IFACE_PREFIX}*" '
@@ -425,6 +491,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                    f'tcp option maxseg size > {mss} tcp option maxseg size set {mss}')
     fwd.append("\t}")
     out.append("\n".join(fwd))
+    out.extend(_limit_chains(wg_iface, limits, labels))
 
     if quic:
         # первые пакеты новых соединений QUIC клиентов с правилами по доменам — в очередь ядра
@@ -498,7 +565,10 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "lo" '
                f'oifname != "{config.IFACE_PREFIX}*" drop\n'
                # все метки политик sniproxy.py, а не только первые 256 (у сотен клиентов со своими правилами их больше)
-               f"\t\tmeta mark {config.SNIFF_OUT_BASE:#x}-{config.QUIC_PASS_MARK - 1:#x} drop\n\t}}")
+               f"\t\tmeta mark {config.SNIFF_OUT_BASE:#x}-{config.QUIC_PASS_MARK - 1:#x} drop\n"
+               # номер ограничения скорости в метке сокета sniproxy.py, который не сняла rl_lab (набор без неё): с ним
+               # метка выхода не совпала бы с ip rule — соединение ушло бы мимо выхода
+               f"\t\tmeta mark & {config.RULE_LIM_MASK:#x} != 0x0 drop\n\t}}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]

@@ -157,7 +157,8 @@ def _state_view() -> dict:
                        "old": engine.module_warn, "min": KERNEL_MIN, **server.engine_offer(t)},
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         # трафик по правилам за месяц (1.24.0): {id правила | "_default": [rx, tx]}; state — ok | off | None
-        "rule_traffic": {"state": engine.racct_state, "rules": engine.traffic.rules_month()},
+        "rule_traffic": {"state": engine.racct_state, "rules": engine.traffic.rules_month(),
+                         "limits": engine.limits_on()},       # ограничение скорости правил действует (1.24.0)
         # балансировка в правилах (1.24.0): {правило | «клиент|правило»: {id выхода: сколько клиентов на нём}}
         "rule_balance": {g: _counts(p) for g, p in (engine.rbal_plan or {}).items()},
         "lists": [{**routing.list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],

@@ -168,6 +168,34 @@ def rules(global_policy, clients=None, balance=frozenset()):
     nft("amz", nftgen.generate("awg0", {}, UPS, global_policy, clients or {}, None, set(balance)))
 
 
+def rule_limit(limits, lim=0):
+    """1.24.0: правило по адресу TARGET «напрямую» с номером ограничения lim (None — без него) и ограничения limits
+    {j: (к клиентам, от клиентов) Мбит/с} — набор с метками соединений, как у панели при учёте по правилам."""
+    pol = {"rules": [(["t"], "direct")], "default": "direct", "slots": [0], "dslots": [],
+           "lims": [lim], "dlims": []}
+    bps = {j: (int(d * 125_000), int(u * 125_000)) for j, (d, u) in limits.items()}
+    nft("amz", nftgen.generate("awg0", {"t": [TARGET + "/32"]}, UPS, pol, {}, None, set(), labels=True, limits=bps))
+
+
+def cpu_busy():
+    """Время процессора в ядре (system + irq + softirq), в тиках: пересылка пакетов и nftables идут здесь."""
+    with open("/proc/stat") as f:
+        v = [int(x) for x in f.readline().split()[1:]]
+    return v[2] + v[5] + v[6]
+
+
+def cost(secs=3.0):
+    """Нагрузка пересылки: тиков ядра на гигабайт при загрузке на полной скорости (лучшая из двух попыток)."""
+    best = None
+    for _ in range(2):
+        t0 = cpu_busy()
+        _, mbit = down(secs=secs)
+        gb = mbit * (secs + 0.7) / 8 / 1000        # с разгоном: тики считаются и за него
+        ticks = (cpu_busy() - t0) / gb if gb else float("inf")
+        best = ticks if best is None else min(best, ticks)
+    return best, mbit
+
+
 class Target:
     """Цель панели — пространство amz."""
     key, iface = "netns-amz", "awg0"
@@ -277,6 +305,30 @@ def main():
         results.append(check("выключено: наших очередей и ifb не осталось",
                              f"htb {shaping.HANDLE}:" not in q and "awgq" not in links))
         results.append(check("выключено: скорость снова полная", down()[1] > 100))
+
+        # 1.24.0: ограничение скорости правила — общий «limit» nftables, отброс там, куда пакеты приходят
+        rule_limit({0: (12, 5)})
+        name, sp = down()
+        results.append(check("правило с ограничением: путь прежний (напрямую)", name == "DIRECT", name))
+        results.append(near("ограничение правила: загрузка 12 Мбит/с", sp, 12, 0.55, 1.2))
+        results.append(near("ограничение правила: отдача 5 Мбит/с", upload(), 5, 0.55, 1.2))
+        rule_limit({0: (12, 0)}, lim=None)
+        results.append(check("ограничение у другого правила: эта загрузка без ограничения", down()[1] > 100))
+        # замер нагрузки (на 1 vCPU у пользователей это важно): тики ядра на ГБ на полной скорости — без ограничений,
+        # с ограничением другого правила (пакет проверяет одна строка) и под ограничением выше скорости линии
+        rule_limit({}, lim=None)
+        base, b_sp = cost()
+        rule_limit({0: (12, 0)}, lim=None)
+        other, o_sp = cost()
+        rule_limit({0: (50_000, 50_000)})
+        under, u_sp = cost()
+        print(f"    нагрузка, тиков ядра на ГБ: без ограничений {base:.1f} ({b_sp} Мбит/с), "
+              f"ограничение у другого правила {other:.1f} ({o_sp}), под ограничением {under:.1f} ({u_sp})")
+        results.append(check("нагрузка под ограничением правила — не больше полутора раз", under <= base * 1.5 + 2,
+                             f"{under:.1f} против {base:.1f}"))
+        results.append(check("нагрузка с ограничением другого правила — не больше полутора раз", other <= base * 1.5 + 2,
+                             f"{other:.1f} против {base:.1f}"))
+        rules({"rules": [], "default": "direct"})
 
         # балансировка: открытое соединение остаётся на прежнем выходе, новые — на новом
         S = nftgen.Sticky

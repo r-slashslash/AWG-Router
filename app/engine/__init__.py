@@ -91,6 +91,12 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self._labels: bool | None = True if config.DRY_RUN else None
         self._labels_key = None
         self._qlab_key = None
+        # ограничение скорости правил (1.24.0): _rlim_ok — ядро приняло «limit» (False — отказало, None — ещё не было);
+        # _rlim_key — цель, где уже стоит набор с цепочкой rl_lab: только тогда sniproxy.py пишет номер ограничения в
+        # метки своих сокетов (без неё метка выхода с этими битами не совпала бы с ip rule); _rlim_ids — номера правил
+        self._rlim_ok: bool | None = None
+        self._rlim_key = None
+        self._rlim_ids: dict[str, int] = {}
         self.racct_state: str | None = None      # учёт по правилам: ok | off | None (ещё не было)
         self._quic_key = None                    # для какой цели это известно
         self.switching = False                         # идёт ручная смена движка (switch_engine)
@@ -459,7 +465,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 # приложения AmneziaVPN сам их не ставит, и всё это время клиенты шли бы мимо выходов
                 self._hold_rules(t, st)
             if self._labels_key != t.key:            # другое ядро (новая цель) — проверить заново
-                self._labels_key, self._qlab_key = t.key, None
+                self._labels_key, self._qlab_key, self._rlim_key, self._rlim_ok = t.key, None, None, None
                 self._labels = True if config.DRY_RUN else None
             if self._labels is None:
                 try:
@@ -525,6 +531,12 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 try:
                     t.ns(["nft", "-f", path], timeout=60)
                 except system.SysError as e:
+                    if self.limits_on() and self.rule_limits(st) and "limit" in str(e):
+                        # ядро без «limit» в nftables (урезанные сборки): правила — без ограничения скорости, остальное
+                        # (учёт по правилам) как было; следующий проход ставит набор без него
+                        self._rlim_ok = False
+                        self.event("warn", Msg("ev.rlim_off", error=str(e)[-300:]))
+                        raise
                     if self.labels_on() and "label" in str(e):
                         # ядро приняло проверку меток, но не весь набор: учёт по правилам выключить; прежние правила
                         # остаются на месте, следующий проход ставит набор без меток (и посредник — с теми же политиками)
@@ -545,6 +557,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     self._quic_nft = True
                 # набор с q_lab стоит: со следующей настройки посредника вердикт QUIC несёт номер правила
                 self._qlab_key = t.key if quic and self.labels_on() else None
+                # набор с rl_lab стоит: со следующей настройки посредника его сокеты несут номер ограничения скорости
+                self._rlim_key = t.key if self.labels_on() else None
                 if self.applied_hash and present:
                     self.event("info", Msg("ev.rules_applied"))
                 self.applied_hash = h

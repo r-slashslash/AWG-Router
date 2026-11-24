@@ -163,7 +163,8 @@ def setup():
     # адрес сервера — адрес сети, как в контейнере AmneziaVPN (Address = 10.8.1.0/24)
     conf("amz", [("awg0", "10.8.1.0", 24), ("eth0", "172.20.0.1", 24)], [dict(dst="0.0.0.0/0", gateway="172.20.0.2")])
     conf("inet", [("i0", "172.20.0.2", 24), ("i1", "172.21.0.1", 24)], lo=targets)
-    conf("prx", [("p0", "172.21.0.2", 24)], [dict(dst="0.0.0.0/0", gateway="172.21.0.1")], lo=targets + ["1.1.1.1"])
+    conf("prx", [("p0", "172.21.0.2", 24)], [dict(dst="0.0.0.0/0", gateway="172.21.0.1")],
+         lo=targets + ["1.1.1.1", "9.9.9.9"])
     sysctl("amz", "net.ipv4.ip_forward", 1)
     sysctl("inet", "net.ipv4.ip_forward", 1)
     for k in ("all", "default"):
@@ -179,7 +180,10 @@ def setup():
         "prx-echo": bg("prx", sys.executable, SRV, "echo", "PROXY-UDP", "8.8.8.8"),
         "socks": bg("prx", sys.executable, SRV, "socks", "172.21.0.2", "1080", USER, PW, *NAMES, log="socks"),
         # потоки для замера скорости: big.test (правило по доменам → посредник) и 8.8.4.4 (правило по адресу → hev)
-        "prx-stream": bg("prx", sys.executable, SRV, "stream", "1.1.1.1:443", "8.8.4.4:5001", log="stream"),
+        # 9.9.9.9:443 — правило по адресу, но TCP 443 у клиента с правилами по доменам идёт через посредник (1.24.0:
+        # ограничение скорости правила общее для этой дороги и транзитной 8.8.4.4:5001)
+        "prx-stream": bg("prx", sys.executable, SRV, "stream", "1.1.1.1:443", "8.8.4.4:5001", "9.9.9.9:443",
+                         log="stream"),
     }
     time.sleep(0.7)
     return procs
@@ -243,12 +247,12 @@ def start_hev():
 
 
 UPS = [{"num": 1, "snat": "", "mtu": 8500}]
-IP_LISTS = {"via": ["8.8.4.4/32"]}
+IP_LISTS = {"via": ["8.8.4.4/32", "9.9.9.9/32"]}
 
 
-def rules(policy, sniff=True, quic=False, strict=False, balance=frozenset(), labels=False):
+def rules(policy, sniff=True, quic=False, strict=False, balance=frozenset(), labels=False, limits=None):
     nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None,
-                               balance, quic=quic, strict=strict, labels=labels))
+                               balance, quic=quic, strict=strict, labels=labels, limits=limits))
 
 
 def racct():
@@ -359,6 +363,58 @@ def shared_limit(procs, pol):
         sh("amz", "ip", "link", "del", "awgq1")
 
 
+def rule_limits(procs):
+    """1.24.0: ограничение скорости правила. Правило по адресам (8.8.4.4, 9.9.9.9 → выход 1) — 10 Мбит/с к клиентам,
+    правило по доменам (big.test → SOCKS5) — 6. Один «limit» правила на обе дороги: транзитную (8.8.4.4:5001, ядро)
+    и через посредник (9.9.9.9:443 без имени — без совпадения по домену, правило по адресам)."""
+    pol = {"rules": [(["via"], 1)], "default": "direct", "domain": [(["dvid"], "up:u1")],
+           "slots": [0], "dslots": [1], "lims": [0], "dlims": [1]}
+    lim = lambda j: (j + 1) << config.RULE_LIM_SHIFT  # noqa: E731
+
+    def conf(to=None):
+        p = sni_conf(pol, to or {"socks": SOCKS, "acct": "u1", "lim": lim(1)})
+        cfg = json.load(open(p))
+        for v in cfg["policies"].values():
+            v["acct"] = {"rules": [[["via"], "u1", 0, lim(0)]], "default": "direct", "slot": config.RULE_DEFAULT_SLOT}
+        cfg["cidrs"] = {"via": os.path.join(TMP, "via.cidrs")}
+        with open(cfg["cidrs"]["via"], "w") as f:
+            f.write("\n".join(IP_LISTS["via"]) + "\n")
+        with open(p, "w") as f:
+            json.dump(cfg, f)
+        return p
+    within = lambda lo, hi: (lambda g: lo <= float(g) <= hi)  # noqa: E731
+    rules(pol, labels=True, limits={0: (10 * 125_000, 0), 1: (6 * 125_000, 0)})
+    procs["sni"] = start_sni(conf())
+    try:
+        check("ограничение правила по доменам 6: сайт через посредник (SOCKS5)", f"{speed('1.1.1.1', 443, 'big.test')}",
+              within(3.3, 7.2))
+        check("ограничение правила по адресам 10: транзитом (ядро)", f"{speed('8.8.4.4', 5001, '-')}", within(5.5, 12))
+        check("…через посредник (TCP 443 без совпадения по домену)", f"{speed('9.9.9.9', 443, 'raw')}", within(5.5, 12))
+        res = {}
+        th = [threading.Thread(target=lambda k=k, a=a: res.__setitem__(k, speed(*a, secs=5.0)))
+              for k, a in (("sni", ("9.9.9.9", 443, "raw")), ("tun", ("8.8.4.4", 5001, "-")))]
+        [t.start() for t in th]
+        [t.join() for t in th]
+        check(f"обе дороги одного правила сразу: вместе не больше 10 ({res})",
+              f"{round(res.get('sni', 0) + res.get('tun', 0), 2)}", within(5.5, 12.5))
+        rules(pol, labels=True)
+        check("ограничения сняты: снова полная скорость", f"{speed('8.8.4.4', 5001, '-')}", within(30, 1e9))
+        # сайт правила на выход-туннель по метке: метка выхода с номером ограничения. С rl_lab — через туннель; набор без
+        # неё (как до 1.24.0 или без меток), а посредник ещё с номером в метках сокетов — соединение не проходит, а не
+        # уходит мимо выхода по основной таблице
+        procs["sni"].terminate()
+        procs["sni"].wait(5)
+        procs["sni"] = start_sni(conf({"mark": nftgen.mark_for(1), "acct": "u1", "lim": lim(1)}))
+        rules(pol, labels=True, limits={1: (6 * 125_000, 0)})
+        check("сайт правила с ограничением → выход по метке: в туннеле выхода", hello("8.8.8.8", "foreign.test"), "PROXY")
+        rules(pol)
+        check("номер в метке сокета без rl_lab: сайт не открывается (не мимо выхода)", hello("8.8.8.8", "foreign.test"),
+              lambda g: g in ("EMPTY",) or g.startswith("FAIL"))
+    finally:
+        procs["sni"].terminate()
+        procs["sni"].wait(5)
+
+
 def udp(ip, port=7):
     return sh("cli", sys.executable, "-c", CLIENT_UDP, ip, str(port), timeout=10).stdout.strip()
 
@@ -445,6 +501,7 @@ def main():
         procs["sni"].terminate()
         procs["sni"].wait(5)
         shared_limit(procs, pol)
+        rule_limits(procs)
 
         # 1.21.0: правила по доменам не работают (посредника нет) и выбран блок — у таких клиентов всё в блок
         rules(pol, sniff=False, strict=True)
