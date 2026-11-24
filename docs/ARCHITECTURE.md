@@ -31,7 +31,7 @@ namespace, and enters the network of the AWG container with `nsenter`.
 | API by topic | `app/api/`: `auth` (login, sessions, 2FA, `same_origin`), `clients` (clients, limits, masking, the client's page `/s/…`), `exits`, `routing` (rules, lists, route check), `server` (AWG server, engine, HTTPS, updates), `state` (`/api/state`, settings), `backup`, `telegram` (settings and bot control) |
 | Input checks, one per kind of thing | `app/checks.py`; the server's client settings in `users.py` |
 | Engine (`Engine`, one class in parts) | `app/engine/`: `__init__` (the pass, loops, events), `tunnels` (exits' tunnels, health, traffic, quotas), `routes` (routing decisions, nftables, ip rule), `sni` (domain rules, QUIC by name), `dns` (DNS on the server), `server` (AWG server, kernel module, rules "before the panel"), `speed` (`tc`), `diag` (exit check, route check), `common` |
-| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` — rules and the rule window with its lists, also used for a client's own rules, `exits`, `server`, `system`, `settings` — Telegram, password, backup); a window over a window (the rule window over the client window) is the second `dialog`, `#modal2`, `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
+| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` — rules and the rule window with its lists, also used for a client's own rules, `clientrules` — the Client rules section of Routing (1.24.0), `exits`, `server`, `system`, `settings` — Telegram, password, backup); a window over a window (the rule window over the client window) is the second `dialog`, `#modal2`, `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
 
 ## The AWG server ("Target")
 
@@ -92,7 +92,24 @@ match. The accounting table `awgr_acct` is never rebuilt together with `awgr`, o
 
 Which exit a client uses is decided in `engine.resolve`: the chosen exit if it works, otherwise the
 fallback; an exit over its monthly quota follows `quota_action`. With load balancing on,
-`balance.Balancer` assigns the least busy exit and moves a client only after sustained overload.
+`balance.Balancer` assigns the least busy exit and moves a client only after sustained overload. A rule
+with load balancing (`balance`, 1.24.0) has its own `Balancer` per rule (per client and rule for a client's own
+rule): `Engine.rule_out` gives the exit it assigned, the rule's `balance_fb` when none works, Block while a ticked exit
+is still connecting, and the rule's `quota_action` once its monthly limit is used up.
+
+Traffic by rule (1.24.0): every line of a policy chain sets a conntrack label with the rule's number — its place
+among the client's enabled rules, `RULE_DEFAULT_SLOT` for Default — and the table `awgr_racct`
+(`nftgen.racct_ruleset`, kept like `awgr_acct`: chains rewritten, sets with counters kept) counts bytes per client
+and number. `sniproxy.py` counts its own connections by `client|exit|number`; `Engine.rule_keys` maps numbers back
+to rules for `traffic.py`. A QUIC verdict carries the number in `QUIC_SLOT_MASK`, which the chain `q_lab` turns into
+the label and takes off before routing.
+
+A rule's speed limit (1.24.0) is a pair of nftables `limit` objects; its connections also get labels
+`RULE_LIM_BASE + j` and `RULE_LIM_ANY`, and the chains `rl_f` (forward) and `rl_i` (input) drop what is over the limit
+where packets arrive. `sniproxy.py` passes `j` in `RULE_LIM_MASK` of its sockets' marks (and QUIC verdicts), the
+`type route` chain `rl_lab` in output turns it into labels and takes it off before the route is chosen again; the
+proxy uses it only once a ruleset with `rl_lab` is in (`_rlim_key`), and `c_guard_post` drops packets still carrying
+it. Numbers `j` are kept between passes (`Engine.rule_limits`).
 
 ## Domain rules
 

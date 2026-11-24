@@ -3,8 +3,57 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.24.0 — 2026-11-23
+## 1.24.0 — 2026-11-25
 
+- **Traffic by rule** (#54, Alex4003). **Routing** shows this month's ↓ ↑ under each rule and **Default** (all clients
+  with the shared rules); the client window shows the client's traffic by each of its rules, this month and last. How
+  it is counted: every line of a policy chain sets a conntrack label with the rule's number (its place among the
+  client's enabled rules; 63 — **Default**), and a separate table `awgr_racct` (forward hook, `filter + 11`) counts
+  bytes per client address and number in dynamic sets (`ipv4_addr . mark`, counters). Like `awgr_acct`, its chains are
+  rewritten and its sets kept (`add set`), so counters survive a new ruleset. `sniproxy.py` counts its connections
+  itself by `client|exit|number`; a QUIC verdict carries the number + 1 in bits `0x3F000000`, and the chain `q_lab`
+  sets the label and takes the bits off before routing — the proxy adds them only after a ruleset with `q_lab` is in
+  (`_qlab_key`), and `c_forward` rejects a client packet that still has them. The kernel is checked once per server
+  (`nft -c`): without labels (some OpenVZ/LXC) there is no traffic by rule and the panel says so; everything else is
+  as before. Rules put in before the panel (`_save_hold`) never use labels. `traffic.json` gets `rules`, `racct` and
+  `by_rule` per client (two months); `FORMAT` stays 2.
+- **Load balancing inside a rule** (#53, Alex4003): the rule's exit can be **Load balancing** with ticked exits. Each
+  rule (a client's own rule — each client and rule) has its own `Balancer`: its clients are those going by the rule,
+  their rates are their traffic by the rule, an exit's load is all its traffic (from the default balancing). Open
+  connections stay on their exit (`Sticky` for address rules; domain rules get the assigned exit); while a ticked exit
+  is still connecting, the rule's traffic is blocked, and with none working it goes to the rule's own fallback (Block
+  by default). Fields `balance` and `balance_fb`; `outbound` is the first ticked exit, so an older panel sends the rule
+  through it. The rule row shows how many clients are on each exit, the client window — the exit "now", the route
+  check — the step.
+- **No traffic past the exits while default load balancing starts**: with no balanced exit up yet, `default_out` took
+  **If all exits are unavailable** (the routing default) even while exits were still connecting after a panel start —
+  with Direct there, past the exits for a few seconds; now it blocks until they answer, as a single exit does since
+  1.23.0.
+- **Client rules on Routing**: a new section lists the clients with their own rules, and they can be added (**+ Add
+  rule** with a client picker; a client on the shared rules gets a copy of them with the new rule last), edited,
+  deleted, or the client sent back to the shared rules. The rule window of a shared rule shows the clients that used
+  the most by it this month (`GET /api/rule-top/{id}`).
+- **Monthly limit per rule**: GB per month for all clients of the rule together (a client's own rule — that client),
+  with the same choices as an exit's limit: Direct, Block, another exit or only a notification. Events at 90% and when
+  it is used up; back to normal on the 1st (UTC). Fields `quota`, `quota_action`, `quota_hit`, `quota_warned`. A domain
+  rule with a limit (or a speed limit) keeps the proxy even when it leads where **Default** does, otherwise its traffic
+  could not be counted.
+- **Speed limit per rule**: `rate_down`/`rate_up` in Mbit/s for all clients of the rule together. One nftables `limit`
+  per rule and direction (`rl_<j>_d`, `rl_<j>_u`, no `burst` — the kernel keeps a second's worth anyway); what is over
+  it is dropped where packets arrive: in forward for transit traffic and in input for `sniproxy.py`'s connections (from
+  the client and the site's replies). The sender sees ordinary loss; dropping what the server itself sends would make
+  TCP wait for a timer. A connection of a limited rule gets labels 64 + j and 127 ("limited": other traffic costs one
+  label test) — from the policy chain, from the QUIC verdict (bits `0x00FF0000`, `q_lab`) or from the proxy's socket
+  marks (same bits; the `type route` chain `rl_lab` in output sets the labels and takes the bits off before the route is
+  chosen again). `rl_lab` is in every ruleset with labels, the proxy uses the bits only after such a ruleset is in
+  (`_rlim_key`), and `c_guard_post` drops a packet that still has them: an exit mark with extra bits would not match
+  the exit's `ip rule`. A rule keeps its number between passes. A kernel without nftables `limit` turns rule speed
+  limits off with an event. On GitHub's runners: 11.8–11.9 of 12 Mbit/s down and 5.45 of 5 up (measured from the
+  first byte), transit and the proxy together 9.4–9.8 of 10; transit through a SOCKS5 exit gets 66–79% of the limit
+  (hev's TCP takes losses worse). Kernel CPU time of forwarding: +2–3% with another rule limited, +4–7% under a limit.
+- **Monthly totals in Telegram** (off by default, also after an upgrade): on the first pass of a month the bot sends
+  last month's server total, exits and Direct, and the top general rules with **Default**. Once a month (`report` in
+  `traffic.json`); the first run after an upgrade only remembers the month.
 - **The bot's main menu is a picture with live numbers** (owner's request). Instead of the logo with a caption, the menu
   message is a PNG drawn by the panel (`app/tgcard.py`): the VPN server's address (`client_host`, the one in clients'
   configs; it was "Host", the panel's `public_host`), **exits online** of the enabled ones (green — all, orange — some,
