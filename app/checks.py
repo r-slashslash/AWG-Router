@@ -157,6 +157,18 @@ def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:
                     "outbound": to,
                     "enabled": flag(r.get("enabled"), True),     # "false" строкой — не «включено»
                     "comment": str(r.get("comment") or "")[:80]})
+        # балансировка в правиле (1.24.0, #53): выходы группы и куда трафик, когда не работает ни один. Поле пишется,
+        # только если задано; outbound — первый выход группы: панель до 1.24.0 поведёт правило через него
+        bal = r.get("balance")
+        if bal not in (None, "", []):
+            with field(f"rule_balance_{i}"):
+                if not isinstance(bal, list) or len(bal) > config.MAX_UPSTREAMS or \
+                        not all(isinstance(x, str) for x in bal):
+                    bad("err.bad_value")
+                ids = [outbound(st, "up:" + x)[3:] for x in dict.fromkeys(bal)]
+            with field(f"rule_balance_fb_{i}"):
+                fb = outbound(st, r.get("balance_fb") or "block")
+            out[-1].update(outbound="up:" + ids[0], balance=ids, balance_fb=fb)
         # свой DNS — только у правила по сайтам (адрес сайта из списка сетей до ответа DNS не известен);
         # поле пишется, только если задано: состояние и копии без него — как до 1.22.0
         if Store.lst(st, ls[0])["kind"] == "domains":

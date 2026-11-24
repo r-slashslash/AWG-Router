@@ -202,7 +202,7 @@ def mark_for(num: int) -> int:
 
 
 def _policy_key(policy: dict) -> tuple:
-    key = (tuple((tuple(l), o) for l, o in policy["rules"]), _okey(policy["default"]),
+    key = (tuple((tuple(l), _okey(o)) for l, o in policy["rules"]), _okey(policy["default"]),
            tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()))
     if policy.get("dns"):          # без своего DNS ключ прежний: номера политик sniproxy.py не сдвигаются
         key += (tuple((tuple(l), str(o), tuple(d)) for l, o, d in policy["dns"]),)
@@ -269,13 +269,13 @@ def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[i
     def norm(policy: dict) -> dict:
         # выход на несуществующий туннель → блок (безопасный вариант)
         fix = lambda o: o if o in ("direct", "block") or o in up_nums else "block"
-        rules = [(l, fix(o)) for l, o in policy["rules"]]
-        default = fix(policy["default"])
-        if isinstance(default, Sticky) and int(default) not in balance:
-            default = int(default)
+        # Sticky — только на рабочий выход балансировки (у «По умолчанию» и у правил с балансировкой, 1.24.0)
+        unstick = lambda o: int(o) if isinstance(o, Sticky) and int(o) not in balance else o  # noqa: E731
+        rules = [(l, unstick(fix(o))) for l, o in policy["rules"]]
+        default = unstick(fix(policy["default"]))
         slots = policy.get("slots")
         # хвостовые правила ничего не меняют в пути — но с учётом по правилам (slots) их строки ставят свою метку
-        while slots is None and rules and rules[-1][1] == default:
+        while slots is None and rules and _okey(rules[-1][1]) == _okey(default):
             rules.pop()
         out = {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
         if policy.get("dns"):                        # свой DNS правил по сайтам (только dnsproxy.py)

@@ -19,7 +19,7 @@ const isDomainList = (id) => (listObj(id) || {}).kind === "domains";
 function ruleTrafficHtml(v) {
   if (!S.rule_traffic || S.rule_traffic.state !== "ok") return "";
   const p = v || [0, 0];
-  return `<span>${esc(t("rt.month"))}</span> <bdi dir="ltr" class="nowrap">↓ ${esc(fmtBytes(p[1]))} ↑ ${esc(fmtBytes(p[0]))}</bdi>`;
+  return `<span>${esc(t("rt.month"))}</span> <span class="nowrap">↓ ${esc(fmtBytes(p[1]))} ↑ ${esc(fmtBytes(p[0]))}</span>`;
 }
 function fillRuleTraffic(root = $("#main")) {
   if (!root) return;
@@ -55,7 +55,7 @@ function ruleRowsHtml(rules, tr = "", pk = "") {
     : `<div class="rule-n">${esc(fmtNum(i + 1))}</div>`}
       <button type="button" class="rule-open" data-open aria-label="${esc(t("rw.edit"))}">
         ${r.comment ? `<span class="rule-title"><bdi>${esc(r.comment)}</bdi></span>` : ""}
-        <span class="rule-line"><span class="rule-what">${what}</span> <span aria-hidden="true">—</span> ${outChip(r.outbound)}</span>
+        <span class="rule-line"><span class="rule-what">${what}</span> <span aria-hidden="true">—</span> ${ruleOutChip(r)}${r.balance && r.balance.length && tr === "c" ? ` <span class="small muted nowrap" data-rbal-c="${esc(r.id)}"></span>` : ""}</span>
         ${tr === "g" ? `<span class="small muted rule-tr" data-rtr="${esc(r.id)}"></span>` : ""}${tr === "c" ? `<span class="small muted rule-tr" data-rtr-c="${esc(r.id)}"${pk ? ` data-rtr-pk="${esc(pk)}"` : ""}></span>` : ""}
         ${warn}
       </button>
@@ -133,23 +133,64 @@ async function dropNewLists(ids) {
 /** Окно правила. ok(правило, новые списки) — сохранить (страница) или положить в черновик (окно клиента); false —
     остаться в окне. del — удалить правило (нет — новое). Готовых правил стран здесь нет (владелец, 2026-11-20): список
     страны — просто список; адреса и домены страны со своим DNS — только кнопки «Применить для …». */
-function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
+function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0, pick = null, top = false, pk = null }) {
   const r = structuredClone(rule0);
+  // ключ балансировки правила (сколько клиентов на каждом выходе): общее правило — id, своё правило клиента — «клиент|id»
+  const balKey = pk ? `${pk}|${r.id}` : r.id;
   const made = [];               // списки, созданные в этом окне: «Отмена» — удалить их
   let form = null;               // открытая форма списка: {kind, id}
   let timer = null;
-  const body = `
+  // pick — первой строкой выбор клиента («Правила клиентов» → «+ Добавить правило», 1.24.0): {choices: [[ключ, подпись]],
+  // hint(ключ) → подсказка под выбором}; выбранный ключ — третьим аргументом ok
+  const pickHtml = pick ? `<label class="field"><span>${esc(t("cr.client"))}</span><select id="rw-pk"><option value="">${esc(t("cr.pick"))}</option>${pick.choices.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select>
+    <span class="hint" id="rw-pk-hint"></span></label>` : "";
+  const body = `${pickHtml}
     <label class="field"><span>${esc(t("rw.name"))}</span><input type="text" id="rw-name" maxlength="80" value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}"></label>
     <div class="field"><span>${esc(t("rw.lists"))}</span><div id="rw-lists"></div></div>
     <div id="rw-dns"></div>
-    <label class="field"><span>${esc(t("rw.exit"))}</span><select id="rw-out">${outOptions(r.outbound)}</select></label>
-    <label class="check"><input type="checkbox" id="rw-en" ${r.enabled !== false ? "checked" : ""}><span>${esc(t("re.enabled"))}</span></label>`;
+    <label class="field"><span>${esc(t("rw.exit"))}</span><select id="rw-out"><option value="balance" ${r.balance && r.balance.length ? "selected" : ""}>${esc(t("bal.option"))}</option>${outOptions(r.balance && r.balance.length ? "" : r.outbound)}</select></label>
+    <div class="panel panel-pad bal-box rw-bal" id="rw-bal" ${r.balance && r.balance.length ? "" : "hidden"}>
+      <p class="small muted" style="margin-top:0">${esc(t("rbal.hint"))}</p>
+      <div class="field"><span>${esc(t("bal.exits"))}</span>${S.upstreams.length ? `<div class="check-cols">${S.upstreams.map((u) => {
+    // как у балансировки «По умолчанию»: сколько клиентов правила на выходе или почему он сейчас не в работе
+    const on = (r.balance || []).includes(u.id), n = (S.rule_balance && S.rule_balance[balKey] || {})[u.id];
+    const live = u.enabled !== false && !quotaSwitched(u) && (u.health || {}).healthy;
+    const why = !on ? "" : n ? t("ex.bal_clients", { n }) : !u.enabled ? t("bal.off") : quotaSwitched(u) ? t("bal.quota") : live ? "" : t("bal.down");
+    return `<label class="check"><input type="checkbox" data-rbal="${esc(u.id)}" ${on ? "checked" : ""}><span><bdi>${esc(u.name)}</bdi>${why ? ` <span class="muted small">— ${esc(why)}</span>` : ""}</span></label>`;
+  }).join("")}</div>` : `<p class="small muted" style="margin:0">${esc(t("bal.no_exits"))}</p>`}</div>
+      <label class="field" style="margin-bottom:0"><span>${esc(t("bal.fallback"))}</span>
+        <select id="rw-bal-fb">${outOptions(r.balance_fb || "block")}</select><span class="hint">${esc(t("rbal.fb_hint"))}</span></label>
+    </div>
+    <label class="check"><input type="checkbox" id="rw-en" ${r.enabled !== false ? "checked" : ""}><span>${esc(t("re.enabled"))}</span></label>
+    ${top && r.id && S.rule_traffic && S.rule_traffic.state === "ok" ? `<div class="field by-exit rw-top" id="rw-top" hidden><span>${esc(t("rw.top"))}</span><div class="rw-top-list"></div></div>` : ""}`;
   const foot = `${del ? `<button class="btn danger left" id="rw-del">${esc(t("re.delete"))}</button>` : ""}
     <button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="rw-ok">${esc(okLabel)}</button>`;
   openModal2(title, body, foot);
   const m = $("#modal2");
+  if (pick) $("#rw-pk", m).onchange = (e) => { $("#rw-pk-hint", m).textContent = e.target.value ? pick.hint(e.target.value) : ""; };
+  // кто больше всех потратил по правилу за месяц (общие правила, 1.24.0) — отдельным запросом, в опросе этого нет
+  if ($("#rw-top", m)) {
+    api("GET", "rule-top/" + encodeURIComponent(r.id)).then((res) => {
+      const box = $("#rw-top", m);
+      if (!box || !res.top || !res.top.length) return;
+      $(".rw-top-list", box).outerHTML = res.top.map((x) => `<div><span><bdi>${esc(x.name)}</bdi></span><b><span class="nowrap">↓ ${esc(fmtBytes(x.tx))} ↑ ${esc(fmtBytes(x.rx))}</span></b></div>`).join("");
+      box.hidden = false;
+    }).catch(() => {});
+  }
   m.addEventListener("close", () => { clearTimeout(timer); dropNewLists(made.splice(0)); }, { once: true });
-  const keep = () => { r.comment = $("#rw-name").value.trim(); r.outbound = $("#rw-out").value; r.enabled = $("#rw-en").checked; };
+  const keep = () => {
+    r.comment = $("#rw-name").value.trim(); r.enabled = $("#rw-en").checked;
+    if ($("#rw-out").value === "balance") {
+      // балансировка в правиле (1.24.0): выходы — в порядке вкладки «Выходы»; outbound — первый (для панели до 1.24.0)
+      r.balance = $$("[data-rbal]", m).filter((x) => x.checked).map((x) => x.dataset.rbal);
+      r.balance_fb = $("#rw-bal-fb", m).value;
+      if (r.balance.length) r.outbound = "up:" + r.balance[0];
+    } else {
+      r.outbound = $("#rw-out").value;
+      delete r.balance; delete r.balance_fb;
+    }
+  };
+  $("#rw-out", m).onchange = (e) => { $("#rw-bal", m).hidden = e.target.value !== "balance"; };
 
   const drawDns = (dom) => {
     const box = $("#rw-dns", m);
@@ -260,13 +301,15 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0 }) {
   drawLists();
   $("#rw-ok", m).onclick = async (e) => {
     keep();
+    if (pick && !$("#rw-pk", m).value) { toast(t("cr.need_client"), true); $("#rw-pk", m).focus(); return; }
     if (!r.lists.length) { toast(t("rw.need_list"), true); $("#rw-add", m).focus(); return; }
+    if (r.balance && !r.balance.length) { toast(t("rbal.need"), true); return; }
     e.target.disabled = true;
     // созданные здесь списки, которые в правило так и не попали (убрали крестиком), удаляются при закрытии окна, как
     // при «Отмене»; остальные уходят вместе с правилом
     const keepIds = new Set(r.lists);
     try {
-      if (await ok(r, made.filter((id) => keepIds.has(id))) !== false) {
+      if (await ok(r, made.filter((id) => keepIds.has(id)), pick ? $("#rw-pk", m).value : null) !== false) {
         made.splice(0, made.length, ...made.filter((id) => !keepIds.has(id)));
         closeModal2();
         return;
@@ -368,6 +411,7 @@ function viewRouting() {
       <input type="number" id="ls-hours" min="1" max="720" step="1" data-field="list_update_hours" value="${S.settings.list_update_hours}">
       <button type="button" class="btn sm primary" id="ls-hours-save" hidden>${esc(t("btn.save"))}</button></div>
   </section>
+  ${clientRulesHtml()}
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("tr.title"))}</h2><p class="muted small">${esc(t("tr.subtitle"))}</p></div></div>
     <div class="panel panel-pad">
@@ -386,7 +430,7 @@ function openRoutingRule(i) {
   const r = i === null ? { lists: [], outbound: "block", enabled: true, comment: "" } : rules[i];
   ruleWindow(r, {
     title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("btn.save"),
-    at: i === null ? rules.length : i,
+    at: i === null ? rules.length : i, top: i !== null,
     ok: async (nr) => saveRules(withRule(S.routing.rules, i, nr)),
     del: i === null ? null : { i, fn: () => saveRules(S.routing.rules.filter((_, j) => j !== i)) },
   });
@@ -413,6 +457,7 @@ bind.routing = () => {
   const upd = () => { routingDraft = draft; $("#savebar").hidden = !routingDirty(); };
   drawRoutingRules();
   fillRuleTraffic();
+  bindClientRules();
   upd();
   bindListHours();
   if (scrollToLists) { scrollToLists = false; $("#g-rules").scrollIntoView(); }

@@ -45,6 +45,13 @@ def _upstream_view(st: dict, u: dict, bal_members: set | None = None, bal_counts
             "balance": u["id"] in bal_members, "bal_clients": bal_counts.get(u["id"], 0)}
 
 
+def _counts(plan: dict) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for uid in plan.values():
+        out[uid] = out.get(uid, 0) + 1
+    return out
+
+
 def _state_tag(out: dict) -> str:
     """Отпечаток состояния для опроса браузера: тот же отпечаток — вкладку перерисовывать незачем (тысяча
     клиентов — четверть секунды на компьютере и секунды на телефоне). Время, процессор и память меняются на
@@ -151,6 +158,8 @@ def _state_view() -> dict:
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
         # трафик по правилам за месяц (1.24.0): {id правила | "_default": [rx, tx]}; state — ok | off | None
         "rule_traffic": {"state": engine.racct_state, "rules": engine.traffic.rules_month()},
+        # балансировка в правилах (1.24.0): {правило | «клиент|правило»: {id выхода: сколько клиентов на нём}}
+        "rule_balance": {g: _counts(p) for g, p in (engine.rbal_plan or {}).items()},
         "lists": [{**routing.list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),
         "clients": rows,

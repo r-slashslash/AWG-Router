@@ -345,7 +345,12 @@ def delete_user(pk: str) -> None:
 @app.get("/api/rule-traffic/{pk:path}")
 def rule_traffic(req, pk):
     """Трафик клиента по правилам за этот месяц (окно клиента → «Маршрут», 1.24.0): {id правила | "_d": [rx, tx]}."""
-    return {"state": engine.racct_state, "rules": engine.traffic.client_rules(pk)}
+    own = store.peek(lambda st: (st["clients"].get(pk) or {}).get("rules_mode") == "custom")
+    plan = engine.rbal_plan or {}
+    # выход клиента в каждом правиле с балансировкой (окно клиента: «сейчас: …»)
+    assign = {g.split("|", 1)[1] if "|" in g else g: p[pk] for g, p in plan.items()
+              if pk in p and (g.startswith(pk + "|") if own else "|" not in g)}
+    return {"state": engine.racct_state, "rules": engine.traffic.client_rules(pk), "assign": assign}
 
 
 @app.get("/api/users/{pk:path}/config")

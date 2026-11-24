@@ -6,7 +6,7 @@ import json
 import os
 import time
 
-from .. import config, nftgen, shaping, system
+from .. import balance, config, nftgen, shaping, system
 from ..i18n import Msg
 from ..store import Store
 from .common import RUN_DIR, log
@@ -54,11 +54,14 @@ class RoutesMixin:
         default = g["default"]
         if cp.get("outbound") and cp["outbound"] != "inherit":
             default = cp["outbound"]
-        return {"rules": [r for r in rules if r.get("enabled", True) and r.get("lists")],
+        rules = [r for r in rules if r.get("enabled", True) and r.get("lists")]
+        return {"rules": rules,
                 "default": default, "custom": bool(cp) and (
                     cp.get("rules_mode") == "custom" or cp.get("outbound", "inherit") != "inherit"),
                 # выход по умолчанию — общий, и включена балансировка: выход выбирает она
-                "balanced": self.balance_on(st) and cp.get("outbound", "inherit") == "inherit"}
+                "balanced": self.balance_on(st) and cp.get("outbound", "inherit") == "inherit",
+                # правило с балансировкой (1.24.0): выход правила у каждого клиента свой — нужна его политика
+                "rbal": any(r.get("balance") for r in rules), "own": cp.get("rules_mode") == "custom"}
 
     # ---------------------------------------------------------- балансировка
     @staticmethod
@@ -76,7 +79,90 @@ class RoutesMixin:
                 for u in st["upstreams"] if u["id"] not in skip and u["id"] in self.rt
                 and self.resolve("up:" + u["id"], st) == u["num"]]
 
+    # ------------------------------------------------- балансировка в правиле (1.24.0, #53)
+    def rule_members(self, st: dict, r: dict) -> list[dict]:
+        """Рабочие выходы балансировки правила — как balance_members, в порядке, отмеченном в правиле."""
+        ids = r.get("balance") or []
+        ups = [u for u in st["upstreams"] if u["id"] in ids and u["id"] in self.rt
+               and self.resolve("up:" + u["id"], st) == u["num"]]
+        return [{"id": u["id"], "num": u["num"], "up": shaping.mbit(u.get("rate_up")),
+                 "down": shaping.mbit(u.get("rate_down"))} for u in sorted(ups, key=lambda u: ids.index(u["id"]))]
+
+    def rule_pending(self, st: dict, ids) -> bool:
+        """Среди выходов есть включённый, который ещё не ответил (только что запущен, проверки ещё не было): пока
+        рабочих нет — блок, а не резерв (решение Н1 и Г1: с резервом «Напрямую» клиенты шли бы мимо выхода)."""
+        return any(u["id"] in ids and u.get("enabled", True) and
+                   (u["id"] not in self.health or self.health[u["id"]].get("state") == "connecting")
+                   for u in st["upstreams"])
+
+    @staticmethod
+    def rule_group(r: dict, pk: str | None, own: bool) -> str:
+        """Ключ балансировки правила: общее правило — его id, своё правило клиента — «клиент|id»."""
+        return f"{pk}|{r['id']}" if own else r["id"]
+
+    def rule_out(self, st: dict, r: dict, pk: str | None, own: bool = False) -> tuple[str, bool]:
+        """Выход правила для клиента в терминах настроек и «держать открытые соединения на выходе» (Sticky). С
+        балансировкой — назначенный ей выход; рабочих выходов нет — резерв правила (balance_fb), а пока какой-то из
+        отмеченных выходов только подключается — блок."""
+        if not r.get("balance"):
+            return r["outbound"], False
+        g = self.rule_group(r, pk, own)
+        uid = ((getattr(self, "rbal_plan", None) or {}).get(g) or {}).get(pk) if pk else \
+            (getattr(self, "rbal_new", None) or {}).get(g)
+        if uid and uid in r["balance"] and Store.upstream(st, uid):
+            return "up:" + uid, True
+        if self.rule_pending(st, r["balance"]):
+            return "block", False
+        return r.get("balance_fb") or "block", False
+
+    def _balance_rules(self, st: dict, now: float) -> None:
+        """Распределение клиентов правил с балансировкой. У каждого правила (у своего правила клиента — у пары
+        «клиент, правило») свой Balancer: клиенты — те, кто идёт по этому правилу, скорость клиента — его трафик по
+        правилу (учёт по правилам), загрузка выхода — весь трафик выхода (из основной балансировки)."""
+        ips = {c["public_key"] for c in self.clients if c.get("ip")}
+        own = {pk for pk, cp in st["clients"].items() if cp.get("rules_mode") == "custom"}
+        general = sorted(pk for pk in ips if pk not in own)
+        groups = {}
+        for r in st["routing"]["rules"]:
+            if r.get("balance") and r.get("enabled", True) and r.get("lists"):
+                groups[r["id"]] = (r, general)
+        for pk in sorted(own & ips):
+            for r in st["clients"][pk].get("rules") or []:
+                if r.get("balance") and r.get("enabled", True) and r.get("lists"):
+                    groups[self.rule_group(r, pk, True)] = (r, [pk])
+        recent = self.traffic.take_recent_rules()
+        old = getattr(self, "rbal", None) or {}
+        self.rbal, plans, news, nums = {}, {}, {}, set()
+        for g, (r, pks) in groups.items():
+            b = old.get(g) or balance.Balancer()
+            b.exit_rate = self.balancer.exit_rate
+            b.feed_clients({(b.assign.get(pk), pk): d for (rid, pk), d in recent.items()
+                            if rid == r["id"] and pk in pks}, now)
+            members = self.rule_members(st, r)
+            plans[g], news[g] = b.plan(members, pks, now), b.pick(members)
+            nums |= {m["num"] for m in members}
+            self.rbal[g] = b
+            mv = b.last_move
+            if mv and mv.get("logged") is None:
+                mv["logged"] = True
+                name = lambda uid: (Store.upstream(st, uid) or {}).get("name", uid)
+                c = next((x for x in self.clients if x["public_key"] == mv["pk"]), {})
+                self.event("info", Msg("ev.rule_balance_move", client=c.get("name") or c.get("ip") or mv["pk"][:8],
+                                       rule=r.get("comment") or ", ".join(r.get("lists") or []),
+                                       **{"from": name(mv["from"])}, to=name(mv["to"])))
+        self.rbal_plan, self.rbal_new, self.rbal_nums = plans, news, nums
+
+    def sticky_nums(self) -> set[int]:
+        """Выходы, у которых открытые соединения держатся на выходе (Sticky): рабочие выходы основной балансировки и
+        балансировок в правилах. Одинаково для nftables, sniproxy.py и DNS на сервере (nftgen.layout)."""
+        return set(self.bal_nums) | set(getattr(self, "rbal_nums", None) or ())
+
     def _balance(self, st: dict) -> None:
+        try:
+            self._balance_rules(st, time.time())
+        except Exception:  # noqa: BLE001  — без распределения правила идут на свой резерв, остальное как обычно
+            log.exception("rule balance")
+            self.rbal, self.rbal_plan, self.rbal_new, self.rbal_nums = {}, {}, {}, set()
         members = self.balance_members(st)
         pks = [c["public_key"] for c in self.clients if c.get("ip")
                and self.policy_for(st, c["public_key"])["balanced"]]
@@ -100,6 +186,11 @@ class RoutesMixin:
             uid = self.bal.get(pk) if pk else self.bal_new
             if uid and Store.upstream(st, uid):
                 return "up:" + uid
+            # рабочих выходов балансировки нет, а какой-то из отмеченных только подключается (запуск панели, проверки ещё
+            # не было): блок, а не запасной выход — с запасным «Напрямую» клиенты шли бы мимо выходов (решения Н1, Г1)
+            skip = set((st["routing"].get("balance") or {}).get("skip") or [])
+            if self.rule_pending(st, {u["id"] for u in st["upstreams"] if u["id"] not in skip}):
+                return "block"
         return pol["default"]
 
     @staticmethod
@@ -136,12 +227,16 @@ class RoutesMixin:
         def conv(pol: dict, pk: str | None) -> dict:
             ip_rules, dom, dns, slots, dslots = [], [], [], [], []
             for k, r in enumerate(pol["rules"]):
+                out, sticky = self.rule_out(st, r, pk, pol.get("own", False))
                 if any(lid in dl for lid in r["lists"]):
-                    dom.append(([lid for lid in r["lists"] if lid in dl], r["outbound"]))
-                    dns.append((dom[-1][0], r["outbound"], list(r.get("dns") or ())))
+                    dom.append(([lid for lid in r["lists"] if lid in dl], out))
+                    dns.append((dom[-1][0], out, list(r.get("dns") or ())))
                     dslots.append(k)
                 else:
-                    ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
+                    eff = self.resolve(out, st)
+                    # балансировка в правиле: соединение держится на выходе, пока тот среди рабочих (как у «По умолчанию»)
+                    ip_rules.append((r["lists"], nftgen.Sticky(eff) if sticky and isinstance(eff, int)
+                                     and eff in (getattr(self, "rbal_nums", None) or ()) else eff))
                     slots.append(k)
             default = self.resolve(self.default_out(st, pk, pol), st)
             # правила по доменам, которые ведут туда же, куда всё остальное, ничего не меняют —
@@ -149,7 +244,8 @@ class RoutesMixin:
             # адресам ведут туда же: домен проверяется раньше них и мог бы увести сайт мимо правила по
             # адресу. Так готовые правила страны на новой установке («всё — напрямую») не включают перехват
             plain = int(default) if isinstance(default, int) else default
-            if dom and all(self.resolve(o, st) == plain for _, o in dom) and all(o == plain for _, o in ip_rules):
+            if dom and all(self.resolve(o, st) == plain for _, o in dom) and \
+                    all((int(o) if isinstance(o, int) else o) == plain for _, o in ip_rules):
                 dom, dslots = [], []
             if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
                 default = nftgen.Sticky(default)     # открытые соединения не переезжают
@@ -167,7 +263,7 @@ class RoutesMixin:
             if not c.get("ip"):
                 continue
             pol = self.policy_for(st, c["public_key"])
-            if pol["custom"] or pol["balanced"]:
+            if pol["custom"] or pol["balanced"] or pol.get("rbal"):
                 cps[c["ip"]] = conv(pol, c["public_key"])
         return gp, cps
 
@@ -196,7 +292,7 @@ class RoutesMixin:
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
         return nftgen.generate(t.iface, lst, [] if hold else self._up_list(st), gp, cps, sniff_port,
-                               frozenset() if hold else self.bal_nums,
+                               frozenset() if hold else self.sticky_nums(),
                                dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
                                strict=sniff_port is None and self.strict(st), slots=self._sniff_slots, labels=labels)
 

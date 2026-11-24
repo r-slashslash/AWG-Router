@@ -14,10 +14,25 @@ os.environ.setdefault("DRY_RUN", "1")
 os.environ.setdefault("PANEL_PASSWORD", "test-password")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import config, nftgen, sniproxy, system  # noqa: E402
+from app import balance, checks, config, nftgen, sniproxy, system  # noqa: E402
+from app.web import HTTPError  # noqa: E402
+from tests.seed import legacy_lists  # noqa: E402
+from app.store import Store  # noqa: E402
 from app.traffic import Traffic, month_key  # noqa: E402
 from app import panel  # noqa: E402
-from app.api import clients as api_clients, routing as api_routing, state as api_state  # noqa: E402
+from app.api import clients as api_clients, exits as api_exits, routing as api_routing, state as api_state  # noqa: E402
+
+UP = ("[Interface]\nAddress = 10.9.0.{n}/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n\n"
+      "[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\n"
+      "Endpoint = 198.51.100.{n}:51820\n")
+
+
+class Req:
+    def __init__(self, body):
+        self.body = body
+
+    def json(self, limit=None):
+        return self.body
 
 D = config.RULE_DEFAULT_SLOT
 
@@ -250,13 +265,13 @@ class EngineRulesTest(unittest.TestCase):
 
     def test_rule_keys(self):
         """Вход: клиент с общими правилами (одно из них выключено) и клиент со своими. Ожидание: номер — место среди
-        включённых правил; «По умолчанию» общего клиента — ещё и в итог общих правил, своего — только у клиента."""
+        включённых правил; общие правила и «По умолчанию» общего клиента — ещё и в итоги, свои — только у клиента."""
         of = self.e.rule_keys(self.st)
         self.assertEqual(of("10.8.1.2", 0), ("r_ru", "r_ru"))
         self.assertEqual(of("10.8.1.2", 1), ("r_yt", "r_yt"))
         self.assertIsNone(of("10.8.1.2", 2))
         self.assertEqual(of("10.8.1.2", D), ("_d", "_default"))
-        self.assertEqual(of("10.8.1.3", 0), ("r_c1", "r_c1"))
+        self.assertEqual(of("10.8.1.3", 0), ("r_c1", None))       # свои правила — не в итоги общих
         self.assertEqual(of("10.8.1.3", D), ("_d", None))
         self.assertIsNone(of("10.8.1.9", 0))
         self.assertEqual(self.e.rule_slots(self.st), [0, 1, D])
@@ -303,6 +318,127 @@ class RuleTrafficApiTest(unittest.TestCase):
         self.assertEqual(api_clients.rule_traffic(None, "PKX")["rules"], {"r_t": [3, 30]})
         self.assertEqual(api_routing.rule_top(None, "r_t")["top"], [{"pk": "PKX", "name": "Phone", "rx": 3, "tx": 30}])
         self.assertIn("r_t", api_state._state_view()["rule_traffic"]["rules"])
+
+
+class RuleBalanceTest(unittest.TestCase):
+    """#53: балансировка между выходами в одном правиле."""
+
+    def setUp(self):
+        legacy_lists(panel.store)                 # страны, как в новой установке до 1.22.0
+        self.e = panel.engine
+        self.e.reconcile()
+        self.ids = [api_exits.add_upstream(Req({"name": f"B{n}", "config": UP.format(n=n)}))["id"] for n in (31, 32)]
+        self.e.reconcile()
+        for uid in self.ids:
+            self.e.health[uid] = {"state": "up", "healthy": True}
+        self.st0 = panel.store.snapshot()
+
+    def tearDown(self):
+        panel.store.mutate(lambda s: s.update(routing=self.st0["routing"], clients=self.st0["clients"]))
+        for uid in self.ids:
+            api_exits.del_upstream(Req({"replace": "direct"}), uid)
+        self.e.rbal, self.e.rbal_plan, self.e.rbal_new, self.e.rbal_nums = {}, {}, {}, set()
+
+    def put_rule(self, **kw):
+        rule = {"id": "r_bal", "lists": ["ru"], "outbound": "direct", "enabled": True, "comment": "YouTube",
+                "balance": list(self.ids), "balance_fb": "block", **kw}
+        panel.store.mutate(lambda s: s["routing"].update(rules=[rule], default="direct"))
+        return panel.store.snapshot()
+
+    def test_check_fields(self):
+        """Вход: правило с балансировкой из панели. Ожидание: outbound — первый выход группы (так его поведёт панель до
+        1.24.0), резерв по умолчанию — «Блокировать»; неизвестный выход — ошибка у поля правила."""
+        st = self.e.store.snapshot()
+        out = checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "balance": [self.ids[1], self.ids[0]]}])[0]
+        self.assertEqual((out["outbound"], out["balance"], out["balance_fb"]),
+                         ("up:" + self.ids[1], [self.ids[1], self.ids[0]], "block"))
+        with self.assertRaises(HTTPError):
+            checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "balance": ["nope"]}])
+        plain = checks.rules(st, [{"lists": ["ru"], "outbound": "direct", "balance": []}])[0]
+        self.assertNotIn("balance", plain)
+
+    def test_clients_spread_and_sticky(self):
+        """Вход: правило по адресам с двумя рабочими выходами, несколько клиентов. Ожидание: клиенты распределены по
+        обоим выходам; в политике клиента — Sticky на его выход (открытые соединения не переезжают)."""
+        st = self.put_rule()
+        self.e._balance(st)
+        plan = self.e.rbal_plan["r_bal"]
+        pks = [c["public_key"] for c in self.e.clients if c.get("ip")]
+        self.assertEqual(set(plan), set(pks))
+        self.assertEqual(set(plan.values()), set(self.ids))
+        nums = {Store.upstream(st, u)["num"] for u in self.ids}
+        self.assertEqual(self.e.rbal_nums, nums)
+        _, cps = self.e._policies(st)
+        c = next(x for x in self.e.clients if x.get("ip"))
+        out = cps[c["ip"]]["rules"][0][1]
+        self.assertIsInstance(out, nftgen.Sticky)
+        self.assertEqual(int(out), Store.upstream(st, plan[c["public_key"]])["num"])
+
+    def test_fallback_and_pending(self):
+        """Вход: оба выхода группы лежат; затем один только подключается. Ожидание: сначала — резерв правила, пока
+        выход подключается — блок, а не резерв (Н1, Г1)."""
+        st = self.put_rule(balance_fb="direct")
+        for uid in self.ids:
+            self.e.health[uid] = {"state": "stale", "healthy": False}
+        self.e._balance(st)
+        r = st["routing"]["rules"][0]
+        pk = next(x["public_key"] for x in self.e.clients if x.get("ip"))
+        self.assertEqual(self.e.rule_out(st, r, pk), ("direct", False))
+        self.e.health[self.ids[0]] = {"state": "connecting", "healthy": False}
+        self.assertEqual(self.e.rule_out(st, r, pk), ("block", False))
+
+    def test_domain_rule_gets_assigned_exit(self):
+        """Вход: правило по доменам с балансировкой. Ожидание: в политике клиента у правила — назначенный ему выход
+        (его разрешит sniproxy.py), у нового клиента (общая политика) — выход для нового."""
+        panel.store.mutate(lambda s: s["lists"].append({"id": "ytb", "kind": "domains", "name": "yt", "source": ""})
+                           if not Store.lst(s, "ytb") else None)
+        st = self.put_rule(lists=["ytb"])
+        self.e._balance(st)
+        gp, cps = self.e._policies(st)
+        c = next(x for x in self.e.clients if x.get("ip"))
+        self.assertEqual(cps[c["ip"]]["domain"][0][1], "up:" + self.e.rbal_plan["r_bal"][c["public_key"]])
+        self.assertEqual(gp["domain"][0][1], "up:" + self.e.rbal_new["r_bal"])
+
+    def test_trace_and_state(self):
+        """Вход: проверка маршрута к адресу из правила, состояние панели. Ожидание: шаг «балансировка в правиле» с
+        выходом клиента; в состоянии — сколько клиентов правила на каждом выходе; /api/rule-traffic — выход клиента."""
+        st = self.put_rule()
+        self.e._balance(st)
+        c = next(x for x in self.e.clients if x.get("ip"))
+        with mock.patch.object(self.e.matcher, "contains", return_value="5.0.0.0/8"):
+            res = self.e.trace(c["public_key"], "5.6.7.8")
+        self.assertTrue(any(getattr(m, "key", None) == "tr.rule_balance" for m in res["steps"]), res["steps"])
+        self.assertEqual(res["result"], "up:" + self.e.rbal_plan["r_bal"][c["public_key"]])
+        counts = api_state._state_view()["rule_balance"]["r_bal"]
+        self.assertEqual(sum(counts.values()), len(self.e.rbal_plan["r_bal"]))
+        self.assertEqual(api_clients.rule_traffic(None, c["public_key"])["assign"],
+                         {"r_bal": self.e.rbal_plan["r_bal"][c["public_key"]]})
+
+    def test_default_balance_blocks_while_exit_connects(self):
+        """Вход: балансировка «По умолчанию» с запасным «Напрямую», выход только что запущен (проверки ещё не было).
+        Ожидание: блок, а не «Напрямую» (до 1.24.0 после запуска панели клиенты 1–2 с шли мимо выходов, как в Г1)."""
+        panel.store.mutate(lambda s: s["routing"].update(default="direct", balance={"on": True, "skip": []}))
+        st = panel.store.snapshot()
+        for uid in self.ids:
+            self.e.health.pop(uid, None)
+        bal, new = self.e.bal, self.e.bal_new
+        self.addCleanup(setattr, self.e, "bal", bal)
+        self.addCleanup(setattr, self.e, "bal_new", new)
+        self.e.bal, self.e.bal_new = {}, None
+        self.assertEqual(self.e.default_out(st, None), "block")
+        for uid in self.ids:
+            self.e.health[uid] = {"state": "stale", "healthy": False}
+        self.assertEqual(self.e.default_out(st, None), "direct")       # все упали — запасной, как раньше
+
+    def test_feed_clients_only_client_rates(self):
+        """Вход: прирост трафика правила у клиента. Ожидание: растёт скорость клиента на его выходе, скорости выходов
+        не трогаются (они общие с основной балансировкой)."""
+        b = balance.Balancer()
+        b.exit_rate = {"u1": [1.0, 1.0]}
+        b.feed_clients({("u1", "PK"): [0, 0]}, 100.0)
+        b.feed_clients({("u1", "PK"): [1000, 900000]}, 110.0)
+        self.assertGreater(b.client_rate[("PK", "u1")][1], 0)
+        self.assertEqual(b.exit_rate, {"u1": [1.0, 1.0]})
 
 
 if __name__ == "__main__":

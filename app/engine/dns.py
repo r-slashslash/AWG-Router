@@ -66,7 +66,7 @@ class DnsMixin:
         Имена политик — из nftgen.layout, как у nftables и sniproxy.py."""
         gp, cps = self._policies(st)
         up_nums = {u["num"] for u in self._up_list(st)}
-        policies, client_map = nftgen.layout(gp, cps, up_nums, self.bal_nums)
+        policies, client_map = nftgen.layout(gp, cps, up_nums, self.sticky_nums())
         route = self._dns_route_fn(st)
         pols = {}
         for n, p in policies.items():

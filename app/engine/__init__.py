@@ -126,6 +126,11 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self.bal: dict[str, str] = {}           # балансировка: клиент → id выхода (пусто — выключена)
         self.bal_new: str | None = None         # выход для нового клиента (ещё не в self.bal)
         self.bal_nums: set[int] = set()         # номера рабочих выходов балансировки
+        # балансировка в правилах (1.24.0): {ключ группы: Balancer}, {ключ: {клиент: id выхода}}, {ключ: выход нового}
+        self.rbal: dict = {}
+        self.rbal_plan: dict[str, dict[str, str]] = {}
+        self.rbal_new: dict[str, str | None] = {}
+        self.rbal_nums: set[int] = set()
         self.shape_state: dict | None = None    # ограничение скорости: {"state": on | error, "error"}
         self._shape: dict[str, str] = {}        # интерфейс → хеш применённой очереди; "ing:<if>" → ifb
         self._shape_key: str | None = None      # цель, на которой уже убрано всё лишнее

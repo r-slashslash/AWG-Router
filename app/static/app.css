@@ -364,6 +364,14 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .rule-sum .rule-tr { flex-basis: 100%; }
 .rule-else { margin: 6px 0 0; }
 .rule-else:has(.rule-tr:empty) { display: none; }
+/* «Правила клиентов» (1.24.0): карточка клиента — имя и трафик, справа кнопки; на телефоне кнопки — под именем */
+.cr-card { margin-bottom: 12px; }
+.cr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.cr-who { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.cr-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+/* выход правила с балансировкой (1.24.0): нейтральный чип «⚖ выход · выход» */
+.line.bal-chip::before { display: none; }
+.rw-bal { margin: -4px 0 14px; }
 .rule-item .rule-ctl { padding-top: 0; }
 /* окно правила: списки строками, новый список — формой прямо в окне */
 .rw-list { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--rule); border-radius: 8px; }

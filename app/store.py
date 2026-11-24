@@ -390,8 +390,10 @@ class Store:
         r = state["routing"]
         if r["default"] == target:
             refs.append(Msg("ref.default"))
+        uses = lambda rule: rule["outbound"] == target or rule.get("balance_fb") == target or (  # noqa: E731
+            target.startswith("up:") and target[3:] in (rule.get("balance") or ()))   # балансировка в правиле (1.24.0)
         for i, rule in enumerate(r["rules"]):
-            if rule["outbound"] == target:
+            if uses(rule):
                 refs.append(Store._rule_ref(rule, i))
         for u in state["upstreams"]:
             if u.get("fallback") == target:
@@ -406,7 +408,7 @@ class Store:
                 refs.append(Msg("ref.client", client=name))
             if c.get("rules_mode") == "custom":
                 for i, rule in enumerate(c.get("rules") or []):
-                    if rule["outbound"] == target:
+                    if uses(rule):
                         refs.append(Store._rule_ref(rule, i, name))
         return refs
 
@@ -423,12 +425,28 @@ class Store:
                     return c
             return last
 
+        def fix_rule(rule: dict) -> None:
+            bal = rule.get("balance")
+            if bal and target.startswith("up:") and target[3:] in bal:
+                # балансировка в правиле (1.24.0): выход уходит из группы, замена-выход встаёт на его место
+                rep = new[3:] if new.startswith("up:") and new != target else None
+                ids = list(dict.fromkeys(rep if x == target[3:] else x for x in bal if rep or x != target[3:]))
+                if ids:
+                    rule["balance"], rule["outbound"] = ids, "up:" + ids[0]
+                else:                   # в группе никого: обычное правило на замену
+                    rule.pop("balance", None)
+                    rule.pop("balance_fb", None)
+                    rule["outbound"] = pick()
+            elif rule["outbound"] == target:
+                rule["outbound"] = pick()
+            if rule.get("balance_fb") == target:
+                rule["balance_fb"] = pick()
+
         r = state["routing"]
         if r["default"] == target:
             r["default"] = pick()
         for rule in r["rules"]:
-            if rule["outbound"] == target:
-                rule["outbound"] = pick()
+            fix_rule(rule)
         for u in state["upstreams"]:
             own = "up:" + u["id"]
             if u.get("fallback") == target:
@@ -439,8 +457,7 @@ class Store:
             if c.get("outbound") == target:
                 c["outbound"] = pick()
             for rule in c.get("rules") or []:
-                if rule.get("outbound") == target:
-                    rule["outbound"] = pick()
+                fix_rule(rule)
         tg = state.get("settings", {}).get("telegram") or {}
         if tg.get("via") == target:
             tg["via"] = pick(allow_block=False)

@@ -488,22 +488,29 @@ function editClient(pk, section = null) {
   $("#modal").addEventListener("close", () => dropNewLists(newLists.splice(0)), { once: true });
   const setRules = (next) => draft.rules.splice(0, draft.rules.length, ...next);
   const openOwn = (i) => ruleWindow(i === null ? { lists: [], outbound: "block", enabled: true, comment: "" } : draft.rules[i], {
-    title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("rw.done"), at: i === null ? draft.rules.length : i,
+    title: i === null ? t("rw.new") : t("rw.title"), okLabel: t("rw.done"), at: i === null ? draft.rules.length : i, pk,
     ok: (nr, made) => { setRules(withRule(draft.rules, i, nr)); newLists.push(...made); drawMode(); },
     del: i === null ? null : { i, fn: () => { draft.rules.splice(i, 1); drawMode(); } },
   });
   /* трафик клиента по правилам за месяц (1.24.0) — отдельным запросом при открытии окна: в опросе его нет */
-  let ruleTr = null;
+  let ruleTr = null, ruleAt = {};
   const fillOwn = () => {
+    $$("#modal [data-rbal-c]").forEach((el) => {
+      // правило с балансировкой (1.24.0): на каком выходе клиент сейчас
+      const u = upstreamById(ruleAt[el.dataset.rbalC]);
+      el.textContent = u ? t("rbal.now", { exit: u.name }) : "";
+    });
     if (!ruleTr) return;
     $$("#modal [data-rtr-c]").forEach((el) => {
       const html = ruleTrafficHtml(ruleTr[el.dataset.rtrC]);
       if (el.innerHTML !== html) el.innerHTML = html;
     });
   };
-  if (S.rule_traffic && S.rule_traffic.state === "ok") {
-    api("GET", "rule-traffic/" + encodeURIComponent(pk)).then((r) => { ruleTr = r.rules || {}; fillOwn(); }).catch(() => {});
-  }
+  api("GET", "rule-traffic/" + encodeURIComponent(pk)).then((r) => {
+    ruleAt = r.assign || {};
+    if (r.state === "ok") ruleTr = r.rules || {};
+    fillOwn();
+  }).catch(() => {});
   const elseLine = `<div class="small muted rule-else"><span aria-hidden="true">∗</span> ${esc(t("rt.else"))} · <span class="rule-tr" data-rtr-c="_d"></span></div>`;
   const drawMode = () => {
     $$("#c-mode button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === draft.rules_mode));

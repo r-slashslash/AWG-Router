@@ -210,7 +210,7 @@ class SniMixin:
         → порт для nftables или None (правила по доменам сейчас не действуют)."""
         gp, cps = self._policies(st)
         up_nums = {u["num"] for u in self._up_list(st)}
-        policies, client_map = nftgen.layout(gp, cps, up_nums, self.bal_nums)
+        policies, client_map = nftgen.layout(gp, cps, up_nums, self.sticky_nums())
         marks = nftgen.sniff_marks(policies, self._sniff_slots)
         if not marks:
             self._stop_sni()

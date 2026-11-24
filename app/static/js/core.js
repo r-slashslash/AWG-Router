@@ -197,6 +197,13 @@ function exitName(v) {
 }
 
 /** чип выхода по значению из настроек: direct | block | up:<id> */
+/** выход правила: с балансировкой (1.24.0) — «⚖ выход · выход», иначе — как outChip */
+function ruleOutChip(r) {
+  const ids = (r && r.balance) || [];
+  if (!ids.length) return outChip(r.outbound);
+  const names = ids.map((id) => { const u = upstreamById(id); return u ? `<bdi>${esc(u.name)}</bdi>` : ""; }).filter(Boolean);
+  return `<span class="line bal-chip" title="${esc(t("bal.option"))}"><span aria-hidden="true">⚖</span> ${names.join(" · ") || esc(t("out.deleted"))}</span>`;
+}
 function outChip(v, extra = "") {
   if (v === "direct") return `<span class="line direct">${esc(t("out.direct"))}${extra}</span>`;
   if (v === "block") return `<span class="line block">${esc(t("out.block"))}${extra}</span>`;
@@ -305,7 +312,7 @@ function rulesSummary(rules, tr = "") {
       .map(([k, ls]) => `<div class="small warn-text rule-warn">⚠ ${th(k, { lists: names(ls) })}</div>`).join("");
     return `<li class="${cls}"${r.enabled === false ? ` title="${esc(t("rl.off"))}"` : ""}>
       <span class="rule-n">${esc(fmtNum(i + 1))}.</span>${name ? `<div class="rule-name"><bdi>${esc(name)}</bdi></div>` : ""}
-      <div class="rule-row"><span class="rule-what">${ruleWhat(r)}</span><span class="rule-dash" aria-hidden="true">—</span>${outChip(r.outbound)}${tr === "c" ? `<span class="small muted rule-tr" data-rtr-c="${esc(r.id)}"></span>` : ""}</div>${warn}</li>`;
+      <div class="rule-row"><span class="rule-what">${ruleWhat(r)}</span><span class="rule-dash" aria-hidden="true">—</span>${ruleOutChip(r)}${r.balance && r.balance.length && tr === "c" ? `<span class="small muted nowrap" data-rbal-c="${esc(r.id)}"></span>` : ""}${tr === "c" ? `<span class="small muted rule-tr" data-rtr-c="${esc(r.id)}"></span>` : ""}</div>${warn}</li>`;
   }).join("")}</ol>`;
 }
 /* Телефон: выход правила не влез в строку рядом со списками — показываем один список и «+N» (не влез и тогда —
@@ -506,7 +513,7 @@ async function refresh(auto = false) {
   // перезагрузкой страницы)
   if (auto && tab === "server" && !anyModal()) drawEngine();
   // трафик по правилам (1.24.0) — только цифры в готовых местах строк
-  if (auto && tab === "routing" && !anyModal()) fillRuleTraffic();
+  if (auto && tab === "routing" && !anyModal()) { fillRuleTraffic(); drawClientRules(); }
   listsBusy = busy;
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;

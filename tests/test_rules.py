@@ -158,14 +158,21 @@ class ExitReferencesTest(unittest.TestCase):
             out = "up:" + x
             st0 = panel.store.snapshot()
             try:
-                routing.put_routing(R({"default": out, "rules": [{"lists": ["ru"], "outbound": out}]}))
+                # правило с балансировкой (1.24.0): выход в группе и резерв группы — тоже ссылки
+                routing.put_routing(R({"default": out, "rules": [
+                    {"lists": ["ru"], "outbound": out},
+                    {"lists": ["ir"], "outbound": "direct", "balance": [x, y], "balance_fb": out}]}))
                 clients.put_client(R({"outbound": out, "rules_mode": "custom",
                                    "rules": [{"lists": ["cn"], "outbound": out}]}), pk)
                 panel.store.mutate(lambda st: st["settings"].setdefault("telegram", {}).update(via=out))
-                # каждое место из outbound_refs: умолчание, правило, резерв и квота Y, Telegram, клиент, его правило
-                self.assertEqual(len(Store.outbound_refs(panel.store.snapshot(), out)), 7)
+                # каждое место из outbound_refs: умолчание, правило, правило с балансировкой, резерв и квота Y,
+                # Telegram, клиент, его правило
+                self.assertEqual(len(Store.outbound_refs(panel.store.snapshot(), out)), 8)
                 exits.del_upstream(R({"replace": "direct"}), x)
-                self.assertNotIn(f'"{out}"', json.dumps(panel.store.snapshot()))
+                st = panel.store.snapshot()
+                self.assertNotIn(f'"{out}"', json.dumps(st))
+                self.assertEqual({k: st["routing"]["rules"][1].get(k) for k in ("balance", "outbound", "balance_fb")},
+                                 {"balance": [y], "outbound": "up:" + y, "balance_fb": "direct"})
             finally:
                 panel.store.mutate(lambda st: st.update(routing=st0["routing"], clients=st0["clients"],
                                                        settings=st0["settings"]))
@@ -208,10 +215,15 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                                                                  extra_hosts=["198.51.100.20"]))
                 clients.put_client_host(R({"host": "198.51.100.20"}), pk)
                 panel.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}, strict=True))
+                # правило с балансировкой (1.24.0) — его поля тоже в копии (без put_routing: тот удалил бы списки
+                # других правил, а их ждут следующие тесты)
+                panel.store.mutate(lambda s: s["routing"]["rules"].append(
+                    {"id": "r_baltest", "lists": ["ru"], "outbound": "up:" + x, "enabled": True, "comment": "",
+                     "balance": [x], "balance_fb": "direct"}))
                 st = panel.store.snapshot(texts=True)          # так состояние выглядит в резервной копии
                 new = backup.clean_backup_state(st)
             finally:
-                panel.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"],
+                panel.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"], routing=st0["routing"],
                                                      shares=st0["shares"], cps=st0["cps"], chost=st0.get("chost", {})))
                 panel.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping",
                                                                                    "extra_hosts")])

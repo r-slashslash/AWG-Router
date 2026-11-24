@@ -129,13 +129,21 @@ class DiagMixin:
         pol = self.policy_for(st, pk)
         steps.append(Msg("tr.client_rules" if pk and st["clients"].get(pk, {}).get("rules_mode")
                          == "custom" else "tr.global_rules"))
+        def out_of(r: dict) -> str:
+            """Выход правила для клиента; с балансировкой (1.24.0) — шаг «балансировка в правиле: выход …»."""
+            out, _ = self.rule_out(st, r, pk, pol.get("own", False))
+            if r.get("balance"):
+                steps.append(Msg("tr.rule_balance" if pk else "tr.rule_balance_new",
+                                 exit=(Store.upstream(st, out[3:]) or {}).get("name", out) if out.startswith("up:")
+                                 else Msg("out." + out)))
+            return out
         for r in pol["rules"] if name and sni_on else []:
             for lid in r["lists"]:
                 dom = self.domain_matcher.match(lid, name) if lid in dl else None
                 if dom:
                     steps.append(Msg("tr.match_domain", list=lid, domain=dom))
-                    eff = self.resolve(r["outbound"], st)
-                    return {"result": r["outbound"], "effective": eff, "steps": steps,
+                    out = out_of(r)
+                    return {"result": out, "effective": self.resolve(out, st), "steps": steps,
                             "rule": r.get("comment") or r["id"], "domain": dom}
         for r in pol["rules"]:
             for lid in r["lists"]:
@@ -144,8 +152,8 @@ class DiagMixin:
                 hit = self.matcher.contains(lid, ip)
                 if hit:
                     steps.append(Msg("tr.match", list=lid, net=hit))
-                    eff = self.resolve(r["outbound"], st)
-                    return {"result": r["outbound"], "effective": eff, "steps": steps,
+                    out = out_of(r)
+                    return {"result": out, "effective": self.resolve(out, st), "steps": steps,
                             "rule": r.get("comment") or r["id"]}
         out = self.default_out(st, pk, pol)
         if out != pol["default"]:

@@ -74,6 +74,24 @@ class Balancer:
                 else:
                     rates[k] = new
 
+    def feed_clients(self, deltas: dict[tuple[str, str], list[int]], now: float) -> None:
+        """Только скорости клиентов (балансировка в правиле, 1.24.0): {(выход, клиент): прирост байт трафика правила}.
+        Скорости выходов у такой балансировки — общие с основной (весь трафик выхода): exit_rate ставит движок."""
+        last, self._last = self._last, now
+        if last is None or not 0 < now - last <= MAX_GAP:
+            return
+        dt = now - last
+        a = 1 - math.exp(-dt / TAU)
+        src = {(pk, out): d for (out, pk), d in deltas.items() if out and pk}
+        for k in set(self.client_rate) | set(src):
+            inst = src.get(k, (0, 0))
+            old = self.client_rate.get(k, [0.0, 0.0])
+            new = [old[i] + a * (inst[i] / dt - old[i]) for i in (0, 1)]
+            if k not in src and max(new) < 100:
+                self.client_rate.pop(k, None)
+            else:
+                self.client_rate[k] = new
+
     def rate(self, out: str) -> list[float]:
         return list(self.exit_rate.get(out, [0.0, 0.0]))
 

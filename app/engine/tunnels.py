@@ -698,8 +698,10 @@ class TunnelsMixin:
     def rule_keys(self, st: dict):
         """(ip, номер правила) → (ключ у клиента, ключ итога) | None. Номер — место правила среди включённых правил
         клиента со списками (как в _policies); RULE_DEFAULT_SLOT — его «По умолчанию» (в итог «_default» — только у
-        клиента с общими правилами и общим выходом). Правила клиента берутся из настроек сейчас: после перестановки
-        правил открытые соединения ещё со старым номером — их остаток уйдёт в правило, которое теперь на этом месте."""
+        клиента с общими правилами и общим выходом). Итоги правил — только по общим правилам: свои правила клиента
+        начинаются с копии общих с теми же id, и их трафик иначе попал бы в итог общего правила. Правила клиента
+        берутся из настроек сейчас: после перестановки правил открытые соединения ещё со старым номером — их остаток
+        уйдёт в правило, которое теперь на этом месте."""
         cache: dict[str, tuple | None] = {}
         pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
 
@@ -707,15 +709,16 @@ class TunnelsMixin:
             if ip not in cache:
                 pk = pk_of.get(ip)
                 pol = self.policy_for(st, pk) if pk else None
-                cache[ip] = (pol["rules"], not pol["custom"]) if pol else None
+                own = (st["clients"].get(pk) or {}).get("rules_mode") == "custom" if pk else False
+                cache[ip] = (pol["rules"], not own, not pol["custom"]) if pol else None
             c = cache[ip]
             if not c:
                 return None
-            rules, general = c
+            rules, general_rules, general = c
             if slot == config.RULE_DEFAULT_SLOT:
                 return traffic.CLIENT_DEFAULT, (traffic.GENERAL_DEFAULT if general else None)
             rid = rules[slot].get("id") if 0 <= slot < len(rules) else None
-            return (rid, rid) if rid else None
+            return (rid, rid if general_rules else None) if rid else None
         return of
 
     def rule_slots(self, st: dict) -> list[int]:
