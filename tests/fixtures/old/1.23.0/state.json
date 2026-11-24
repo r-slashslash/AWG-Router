@@ -1,0 +1,361 @@
+{
+  "version": 1,
+  "routing": {
+    "default": "up:ue43d22",
+    "rules": [
+      {
+        "id": "r_be215f",
+        "lists": [
+          "l6c6c7f",
+          "l93fa65"
+        ],
+        "outbound": "up:u41d805",
+        "enabled": true,
+        "comment": ""
+      },
+      {
+        "id": "r_55bfd9",
+        "lists": [
+          "l135525"
+        ],
+        "outbound": "up:u41d805",
+        "enabled": true,
+        "comment": ""
+      },
+      {
+        "id": "r_1d67d3",
+        "lists": [
+          "ru",
+          "cn"
+        ],
+        "outbound": "direct",
+        "enabled": true,
+        "comment": "geo"
+      },
+      {
+        "id": "r_a88723",
+        "lists": [
+          "l135525"
+        ],
+        "outbound": "up:u41d805",
+        "enabled": true,
+        "comment": "Proxy"
+      },
+      {
+        "id": "r_b27d1a",
+        "lists": [
+          "l93fa65"
+        ],
+        "outbound": "block",
+        "enabled": false,
+        "comment": "off"
+      },
+      {
+        "id": "r_95f048",
+        "lists": [
+          "l4967e6",
+          "l8026e1",
+          "de"
+        ],
+        "outbound": "direct",
+        "enabled": true,
+        "comment": ""
+      }
+    ],
+    "balance": {
+      "on": true,
+      "skip": [
+        "ud8df61"
+      ]
+    },
+    "strict": true
+  },
+  "upstreams": [
+    {
+      "id": "ue43d22",
+      "name": "NL",
+      "num": 1,
+      "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+      "enabled": true,
+      "fallback": "block",
+      "created": 1795559971.295135,
+      "quota": 53687091200,
+      "quota_action": "up:u41d805",
+      "rate_down": 50.0,
+      "rate_up": 10.0,
+      "quota_hit": null,
+      "quota_warned": null
+    },
+    {
+      "id": "u41d805",
+      "name": "Proxy",
+      "num": 2,
+      "config": "socks5://user:pass@198.51.100.9:1080",
+      "enabled": true,
+      "fallback": "up:ue43d22",
+      "created": 1795559971.2983003,
+      "quota": 2684354560,
+      "quota_action": "block",
+      "quic": true,
+      "own_list": "l6c6c7f"
+    },
+    {
+      "id": "ud8df61",
+      "name": "Spare",
+      "num": 3,
+      "config": "socks5://198.51.100.10:1080",
+      "enabled": false,
+      "fallback": "block",
+      "created": 1795559971.3079143,
+      "quota": null,
+      "quota_action": "notify"
+    }
+  ],
+  "lists": [
+    {
+      "id": "l135525",
+      "kind": "manual",
+      "source": "",
+      "name": "Office",
+      "text": "636dbc569e9289b6",
+      "error": null,
+      "count": 3,
+      "addresses": 385,
+      "skipped_v6": 1,
+      "updated": 1795559971.2733476,
+      "checked": 1795559971.2733479
+    },
+    {
+      "id": "l93fa65",
+      "kind": "domains",
+      "source": "",
+      "name": "Sites",
+      "text": "f03ffea7fcf916be",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "lists.example: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+        }
+      },
+      "count": 2,
+      "first": "example.com",
+      "addresses": null,
+      "skipped_v6": 0,
+      "updated": 1795559971.392388,
+      "checked": 1795559971.3923883
+    },
+    {
+      "id": "l4967e6",
+      "kind": "asn",
+      "source": "AS64496 AS64511",
+      "name": "AS64496 AS64511",
+      "error": {
+        "$t": "list.asn_failed",
+        "p": {
+          "asn": 64496,
+          "detail": "ipverse: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; ripestat: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+        }
+      },
+      "checked": 1795559971.5538764
+    },
+    {
+      "id": "l8026e1",
+      "kind": "url",
+      "source": "https://lists.example/nets.txt",
+      "name": "Feed",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "<urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+        }
+      },
+      "checked": 1795559971.6509116
+    },
+    {
+      "id": "de",
+      "kind": "country",
+      "source": "de",
+      "name": "Germany",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+        }
+      },
+      "checked": 1795559971.5856252
+    },
+    {
+      "id": "l6c6c7f",
+      "kind": "domains",
+      "source": "",
+      "name": "Proxy",
+      "text": "2a191a2b08b137ec",
+      "error": null,
+      "count": 2,
+      "first": "a.example",
+      "addresses": null,
+      "skipped_v6": 0,
+      "updated": 1795559971.3008919,
+      "checked": 1795559971.300892
+    },
+    {
+      "id": "ru",
+      "kind": "country",
+      "source": "ru",
+      "name": "",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+        }
+      },
+      "checked": 1795559971.5943742
+    },
+    {
+      "id": "cn",
+      "kind": "country",
+      "source": "cn",
+      "name": "",
+      "error": {
+        "$t": "list.fetch_failed",
+        "p": {
+          "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+        }
+      },
+      "checked": 1795559971.600145
+    }
+  ],
+  "clients": {
+    "VqGnm0P73GPdO3XPxZdp55uF7/ZykFMzukU13tbuhtc=": {
+      "outbound": "up:u41d805",
+      "rules_mode": "custom",
+      "rules": [
+        {
+          "id": "r_e1b910",
+          "lists": [
+            "l135525"
+          ],
+          "outbound": "direct",
+          "enabled": true,
+          "comment": "home"
+        }
+      ],
+      "note": "phone",
+      "name": "alice"
+    },
+    "/08Vpq4wldt4nV8lvzeh2LnY4RyKP/TMaPx0h+Ae2M4=": {
+      "outbound": "block",
+      "rules_mode": "inherit",
+      "rules": [],
+      "note": "",
+      "name": "bob"
+    }
+  },
+  "keys": {
+    "VqGnm0P73GPdO3XPxZdp55uF7/ZykFMzukU13tbuhtc=": "AcH5K9AYziMbscyKnReUf1RcJokBmid6iDJuPqqbMLg=",
+    "/08Vpq4wldt4nV8lvzeh2LnY4RyKP/TMaPx0h+Ae2M4=": "xDer12OCObjYj0EHcGLJQBvpsF4ZuRALEROqIH4O0qY=",
+    "sqkkYkK3JTKxDLC5zEx0e/qm5vfz2pVoW+JxsEJUtSM=": "kOS0S4pfCpys+I81cGmLBbxTc87XTJbWPnGeBHAnVuE="
+  },
+  "limits": {
+    "VqGnm0P73GPdO3XPxZdp55uF7/ZykFMzukU13tbuhtc=": {
+      "quota_done": null,
+      "quota_warned": null,
+      "expires": 1900000000,
+      "quota": 21474836480,
+      "period": "month",
+      "rate_down": 5.0,
+      "rate_up": 1.0
+    },
+    "/08Vpq4wldt4nV8lvzeh2LnY4RyKP/TMaPx0h+Ae2M4=": {
+      "quota_done": null,
+      "quota_warned": null,
+      "expires": 1800000000,
+      "quota": 1610612736,
+      "period": "total"
+    }
+  },
+  "shares": {
+    "dhbMbmRKjFH8VnueUMRajPdR": {
+      "pk": "VqGnm0P73GPdO3XPxZdp55uF7/ZykFMzukU13tbuhtc=",
+      "created": 1795559969.7552464
+    },
+    "vujCGZPfpfrBwnbp5oa93kpd": {
+      "pk": "/08Vpq4wldt4nV8lvzeh2LnY4RyKP/TMaPx0h+Ae2M4=",
+      "created": 1795559969.7613482
+    },
+    "GBdoRcTg6ZEdAilVICV7rMRs": {
+      "pk": "sqkkYkK3JTKxDLC5zEx0e/qm5vfz2pVoW+JxsEJUtSM=",
+      "created": 1795559969.7665203
+    }
+  },
+  "cps": {
+    "VqGnm0P73GPdO3XPxZdp55uF7/ZykFMzukU13tbuhtc=": {
+      "preset": "icloud"
+    },
+    "/08Vpq4wldt4nV8lvzeh2LnY4RyKP/TMaPx0h+Ae2M4=": {
+      "preset": "custom",
+      "values": {
+        "I1": "<b 0x0102030405060708>",
+        "I2": "",
+        "I3": "",
+        "I4": "",
+        "I5": ""
+      }
+    }
+  },
+  "chost": {
+    "VqGnm0P73GPdO3XPxZdp55uF7/ZykFMzukU13tbuhtc=": "198.51.100.20"
+  },
+  "settings": {
+    "list_update_hours": 12,
+    "on_stop": "restore",
+    "shaping": {
+      "down": 200.0,
+      "up": 100.0
+    },
+    "telegram": {
+      "enabled": true,
+      "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "chat_id": "-1001234567",
+      "lang": "ru",
+      "events": {
+        "exit": true,
+        "server": true,
+        "system": true,
+        "clients": true,
+        "login": false,
+        "tls": true,
+        "update": true
+      },
+      "via": "up:ue43d22",
+      "control": true,
+      "fallback": true,
+      "clients": true,
+      "client_notify": true,
+      "backup": "weekly",
+      "backup_pw": "tg-backup-pass",
+      "backup_last": null,
+      "backup_error": null
+    },
+    "client_dns": [
+      "1.1.1.1",
+      "9.9.9.9"
+    ],
+    "client_mtu": 1380,
+    "client_keepalive": "25",
+    "panel_dns": true,
+    "panel_dns_enc": "doh",
+    "dom_filter": true,
+    "public_host": "vpn.example.com",
+    "extra_hosts": [
+      "198.51.100.20"
+    ],
+    "client_host": "198.51.100.21"
+  },
+  "upgraded": [
+    "rule_names",
+    "client_bot",
+    "bot_switch"
+  ],
+  "await_first": {}
+}

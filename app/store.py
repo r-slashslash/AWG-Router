@@ -390,8 +390,9 @@ class Store:
         r = state["routing"]
         if r["default"] == target:
             refs.append(Msg("ref.default"))
+        # балансировка в правиле и куда трафик правила, когда его месячный лимит исчерпан (1.24.0)
         uses = lambda rule: rule["outbound"] == target or rule.get("balance_fb") == target or (  # noqa: E731
-            target.startswith("up:") and target[3:] in (rule.get("balance") or ()))   # балансировка в правиле (1.24.0)
+            rule.get("quota_action") == target) or (target.startswith("up:") and target[3:] in (rule.get("balance") or ()))
         for i, rule in enumerate(r["rules"]):
             if uses(rule):
                 refs.append(Store._rule_ref(rule, i))
@@ -441,6 +442,8 @@ class Store:
                 rule["outbound"] = pick()
             if rule.get("balance_fb") == target:
                 rule["balance_fb"] = pick()
+            if rule.get("quota_action") == target:     # лимит правила исчерпан → сюда (1.24.0)
+                rule["quota_action"] = pick(last="notify")
 
         r = state["routing"]
         if r["default"] == target:

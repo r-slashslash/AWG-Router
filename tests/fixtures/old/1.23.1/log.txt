@@ -1,0 +1,43 @@
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/users
+ok   POST /api/lists
+FAIL POST /api/lists 400 b'{"detail": {"$t": "err.only_v6", "p": {}}}'
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/lists
+ok   POST /api/upstreams
+ok   POST /api/upstreams
+FAIL PUT /api/upstreams/u102360 400 b'{"detail": {"$t": "err.fallback_loop", "p": {}}, "field": "fallback"}'
+ok   PUT /api/upstreams/u102360
+ok   POST /api/upstreams
+ok   PUT /api/upstreams/u832bb6
+ok   POST /api/lists
+ok   POST /api/lists
+ok   GET /api/state
+ok   PUT /api/routing
+ok   PUT /api/clients/obq7LgZAPZGkUuw7+tq9OmRFJJD/5aJVC0yFmZrxSz8=
+ok   PUT /api/limits/obq7LgZAPZGkUuw7+tq9OmRFJJD/5aJVC0yFmZrxSz8=
+ok   POST /api/shares/obq7LgZAPZGkUuw7+tq9OmRFJJD/5aJVC0yFmZrxSz8=
+FAIL PUT /api/cps/obq7LgZAPZGkUuw7+tq9OmRFJJD/5aJVC0yFmZrxSz8= 400 b'{"detail": {"$t": "err.bad_value", "p": {}}}'
+ok   PUT /api/cps/obq7LgZAPZGkUuw7+tq9OmRFJJD/5aJVC0yFmZrxSz8=
+ok   PUT /api/clients/j+KMyczwyg2xcOVOkrRL8VX02U+shJ8sYQ/bTU6ZtN4=
+ok   PUT /api/limits/j+KMyczwyg2xcOVOkrRL8VX02U+shJ8sYQ/bTU6ZtN4=
+ok   PUT /api/cps/j+KMyczwyg2xcOVOkrRL8VX02U+shJ8sYQ/bTU6ZtN4=
+ok   POST /api/shares/j+KMyczwyg2xcOVOkrRL8VX02U+shJ8sYQ/bTU6ZtN4=
+ok   PUT /api/users/VYNKUBjRNlD0XH92kw37doOsxRypGcvj+0EOYIZ0EGo=
+ok   PUT /api/settings
+ok   PUT /api/telegram
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/server
+ok   PUT /api/hosts/obq7LgZAPZGkUuw7+tq9OmRFJJD/5aJVC0yFmZrxSz8=
+ok   GET /api/backup
+ok   POST /api/backup/encrypted

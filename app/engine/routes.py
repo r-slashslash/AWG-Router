@@ -260,15 +260,26 @@ class RoutesMixin:
             prev = self._rlim_ids = {}
         busy = set(prev.values())
         ids = {k: prev[k] for k, _, _ in want if k in prev}
-        free = (i for i in range(config.RULE_LIM_MAX) if i not in busy)
+        # новые номера — по кругу, с места после последнего выданного: освободившийся номер снова выдаётся не скоро, а
+        # открытые соединения ушедшего правила (метки соединения не снимаются) не попадают под чужой предел
+        start, lost = getattr(self, "_rlim_next", 0), 0
         out = {}
         for k, d, u in want:
             if k not in ids:
-                j = next(free, None)
+                j = next((x for x in ((start + n) % config.RULE_LIM_MAX for n in range(config.RULE_LIM_MAX))
+                          if x not in busy), None)
                 if j is None:
+                    lost += 1
                     continue
                 ids[k] = j
+                busy.add(j)
+                start = (j + 1) % config.RULE_LIM_MAX
             out[k] = (ids[k], d, u)
+        self._rlim_next = start
+        if lost and not getattr(self, "_rlim_full", False):
+            # больше RULE_LIM_MAX ограничений (свои правила многих клиентов): у лишних ограничения нет — сказать один раз
+            self.event("warn", Msg("ev.rlim_full", n=lost, max=config.RULE_LIM_MAX))
+        self._rlim_full = bool(lost)
         prev.clear()
         prev.update(ids)
         return out

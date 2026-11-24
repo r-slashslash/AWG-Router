@@ -202,6 +202,8 @@ def put_client(req, pk):
         before = routing.rule_lists(old.get("rules") if old.get("rules_mode") == "custom" else [])
         c = {**checks.client_policy(st, body, engine.dns_listen()),
              "name": next((x.get("name") for x in engine.clients if x["public_key"] == pk), "")}
+        # отметки лимита правил: только у своего правила клиента с тем же лимитом (копия общего — заново)
+        routing.keep_quota_marks(old.get("rules") if old.get("rules_mode") == "custom" else [], c["rules"])
         if c["outbound"] == "inherit" and c["rules_mode"] == "inherit" and not c["note"]:
             st["clients"].pop(pk, None)
         else:

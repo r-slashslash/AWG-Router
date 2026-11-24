@@ -253,6 +253,13 @@ def main():
         panel_apply({"rules": [(["ru"], nftgen.Sticky(1))], "default": "direct"}, {}, balance={1})
         results += [expect("балансировка в правиле: RU через выход группы", "russian", "UP1 from 10.8.1.3"),
                     expect("балансировка в правиле: остальное напрямую", "foreign", "DIRECT from 172.20.0.2")]
+        # чужая программа на сервере «на хосте» метит пересылаемые пакеты теми же битами, что и номер ограничения
+        # скорости правила (Tailscale: 0x40000 — пересылка, 0x80000 — свои соединения): защита панели их не трогает
+        panel_apply({"rules": [], "default": "direct"}, {}, labels=True)
+        nft("amz", "table ip ts {\n chain f {\n  type filter hook forward priority 10; policy accept;\n"
+                   '  iifname "awg0" meta mark set meta mark or 0x40000\n }\n}\n')
+        results += [expect("чужая метка 0x40000 (Tailscale) на пересылке — проходит", "foreign", "DIRECT")]
+        assert sh("amz", "nft", "delete", "table", "ip", "ts").returncode == 0
         panel_apply({"rules": [], "default": 1}, {})
         results += [expect("без правил: RU тоже через выход", "russian", "UP1")]
         # туннель исчез (упал amneziawg-go): маршрут по таблице → unreachable, утечки нет

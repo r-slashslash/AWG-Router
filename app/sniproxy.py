@@ -243,7 +243,7 @@ async def send_all(sock: socket.socket, data: bytes) -> None:
 async def socks_connect(s: dict, host: str | None, ip: str, port: int, mark: int = 0) -> socket.socket:
     """Соединение через прокси: CONNECT по имени (или по адресу, если имени нет).
     Возвращает сырой сокет: дальше поток идёт через splice, как и на прямом пути.
-    mark — номер ограничения скорости правила (биты RULE_LIM_MASK; 0 — нет): по нему nftables ограничивает ответы."""
+    mark — метка сокета с номером ограничения скорости правила (with_lim; 0 — нет): по нему nftables ограничивает ответы."""
     sock = await asyncio.wait_for(_connect_any(s["ip"], int(s["port"]), mark), CONNECT_TIMEOUT)
     try:
         user, pw = (s.get("user") or "").encode(), (s.get("password") or "").encode()
@@ -317,6 +317,18 @@ SHARE_SMOOTH = 0.5         # сглаживание скоростей при д
 def _lim(v) -> int:
     """Номер ограничения скорости правила из настроек → биты метки RULE_LIM_MASK (0x00FF0000); чужое — 0."""
     return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 and not v & ~0x00FF0000 else 0
+
+
+# config.RULE_LIM_TAG: метка сокета без своей (к клиенту, к прокси, «напрямую»), когда у него номер ограничения скорости.
+# nftables снимает номер (rl_lab) только с меток панели: на сервере «на хосте» те же биты у чужих программ (Tailscale)
+LIM_TAG = 0xE1F0
+
+
+def with_lim(mark: int, lim: int) -> int:
+    """Метка сокета с номером ограничения скорости правила: у сокета без своей метки — ещё служебная LIM_TAG."""
+    if not lim:
+        return mark
+    return mark | lim if mark else LIM_TAG | lim
 
 
 def share(cap: float, other: float) -> float:
@@ -805,9 +817,9 @@ class Sniffer:
         первых байт клиента, прочитанных ради имени сайта. lim — номер ограничения скорости правила в битах метки:
         rl_lab в nftables ставит по нему метку соединения и снимает биты до выбора маршрута."""
         if to.get("socks"):
-            out = await socks_connect(to["socks"], name, dip, dport, lim)
+            out = await socks_connect(to["socks"], name, dip, dport, with_lim(0, lim))
         else:
-            out = await direct_socket(dip, dport, int(to.get("mark") or 0) | lim)
+            out = await direct_socket(dip, dport, with_lim(int(to.get("mark") or 0), lim))
         try:
             no_delay(out)
             keepalive(out)
@@ -864,7 +876,7 @@ class Sniffer:
             if lim:
                 # ограничение скорости правила: метка сокета к клиенту даёт номер ограничения соединению клиента
                 # (nftables ограничивает по нему то, что приходит от клиента), к сайту — ответам сайта
-                sock.setsockopt(socket.SOL_SOCKET, SO_MARK, lim)
+                sock.setsockopt(socket.SOL_SOCKET, SO_MARK, with_lim(0, lim))
             act = [time.monotonic()]
             out = await self.open_upstream(to, name, dip, dport, data, lim)
             if cnt is not None:

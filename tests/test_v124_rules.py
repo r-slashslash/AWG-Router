@@ -159,6 +159,65 @@ class RacctTableTest(unittest.TestCase):
             subprocess.run(["nft", "delete", "table", "ip", name], capture_output=True)
 
 
+class LabelErrorTest(unittest.TestCase):
+    def test_label_word_alone_turns_nothing_off(self):
+        """Вход: набор не встал, в ошибке nft — строка политики со словом «label» (метка соединения теперь в каждой такой
+        строке). Ожидание: учёт по правилам выключается, только если тот же набор без меток ядро принимает (nft -c);
+        иначе ошибка в другом — метки остаются, проход падает, как раньше."""
+        legacy_lists(panel.store)
+        e = panel.engine
+        with mock.patch.object(api_routing.lists, "_fetch", side_effect=OSError("offline")):
+            e.reconcile()
+        t = e.target
+        real = t.ns
+        for check_rc, labels_after in ((1, True), (0, False)):
+            def ns(cmd, rc=check_rc, **kw):
+                if cmd[:2] == ["nft", "-f"] and cmd[-1].endswith("ruleset.nft"):
+                    raise system.SysError("Error: Could not process rule: No such file or directory\n"
+                                          "\t\tip daddr @l_ru ct label set 0 goto o_u1")
+                if cmd[:3] == ["nft", "-c", "-f"]:
+                    return subprocess.CompletedProcess(cmd, rc, "", "" if rc == 0 else "Error: still broken")
+                return real(cmd, **kw)
+            e._labels, e.applied_hash = True, None
+            with mock.patch.object(t, "ns", side_effect=ns), \
+                    mock.patch.object(api_routing.lists, "_fetch", side_effect=OSError("offline")):
+                with self.assertRaises(system.SysError):
+                    e.reconcile()
+            self.assertIs(e.labels_on(), labels_after)
+        e._labels, e.racct_state, e.applied_hash = True, None, None
+
+
+class SlotBitsTest(unittest.TestCase):
+    def test_rule_number_fits_quic_bits(self):
+        """Вход: предел числа правил. Ожидание: номер правила + 1 влезает в биты QUIC_SLOT_MASK вердикта QUIC и не
+        доходит до номера «По умолчанию». Если предел поднимут выше 62, бит номера переполнится в QUIC_CT_BIT: такой
+        вердикт не снимет q_lab и не поймает c_forward — QUIC ушёл бы мимо выхода."""
+        top = config.QUIC_SLOT_MASK >> config.QUIC_SLOT_SHIFT
+        self.assertLess(config.MAX_RULES, config.RULE_DEFAULT_SLOT)
+        self.assertLessEqual(config.MAX_RULES, top)
+        self.assertEqual((config.MAX_RULES << config.QUIC_SLOT_SHIFT) & ~config.QUIC_SLOT_MASK, 0)
+        legacy_lists(panel.store)
+        with self.assertRaises(HTTPError):
+            checks.rules(panel.store.snapshot(), [{"lists": ["ru"], "outbound": "direct"}] * (config.MAX_RULES + 1))
+        self.assertEqual(len(checks.rules(panel.store.snapshot(), [{"lists": ["ru"], "outbound": "direct"}]
+                                          * config.MAX_RULES)), config.MAX_RULES)
+
+
+class TeardownTest(unittest.TestCase):
+    def test_racct_table_removed(self):
+        """Вход: удаление панели (app.uninstall) или «при остановке — вернуть как было». Ожидание: убирается и таблица
+        учёта по правилам awgr_racct, как awgr и awgr_acct (иначе на сервере «на хосте» она висела до перезагрузки)."""
+        legacy_lists(panel.store)
+        with mock.patch.object(api_routing.lists, "_fetch", side_effect=OSError("offline")):
+            panel.engine.reconcile()
+        t = panel.engine.target
+        t.log.clear()
+        panel.engine.teardown()
+        self.addCleanup(panel.engine.reconcile)
+        self.assertIn(f"nft delete table ip {nftgen.RACCT_TABLE}", t.log)
+        self.assertIn(f"nft delete table ip {nftgen.ACCT_TABLE}", t.log)
+
+
 class TrafficByRuleTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -509,6 +568,7 @@ class RuleSpeedTest(unittest.TestCase):
         old = (self.e._labels, self.e._rlim_ok, dict(self.e._rlim_ids), self.e.clients)
         self.e._labels, self.e._rlim_ok = True, None
         self.e._rlim_ids.clear()
+        self.e._rlim_next, self.e._rlim_full = 0, False       # номера ограничений — по кругу: каждый тест с нуля
 
         def back():
             self.e._labels, self.e._rlim_ok, self.e.clients = old[0], old[1], old[3]
@@ -552,7 +612,7 @@ class RuleSpeedTest(unittest.TestCase):
         self.assertIn(f"meta mark & {config.RULE_LIM_MASK:#x} == {1 << config.RULE_LIM_SHIFT:#x} ct label set {self.LB}",
                       text)
         self.assertIn("type route hook output priority mangle - 1", text)
-        guard = f"meta mark & {config.RULE_LIM_MASK:#x} != 0x0 drop"
+        guard = f"{nftgen._own_lim()} drop"
         bare = nftgen.generate("awg0", lists, [{"num": 1}], pol([(["ru"], 1)], slots=[0]), {}, labels=True)
         self.assertIn("chain rl_lab {\n\t\tmeta mark set meta mark &", bare)
         self.assertNotIn("limit name", bare)
@@ -616,6 +676,22 @@ class RuleSpeedTest(unittest.TestCase):
         st = panel.store.snapshot()
         self.assertEqual(self.e.rule_limits(st)["PKC|r_c"][0], 1)
         self.assertEqual(self.e.rule_limits(st)["r_n"][0], 2)
+        # по кругу: следующее новое правило получает 3, а не освободившиеся 0 или 2 — открытые соединения ушедших правил
+        # с их метками не попадут под его предел
+        panel.store.mutate(lambda s: setup(s, [{"id": "r_m", "lists": ["ru"], "outbound": "direct", "rate_down": 1}]))
+        st = panel.store.snapshot()
+        self.e.rule_limits(st)
+        self.assertEqual(self.e.rule_limits(st)["r_m"][0], 3)
+        # больше 63 ограничений: у лишних нет, и об этом событие — один раз
+        events = []
+        with mock.patch.object(self.e, "event", side_effect=lambda lvl, m: events.append(m.key)):
+            panel.store.mutate(lambda s: setup(s, [{"id": f"r_{i}", "lists": ["ru"], "outbound": "direct",
+                                                    "rate_down": 1} for i in range(70)]))
+            st = panel.store.snapshot()
+            self.e.rule_limits(st)            # номер ушедшего r_m в этом проходе ещё занят
+            got = self.e.rule_limits(st)
+        self.assertEqual(len(got), config.RULE_LIM_MAX)
+        self.assertEqual(events, ["ev.rlim_full"])
         self.e._rlim_ok = False
         self.assertEqual(self.e.rule_limits(st), {})
         self.assertNotIn("lims", self.e._policies(st)[0])
@@ -665,8 +741,45 @@ class RuleSpeedTest(unittest.TestCase):
             with mock.patch.object(sniproxy, "peek_name", peek), \
                     mock.patch.object(s, "open_upstream", side_effect=OSError("stop")) as up:
                 asyncio.run(s.client(sock))
-            sock.setsockopt.assert_any_call(sniproxy.socket.SOL_SOCKET, sniproxy.SO_MARK, want)
+            # сокет к клиенту своей метки не имеет: номер ограничения — со служебной меткой (rl_lab снимает обе)
+            sock.setsockopt.assert_any_call(sniproxy.socket.SOL_SOCKET, sniproxy.SO_MARK, config.RULE_LIM_TAG | want)
             self.assertEqual(up.call_args.args[-1], want)
+
+    def test_foreign_marks_untouched(self):
+        """Вход: набор с метками и ограничениями (сервер «на хосте»: цепочки видят пакеты всех программ). Ожидание:
+        rl_lab и защита c_guard_post срабатывают только на метки панели (выход, политика посредника, служебная метка) с
+        битами номера ограничения; чужие метки с теми же битами (Tailscale: 0x40000 — пересылка, 0x80000 — свои
+        соединения) не трогаются. Посредник: у сокета без своей метки номер ограничения идёт со служебной."""
+        self.assertEqual(sniproxy.LIM_TAG, config.RULE_LIM_TAG)      # посредник не читает config
+        self.assertEqual(sniproxy.with_lim(0, 0x30000), config.RULE_LIM_TAG | 0x30000)
+        self.assertEqual(sniproxy.with_lim(0x2001, 0x30000), 0x2001 | 0x30000)
+        self.assertEqual(sniproxy.with_lim(0xD105, 0), 0xD105)
+        own = nftgen._own_lim()
+        self.assertIn(f"meta mark & {0xFFFFFFFF ^ config.RULE_LIM_MASK:#x} {{ {config.RULE_LIM_OWN} }}", own)
+        self.assertEqual(config.RULE_LIM_OWN, "0x2000-0x20ff, 0xd100-0xe0ff, 0xe1f0")
+        text = nftgen.generate("awg0", {"ru": ["5.0.0.0/8"]}, [{"num": 1}], pol([(["ru"], 1)], slots=[0]), {},
+                               labels=True, limits={7: (1, 1)})
+        self.assertIn(f"{own} jump rl_lab", text)
+        self.assertIn(f"{own} drop", text)
+        self.assertIn(f"meta mark {config.RULE_LIM_TAG:#x} meta mark set 0x0", text)
+        # ни одной строки, которая смотрит на биты 0x00FF0000 без проверки, что метка — панели
+        bare = [ln for ln in text.splitlines() if f"meta mark & {config.RULE_LIM_MASK:#x} != 0x0" in ln and own not in ln]
+        self.assertEqual(bare, [ln for ln in bare if 'iifname "awg0"' in ln])
+
+    @unittest.skipUnless(shutil.which("nft") and shutil.which("unshare") and os.geteuid() == 0, "nft в своей сети — root")
+    def test_foreign_marks_in_kernel(self):
+        """Вход: набор с метками и ограничением 7 (его биты = 0x80000) в отдельной сети; UDP через lo с меткой Tailscale
+        0x80000, сокет посредника со служебной меткой и с меткой выхода — оба с номером ограничения 7. Ожидание: чужая
+        метка уходит как была и без метки ограничения; метки панели сняты (0 и 0x2001), на их соединениях метка 71;
+        без меток соединений — чужая проходит, метки панели с битами отбрасываются."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        r = subprocess.run(["unshare", "-n", sys.executable, os.path.join(here, "foreign_marks_check.py")],
+                           capture_output=True, text=True, timeout=60, cwd=os.path.dirname(here))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(res["labels"], {"foreign": "ok", "tag": "ok", "exit": "ok", "after": [1, 1, 1, 0], "lab": 2})
+        self.assertEqual(res["plain"], {"foreign": "ok", "tag": "PermissionError", "exit": "PermissionError",
+                                        "after": [1, 0, 0, 0], "lab": 0})
 
     def test_proxy_config_gated(self):
         """Вход: настройка посредника при ограничении правила по доменам — до и после того, как в ядре встал набор с

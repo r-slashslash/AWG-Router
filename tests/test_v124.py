@@ -359,3 +359,36 @@ class EditPhotoTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstallerPipeTest(unittest.TestCase):
+    """install.sh перед перезапуском из скачанной копии дочитывает остаток скрипта из трубы (curl | bash без ошибки
+    curl 23) — но не из терминала: под bash -c "$(curl …)" трубы нет, и cat ждал бы ввода, установка висела бы."""
+
+    def _run(self, stdin_kind: str) -> int:
+        import pty
+        import subprocess
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "install.sh")
+        with open(here) as f:
+            line = next(ln.strip() for ln in f if "|| cat >/dev/null" in ln)
+        script = "{\n  _src=\"${BASH_SOURCE[0]:-}\"\n  " + line + "\n  echo done\n}\n"
+        if stdin_kind == "tty":
+            master, slave = pty.openpty()
+            self.addCleanup(os.close, master)
+            try:
+                p = subprocess.run(["bash", "-c", script], stdin=slave, capture_output=True, text=True, timeout=5)
+            finally:
+                os.close(slave)
+        else:
+            p = subprocess.run(["bash", "-c", script], input="rest of the script\n", capture_output=True, text=True,
+                               timeout=5)
+        self.assertEqual(p.stdout.strip(), "done")
+        return p.returncode
+
+    def test_terminal_does_not_wait(self):
+        """Вход: bash -c, на входе терминал. Ожидание: сразу дальше (раньше — висело до Ctrl-D)."""
+        self.assertEqual(self._run("tty"), 0)
+
+    def test_pipe_is_drained(self):
+        """Вход: bash -c, на входе труба с остатком скрипта (как curl | bash). Ожидание: дочитано, дальше."""
+        self.assertEqual(self._run("pipe"), 0)

@@ -5,6 +5,10 @@ it grows, so every user-visible change gets a new version.
 
 ## 1.24.0 — 2026-11-25
 
+- **No traffic past the exits while default load balancing starts**: with no balanced exit up yet, `default_out` took
+  **If all exits are unavailable** (the routing default) even while exits were still connecting after a panel start —
+  with Direct there, past the exits for a few seconds; now it blocks until they answer, as a single exit does since
+  1.23.0.
 - **Traffic by rule** (#54, Alex4003). **Routing** shows this month's ↓ ↑ under each rule and **Default** (all clients
   with the shared rules); the client window shows the client's traffic by each of its rules, this month and last. How
   it is counted: every line of a policy chain sets a conntrack label with the rule's number (its place among the
@@ -25,19 +29,18 @@ it grows, so every user-visible change gets a new version.
   by default). Fields `balance` and `balance_fb`; `outbound` is the first ticked exit, so an older panel sends the rule
   through it. The rule row shows how many clients are on each exit, the client window — the exit "now", the route
   check — the step.
-- **No traffic past the exits while default load balancing starts**: with no balanced exit up yet, `default_out` took
-  **If all exits are unavailable** (the routing default) even while exits were still connecting after a panel start —
-  with Direct there, past the exits for a few seconds; now it blocks until they answer, as a single exit does since
-  1.23.0.
 - **Client rules on Routing**: a new section lists the clients with their own rules, and they can be added (**+ Add
-  rule** with a client picker; a client on the shared rules gets a copy of them with the new rule last), edited,
+  rule** with a client picker; a client on the shared rules gets a copy of them with the new rule last — without the
+  shared rules' monthly and speed limits, which belong to the shared rule and all its clients together; the client
+  window copies them the same way), edited,
   deleted, or the client sent back to the shared rules. The rule window of a shared rule shows the clients that used
   the most by it this month (`GET /api/rule-top/{id}`).
 - **Monthly limit per rule**: GB per month for all clients of the rule together (a client's own rule — that client),
   with the same choices as an exit's limit: Direct, Block, another exit or only a notification. Events at 90% and when
   it is used up; back to normal on the 1st (UTC). Fields `quota`, `quota_action`, `quota_hit`, `quota_warned`. A domain
   rule with a limit (or a speed limit) keeps the proxy even when it leads where **Default** does, otherwise its traffic
-  could not be counted.
+  could not be counted. A new limit or action clears the marks (`keep_quota_marks`), as an exit's does; an exit chosen
+  for a used-up limit is one of the exit's references (`Store.outbound_refs`, `replace_outbound`).
 - **Speed limit per rule**: `rate_down`/`rate_up` in Mbit/s for all clients of the rule together. One nftables `limit`
   per rule and direction (`rl_<j>_d`, `rl_<j>_u`, no `burst` — the kernel keeps a second's worth anyway); what is over
   it is dropped where packets arrive: in forward for transit traffic and in input for `sniproxy.py`'s connections (from
@@ -47,11 +50,16 @@ it grows, so every user-visible change gets a new version.
   marks (same bits; the `type route` chain `rl_lab` in output sets the labels and takes the bits off before the route is
   chosen again). `rl_lab` is in every ruleset with labels, the proxy uses the bits only after such a ruleset is in
   (`_rlim_key`), and `c_guard_post` drops a packet that still has them: an exit mark with extra bits would not match
-  the exit's `ip rule`. A rule keeps its number between passes. A kernel without nftables `limit` turns rule speed
-  limits off with an event. On GitHub's runners: 11.8–11.9 of 12 Mbit/s down and 5.45 of 5 up (measured from the
+  the exit's `ip rule`. Both `rl_lab` and that guard look only at the panel's own marks (`RULE_LIM_OWN`: an exit, a
+  proxy policy, or the tag `0xE1F0` that a proxy socket without a mark of its own carries with the number): on a server
+  on the host they see every program's packets, and Tailscale keeps its own marks in the same byte (`0x40000`,
+  `0x80000`). A rule keeps its number between passes; new numbers go round, so a freed one comes back only after the
+  others (labels stay on open connections); more than 63 limited rules — an event. A kernel without nftables `limit`
+  turns rule speed limits off with an event; an apply error that only mentions a label or a limit turns them off only
+  if the same ruleset without them passes `nft -c`. Uninstalling removes `awgr_racct` too. On GitHub's runners: 11.8–11.9 of 12 Mbit/s down and 5.45 of 5 up (measured from the
   first byte), transit and the proxy together 9.4–9.8 of 10; transit through a SOCKS5 exit gets 66–79% of the limit
   (hev's TCP takes losses worse). Kernel CPU time of forwarding: +2–3% with another rule limited, +4–7% under a limit.
-- **Let's Encrypt through Cloudflare DNS** (the idea and first code: PR #51, zabit-z). In **Domain and certificate**,
+- **Let's Encrypt through Cloudflare DNS** (the idea: PR #51, zabit-z). In **Domain and certificate**,
   for a domain (not an IP), **How to verify the domain**: through port 80 as before, or through Cloudflare with an API
   token (Zone → Zone → Read and Zone → DNS → Edit). `lego run --dns cloudflare`, the token only in lego's environment
   (`CF_DNS_API_TOKEN`), never on its command line or in the status; one name (the domain), no port 80 check and no web
@@ -60,7 +68,7 @@ it grows, so every user-visible change gets a new version.
   Cloudflare API (`tlsmgr.cf_check`: the zone of the domain or its nearest parent is visible, its DNS records are
   readable) and marks the field on an error. The token lives in `tls.json` with the other per-server HTTPS settings —
   now written `0600`, not in backups — and is removed on going back to port 80 or to an own certificate. Not a way to
-  put the panel behind Cloudflare's proxy.
+  put the panel behind Cloudflare's proxy: the hint asks for a DNS only (grey cloud) record.
 - **Monthly totals in Telegram** (off by default, also after an upgrade): on the first pass of a month the bot sends
   last month's server total, exits and Direct, and the top general rules with **Default**. Once a month (`report` in
   `traffic.json`); the first run after an upgrade only remembers the month.
@@ -86,7 +94,8 @@ it grows, so every user-visible change gets a new version.
   "VPN server" and "Exits online" and without "Host". `AtlasTest` fails until the tool is run again.
 - A new install with `curl … | bash` no longer ends with `curl: (23) Failure writing output to destination`: the
   installer restarts from its downloaded copy (`exec … </dev/null`) and left the rest of itself unread in the pipe; now
-  it reads it off first. The install itself was fine.
+  it reads it off first — not from a terminal (`bash -c "$(curl …)"` has no pipe, and the read would wait). The
+  install itself was fine.
 
 ## 1.23.1 — 2026-11-21
 

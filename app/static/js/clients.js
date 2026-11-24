@@ -339,7 +339,7 @@ function editClient(pk, section = null) {
   const c = S.clients.find((x) => x.public_key === pk);
   if (!c) return;
   const draft = { outbound: c.policy.outbound, rules_mode: c.policy.rules_mode, note: c.policy.note,
-    rules: structuredClone(c.policy.rules_mode === "custom" ? c.policy.rules : S.routing.rules) };
+    rules: c.policy.rules_mode === "custom" ? structuredClone(c.policy.rules) : copyRules(S.routing.rules) };
   let view = section || (c.has_config ? "connect" : "route");
   const L = c.limits || {};
   openModal(c.name || c.ip, `

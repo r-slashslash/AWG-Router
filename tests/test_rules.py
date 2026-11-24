@@ -161,18 +161,23 @@ class ExitReferencesTest(unittest.TestCase):
                 # правило с балансировкой (1.24.0): выход в группе и резерв группы — тоже ссылки
                 routing.put_routing(R({"default": out, "rules": [
                     {"lists": ["ru"], "outbound": out},
-                    {"lists": ["ir"], "outbound": "direct", "balance": [x, y], "balance_fb": out}]}))
+                    {"lists": ["ir"], "outbound": "direct", "balance": [x, y], "balance_fb": out},
+                    # куда трафик правила, когда исчерпан его месячный лимит (1.24.0)
+                    {"lists": ["cn"], "outbound": "direct", "quota_gb": 5, "quota_action": out}]}))
                 clients.put_client(R({"outbound": out, "rules_mode": "custom",
                                    "rules": [{"lists": ["cn"], "outbound": out}]}), pk)
                 panel.store.mutate(lambda st: st["settings"].setdefault("telegram", {}).update(via=out))
-                # каждое место из outbound_refs: умолчание, правило, правило с балансировкой, резерв и квота Y,
-                # Telegram, клиент, его правило
-                self.assertEqual(len(Store.outbound_refs(panel.store.snapshot(), out)), 8)
+                # каждое место из outbound_refs: умолчание, правило, правило с балансировкой, правило с лимитом, резерв
+                # и квота Y, Telegram, клиент, его правило
+                self.assertEqual(len(Store.outbound_refs(panel.store.snapshot(), out)), 9)
                 exits.del_upstream(R({"replace": "direct"}), x)
                 st = panel.store.snapshot()
                 self.assertNotIn(f'"{out}"', json.dumps(st))
                 self.assertEqual({k: st["routing"]["rules"][1].get(k) for k in ("balance", "outbound", "balance_fb")},
                                  {"balance": [y], "outbound": "up:" + y, "balance_fb": "direct"})
+                self.assertEqual(st["routing"]["rules"][2]["quota_action"], "direct")
+                # копия после удаления восстанавливается (до исправления: «Ошибка в копии: routing.rules»)
+                backup.clean_backup_state(backup.make_backup()["state"])
             finally:
                 panel.store.mutate(lambda st: st.update(routing=st0["routing"], clients=st0["clients"],
                                                        settings=st0["settings"]))

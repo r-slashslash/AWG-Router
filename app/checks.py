@@ -135,7 +135,7 @@ def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:
     """Правила «списки → выход» (общие и клиента). self_dns — адрес, на котором слушает DNS на сервере: свой DNS
     правила с ним бесполезен (DNS на сервере не спрашивает сам себя, имена ушли бы к общим серверам), поэтому
     при сохранении из панели он не принимается; копии и выходы проверяют без него, как до 1.22.0."""
-    if not isinstance(rules, list) or len(rules) > 50:
+    if not isinstance(rules, list) or len(rules) > config.MAX_RULES:
         bad("err.bad_rules")
     out = []
     for i, r in enumerate(rules):

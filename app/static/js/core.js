@@ -196,6 +196,14 @@ function exitName(v) {
   return u ? u.name : t("out.deleted");
 }
 
+/** Свои правила клиента начинаются с копии общих — без месячного лимита и ограничения скорости (1.24.0): у общего
+    правила они на всех его клиентов вместе, а у копии были бы свои, отдельные — клиент выпал бы из общего предела */
+function copyRules(rules) {
+  return structuredClone(rules).map((r) => {
+    for (const k of ["quota", "quota_gb", "quota_action", "quota_hit", "quota_warned", "rate_down", "rate_up"]) delete r[k];
+    return r;
+  });
+}
 /** чип выхода по значению из настроек: direct | block | up:<id> */
 /** выход правила: с балансировкой (1.24.0) — «⚖ выход · выход», иначе — как outChip */
 function ruleOutChip(r) {

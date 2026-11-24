@@ -531,13 +531,14 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 try:
                     t.ns(["nft", "-f", path], timeout=60)
                 except system.SysError as e:
-                    if self.limits_on() and self.rule_limits(st) and "limit" in str(e):
+                    if self.limits_on() and self.rule_limits(st) and "limit" in str(e) and \
+                            self._kernel_blames(t, st, sniff, quic, "_rlim_ok"):
                         # ядро без «limit» в nftables (урезанные сборки): правила — без ограничения скорости, остальное
                         # (учёт по правилам) как было; следующий проход ставит набор без него
                         self._rlim_ok = False
                         self.event("warn", Msg("ev.rlim_off", error=str(e)[-300:]))
                         raise
-                    if self.labels_on() and "label" in str(e):
+                    if self.labels_on() and "label" in str(e) and self._kernel_blames(t, st, sniff, quic, "_labels"):
                         # ядро приняло проверку меток, но не весь набор: учёт по правилам выключить; прежние правила
                         # остаются на месте, следующий проход ставит набор без меток (и посредник — с теми же политиками)
                         self._labels, self.racct_state = False, "off"
@@ -583,6 +584,29 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 self.shape_state = {"state": "error", "error": msg_of(e)}
             self._pass_done()
 
+    def _kernel_blames(self, t: system.Target, st: dict, sniff, quic: bool, attr: str) -> bool:
+        """Набор не встал, и в ошибке есть «label» или «limit»: виноваты ли метки соединений (attr "_labels") или
+        ограничения скорости правил ("_rlim_ok")? nft печатает строку, на которой споткнулся, а метка соединения стоит в
+        каждой строке политики — само слово ещё не значит, что ядро их не умеет. Тот же набор без них ядро принимает
+        (nft -c) — виноваты они, их выключают; не принимает — ошибка в другом: выключать нечего, проход падает, как раньше
+        (иначе учёт, лимиты и скорость правил молча выключались бы до перезапуска из-за чужой ошибки)."""
+        old, slots = getattr(self, attr, None), dict(self._sniff_slots)
+        try:
+            setattr(self, attr, False)
+            text = self.build_ruleset(t, st, sniff, quic)
+        finally:
+            setattr(self, attr, old)
+            # номера политик посредника — как были: пробный набор не должен их сдвигать
+            self._sniff_slots.clear()
+            self._sniff_slots.update(slots)
+        path = os.path.join(RUN_DIR, "ruleset-check.nft")
+        with open(path, "w") as f:
+            f.write(text)
+        p = t.ns(["nft", "-c", "-f", path], check=False, timeout=60)
+        if p.returncode != 0:
+            log.warning("rule set refused, but not for %s: %s", attr.strip("_"), (p.stderr or "").strip()[-300:])
+        return p.returncode == 0
+
     def _pass_done(self) -> None:
         """Проход удался. Сервер после смены движка или перезапуска из панели снова работает (интерфейс на месте) —
         шапка больше не ждёт (_settle)."""
@@ -603,11 +627,13 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 self._drop_hold(t)
                 t.ns(["nft", "delete", "table", "ip", config.NFT_TABLE], check=False)
                 t.ns(["nft", "delete", "table", "ip", nftgen.ACCT_TABLE], check=False)
+                t.ns(["nft", "delete", "table", "ip", nftgen.RACCT_TABLE], check=False)   # учёт по правилам (1.24.0)
                 t.ns(["nft", "delete", "table", "ip6", "awgr6"], check=False)      # server.V6_TABLE
                 self._v6_key = None
                 self._input_rule(t, "del")
                 self._input_rule(t, "del", [("udp", DNS_PORT), ("tcp", DNS_PORT)])
                 self._acct_key = None
+                self._racct_slots = None
                 p = t.ns(["ip", "-j", "rule", "show"], check=False)
                 try:
                     for rule in json.loads(p.stdout or "[]"):

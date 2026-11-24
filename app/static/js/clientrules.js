@@ -62,7 +62,7 @@ function openClientRule(pk = null) {
       if (!c) { toast(t("cr.need_client"), true); return false; }
       // у клиента с общими правилами свои начинаются с копии общих, как в окне клиента; новое — последним
       const own = c.policy && c.policy.rules_mode === "custom";
-      const base = own ? (c.policy.rules || []) : structuredClone(S.routing.rules);
+      const base = own ? (c.policy.rules || []) : copyRules(S.routing.rules);
       return saveClientRules(c, { rules_mode: "custom", rules: [...base, nr] });
     },
   });

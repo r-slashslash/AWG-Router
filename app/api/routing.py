@@ -40,10 +40,12 @@ def put_routing(req):
 
     def fn(st):
         before = rule_lists(st["routing"]["rules"])
+        old_rules = st["routing"]["rules"]
         bal = checks.balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
         strict = checks.strict(body["strict"] if "strict" in body else st["routing"].get("strict"))
         st["routing"] = {"default": checks.outbound(st, body.get("default")),
                          "rules": checks.rules(st, body.get("rules", []), engine.dns_listen())}
+        keep_quota_marks(old_rules, st["routing"]["rules"])
         if bal:
             st["routing"]["balance"] = bal
         if strict:
@@ -52,6 +54,20 @@ def put_routing(req):
     forget_lists(store.mutate(fn))
     engine.trigger()
     return {"ok": True}
+
+
+def keep_quota_marks(old_rules, rules: list[dict]) -> None:
+    """Отметки месячного лимита правила («исчерпан», «предупредили о 90%» в этом месяце) остаются, только пока лимит и
+    действие те же. Подняли лимит после исчерпания или правило новое (копия общего в свои правила клиента) — отметки
+    снимаются, как у выходов (api/exits.py): иначе строка правила до конца месяца писала бы «лимит исчерпан», а о новом
+    пределе не пришло бы ни события, ни сообщения."""
+    old = {r.get("id"): r for r in old_rules or () if isinstance(r, dict)}
+    for r in rules:
+        o = old.get(r.get("id"))
+        if o is None or o.get("quota") != r.get("quota") or \
+                (o.get("quota_action") or "notify") != (r.get("quota_action") or "notify"):
+            r.pop("quota_hit", None)
+            r.pop("quota_warned", None)
 
 
 @app.post("/api/trace")

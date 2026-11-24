@@ -331,6 +331,13 @@ def sniff_marks(policies: dict, slots: dict | None = None) -> dict[str, int]:
     return {n: config.SNIFF_OUT_BASE + new[keys[n]] for n in names}
 
 
+def _own_lim() -> str:
+    """Условие «метка панели с битами номера ограничения»: биты RULE_LIM_MASK есть, а остальная метка — выход, политика
+    sniproxy.py или RULE_LIM_TAG (RULE_LIM_OWN). Чужие метки с теми же битами (Tailscale: 0x40000, 0x80000) — мимо."""
+    return (f"meta mark & {config.RULE_LIM_MASK:#x} != 0x0 "
+            f"meta mark & {0xFFFFFFFF ^ config.RULE_LIM_MASK:#x} {{ {config.RULE_LIM_OWN} }}")
+
+
 def _lim_label(j: int) -> str:
     """Строка rl_lab/q_lab: номер ограничения j в битах RULE_LIM_MASK метки → метки соединения."""
     return (f"\t\tmeta mark & {config.RULE_LIM_MASK:#x} == {(j + 1) << config.RULE_LIM_SHIFT:#x} "
@@ -344,15 +351,17 @@ def _limit_chains(wg: str, limits: dict[int, tuple[int, int]], labels: bool) -> 
     TCP сбавляет скорость. Отбрасывать отправляемое самим сервером (ответы посредника клиенту) нельзя: потерянное в
     своём же стеке TCP не считает потерей и ждёт таймера.
     c_rlim_out (labels, даже без ограничений: на неё полагается номер в метках сокетов посредника, см. _rlim_key) —
-    номер ограничения из метки сокета sniproxy.py → метки соединения, биты снимаются; type route: с исходной меткой
-    маршрут выбирается заново, до c_output."""
+    номер ограничения из метки сокета sniproxy.py → метки соединения, биты снимаются (и служебная RULE_LIM_TAG у сокетов
+    без своей метки); type route: с исходной меткой маршрут выбирается заново, до c_output. Только метки панели
+    (_own_lim): на сервере «на хосте» цепочка видит пакеты всех программ, а Tailscale держит в тех же битах свои метки."""
     out = []
     if labels:
         strip = 0xFFFFFFFF ^ config.RULE_LIM_MASK
         out.append("\tchain rl_lab {\n" + "".join(_lim_label(j) for j in sorted(limits))
-                   + f"\t\tmeta mark set meta mark & {strip:#x}\n\t}}")
+                   + f"\t\tmeta mark set meta mark & {strip:#x}\n"
+                   + f"\t\tmeta mark {config.RULE_LIM_TAG:#x} meta mark set 0x0\n\t}}")
         out.append("\tchain c_rlim_out {\n\t\ttype route hook output priority mangle - 1; policy accept;\n"
-                   f"\t\tmeta mark & {config.RULE_LIM_MASK:#x} != 0x0 jump rl_lab\n\t}}")
+                   f"\t\t{_own_lim()} jump rl_lab\n\t}}")
     if not limits:
         return out
     fw, inp = [], []
@@ -566,8 +575,9 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                # все метки политик sniproxy.py, а не только первые 256 (у сотен клиентов со своими правилами их больше)
                f"\t\tmeta mark {config.SNIFF_OUT_BASE:#x}-{config.QUIC_PASS_MARK - 1:#x} drop\n"
                # номер ограничения скорости в метке сокета sniproxy.py, который не сняла rl_lab (набор без неё): с ним
-               # метка выхода не совпала бы с ip rule — соединение ушло бы мимо выхода
-               f"\t\tmeta mark & {config.RULE_LIM_MASK:#x} != 0x0 drop\n\t}}")
+               # метка выхода не совпала бы с ip rule — соединение ушло бы мимо выхода. Только метки панели: на сервере
+               # «на хосте» здесь и пакеты других программ (Tailscale метит свои 0x40000 и 0x80000)
+               f"\t\t{_own_lim()} drop\n\t}}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]

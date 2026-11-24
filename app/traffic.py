@@ -521,8 +521,12 @@ class Traffic:
             return {k: list(m) for k, o in self.rules.items() if (m := (o.get("months") or {}).get(mk))}
 
     def rule_used(self, rid: str) -> int:
-        """Трафик правила за текущий месяц (оба направления) — для месячного лимита правила."""
-        return sum(self.rules_month().get(rid) or [0, 0])
+        """Трафик правила за текущий месяц (оба направления) — для месячного лимита правила. Зовётся на каждое правило
+        с лимитом у каждого клиента несколько раз за проход: только его месяц, без сборки итогов всех правил."""
+        mk = month_key()
+        with self.lock:
+            m = ((self.rules.get(rid) or {}).get("months") or {}).get(mk)
+            return sum(m) if m else 0
 
     def client_rules(self, pk: str, mk: str | None = None) -> dict[str, list[int]]:
         """Трафик клиента по правилам за месяц: {id правила | "_d": [rx, tx]}."""
