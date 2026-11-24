@@ -535,16 +535,16 @@ class RuleSpeedTest(unittest.TestCase):
 
     def test_ruleset(self):
         """Вход: правило по адресам с ограничением 0 (к клиентам 2,5 МБ/с) и правило без него. Ожидание: строка правила
-        ставит метки номера, ограничения и «есть ограничение»; «limit» с запасом в четверть секунды; отброс в forward и
-        input по сторонам; rl_lab снимает биты номера в метке сокета; без ограничений — только rl_lab (снимает биты),
-        без учёта — ничего, а защита от неснятых битов в c_guard_post — всегда."""
+        ставит метки номера, ограничения и «есть ограничение»; «limit» без burst (запас в секунду держит ядро);
+        отброс в forward и input по сторонам; rl_lab снимает биты номера в метке сокета; без ограничений — только
+        rl_lab (снимает биты), без учёта — ничего, а защита от неснятых битов в c_guard_post — всегда."""
         p = pol([(["ru"], 1), (["of"], "direct")], slots=[0, 1])
         p["lims"], p["dlims"] = [0, None], []
         lists = {"ru": ["5.0.0.0/8"], "of": ["10.20.0.0/16"]}
         text = nftgen.generate("awg0", lists, [{"num": 1}], p, {}, labels=True, limits={0: (2_500_000, 0)})
         self.assertIn(f"ip daddr @l_ru ct label set 0 ct label set {self.LB} ct label set {self.ANY} goto o_u1", text)
         self.assertIn("ip daddr @l_of ct label set 1 goto o_direct", text)
-        self.assertIn("limit rl_0_d {\n\t\trate over 2500000 bytes/second burst 625000 bytes", text)
+        self.assertIn("limit rl_0_d {\n\t\trate over 2500000 bytes/second\n\t}", text)
         self.assertNotIn("rl_0_u", text)
         self.assertIn(f'oifname "awg0" ct label {self.LB} limit name "rl_0_d" drop', text)
         self.assertIn(f'iifname != "awg0" ct label {self.LB} limit name "rl_0_d" drop', text)

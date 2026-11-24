@@ -411,10 +411,9 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     for j, pair in sorted(limits.items()):
         for d, bps in zip("du", pair):
             if bps:
-                # burst — четверть секунды на этой скорости (не меньше 64 КБ): TCP через VPN с задержкой 100–200 мс
-                # с меньшим запасом не добирал бы до предела
-                out.append(f"\tlimit rl_{j}_{d} {{\n\t\trate over {int(bps)} bytes/second burst "
-                           f"{max(int(bps) // 4, 65536)} bytes\n\t}}")
+                # без burst: у «limit» в байтах ядро и так держит запас в секунду на этой скорости (rate + burst) — с ним
+                # TCP через VPN с задержкой 100–200 мс добирает до предела; первая секунда после паузы может быть быстрее
+                out.append(f"\tlimit rl_{j}_{d} {{\n\t\trate over {int(bps)} bytes/second\n\t}}")
 
     out.append("\tmap clients {")
     out.append("\t\ttype ipv4_addr : verdict")
