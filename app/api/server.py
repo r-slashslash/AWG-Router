@@ -84,6 +84,8 @@ def put_server(req):
 
 # ------------------------------------------------------- модуль ядра (рекомендуемый движок)
 ENGINE_HIDE_RE = re.compile(r"^[a-z]{3,10}(:\d{1,12})?$")
+# API-токен Cloudflare: 40 знаков у нынешних, но формат не обещан — латиница, цифры, «_», «-», «.» без пробелов
+CF_TOKEN_RE = re.compile(r"[A-Za-z0-9_.-]{20,200}")
 
 
 def engine_offer(t) -> dict:
@@ -223,6 +225,19 @@ def tls_set(req):
     host = domain or engine.srv.public_host(store.snapshot())
     if not host:
         bad("tls.no_host")
+    # проверка домена через DNS Cloudflare (1.24.0): только Let's Encrypt на домен; пустой токен — оставить сохранённый
+    ch = body.get("challenge") or "http"
+    if ch not in tlsconf.CHALLENGES:
+        bad("err.bad_value")
+    token = None
+    if ch == "cloudflare" and src == "letsencrypt":
+        if not domain or tlsmgr._is_ip(domain):
+            bad("tls.cf_need_domain", field="tls_domain")
+        token = str(body.get("cf_token") or "").strip() or tlsconf.cf_token()
+        if not token:
+            bad("tls.cf_token_empty", field="cf_token")
+        if not CF_TOKEN_RE.fullmatch(token):
+            bad("tls.cf_token_bad", field="cf_token")
     if domain and not tlsmgr._is_ip(domain) and not body.get("force"):
         m = tlsmgr.check_dns(domain, _server_ips())
         if m:
@@ -231,9 +246,14 @@ def tls_set(req):
         m = tlsmgr.check_custom(cert, key, host)
         if m:
             bad(m)
+    if token and not config.DRY_RUN:
+        m = tlsmgr.cf_check(token, domain)
+        if m:
+            bad(m, field="cf_token")
     old_host = tls.host()
+    # без проверки через Cloudflare токен на сервере не хранится
     tlsconf.update(domain=domain, source=src, cert=cert if src == "custom" else None,
-                   key=key if src == "custom" else None)
+                   key=key if src == "custom" else None, challenge="cloudflare" if token else None, cf_token=token)
     warn = None
     if host != old_host:
         try:
@@ -244,7 +264,7 @@ def tls_set(req):
     tls.reconfigure()
     write_status()
     return {"ok": True, "tls": tls.status(), "url": panel_url(), "warn": warn,
-            "web": _need_web(host) if src == "letsencrypt" else None}
+            "web": _need_web(host) if src == "letsencrypt" and not token else None}
 
 
 @app.get("/api/tls/web")

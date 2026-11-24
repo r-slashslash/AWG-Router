@@ -168,7 +168,8 @@ domain rules become a block.
   before 1.21.0). A new text gets a new file written before `state.json` refers to it; the previous one
   stays while `state.json.bak` needs it.
 - `traffic.json` — counters (`traffic.FORMAT` stays 2 so older panels can still read it).
-- `tls.json` — HTTPS settings for this particular server; not part of backups.
+- `tls.json` — HTTPS settings for this particular server, with the Cloudflare API token when the domain is verified
+  through Cloudflare DNS (1.24.0); written `0600`, not part of backups.
 - `/api/state` is polled every few seconds, so keep it small (the clients' live speed, `speeds`, and CPU and memory come with every answer, outside the tag); load big data with separate requests,
   and read the state once per request (`store.snapshot()` copies all of it). The server keeps connections
   open (HTTP/1.1) and compresses text responses from `web.GZIP_MIN` bytes; static files are compressed once per
@@ -188,7 +189,7 @@ has to show a panel message (an error), `app/uitext.py` reads the same dictionar
 
 | Module | What it does |
 |---|---|
-| `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego), own certificate, a web server on port 80 |
+| `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego; HTTP-01 on port 80 or through a web server, DNS-01 through Cloudflare), own certificate |
 | `notify.py`, `tgbot.py` | Telegram notifications and control (every Bot API request goes through `notify.Paths`: the chosen path, then other working exits — never Direct after an exit; "Turn on the bot" is the main switch); clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) and, if on, get reminders about the end date and the limit (`Notifier.client_fn` → `Bot.remind`, sent by the `tgbot-remind` thread) |
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
 | `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (the **Apply for …** buttons on Overview and Routing, the local DNS of the direct path in `dnsproxy.py`) |

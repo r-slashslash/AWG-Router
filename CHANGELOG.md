@@ -51,6 +51,16 @@ it grows, so every user-visible change gets a new version.
   limits off with an event. On GitHub's runners: 11.8–11.9 of 12 Mbit/s down and 5.45 of 5 up (measured from the
   first byte), transit and the proxy together 9.4–9.8 of 10; transit through a SOCKS5 exit gets 66–79% of the limit
   (hev's TCP takes losses worse). Kernel CPU time of forwarding: +2–3% with another rule limited, +4–7% under a limit.
+- **Let's Encrypt through Cloudflare DNS** (the idea and first code: PR #51, zabit-z). In **Domain and certificate**,
+  for a domain (not an IP), **How to verify the domain**: through port 80 as before, or through Cloudflare with an API
+  token (Zone → Zone → Read and Zone → DNS → Edit). `lego run --dns cloudflare`, the token only in lego's environment
+  (`CF_DNS_API_TOKEN`), never on its command line or in the status; one name (the domain), no port 80 check and no web
+  server step; the usual 90-day profile unless `ACME_PROFILE` is set explicitly (renewal depends on an outside API and
+  the token, so the longer certificate leaves time to notice). Before saving, the panel checks the token against the
+  Cloudflare API (`tlsmgr.cf_check`: the zone of the domain or its nearest parent is visible, its DNS records are
+  readable) and marks the field on an error. The token lives in `tls.json` with the other per-server HTTPS settings —
+  now written `0600`, not in backups — and is removed on going back to port 80 or to an own certificate. Not a way to
+  put the panel behind Cloudflare's proxy.
 - **Monthly totals in Telegram** (off by default, also after an upgrade): on the first pass of a month the bot sends
   last month's server total, exits and Direct, and the top general rules with **Default**. Once a month (`report` in
   `traffic.json`); the first run after an upgrade only remembers the month.

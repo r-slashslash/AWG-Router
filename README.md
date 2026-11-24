@@ -109,7 +109,7 @@ Details are in [How routing works](#how-routing-works).
 </p>
 
 **Panel**
-- HTTPS with a Let's Encrypt certificate for the server's IP or your domain, renewed by itself, or with your own certificate (for example, from certbot). If nginx or Apache already holds port 80, validation goes through it.
+- HTTPS with a Let's Encrypt certificate for the server's IP or your domain, renewed by itself, or with your own certificate (for example, from certbot). If nginx or Apache already holds port 80, validation goes through it; a domain whose DNS is in Cloudflare can be validated through Cloudflare instead, without port 80.
 - Alternatively, the panel can be reachable only through an SSH tunnel.
 - The address uses a random port and a secret path, and login is password-protected with brute-force protection. A sign-in lasts 4 hours.
 - Optional second factor: a 6-digit code from an authenticator app (Google Authenticator, Aegis, 2FAS…). Turned on in **System**.
@@ -187,6 +187,7 @@ Keep it running and open `http://127.0.0.1:PORT/secret-path/`. Run `awg-router i
 
 - The panel gets a Let's Encrypt certificate with [lego](https://go-acme.github.io/lego/) for the server's IP or the panel domain, validating over port 80, and renews it without a restart. For an IP address Let's Encrypt issues only 6-day certificates (the `shortlived` profile), so the panel renews about every 3 days.
 - **System → Domain and certificate** sets the panel domain (empty — by IP) and chooses Let's Encrypt or your own certificate. For your own, give the paths on the server to the certificate (full chain) and the key, for example certbot's `/etc/letsencrypt/live/example.com/fullchain.pem` and `privkey.pem`. The panel checks that the certificate is for the panel address and that the key matches; when certbot renews it, the panel picks up the new one within a few minutes.
+- **Through Cloudflare** (for a domain whose DNS is in Cloudflare): in the same window choose **How to verify the domain → Through Cloudflare** and paste a Cloudflare API token with **Zone → Zone → Read** and **Zone → DNS → Edit** for that domain only (Cloudflare: **My Profile → API Tokens → Create Token**). Let's Encrypt then checks a TXT record that the panel adds through the Cloudflare API, so port 80 and a web server aren't needed. The panel checks the token before saving it; the token is kept only on this server (`data/tls.json`, readable by root only), isn't part of backups and is removed when you switch back to port 80. Such certificates are the usual 90-day ones. This only gets the certificate: putting the panel itself behind Cloudflare's proxy is not supported.
 - With IPv6 in use (an IPv6 **Server public address**, or IPv6 picked in **Address in configs**), the certificate covers both the server's IPv4 and IPv6 addresses, so the panel opens without a warning at either. If Let's Encrypt can't validate the second address (for example, port 80 is closed over it), the certificate covers the main one and the panel tries the second again a day later. Through a web server on port 80 the certificate covers only the main address.
 - The domain is the panel's address. Client configs use the server address from the **Server** tab; the installer offers to put the panel domain there too.
 - If issuance fails, the panel runs with a temporary self-signed certificate, so the browser will show a warning. It retries every 30 minutes.
@@ -353,6 +354,7 @@ They found problems, traced them down to the line of code and suggested solution
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>several server addresses in client configs <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a>, the server name in the browser tab <a href="https://github.com/r-slashslash/AWG-Router/issues/38">#38</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/Alex4003"><img src="https://github.com/Alex4003.png?size=128" width="72" alt=""><br><b>Alex4003</b></a><br>💡<br><sub>load balancing inside a rule <a href="https://github.com/r-slashslash/AWG-Router/issues/53">#53</a>, traffic by rule <a href="https://github.com/r-slashslash/AWG-Router/issues/54">#54</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/zabit-z"><img src="https://github.com/zabit-z.png?size=128" width="72" alt=""><br><b>zabit-z</b></a><br>💡<br><sub>the Let's Encrypt certificate through Cloudflare DNS <a href="https://github.com/r-slashslash/AWG-Router/pull/51">#51</a></sub></td>
 </tr>
 </table>
 

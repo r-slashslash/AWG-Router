@@ -7,6 +7,9 @@
   Порт 80 свободен — lego слушает его сам; занят веб-сервером — токены кладутся в папку, которую
   этот веб-сервер отдаёт (webfront.py). Не получилось — временный самоподписанный, попытки идут.
   Каждые ~6 часов `lego run` проверяет, не пора ли продлевать (для 6-дневного — на середине срока).
+* Домен, чей DNS в Cloudflare (1.24.0, идея PR #51): проверка DNS-01 — lego кладёт запись TXT через API Cloudflare
+  токеном из настроек (только в окружении lego, не в командной строке). Порт 80 и веб-сервер не нужны. Профиль —
+  обычный (90 дней), если ACME_PROFILE не задан явно: продление зависит от чужого API и токена, запас по сроку больше.
 * Свой сертификат: файлы на хосте (например, от certbot). Раз в несколько минут смотрим, не
   сменились ли они, и подхватываем новые.
 * Новый сертификат подхватывается без перезапуска: сервер берёт контекст при каждом соединении.
@@ -14,6 +17,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import os
 import random
@@ -22,6 +26,9 @@ import ssl
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 from . import config, tlsconf, webfront
@@ -32,6 +39,8 @@ log = logging.getLogger("awgr.tls")
 TLS_DIR = os.path.join(config.DATA_DIR, "tls")
 ACME_DIR = os.path.join(config.DATA_DIR, "acme")
 ACME_PROFILE = os.environ.get("ACME_PROFILE", "shortlived")
+ACME_PROFILE_EXPLICIT = "ACME_PROFILE" in os.environ
+CF_API = "https://api.cloudflare.com/client/v4"
 CUSTOM_CHECK = 300            # с, как часто смотреть, не сменил ли certbot файлы своего сертификата
 ALT_RETRY = 24 * 3600         # с: Let's Encrypt не проверил второй адрес — столько не просим его снова
 
@@ -109,6 +118,13 @@ class TLSManager:
     def context(self) -> ssl.SSLContext | None:
         return self._ctx
 
+    def cf_token(self, host: str | None = None) -> str:
+        """Токен Cloudflare, если домен проверяется через DNS (DNS-01): выбрано в настройках, токен есть и адрес
+        сертификата — домен (IP так не проверить). Иначе пусто — порт 80 или веб-сервер, как раньше."""
+        c = tlsconf.load()
+        h = self.host() if host is None else host
+        return tlsconf.cf_token(c) if tlsconf.challenge(c) == "cloudflare" and h and not _is_ip(h) else ""
+
     def status(self) -> dict:
         c = tlsconf.load()
         web = c.get("web")
@@ -117,7 +133,8 @@ class TLSManager:
                 "domain": tlsconf.domain(c), "cert": c.get("cert") or "", "key": c.get("key") or "",
                 "web": {k: web.get(k) for k in ("kind", "process", "where", "container", "file", "host")}
                 if web else None,
-                "port80": self.port80}
+                "port80": self.port80,
+                "challenge": tlsconf.challenge(c), "cf_token": bool(tlsconf.cf_token(c))}   # сам токен — никогда
 
     # ------------------------------------------------------------ загрузка
     def _load(self, cert: str, key: str, kind: str) -> bool:
@@ -215,15 +232,19 @@ class TLSManager:
             self.error = "no public address"
             return False
         names = self._want()
-        web = tlsconf.load().get("web")
-        if web and web.get("host") == host:
-            names = [host]          # блок веб-сервера отвечает только на основной адрес (server_name)
+        token = self.cf_token(host)
+        web = None if token else tlsconf.load().get("web")
+        if token or (web and web.get("host") == host):
+            names = [host]          # блок веб-сервера отвечает только на основной адрес; DNS-01 — только домен
         if keep and len(names) < 2:
             return False
         cmd = ["lego", "run", "--accept-tos", "--path", ACME_DIR, "--server", config.ACME_SERVER,
-               "--key-type", "ec256", "--http", "--no-random-sleep"]
-        if web and web.get("host") == host:
-            cmd += ["--http.webroot", webfront.host_path(web["webroot"])]
+               "--key-type", "ec256"]
+        if token:
+            cmd += ["--dns", "cloudflare", "--no-random-sleep"]
+            self.port80 = None
+        elif web and web.get("host") == host:
+            cmd += ["--http", "--no-random-sleep", "--http.webroot", webfront.host_path(web["webroot"])]
             self.port80 = None
         else:
             busy = config.ACME_HTTP_PORT == 80 and (config.DRY_RUN or webfront.listeners())
@@ -234,12 +255,12 @@ class TLSManager:
                 self.last_try = time.time()
                 return False
             self.port80 = None
-            cmd += ["--http.address", f":{config.ACME_HTTP_PORT}"]
+            cmd += ["--http", "--no-random-sleep", "--http.address", f":{config.ACME_HTTP_PORT}"]
         if config.DRY_RUN:
             self.error = "demo: no Let's Encrypt"
             self.last_try = time.time()
             return False
-        if ACME_PROFILE:
+        if ACME_PROFILE and (not token or ACME_PROFILE_EXPLICIT):
             cmd += ["--profile", ACME_PROFILE]
         if config.ACME_EMAIL:
             cmd += ["--email", config.ACME_EMAIL]
@@ -254,7 +275,7 @@ class TLSManager:
 
     def _issue(self, cmd: list[str], names: list[str]) -> bool:
         """Один запуск lego на эти адреса. Файлы сертификата не покрывают их (добавили второй адрес) —
-        `--renew-force`: иначе lego решил бы, что продлевать ещё рано."""
+        `--renew-force`: иначе lego решил бы, что продлевать ещё рано. Токен Cloudflare — только в окружении lego."""
         cur = self._le_paths()[0]
         if os.path.exists(cur) and not all(_san_matches(cur, n) for n in names):
             cmd = cmd + ["--renew-force"]
@@ -262,7 +283,9 @@ class TLSManager:
             cmd = cmd + ["-d", n]
         self.last_try = time.time()
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+            token = self.cf_token(names[0]) if "--dns" in cmd else ""
+            env = {**os.environ, "CF_DNS_API_TOKEN": token} if token else None
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=240, env=env)
         except (OSError, subprocess.TimeoutExpired) as e:
             self.error = str(e)[:300]
             log.warning("lego: %s", e)
@@ -444,6 +467,53 @@ def check_custom(cert: str, key: str, host: str):
         ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cp, kp)
     except (ssl.SSLError, OSError, ValueError):
         return Msg("tls.cert_key", path=key)
+    return None
+
+
+def _cf_get(path: str, token: str) -> tuple[int, dict]:
+    """GET к API Cloudflare с токеном → (код HTTP, ответ). Сеть недоступна — OSError."""
+    req = urllib.request.Request(CF_API + path, headers={"Authorization": f"Bearer {token}",
+                                                         "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read() or b"{}")
+        except ValueError:
+            body = {}
+        return e.code, body if isinstance(body, dict) else {}
+    except ValueError as e:
+        raise OSError(str(e)) from e
+
+
+def _cf_errors(body: dict) -> str:
+    errs = body.get("errors") if isinstance(body, dict) else None
+    return "; ".join(str(e.get("message") or e) for e in errs if isinstance(e, dict))[:200] if errs else ""
+
+
+def cf_check(token: str, domain: str):
+    """Подходит ли токен для проверки домена через DNS Cloudflare: видна зона домена (Zone → Zone → Read) и её
+    записи DNS (Zone → DNS → Edit). None — да; Msg — что не так. Зона — сам домен или ближайший родитель."""
+    labels = domain.lower().rstrip(".").split(".")
+    try:
+        zone = None
+        for i in range(len(labels) - 1):
+            name = ".".join(labels[i:])
+            code, body = _cf_get("/zones?" + urllib.parse.urlencode({"name": name}), token)
+            if code in (400, 401, 403) or not body.get("success", code == 200):
+                return Msg("tls.cf_rejected", error=_cf_errors(body) or f"HTTP {code}")
+            found = [z for z in body.get("result") or [] if isinstance(z, dict) and z.get("name") == name]
+            if found:
+                zone = found[0]
+                break
+        if not zone:
+            return Msg("tls.cf_no_zone", domain=domain)
+        code, body = _cf_get(f"/zones/{urllib.parse.quote(str(zone.get('id')), safe='')}/dns_records?per_page=1", token)
+        if code != 200 or not body.get("success"):
+            return Msg("tls.cf_no_dns", zone=zone.get("name") or domain)
+    except OSError as e:
+        return Msg("tls.cf_unreachable", error=str(e)[:200])
     return None
 
 

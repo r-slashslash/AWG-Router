@@ -122,7 +122,7 @@ curl -fsSL https://raw.githubusercontent.com/r-slashslash/AWG-Router/main/instal
 </p>
 
 **پنل**
-- HTTPS با گواهی Let's Encrypt برای IP سرور یا دامنهٔ شما که خودکار تمدید می‌شود، یا با گواهی خودتان (مثلاً از certbot). اگر nginx یا Apache از پیش درگاه ۸۰ را گرفته باشد، اعتبارسنجی از طریق آن انجام می‌شود.
+- HTTPS با گواهی Let's Encrypt برای IP سرور یا دامنهٔ شما که خودکار تمدید می‌شود، یا با گواهی خودتان (مثلاً از certbot). اگر nginx یا Apache از پیش درگاه ۸۰ را گرفته باشد، اعتبارسنجی از طریق آن انجام می‌شود؛ دامنه‌ای که DNS آن در Cloudflare است را می‌توان بدون درگاه ۸۰ از راه Cloudflare تأیید کرد.
 - یا می‌توان پنل را فقط از راه تونل SSH در دسترس گذاشت.
 - نشانی پنل پورت تصادفی و مسیر مخفی دارد، ورود با رمز عبور است و در برابر حدس رمز محافظت می‌شود. هر ورود ۴ ساعت معتبر است.
 - عامل دوم اختیاری: کد ۶ رقمی از برنامهٔ احراز هویت (Google Authenticator، Aegis، 2FAS…). در زبانهٔ **سیستم** فعال می‌شود.
@@ -216,6 +216,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 
 - پنل گواهی Let's Encrypt را با [lego](https://go-acme.github.io/lego/) برای IP سرور یا دامنهٔ پنل و با بررسی از راه پورت 80 می‌گیرد و بدون راه‌اندازی دوباره تمدیدش می‌کند. ‏Let's Encrypt برای نشانی IP فقط گواهی ۶ روزه صادر می‌کند (پروفایل `shortlived`)، پس پنل حدوداً هر ۳ روز تمدیدش می‌کند.
 - **سیستم ← دامنه و گواهی**: دامنهٔ پنل (خالی — با IP) و انتخاب میان Let's Encrypt و گواهی خودتان. برای گواهی خودتان، مسیر گواهی (با زنجیره) و کلید را روی سرور وارد کنید، مثلاً از certbot: ‏`/etc/letsencrypt/live/example.com/fullchain.pem` و `privkey.pem`. پنل بررسی می‌کند که گواهی برای آدرس پنل صادر شده و کلید با آن جور است؛ وقتی certbot گواهی را تمدید کند، پنل ظرف چند دقیقه گواهی تازه را برمی‌دارد.
+- **از راه Cloudflare** (برای دامنه‌ای که DNS آن در Cloudflare است): در همان پنجره **تأیید دامنه از چه راهی ← از راه Cloudflare** را انتخاب کنید و توکن API در Cloudflare را با دسترسی‌های **Zone ← Zone ← Read** و **Zone ← DNS ← Edit** فقط برای همان دامنه بچسبانید (در Cloudflare: **My Profile ← API Tokens ← Create Token**). آن‌گاه Let's Encrypt رکورد TXT را که پنل از راه API ‏Cloudflare می‌افزاید بررسی می‌کند و درگاه ۸۰ و وب‌سرور لازم نیست. پنل توکن را پیش از ذخیره می‌آزماید؛ توکن فقط روی همین سرور نگه داشته می‌شود (<bdi>`data/tls.json`</bdi>، فقط برای root خواندنی)، در پشتیبان نمی‌آید و با بازگشت به درگاه ۸۰ پاک می‌شود. این گواهی‌ها همان گواهی‌های معمولی ۹۰ روزه‌اند. این فقط برای گرفتن گواهی است: گذاشتن خود پنل پشت پراکسی Cloudflare پشتیبانی نمی‌شود.
 - وقتی IPv6 در کار است (IPv6 در **آدرس عمومی سرور** یا انتخاب‌شده در **آدرس در پیکربندی‌ها**)، گواهی هم برای IPv4 و هم برای IPv6 سرور صادر می‌شود و پنل با هر دو بدون هشدار باز می‌شود. اگر Let's Encrypt نتواند نشانی دوم را بررسی کند (مثلاً درگاه 80 روی آن بسته باشد)، گواهی فقط برای نشانی اصلی است و پنل یک روز بعد دوباره نشانی دوم را امتحان می‌کند. از راه وب‌سرور روی درگاه 80، گواهی فقط برای نشانی اصلی صادر می‌شود.
 - دامنه آدرس پنل است. پیکربندی کلاینت‌ها آدرس سرور از زبانهٔ **سرور** را به کار می‌برد؛ نصب‌کننده پیشنهاد می‌کند دامنهٔ پنل را آنجا هم بگذارد.
 - اگر دریافت گواهی ناموفق باشد، پنل با یک گواهی موقت خودامضا کار می‌کند و مرورگر هشدار نشان می‌دهد. هر ۳۰ دقیقه دوباره تلاش می‌شود.
@@ -386,6 +387,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # demo w
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>چند آدرس سرور در پیکربندی کلاینت‌ها <a href="https://github.com/r-slashslash/AWG-Router/issues/37">&lrm;#37&lrm;</a>، نام سرور در زبانهٔ مرورگر <a href="https://github.com/r-slashslash/AWG-Router/issues/38">&lrm;#38&lrm;</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/Alex4003"><img src="https://github.com/Alex4003.png?size=128" width="72" alt=""><br><b>Alex4003</b></a><br>💡<br><sub>توزیع بار درون قانون <a href="https://github.com/r-slashslash/AWG-Router/issues/53">#53</a>, ترافیک هر قانون <a href="https://github.com/r-slashslash/AWG-Router/issues/54">#54</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/zabit-z"><img src="https://github.com/zabit-z.png?size=128" width="72" alt=""><br><b>zabit-z</b></a><br>💡<br><sub>گواهی Let's Encrypt از راه DNS ‏Cloudflare <a href="https://github.com/r-slashslash/AWG-Router/pull/51">#51</a></sub></td>
 </tr>
 </table>
 

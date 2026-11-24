@@ -8,7 +8,7 @@ function viewSystem() {
   const pub = P.access !== "ssh" && (T.mode === "letsencrypt" || T.mode === "selfsigned");
   const tlsLine = P.access === "ssh" ? t("sy.tls_ssh")
     : T.busy ? t("sy.tls_busy")
-    : T.active === "letsencrypt" ? t("sy.tls_le", { date: fmtTime(T.expires) })
+    : T.active === "letsencrypt" ? t(T.challenge === "cloudflare" ? "sy.tls_le_cf" : "sy.tls_le", { date: fmtTime(T.expires) })
     : T.active === "custom" ? t("sy.tls_custom", { date: fmtTime(T.expires) })
     : T.active === "selfsigned" ? t("sy.tls_self") : t("sy.tls_off");
   const W = T.web;
@@ -23,7 +23,7 @@ function viewSystem() {
         <div><span>${esc(t("sy.url"))}</span><b><bdi>${esc(P.url || "—")}</bdi></b></div>
         <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b></div>
         <div><span>${esc(t("sy.cert"))}</span><b>${esc(tlsLine)}</b></div>
-        ${pub && W && T.source === "letsencrypt" ? `<div><span>${esc(t("sy.tls_web"))}</span><b style="word-break:normal">${esc(webLine)}</b>${W.file ? `<span class="muted small" dir="ltr" style="display:block;overflow-wrap:anywhere">${esc(W.file)}</span>` : ""}</div>` : ""}
+        ${pub && W && T.source === "letsencrypt" && T.challenge !== "cloudflare" ? `<div><span>${esc(t("sy.tls_web"))}</span><b style="word-break:normal">${esc(webLine)}</b>${W.file ? `<span class="muted small" dir="ltr" style="display:block;overflow-wrap:anywhere">${esc(W.file)}</span>` : ""}</div>` : ""}
         <div><span>${esc(t("sy.version"))}</span><b>${esc((S.version || {}).current || "—")}</b></div>
       </div>
       ${updateNotice()}
@@ -140,13 +140,21 @@ function tlsModal() {
   const T = S.panel.tls || {};
   const ip = S.panel.ip || "";
   let src = T.source === "custom" ? "custom" : "letsencrypt";
+  // как Let's Encrypt проверяет домен (1.24.0): порт 80 (или веб-сервер на нём) либо запись в DNS через API Cloudflare
+  let ch = T.challenge === "cloudflare" ? "cloudflare" : "http";
   const certPh = "/etc/letsencrypt/live/example.com/fullchain.pem", keyPh = "/etc/letsencrypt/live/example.com/privkey.pem";
   const body = `
-    <label class="field"><span>${esc(t("tls.domain"))}</span><input type="text" id="tls-domain" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.domain || "")}" placeholder="panel.example.com">
+    <label class="field"><span>${esc(t("tls.domain"))}</span><input type="text" id="tls-domain" data-field="tls_domain" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.domain || "")}" placeholder="panel.example.com">
       <span class="hint">${esc(t("tls.domain_hint", { ip: ip || "IP" }))}</span></label>
     <div class="field"><span>${esc(t("tls.source"))}</span>
       <div class="seg" id="tls-src"><button type="button" data-v="letsencrypt">${esc(t("tls.src_le"))}</button><button type="button" data-v="custom">${esc(t("tls.src_custom"))}</button></div>
       <span class="hint" id="tls-src-hint"></span></div>
+    <div id="tls-ch-box" hidden>
+      <div class="field"><span>${esc(t("tls.ch"))}</span>
+        <div class="seg" id="tls-ch"><button type="button" data-v="http">${esc(t("tls.ch_http"))}</button><button type="button" data-v="cloudflare">${esc(t("tls.ch_cf"))}</button></div></div>
+      <label class="field" id="tls-cf-box"><span>${esc(t("tls.cf_token"))}</span><input type="password" id="tls-cf" data-field="cf_token" dir="ltr" autocomplete="new-password" spellcheck="false" placeholder="${esc(T.cf_token ? t("tls.cf_saved") : "")}">
+        <span class="hint">${esc(t("tls.cf_hint"))}</span></label>
+    </div>
     <div id="tls-files">
       <label class="field"><span>${esc(t("tls.cert"))}</span><input type="text" id="tls-cert" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.cert || "")}" placeholder="${esc(certPh)}"></label>
       <label class="field"><span>${esc(t("tls.key"))}</span><input type="text" id="tls-key" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.key || "")}" placeholder="${esc(keyPh)}"></label>
@@ -156,14 +164,21 @@ function tlsModal() {
     const d = $("#tls-domain").value.trim().toLowerCase() || "example.com";
     return { cert: `/etc/letsencrypt/live/${d}/fullchain.pem`, key: `/etc/letsencrypt/live/${d}/privkey.pem` };
   };
+  // через Cloudflare подтверждается только домен: IP (с точками или «:») — только порт 80
+  const domainOnly = () => { const d = $("#tls-domain").value.trim(); return !!d && !/^[\d.]+$/.test(d) && !d.includes(":"); };
+  const viaCf = () => src === "letsencrypt" && domainOnly() && ch === "cloudflare";
   const seg = () => {
     $$("#tls-src button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === src));
+    $$("#tls-ch button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === ch));
     $("#tls-files").hidden = src !== "custom";
+    $("#tls-ch-box").hidden = !(src === "letsencrypt" && domainOnly());
+    $("#tls-cf-box").hidden = !viaCf();
     const p = paths();
-    $("#tls-src-hint").innerHTML = src === "custom" ? th("tls.custom_hint", { cert: `<bdi dir="ltr">${esc(p.cert)}</bdi>`, key: `<bdi dir="ltr">${esc(p.key)}</bdi>` }) : esc(t("tls.le_hint"));
+    $("#tls-src-hint").innerHTML = src === "custom" ? th("tls.custom_hint", { cert: `<bdi dir="ltr">${esc(p.cert)}</bdi>`, key: `<bdi dir="ltr">${esc(p.key)}</bdi>` }) : esc(t(viaCf() ? "tls.le_cf_hint" : "tls.le_hint"));
     $("#tls-cert").placeholder = p.cert; $("#tls-key").placeholder = p.key;
   };
   $$("#tls-src button").forEach((b) => b.onclick = () => { src = b.dataset.v; seg(); });
+  $$("#tls-ch button").forEach((b) => b.onclick = () => { ch = b.dataset.v; seg(); });
   $("#tls-domain").oninput = seg;
   seg();
   const apply = async (force) => {
@@ -171,7 +186,8 @@ function tlsModal() {
     const before = S.panel.url;
     try {
       const r = await api("PUT", "tls", { domain: $("#tls-domain").value.trim(), source: src,
-        cert: $("#tls-cert").value.trim(), key: $("#tls-key").value.trim(), force: !!force });
+        cert: $("#tls-cert").value.trim(), key: $("#tls-key").value.trim(), force: !!force,
+        challenge: viaCf() ? "cloudflare" : "http", cf_token: viaCf() ? $("#tls-cf").value.trim() : "" });
       if (r.confirm) {
         btn.disabled = false;
         if (confirm(tm(r.confirm) + "\n\n" + t("tls.dns_force"))) return apply(true);
@@ -182,7 +198,7 @@ function tlsModal() {
       if (r.web && r.web.kind !== "none") webModal(r.web);
       else closeModal();
       refresh();
-    } catch (e) { toast(e.message, true); btn.disabled = false; }
+    } catch (e) { toast(e.message, true); markField(e, $("#modal")); btn.disabled = false; }
   };
   $("#tls-apply").onclick = () => apply(false);
 }

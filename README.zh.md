@@ -109,7 +109,7 @@ AWG Router 让你的 AmneziaWG 服务器成为级联的入口（中转服务器�
 </p>
 
 **面板**
-- 使用为服务器 IP 或你的域名签发的 Let's Encrypt 证书提供 HTTPS，证书自动续期；也可以使用自有证书（例如 certbot 签发的）。如果 80 端口已被 nginx 或 Apache 占用，验证会通过它们进行。
+- 使用为服务器 IP 或你的域名签发的 Let's Encrypt 证书提供 HTTPS，证书自动续期；也可以使用自有证书（例如 certbot 签发的）。如果 80 端口已被 nginx 或 Apache 占用，验证会通过它们进行；DNS 托管在 Cloudflare 的域名也可以通过 Cloudflare 验证，无需 80 端口。
 - 也可以设置为只能通过 SSH 隧道访问面板。
 - 地址包含随机端口和秘密路径，登录需要密码，并有防暴力破解保护。登录有效期为 4 小时。
 - 可选的第二重验证：身份验证器应用（Google Authenticator、Aegis、2FAS…）中的 6 位代码。在 **系统** 选项卡中启用。
@@ -187,6 +187,7 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 
 - 面板通过 [lego](https://go-acme.github.io/lego/) 为服务器 IP 或面板域名获取 Let's Encrypt 证书，经 80 端口验证，并在不重启的情况下续期。Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配置），因此面板大约每 3 天续期一次。
 - **系统 → 域名和证书**：设置面板域名（留空则通过 IP）并选择 Let's Encrypt 或自有证书。使用自有证书时，填写服务器上证书（完整链）和私钥的路径，例如 certbot 的 `/etc/letsencrypt/live/example.com/fullchain.pem` 和 `privkey.pem`。面板会检查证书是否签发给面板地址、私钥是否匹配；certbot 续期后，面板会在几分钟内加载新证书。
+- **通过 Cloudflare**（适用于 DNS 托管在 Cloudflare 的域名）：在同一窗口中选择 **如何验证域名 → 通过 Cloudflare**，并粘贴一个仅对该域名拥有 **Zone → Zone → Read** 和 **Zone → DNS → Edit** 权限的 Cloudflare API 令牌（在 Cloudflare 中：**My Profile → API Tokens → Create Token**）。这样 Let's Encrypt 会检查面板通过 Cloudflare API 添加的 TXT 记录，因此不需要 80 端口和网页服务器。面板在保存前会检查令牌；令牌只保存在此服务器上（`data/tls.json`，仅 root 可读），不包含在备份中，切换回 80 端口时会被删除。这类证书是普通的 90 天证书。这只用于获取证书：不支持把面板本身放在 Cloudflare 代理之后。
 - 使用 IPv6 时（**服务器公网地址** 为 IPv6，或在 **配置中的地址** 中选择了 IPv6），证书同时签发给服务器的 IPv4 和 IPv6 地址，通过任一地址打开面板都不会出现警告。如果 Let's Encrypt 无法验证第二个地址（例如该地址的 80 端口被关闭），证书只签发给主地址，面板会在一天后再尝试第二个地址。通过 80 端口上的 Web 服务器验证时，证书只签发给主地址。
 - 域名是面板的地址。客户端配置使用 **服务器** 选项卡中的服务器地址；安装程序也会询问是否改用面板域名。
 - 如果签发失败，面板会使用临时自签名证书运行，浏览器会显示警告。每 30 分钟重试一次。
@@ -353,6 +354,7 @@ DRY_RUN=1 PANEL_PASSWORD=demo DATA_DIR=./demo python3 -m app.main       # 无需
 <tr>
 <td align="center" valign="top" width="33%"><a href="https://github.com/MacSergey"><img src="https://github.com/MacSergey.png?size=128" width="72" alt=""><br><b>MacSergey</b></a><br>💡<br><sub>客户端配置中的多个服务器地址 <a href="https://github.com/r-slashslash/AWG-Router/issues/37">#37</a>、浏览器标签页中的服务器名称 <a href="https://github.com/r-slashslash/AWG-Router/issues/38">#38</a></sub></td>
 <td align="center" valign="top" width="33%"><a href="https://github.com/Alex4003"><img src="https://github.com/Alex4003.png?size=128" width="72" alt=""><br><b>Alex4003</b></a><br>💡<br><sub>规则内的负载均衡 <a href="https://github.com/r-slashslash/AWG-Router/issues/53">#53</a>, 按规则统计流量 <a href="https://github.com/r-slashslash/AWG-Router/issues/54">#54</a></sub></td>
+<td align="center" valign="top" width="33%"><a href="https://github.com/zabit-z"><img src="https://github.com/zabit-z.png?size=128" width="72" alt=""><br><b>zabit-z</b></a><br>💡<br><sub>通过 Cloudflare DNS 获取 Let's Encrypt 证书 <a href="https://github.com/r-slashslash/AWG-Router/pull/51">#51</a></sub></td>
 </tr>
 </table>
 
