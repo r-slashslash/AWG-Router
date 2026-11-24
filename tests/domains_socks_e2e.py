@@ -246,9 +246,15 @@ UPS = [{"num": 1, "snat": "", "mtu": 8500}]
 IP_LISTS = {"via": ["8.8.4.4/32"]}
 
 
-def rules(policy, sniff=True, quic=False, strict=False, balance=frozenset()):
+def rules(policy, sniff=True, quic=False, strict=False, balance=frozenset(), labels=False):
     nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None,
-                               balance, quic=quic, strict=strict))
+                               balance, quic=quic, strict=strict, labels=labels))
+
+
+def racct():
+    """Счётчики учёта трафика по правилам (1.24.0) в amz: {(адрес, номер правила): [от клиента, к клиенту]}."""
+    p = sh("amz", "nft", "-j", "list", "table", "ip", nftgen.RACCT_TABLE)
+    return nftgen.parse_racct(json.loads(p.stdout), "awg0") if p.returncode == 0 else {}
 
 
 def quic_ok() -> bool:
@@ -485,8 +491,25 @@ def main():
             procs["sni"] = start_sni(sni_conf(qpol, {"mark": nftgen.mark_for(1)}, qmark=nftgen.mark_for(1)))
             check("QUIC: сайт из правила → выход-туннель по метке (AWG; SOCKS5 с «Пропускать QUIC» — через UDP ASSOCIATE)",
                   quic("8.8.8.8"), "PROXY-UDP")
+            # 1.24.0: номер правила в вердикте QUIC (биты QUIC_SLOT_MASK): q_lab ставит метку соединения и снимает биты
+            # до маршрутизации — путь тот же, а таблица учёта по правилам видит трафик правила
+            nft("amz", nftgen.racct_ruleset("awg0", [0, config.RULE_DEFAULT_SLOT]))
+            qlp = {**qpol, "slots": [], "dslots": [0]}
+            bits = 1 << config.QUIC_SLOT_SHIFT
+            for want, qm in (("PROXY-UDP", nftgen.mark_for(1)), ("DIRECT-UDP", config.QUIC_DIRECT_MARK)):
+                procs["sni"].terminate()
+                procs["sni"].wait(5)
+                rules(qlp, quic=True, labels=True)
+                procs["sni"] = start_sni(sni_conf(qlp, {"mark": nftgen.mark_for(1)}, qmark=qm | bits))
+                before = racct().get(("10.8.1.2", 0), [0, 0])
+                check(f"QUIC с номером правила в вердикте: тот же путь ({want}), и после ответа сервера",
+                      quic("8.8.8.8", extra=True), lambda g, w=want: g == f"{w} {w}")
+                after = racct().get(("10.8.1.2", 0), [0, 0])
+                check("QUIC с номером правила: учёт видит правило в обе стороны",
+                      f"{after[0] > before[0]} {after[1] > before[1]}", "True True")
             procs["sni"].terminate()
             procs["sni"].wait(5)
+            rules(qpol, quic=True)
             procs["sni"] = start_sni(sni_conf(qpol, {"socks": SOCKS}, qmark=config.MARK_BLOCK))
             check("QUIC: сайт из правила на SOCKS5 → отказ (HTTPS через прокси по имени)", quic("8.8.8.8"), "FAIL")
             procs["sni"].terminate()

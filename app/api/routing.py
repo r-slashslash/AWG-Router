@@ -132,6 +132,14 @@ def refresh_now_or_bg(lid: str) -> dict | None:
     return list_view(Store.lst(store.snapshot(), lid))
 
 
+@app.get("/api/rule-top/{rid}")
+def rule_top(req, rid):
+    """Клиенты, больше всех потратившие по правилу за этот месяц (окно правила, 1.24.0)."""
+    names = {c["public_key"]: c.get("name") or c.get("ip") or "" for c in engine.clients}
+    return {"top": [{"pk": pk, "name": names[pk], "rx": v[0], "tx": v[1]}
+                    for pk, v in engine.traffic.rule_top(rid) if pk in names]}
+
+
 @app.get("/api/lists/{lid}")
 def get_list(req, lid):
     l = Store.lst(store.snapshot(), lid)

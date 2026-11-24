@@ -342,6 +342,12 @@ def delete_user(pk: str) -> None:
     engine.reconcile_soon()
 
 
+@app.get("/api/rule-traffic/{pk:path}")
+def rule_traffic(req, pk):
+    """Трафик клиента по правилам за этот месяц (окно клиента → «Маршрут», 1.24.0): {id правила | "_d": [rx, tx]}."""
+    return {"state": engine.racct_state, "rules": engine.traffic.client_rules(pk)}
+
+
 @app.get("/api/users/{pk:path}/config")
 def user_config(req, pk):
     return user_errors(lambda: engine.srv.client_config(_pk(pk)))

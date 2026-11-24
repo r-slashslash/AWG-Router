@@ -119,13 +119,13 @@ def nft(ns, text):
     assert p.returncode == 0, p.stderr
 
 
-def panel_apply(global_policy, clients, upstream_alive=True):
-    """То, что делает engine.reconcile() внутри контейнера Amnezia."""
+def panel_apply(global_policy, clients, upstream_alive=True, labels=False):
+    """То, что делает engine.reconcile() внутри контейнера Amnezia. labels — учёт трафика по правилам (1.24.0)."""
     for k in ("all", "default", "awgr1"):
         sysctl("amz", f"net.ipv4.conf.{k}.rp_filter", 2)
     ups = [{"num": 1, "snat": "10.8.1.3", "mtu": 1280}] if upstream_alive else []
     nft("amz", nftgen.generate("awg0", {"ru": ["77.88.0.0/18", "5.3.0.0/16"]}, ups,
-                               global_policy, clients))
+                               global_policy, clients, labels=labels))
     with NetNS("amz") as ip:
         table = config.TABLE_BASE + 1
         if not ip.get_rules(priority=config.RULE_PRIO_BASE + 1):
@@ -145,6 +145,13 @@ def acct():
     p = sh("amz", "nft", "-j", "list", "table", "ip", nftgen.ACCT_TABLE)
     assert p.returncode == 0, p.stderr
     return nftgen.parse_acct(json.loads(p.stdout), "awg0")
+
+
+def racct():
+    """Счётчики таблицы учёта трафика по правилам в amz (1.24.0)."""
+    p = sh("amz", "nft", "-j", "list", "table", "ip", nftgen.RACCT_TABLE)
+    assert p.returncode == 0, p.stderr
+    return nftgen.parse_racct(json.loads(p.stdout), "awg0")
 
 
 def check(label, ok):
@@ -227,6 +234,21 @@ def main():
             check("учёт: заблокированный трафик не считается", a == before),
             check("учёт: таблица пережила 4 пересоздания основной таблицы", a.get(("10.8.1.2", "awgr1"))
                   is not None and a[("10.8.1.2", "awgr1")] >= before[("10.8.1.2", "awgr1")])]
+        # учёт по правилам (1.24.0): метки соединений (ct label) в цепочках политик и таблица awgr_racct
+        d = config.RULE_DEFAULT_SLOT
+        nft("amz", nftgen.racct_ruleset("awg0", [0, d]))
+        lg = {**g, "slots": [0], "dslots": []}
+        panel_apply(lg, {}, labels=True)
+        results += [expect("с метками правил: всё через выход", "foreign", "UP1 from 10.8.1.3"),
+                    expect("с метками правил: RU напрямую", "russian", "DIRECT from 172.20.0.2")]
+        r = racct()
+        results += [check("учёт по правилам: правило RU (номер 0) — в обе стороны", all(r.get(("10.8.1.2", 0), [0, 0]))),
+                    check("учёт по правилам: «По умолчанию» — в обе стороны", all(r.get(("10.8.1.2", d), [0, 0])))]
+        panel_apply(lg, {}, labels=True)
+        nft("amz", nftgen.racct_ruleset("awg0", [0, 1, 2, d]))     # правил стало больше: цепочки — заново
+        r2 = racct()
+        results += [check("учёт по правилам: счётчики пережили новую основную таблицу и новые строки",
+                          r2.get(("10.8.1.2", 0), [0, 0])[1] >= r[("10.8.1.2", 0)][1] > 0)]
         panel_apply({"rules": [], "default": 1}, {})
         results += [expect("без правил: RU тоже через выход", "russian", "UP1")]
         # туннель исчез (упал amneziawg-go): маршрут по таблице → unreachable, утечки нет

@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 
-from .. import awgconf, config, cps, limits, nftgen, socks, system
+from .. import awgconf, config, cps, limits, nftgen, socks, system, traffic
 from ..i18n import Msg, msg_of
 from ..store import Store
 from ..traffic import month_key
@@ -693,6 +693,77 @@ class TunnelsMixin:
             return "direct"
         pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
         self.traffic.update_outs(counters, out_of, pk_of, fresh=fresh, now=now)
+
+    # ------------------------------------------------- трафик по правилам (1.24.0)
+    def rule_keys(self, st: dict):
+        """(ip, номер правила) → (ключ у клиента, ключ итога) | None. Номер — место правила среди включённых правил
+        клиента со списками (как в _policies); RULE_DEFAULT_SLOT — его «По умолчанию» (в итог «_default» — только у
+        клиента с общими правилами и общим выходом). Правила клиента берутся из настроек сейчас: после перестановки
+        правил открытые соединения ещё со старым номером — их остаток уйдёт в правило, которое теперь на этом месте."""
+        cache: dict[str, tuple | None] = {}
+        pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
+
+        def of(ip: str, slot: int):
+            if ip not in cache:
+                pk = pk_of.get(ip)
+                pol = self.policy_for(st, pk) if pk else None
+                cache[ip] = (pol["rules"], not pol["custom"]) if pol else None
+            c = cache[ip]
+            if not c:
+                return None
+            rules, general = c
+            if slot == config.RULE_DEFAULT_SLOT:
+                return traffic.CLIENT_DEFAULT, (traffic.GENERAL_DEFAULT if general else None)
+            rid = rules[slot].get("id") if 0 <= slot < len(rules) else None
+            return (rid, rid) if rid else None
+        return of
+
+    def rule_slots(self, st: dict) -> list[int]:
+        """Номера правил, которые сейчас могут стоять в метках: от 0 до наибольшего числа правил у клиента и «По
+        умолчанию» (строки таблицы awgr_racct)."""
+        n = max([len(self.policy_for(st, None)["rules"])]
+                + [len(self.policy_for(st, c["public_key"])["rules"]) for c in self.clients if c.get("ip")])
+        return [*range(min(n, config.RULE_DEFAULT_SLOT)), config.RULE_DEFAULT_SLOT]
+
+    def _account_rules(self, t: system.Target, st: dict) -> None:
+        """Счётчики таблицы awgr_racct → трафик по правилам. Таблица ставится, когда её нет и когда меняется число
+        номеров правил (цепочки — заново, наборы со счётчиками остаются). Ошибка не мешает маршрутизации: учёт по
+        правилам выключается, через час — снова."""
+        if not self.labels_on():
+            self.racct_state = "off" if getattr(self, "_labels", None) is False else None
+            return
+        now = time.time()
+        if self.racct_state == "off" and getattr(self, "_racct_key", None) == t.key and \
+                now < getattr(self, "_racct_retry", 0):
+            return
+        p = t.ns(["nft", "-j", "list", "table", "ip", nftgen.RACCT_TABLE], check=False, timeout=20)
+        counters = None
+        if p.returncode == 0:
+            try:
+                counters = nftgen.parse_racct(json.loads(p.stdout or "{}"), t.iface)
+            except ValueError:
+                counters = None
+        want = (t.key, t.iface, tuple(self.rule_slots(st)))
+        fresh = p.returncode != 0               # таблицы не было: всё в её счётчиках — новый трафик
+        if counters is None or getattr(self, "_racct_slots", None) != want:
+            path = os.path.join(RUN_DIR, "racct.nft")
+            with open(path, "w") as f:
+                f.write(nftgen.racct_ruleset(t.iface, want[2]))
+            r = t.ns(["nft", "-f", path], check=False, timeout=60)
+            if r.returncode != 0:
+                err = (r.stderr or r.stdout or "").strip()[-300:]
+                if self.racct_state != "off":
+                    log.warning("rule traffic accounting is off: %s", err)
+                    self.event("warn", Msg("ev.racct_off", error=err))
+                self.racct_state = "off"
+                self._racct_key, self._racct_retry = t.key, now + 3600
+                return
+            self._racct_slots = want
+            if counters is None:
+                counters = {}
+        self.racct_state = "ok"
+        pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
+        self.traffic.update_rules(counters, self.rule_keys(st), pk_of, fresh=fresh, now=now)
 
     @staticmethod
     def quota_target(u: dict) -> str | None:

@@ -3,11 +3,13 @@ ip rule и маршруты таблиц выходов, sysctl."""
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from .. import config, nftgen, shaping, system
 from ..i18n import Msg
 from ..store import Store
+from .common import RUN_DIR, log
 
 ROUTES_EVERY = 60                                # маршруты таблиц выходов ставятся заново не реже, с
 
@@ -104,19 +106,43 @@ class RoutesMixin:
     def domain_lists(st: dict) -> set[str]:
         return {l["id"] for l in st["lists"] if l.get("kind") == "domains"}
 
-    def _policies(self, st: dict) -> tuple[dict, dict]:
+    def labels_on(self) -> bool:
+        """Учёт трафика по правилам (1.24.0) действует: ядро цели приняло метки соединений (_probe_labels)."""
+        return getattr(self, "_labels", None) is True
+
+    def _probe_labels(self, t: system.Target) -> bool:
+        """Умеет ли ядро цели метки соединений (ct label) и наборы с номером правила: `nft -c` — проверка ядром без
+        применения. Нет (OpenVZ/LXC, урезанные сборки) — учёта по правилам нет, остальное работает как раньше."""
+        if config.DRY_RUN:
+            return True
+        path = os.path.join(RUN_DIR, "labels-probe.nft")
+        with open(path, "w") as f:
+            f.write("table ip awgr_probe {\n\tset s {\n\t\ttype ipv4_addr . mark\n\t\tflags dynamic\n\t}\n"
+                    "\tchain c {\n\t\tct label set 1\n\t\tct label 1 update @s { ip saddr . 0x1 counter }\n\t}\n}\n")
+        p = t.ns(["nft", "-c", "-f", path], check=False, timeout=30)
+        if p.returncode != 0:
+            log.info("rule traffic: no conntrack labels here: %s", (p.stderr or p.stdout or "").strip()[-200:])
+        return p.returncode == 0
+
+    def _policies(self, st: dict, labels: bool | None = None) -> tuple[dict, dict]:
         """Общая и личные политики для nftables и sniproxy.py: правила по адресам — с выходом
-        после резолва; правила со списками доменов — отдельно (их выход резолвит sniproxy-конфиг)."""
+        после резолва; правила со списками доменов — отдельно (их выход резолвит sniproxy-конфиг).
+        labels (по умолчанию — labels_on): у политики номера её правил (slots — у правил по адресам, dslots — по
+        доменам; номер — место правила среди включённых правил клиента) для учёта трафика по правилам."""
         dl = self.domain_lists(st)
+        if labels is None:
+            labels = self.labels_on()
 
         def conv(pol: dict, pk: str | None) -> dict:
-            ip_rules, dom, dns = [], [], []
-            for r in pol["rules"]:
+            ip_rules, dom, dns, slots, dslots = [], [], [], [], []
+            for k, r in enumerate(pol["rules"]):
                 if any(lid in dl for lid in r["lists"]):
                     dom.append(([lid for lid in r["lists"] if lid in dl], r["outbound"]))
                     dns.append((dom[-1][0], r["outbound"], list(r.get("dns") or ())))
+                    dslots.append(k)
                 else:
                     ip_rules.append((r["lists"], self.resolve(r["outbound"], st)))
+                    slots.append(k)
             default = self.resolve(self.default_out(st, pk, pol), st)
             # правила по доменам, которые ведут туда же, куда всё остальное, ничего не меняют —
             # но включили бы перехват всего HTTPS/HTTP клиента посредником. Только если и правила по
@@ -124,13 +150,16 @@ class RoutesMixin:
             # адресу. Так готовые правила страны на новой установке («всё — напрямую») не включают перехват
             plain = int(default) if isinstance(default, int) else default
             if dom and all(self.resolve(o, st) == plain for _, o in dom) and all(o == plain for _, o in ip_rules):
-                dom = []
+                dom, dslots = [], []
             if pol.get("balanced") and isinstance(default, int) and default in self.bal_nums:
                 default = nftgen.Sticky(default)     # открытые соединения не переезжают
             # «dns» — все правила по сайтам по порядку со своим DNS (engine/dns.py), только если он у кого-то
             # задан; не выбрасываются вместе с dom выше: правило, ведущее туда же, нужно ради своего DNS
-            return {"rules": ip_rules, "default": default, "domain": dom,
-                    "dns": dns if any(x[2] for x in dns) else []}
+            out = {"rules": ip_rules, "default": default, "domain": dom,
+                   "dns": dns if any(x[2] for x in dns) else []}
+            if labels:
+                out["slots"], out["dslots"] = slots, dslots
+            return out
 
         gp = conv(self.policy_for(st, None), None)
         cps = {}
@@ -160,14 +189,16 @@ class RoutesMixin:
                       hold: bool = False) -> str:
         """quic — первые пакеты QUIC клиентов с правилами по доменам в очередь sniproxy.py (если
         ядро это умеет — иначе QUIC у них блокируется, как раньше). hold — как будто ни одного туннеля
-        ещё нет (правила «до панели», _save_hold): трафик на выходы — в блок, «напрямую» — напрямую."""
-        gp, cps = self._policies(st)
+        ещё нет (правила «до панели», _save_hold): трафик на выходы — в блок, «напрямую» — напрямую. Правила «до
+        панели» — без меток учёта по правилам: их ставит nft самого сервера, а ядро и nft там могут их не знать."""
+        labels = self.labels_on() and not hold
+        gp, cps = self._policies(st, labels)
         used = {lid for p in [gp, *cps.values()] for l, _ in p["rules"] for lid in l}
         lst = {lid: self._cidrs(lid) for lid in used}
         return nftgen.generate(t.iface, lst, [] if hold else self._up_list(st), gp, cps, sniff_port,
                                frozenset() if hold else self.bal_nums,
                                dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
-                               strict=sniff_port is None and self.strict(st), slots=self._sniff_slots)
+                               strict=sniff_port is None and self.strict(st), slots=self._sniff_slots, labels=labels)
 
     @staticmethod
     def strict(st: dict) -> bool:

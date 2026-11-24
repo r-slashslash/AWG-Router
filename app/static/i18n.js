@@ -3268,6 +3268,28 @@ Object.assign(I18N.fa, {
   "sni.restart_wait": "پردازشگر قانون‌های دامنه متوقف شد؛ تلاش بعدی برای راه‌اندازی تا {s} ثانیهٔ دیگر",
 });
 
+/* 1.24.0: трафик по правилам (#54), балансировка в правиле (#53), правила клиентов на «Маршрутизации» */
+Object.assign(I18N.ru, {
+  "rt.month": "За месяц",
+  "rt.off": "Трафик по правилам на этом сервере не считается: его ядро не умеет помечать соединения.",
+  "ev.racct_off": "Трафик по правилам не считается: {error}",
+});
+Object.assign(I18N.en, {
+  "rt.month": "This month",
+  "rt.off": "Traffic by rule is not counted on this server: its kernel can't mark connections.",
+  "ev.racct_off": "Traffic by rule is not counted: {error}",
+});
+Object.assign(I18N.zh, {
+  "rt.month": "本月",
+  "rt.off": "此服务器不统计各规则的流量：其内核不支持连接标记。",
+  "ev.racct_off": "未统计各规则流量：{error}",
+});
+Object.assign(I18N.fa, {
+  "rt.month": "این ماه",
+  "rt.off": "ترافیک هر قانون روی این سرور شمرده نمی‌شود: هستهٔ آن نمی‌تواند اتصال‌ها را علامت‌گذاری کند.",
+  "ev.racct_off": "ترافیک قانون‌ها شمرده نمی‌شود: {error}",
+});
+
 /* Разделители: перечисление, фразы, ссылки */
 const SEP = {
   list: { zh: "、", fa: "، " }, phrase: { zh: "，", fa: "، " }, refs: { zh: "；", fa: "؛ " },

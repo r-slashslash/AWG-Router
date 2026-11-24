@@ -93,6 +93,7 @@ class ReconcileOrderTest(unittest.TestCase):
                 mock.patch.object(e, "_start_up", side_effect=self.start_up), \
                 mock.patch.object(e, "module_info", return_value={"loaded": False, "version": None, "ok": False}), \
                 mock.patch.object(e, "_watch_module"), mock.patch.object(e, "_account"), \
+                mock.patch.object(e, "_account_rules"), \
                 mock.patch.object(e, "_sni_account"), mock.patch.object(e, "_sync_shaping"), \
                 mock.patch.object(e, "_input_rule"):
             e.reconcile()

@@ -86,6 +86,12 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         self._srv_down: float | None = None   # с какого момента нет интерфейса сервера (_watch_server)
         self.server_restart_at: float | None = None   # перезапуск сервера (кнопка, автоперезапуск): до его интерфейса
         self._quic_nft: bool | None = None       # ядро принимает очередь QUIC (None — ещё не пробовали)
+        # учёт трафика по правилам (1.24.0): ядро цели умеет метки соединений (None — ещё не пробовали, _probe_labels);
+        # _qlab_key — цель, где уже стоит набор с цепочкой q_lab: только тогда sniproxy.py пишет номер правила в вердикт QUIC
+        self._labels: bool | None = True if config.DRY_RUN else None
+        self._labels_key = None
+        self._qlab_key = None
+        self.racct_state: str | None = None      # учёт по правилам: ok | off | None (ещё не было)
         self._quic_key = None                    # для какой цели это известно
         self.switching = False                         # идёт ручная смена движка (switch_engine)
         # смена движка или перезапуск сервера из панели: (что, когда) — до первого удачного прохода с поднятым
@@ -447,6 +453,15 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 # (их личные правила), — до учёта трафика, лимитов и запуска туннелей. Сервер в контейнере
                 # приложения AmneziaVPN сам их не ставит, и всё это время клиенты шли бы мимо выходов
                 self._hold_rules(t, st)
+            if self._labels_key != t.key:            # другое ядро (новая цель) — проверить заново
+                self._labels_key, self._qlab_key = t.key, None
+                self._labels = True if config.DRY_RUN else None
+            if self._labels is None:
+                try:
+                    self._labels = self._probe_labels(t)
+                except Exception:  # noqa: BLE001
+                    log.exception("conntrack labels")
+                    self._labels = False
             if listed:
                 try:
                     self.traffic.update(self.clients)
@@ -456,6 +471,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     log.exception("traffic/limits")
             try:
                 self._account(t, st)
+                self._account_rules(t, st)
                 if not config.DRY_RUN:
                     self._sni_account()
                 self._exit_quotas(st)
@@ -502,6 +518,12 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 try:
                     t.ns(["nft", "-f", path], timeout=60)
                 except system.SysError as e:
+                    if self.labels_on() and "label" in str(e):
+                        # ядро приняло проверку меток, но не весь набор: учёт по правилам выключить; прежние правила
+                        # остаются на месте, следующий проход ставит набор без меток (и посредник — с теми же политиками)
+                        self._labels, self.racct_state = False, "off"
+                        self.event("warn", Msg("ev.racct_off", error=str(e)[-300:]))
+                        raise
                     if not quic or "queue" not in str(e):
                         raise
                     # ядро без nft_queue (OpenVZ/LXC, урезанные сборки): QUIC у этих клиентов — блок, как раньше
@@ -514,6 +536,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     t.ns(["nft", "-f", path], timeout=60)
                 if quic and self._quic_nft is None:
                     self._quic_nft = True
+                # набор с q_lab стоит: со следующей настройки посредника вердикт QUIC несёт номер правила
+                self._qlab_key = t.key if quic and self.labels_on() else None
                 if self.applied_hash and present:
                     self.event("info", Msg("ev.rules_applied"))
                 self.applied_hash = h

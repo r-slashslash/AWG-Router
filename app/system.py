@@ -809,6 +809,8 @@ class DemoTarget(Target):
             out = "table ip awgr {}"
         if cmd[:3] == ["nft", "-j", "list"] and cmd[-1] == nftgen.ACCT_TABLE:
             out = self._acct_dump()
+        if cmd[:3] == ["nft", "-j", "list"] and cmd[-1] == nftgen.RACCT_TABLE:
+            out = self._racct_dump()
         if cmd[:1] == ["ip"] and "-j" in cmd:
             out = "[]"
         if len(cmd) > 3 and cmd[1] == "show" and cmd[-1] == "dump":
@@ -879,6 +881,27 @@ class DemoTarget(Target):
         for name, elems in sets.items():
             items.append({"set": {"family": "ip", "name": name, "table": nftgen.ACCT_TABLE,
                                   "type": ["ipv4_addr", "ifname"], "elem": elems}})
+        return json.dumps({"nftables": items})
+
+    def _racct_dump(self) -> str:
+        """Таблица учёта по правилам (1.24.0): у каждого клиента немного трафика по первым трём правилам и больше —
+        «По умолчанию». Номера, которых у клиента нет, панель не считает."""
+        sc = awgserver.parse(self.read_file(self.conf_path) or "")
+        grow = int(time.time() - self.born)
+        items = [{"rule": {"family": "ip", "table": nftgen.RACCT_TABLE, "chain": "c_racct",
+                           "comment": nftgen.racct_marker(self.iface)}}]
+        sets = {"up": [], "down": []}
+        for i, p in enumerate(sc.peers):
+            if not p.enabled:
+                continue
+            ip = p.allowed_ips.split("/")[0]
+            for slot, share in ((0, 4), (1, 2), (2, 1), (config.RULE_DEFAULT_SLOT, 3)):
+                for name, rate in (("up", 3_000), ("down", 25_000)):
+                    b = (i + 1) * share * grow * rate
+                    sets[name].append({"elem": {"val": {"concat": [ip, slot]}, "counter": {"packets": b // 900, "bytes": b}}})
+        for name, elems in sets.items():
+            items.append({"set": {"family": "ip", "name": name, "table": nftgen.RACCT_TABLE,
+                                  "type": ["ipv4_addr", "mark"], "elem": elems}})
         return json.dumps({"nftables": items})
 
     def _seed(self) -> None:

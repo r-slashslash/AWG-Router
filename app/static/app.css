@@ -359,6 +359,11 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 .rule-title { font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 .rule-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
 .rule-line .rule-what { min-width: 0; overflow-wrap: anywhere; }
+/* трафик правила за месяц (1.24.0): цифры кладёт fillRuleTraffic, пустое место не занимает строку */
+.rule-tr:empty { display: none; }
+.rule-sum .rule-tr { flex-basis: 100%; }
+.rule-else { margin: 6px 0 0; }
+.rule-else:has(.rule-tr:empty) { display: none; }
 .rule-item .rule-ctl { padding-top: 0; }
 /* окно правила: списки строками, новый список — формой прямо в окне */
 .rw-list { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--rule); border-radius: 8px; }

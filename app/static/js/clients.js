@@ -492,18 +492,32 @@ function editClient(pk, section = null) {
     ok: (nr, made) => { setRules(withRule(draft.rules, i, nr)); newLists.push(...made); drawMode(); },
     del: i === null ? null : { i, fn: () => { draft.rules.splice(i, 1); drawMode(); } },
   });
+  /* трафик клиента по правилам за месяц (1.24.0) — отдельным запросом при открытии окна: в опросе его нет */
+  let ruleTr = null;
+  const fillOwn = () => {
+    if (!ruleTr) return;
+    $$("#modal [data-rtr-c]").forEach((el) => {
+      const html = ruleTrafficHtml(ruleTr[el.dataset.rtrC]);
+      if (el.innerHTML !== html) el.innerHTML = html;
+    });
+  };
+  if (S.rule_traffic && S.rule_traffic.state === "ok") {
+    api("GET", "rule-traffic/" + encodeURIComponent(pk)).then((r) => { ruleTr = r.rules || {}; fillOwn(); }).catch(() => {});
+  }
+  const elseLine = `<div class="small muted rule-else"><span aria-hidden="true">∗</span> ${esc(t("rt.else"))} · <span class="rule-tr" data-rtr-c="_d"></span></div>`;
   const drawMode = () => {
     $$("#c-mode button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === draft.rules_mode));
     const box = $("#c-rules");
     if (draft.rules_mode === "inherit") {
-      box.innerHTML = S.routing.rules.length ? rulesSummary(S.routing.rules)
+      box.innerHTML = S.routing.rules.length ? rulesSummary(S.routing.rules, "c") + elseLine
         : `<p class="muted small">${esc(t("cl.no_global"))}</p>`;
       watchRules(box);
     } else {
-      box.innerHTML = ruleRowsHtml(draft.rules) + `<button class="btn sm" type="button" id="c-rule-add" style="margin-top:8px">${esc(t("rw.add"))}</button>`;
+      box.innerHTML = ruleRowsHtml(draft.rules, "c") + elseLine + `<button class="btn sm" type="button" id="c-rule-add" style="margin-top:8px">${esc(t("rw.add"))}</button>`;
       bindRuleRows(box, draft.rules, (next) => { setRules(next); drawMode(); }, openOwn);
       $("#c-rule-add").onclick = () => openOwn(null);
     }
+    fillOwn();
   };
   $$("#c-mode button").forEach((b) => b.onclick = () => { draft.rules_mode = b.dataset.v; drawMode(); });
   drawMode();

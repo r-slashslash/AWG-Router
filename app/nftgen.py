@@ -93,6 +93,66 @@ def parse_acct(data: dict, wg_iface: str) -> dict[tuple[str, str], list[int]] | 
     return out
 
 
+RACCT_TABLE = "awgr_racct"
+RACCT_VER = 1
+
+
+def racct_marker(wg_iface: str) -> str:
+    return f"awgr-racct {RACCT_VER} {wg_iface}"
+
+
+def racct_ruleset(wg_iface: str, slots) -> str:
+    """Учёт трафика по правилам (1.24.0): счётчик на пару «адрес клиента + номер правила» по метке соединения
+    (ct label), которую ставят цепочки политик (_policy_chain с labels). Отдельная таблица, как awgr_acct: основная
+    пересоздаётся при каждой правке, а эта — никогда. Строки по номерам правил меняются (их столько, сколько
+    номеров в политиках), поэтому цепочки очищаются и пишутся заново, а наборы со счётчиками остаются (add —
+    без ошибки, если набор уже есть). Только считает: на путь пакетов не влияет."""
+    T, w = RACCT_TABLE, wg_iface
+    out = [f"table ip {T} {{}}"]
+    for name in ("up", "down"):
+        out.append(f"add set ip {T} {name} {{ type ipv4_addr . mark; size 65535; flags dynamic; }}")
+    out.append(f"add chain ip {T} c_racct {{ type filter hook forward priority filter + 11; policy accept; }}")
+    for c in ("c_racct", "r_up", "r_down"):
+        out.append(f"add chain ip {T} {c}")
+        out.append(f"flush chain ip {T} {c}")
+    out.append(f'add rule ip {T} c_racct iifname "{w}" oifname != "{w}" jump r_up comment "{racct_marker(w)}"')
+    out.append(f'add rule ip {T} c_racct oifname "{w}" iifname != "{w}" jump r_down')
+    for k in sorted({int(x) for x in slots}):
+        out.append(f"add rule ip {T} r_up ct label {k} update @up {{ ip saddr . {k:#x} counter }} return")
+        out.append(f"add rule ip {T} r_down ct label {k} update @down {{ ip daddr . {k:#x} counter }} return")
+    return "\n".join(out) + "\n"
+
+
+def parse_racct(data: dict, wg_iface: str) -> dict[tuple[str, int], list[int]] | None:
+    """`nft -j list table ip awgr_racct` → {(ip, номер правила): [от клиента, к клиенту]}. None — таблицы нет или
+    она не наша (её нужно поставить заново: наборы, если есть, останутся со своими счётчиками)."""
+    items = data.get("nftables") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return None
+    marker = racct_marker(wg_iface)
+    if not any(isinstance(x, dict) and isinstance(x.get("rule"), dict)
+               and x["rule"].get("comment") == marker for x in items):
+        return None
+    out: dict[tuple[str, int], list[int]] = {}
+    for x in items:
+        st = x.get("set") if isinstance(x, dict) else None
+        if not isinstance(st, dict) or st.get("table") != RACCT_TABLE or st.get("name") not in ("up", "down"):
+            continue
+        i = 0 if st["name"] == "up" else 1
+        for e in st.get("elem") or []:
+            if not isinstance(e, dict):
+                continue
+            el = e.get("elem") if isinstance(e.get("elem"), dict) else e
+            key = (el.get("val") or {}).get("concat") if isinstance(el.get("val"), dict) else None
+            cnt = el.get("counter") or {}
+            b = cnt.get("bytes") if isinstance(cnt, dict) else None
+            if not (isinstance(key, list) and len(key) == 2 and isinstance(key[0], str) and isinstance(b, int)
+                    and b >= 0 and isinstance(key[1], int) and 0 <= key[1] <= config.RULE_DEFAULT_SLOT):
+                continue
+            out.setdefault((key[0], key[1]), [0, 0])[i] = b
+    return out
+
+
 class Sticky(int):
     """Выход N с запоминанием выхода у соединения (балансировка): первый пакет соединения
     записывает метку выхода в conntrack (ct mark), следующие берут её оттуда, пока этот выход
@@ -146,6 +206,9 @@ def _policy_key(policy: dict) -> tuple:
            tuple((tuple(l), str(o)) for l, o in policy.get("domain") or ()))
     if policy.get("dns"):          # без своего DNS ключ прежний: номера политик sniproxy.py не сдвигаются
         key += (tuple((tuple(l), str(o), tuple(d)) for l, o, d in policy["dns"]),)
+    if policy.get("slots") is not None:
+        # учёт по правилам (1.24.0): одинаковые правила в разном порядке — разные номера меток, значит разные политики
+        key += (("slots", tuple(policy["slots"]), tuple(policy.get("dslots") or ())),)
     return key
 
 
@@ -169,25 +232,30 @@ EXIT_MASK = 0xFFFFFF00
 
 
 def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = False,
-                  outs=None, dom: bool = False, quic: bool = False) -> str:
+                  outs=None, dom: bool = False, quic: bool = False, labels: bool = False) -> str:
     """Цепочка политики. sniff — у политики есть правила по доменам: её TCP 80/443 идёт в
     sniproxy.py, а QUIC (UDP 443) блокируется — кроме пакетов, которые разобрала по имени очередь
     (quic: метка «пропустить» — дальше обычные правила; остальные решения цепочка c_prerouting
     принимает раньше), и браузер переходит на обычный HTTPS. dom — только к адресам из набора
     DOM_SET (режим «фильтр по DNS»): остальное идёт ядром, и HTTP/3 к ним работает.
-    outs — свои цепочки выходов (для q_* в hook output)."""
+    outs — свои цепочки выходов (для q_* в hook output).
+    labels — учёт по правилам: совпавшее правило ставит соединению метку conntrack со своим номером в политике
+    (policy["slots"]), «По умолчанию» — RULE_DEFAULT_SLOT; по ним считает таблица racct_ruleset."""
     oc = outs or out_chain
+    slots = policy.get("slots") if labels else None
     lines = [f"\tchain {name} {{"]
     if sniff:
         pre = f"ip daddr @{DOM_SET} " if dom else ""
         skip = f"meta mark != {config.QUIC_PASS_MARK:#x} " if quic else ""
         lines.append(f"\t\t{pre}udp dport 443 {skip}goto {oc('block')}")
         lines.append(f"\t\t{pre}tcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
-    for list_ids, out in policy["rules"]:
+    for i, (list_ids, out) in enumerate(policy["rules"]):
+        lab = f"ct label set {int(slots[i])} " if slots is not None else ""
         for lid in list_ids:
             if lid in available:
-                lines.append(f"\t\tip daddr @l_{lid} goto {oc(out)}")
-    lines.append(f"\t\tgoto {oc(policy['default'])}")
+                lines.append(f"\t\tip daddr @l_{lid} {lab}goto {oc(out)}")
+    dlab = f"ct label set {config.RULE_DEFAULT_SLOT} " if slots is not None else ""
+    lines.append(f"\t\t{dlab}goto {oc(policy['default'])}")
     lines.append("\t}")
     return "\n".join(lines)
 
@@ -205,11 +273,16 @@ def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[i
         default = fix(policy["default"])
         if isinstance(default, Sticky) and int(default) not in balance:
             default = int(default)
-        while rules and rules[-1][1] == default:  # хвостовые правила ничего не меняют
+        slots = policy.get("slots")
+        # хвостовые правила ничего не меняют в пути — но с учётом по правилам (slots) их строки ставят свою метку
+        while slots is None and rules and rules[-1][1] == default:
             rules.pop()
         out = {"rules": rules, "default": default, "domain": list(policy.get("domain") or ())}
         if policy.get("dns"):                        # свой DNS правил по сайтам (только dnsproxy.py)
             out["dns"] = list(policy["dns"])
+        if slots is not None:
+            out["slots"] = list(slots)
+            out["dslots"] = list(policy.get("dslots") or ())
         return out
 
     gp = norm(global_policy)
@@ -251,7 +324,7 @@ def sniff_marks(policies: dict, slots: dict | None = None) -> dict[str, int]:
 def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
-             quic: bool = False, strict: bool = False, slots: dict | None = None) -> str:
+             quic: bool = False, strict: bool = False, slots: dict | None = None, labels: bool = False) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
@@ -260,7 +333,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     quic — первые пакеты QUIC таких клиентов идут в очередь ядра (sniproxy.py разбирает имя), а не
     блокируются: цепочка c_quic; без слушателя (bypass) пакет блокируется, как без очереди.
     strict — правила по доменам сейчас не действуют (sniff_port None), а выбрано «тогда блокировать»:
-    у клиентов с правилами по доменам весь трафик (кроме местных сетей и самого сервера) — в блок."""
+    у клиентов с правилами по доменам весь трафик (кроме местных сетей и самого сервера) — в блок.
+    labels — учёт трафика по правилам (1.24.0): правила политик ставят метку conntrack (ct label) со своим номером."""
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
@@ -292,7 +366,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     # решение запоминается в conntrack для остальных пакетов соединения. «Пропустить» тоже
     # запоминается (и идёт дальше, к обычным правилам политики): иначе пакеты после ответа сервера —
     # уже не «новые», в очередь не идут и без метки попали бы в строку блока QUIC политики
-    quic_line = (f"\t\tudp dport 443 meta mark {config.QUIC_PASS_MARK:#x} "
+    qlab = (f"\t\tudp dport 443 meta mark & {config.QUIC_SLOT_MASK:#x} != 0x0 jump q_lab\n") if quic else ""
+    quic_line = qlab + (f"\t\tudp dport 443 meta mark {config.QUIC_PASS_MARK:#x} "
                  f"ct mark set {config.QUIC_PASS_MARK | config.QUIC_CT_BIT:#x}\n"
                  f"\t\tudp dport 443 meta mark != 0x0 meta mark != {config.QUIC_PASS_MARK:#x} "
                  f"ct mark set meta mark | {config.QUIC_CT_BIT:#x} accept\n") if quic else ""
@@ -308,7 +383,16 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         if strict and not sniff_port and policies[name].get("domain"):
             out.append(f"\tchain {name} {{\n\t\tgoto o_block\n\t}}")
             continue
-        out.append(_policy_chain(name, policies[name], available, name in marks, dom=dom_filter, quic=quic))
+        out.append(_policy_chain(name, policies[name], available, name in marks, dom=dom_filter, quic=quic,
+                                 labels=labels))
+    if quic:
+        # вердикт QUIC с номером правила (биты QUIC_SLOT_MASK; их ставит sniproxy.py, только когда этот набор уже
+        # стоит) — метка соединения для учёта; биты снимаются всегда: с ними метка выхода не совпала бы с ip rule
+        strip = 0xFFFFFFFF ^ config.QUIC_SLOT_MASK
+        qs = sorted({int(k) for n in marks for k in (policies[n].get("dslots") or ())}) if labels else []
+        lab = "".join(f"\t\tmeta mark & {config.QUIC_SLOT_MASK:#x} == {(k + 1) << config.QUIC_SLOT_SHIFT:#x} "
+                      f"ct label set {k} meta mark set meta mark & {strip:#x} return\n" for k in qs)
+        out.append(f"\tchain q_lab {{\n{lab}\t\tmeta mark set meta mark & {strip:#x}\n\t}}")
 
     out.append("\tchain o_direct {\n\t\taccept\n\t}")
     out.append(f"\tchain o_block {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept\n\t}}")
@@ -325,6 +409,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         # служебный адрес облака (169.254.169.254): link-local входит в local4 и шёл бы с самого сервера при любом выходе
         f'\t\tiifname "{wg_iface}" ip daddr {LINK_LOCAL} reject with icmp type admin-prohibited',
         f"\t\tmeta mark {config.MARK_BLOCK:#x} reject with icmp type admin-prohibited",
+        # биты номера правила из вердикта QUIC снимает q_lab; дошли сюда — метка выхода не та, что у ip rule
+        f'\t\tiifname "{wg_iface}" meta mark & {config.QUIC_SLOT_MASK:#x} != 0x0 reject with icmp type admin-prohibited',
         # страховка: пакет с меткой выхода уходит не в туннель (ip rule этой метки ещё нет или уже нет —
         # основная таблица) — отказ, а не путь мимо выхода
         f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "{config.IFACE_PREFIX}*" '

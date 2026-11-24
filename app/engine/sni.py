@@ -130,7 +130,8 @@ class SniMixin:
         st = self.store.snapshot()
         valid = {"direct"} | {u["id"] for u in st["upstreams"]}
         pk_of = {c["ip"]: c["public_key"] for c in self.clients if c.get("ip")}
-        self.traffic.update_sni(s["pid"], s["bytes"], valid, pk_of)
+        self.traffic.update_sni(s["pid"], s["bytes"], valid, pk_of,
+                                rule_of=self.rule_keys(st) if self.labels_on() else None)
 
     def _sni_shared(self, st: dict, rates: dict) -> dict:
         """Общий предел туннеля выхода SOCKS5 и соединений sniproxy.py через прокси: {id выхода:
@@ -230,8 +231,25 @@ class SniMixin:
         # домену (те же правила проверяет цепочка q_* в nftables)
         nets = sorted({lid for n in marks for l, _ in policies[n]["rules"] for lid in l})
         cidrs = {lid: lists.path_for(lid) for lid in nets if os.path.exists(lists.path_for(lid))}
-        acct = lambda p: {"rules": [[l, self._acct_label(st, o)] for l, o in p["rules"]],
-                          "default": self._acct_label(st, p["default"])}
+        # учёт по правилам (1.24.0): номер правила у строки (и у «По умолчанию») — sniproxy.py считает байты по нему
+        lab = self.labels_on()
+
+        def slot(p: dict, key: str, i: int) -> int | None:
+            ks = p.get(key) if lab else None
+            return ks[i] if ks and i < len(ks) else None
+        acct = lambda p: {"rules": [[l, self._acct_label(st, o), *([k] if (k := slot(p, "slots", i)) is not None else [])]
+                                    for i, (l, o) in enumerate(p["rules"])],
+                          "default": self._acct_label(st, p["default"]),
+                          **({"slot": config.RULE_DEFAULT_SLOT} if lab and p.get("slots") is not None else {})}
+        # номер правила в вердикте QUIC — только когда в ядре уже стоит набор с цепочкой q_lab, которая его снимает
+        qlab = lab and getattr(self, "_qlab_key", None) == t.key
+
+        def qmark(p: dict, i: int, o: str) -> int:
+            m = self._quic_mark(st, o)
+            k = slot(p, "dslots", i)
+            if qlab and m and m != config.MARK_BLOCK and k is not None:
+                m |= (int(k) + 1) << config.QUIC_SLOT_SHIFT
+            return m
         # ограничения скорости выходов SOCKS5 для соединений через прокси (байт/с; 0 — нет)
         bps = lambda v: int((shaping.mbit(v) or 0) * 125_000)
         rates = {u["id"]: [bps(u.get("rate_up")), bps(u.get("rate_down"))] for u in st["upstreams"]
@@ -243,8 +261,10 @@ class SniMixin:
                "client_policy": {ip: n for ip, n in client_map.items() if n in marks},
                "quic": {"queue": config.QUIC_QUEUE, "pass": config.QUIC_PASS_MARK, "block": config.MARK_BLOCK},
                "policies": {n: {"mark": m, "rules": [{"lists": l, "to": self._sni_target(st, o),
-                                                      "qmark": self._quic_mark(st, o)}
-                                                     for l, o in policies[n]["domain"]],
+                                                      "qmark": qmark(policies[n], i, o),
+                                                      **({"slot": k} if (k := slot(policies[n], "dslots", i)) is not None
+                                                         else {})}
+                                                     for i, (l, o) in enumerate(policies[n]["domain"])],
                                 "acct": acct(policies[n])}
                             for n, m in marks.items()}}
         mt = {lid: os.path.getmtime(p) if os.path.exists(p) else 0 for lid, p in {**files, **cidrs}.items()}

@@ -13,8 +13,30 @@ function addListTo(r, id) {
 }
 const isDomainList = (id) => (listObj(id) || {}).kind === "domains";
 
-/** строки правил: номер (выбор места), что ловит правило и выход; нажатие открывает окно правила */
-function ruleRowsHtml(rules) {
+/* Трафик по правилам за месяц (1.24.0). Строки правил держат пустые места [data-rtr] (общие правила и «По умолчанию»)
+   и [data-rtr-c] (правила одного клиента: окно клиента, раздел «Правила клиентов» — data-rtr-pk), а цифры кладут
+   fill*: опрос приносит новые цифры каждые несколько секунд, а строки из-за них не перерисовываются. */
+function ruleTrafficHtml(v) {
+  if (!S.rule_traffic || S.rule_traffic.state !== "ok") return "";
+  const p = v || [0, 0];
+  return `<span>${esc(t("rt.month"))}</span> <bdi dir="ltr" class="nowrap">↓ ${esc(fmtBytes(p[1]))} ↑ ${esc(fmtBytes(p[0]))}</bdi>`;
+}
+function fillRuleTraffic(root = $("#main")) {
+  if (!root) return;
+  const g = (S.rule_traffic && S.rule_traffic.rules) || {};
+  $$("[data-rtr]", root).forEach((el) => {
+    const html = ruleTrafficHtml(g[el.dataset.rtr]);
+    if (el.innerHTML !== html) el.innerHTML = html;
+  });
+  const own = Object.fromEntries(S.clients.map((c) => [c.public_key, c.rule_traffic || {}]));
+  $$("[data-rtr-pk]", root).forEach((el) => {
+    const html = ruleTrafficHtml((own[el.dataset.rtrPk] || {})[el.dataset.rtrC]);
+    if (el.innerHTML !== html) el.innerHTML = html;
+  });
+}
+/** строки правил: номер (выбор места), что ловит правило и выход; нажатие открывает окно правила. tr — места для
+    трафика правила: "g" — общие правила, "c" — правила клиента (pk — в разделе «Правила клиентов») */
+function ruleRowsHtml(rules, tr = "", pk = "") {
   if (!rules.length) return `<p class="muted small" style="margin:0 0 4px">${esc(t("re.none"))}</p>`;
   const s = esc(sep("list"));
   return `<div class="rules">${rules.map((r, i) => {
@@ -34,6 +56,7 @@ function ruleRowsHtml(rules) {
       <button type="button" class="rule-open" data-open aria-label="${esc(t("rw.edit"))}">
         ${r.comment ? `<span class="rule-title"><bdi>${esc(r.comment)}</bdi></span>` : ""}
         <span class="rule-line"><span class="rule-what">${what}</span> <span aria-hidden="true">—</span> ${outChip(r.outbound)}</span>
+        ${tr === "g" ? `<span class="small muted rule-tr" data-rtr="${esc(r.id)}"></span>` : ""}${tr === "c" ? `<span class="small muted rule-tr" data-rtr-c="${esc(r.id)}"${pk ? ` data-rtr-pk="${esc(pk)}"` : ""}></span>` : ""}
         ${warn}
       </button>
       <div class="rule-ctl">
@@ -324,10 +347,11 @@ function viewRouting() {
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("rt.title"))}</h2><p class="muted small">${esc(t("rt.subtitle"))}</p></div></div>
     <div class="add-row rules-add"><button class="btn primary" id="g-add">${esc(t("rw.add"))}</button>${routingCountryButtons()}</div>
-    <div id="g-rules">${ruleRowsHtml(S.routing.rules)}</div>
+    ${S.rule_traffic && S.rule_traffic.state === "off" ? `<p class="small muted" style="margin:0 0 8px">${esc(t("rt.off"))}</p>` : ""}
+    <div id="g-rules">${ruleRowsHtml(S.routing.rules, "g")}</div>
     <div class="default-row" style="margin-top:8px">
       <div class="rule-n" style="padding:0">∗</div>
-      <div><b>${esc(t("rt.else"))}</b><div class="small muted">${esc(t("rt.else_sub"))}</div></div>
+      <div><b>${esc(t("rt.else"))}</b><div class="small muted">${esc(t("rt.else_sub"))}</div><div class="small muted rule-tr" data-rtr="_default"></div></div>
       <select id="g-default"><option value="balance" ${rd.balance.on ? "selected" : ""}>${esc(t("bal.option"))}</option>${outOptions(rd.balance.on ? "" : rd.default)}</select>
       <div></div>
     </div>
@@ -373,7 +397,8 @@ let rulesDrawn = "";
 function drawRoutingRules() {
   const box = $("#g-rules");
   if (!box) return;
-  box.innerHTML = ruleRowsHtml(S.routing.rules);
+  box.innerHTML = ruleRowsHtml(S.routing.rules, "g");
+  fillRuleTraffic(box);
   rulesDrawn = JSON.stringify(S.routing.rules);
   bindRuleRows(box, S.routing.rules, async (next) => {
     // пока это сохраняется, строки не нажимаются: следующее нажатие считалось бы от прежних правил и отменяло это
@@ -387,6 +412,7 @@ bind.routing = () => {
   const draft = routingDraft || structuredClone(routingNow());
   const upd = () => { routingDraft = draft; $("#savebar").hidden = !routingDirty(); };
   drawRoutingRules();
+  fillRuleTraffic();
   upd();
   bindListHours();
   if (scrollToLists) { scrollToLists = false; $("#g-rules").scrollIntoView(); }

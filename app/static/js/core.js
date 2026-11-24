@@ -289,7 +289,8 @@ function ruleWhat(r) {
 }
 /** строки правил политики: слева — что ловит правило (его списки), справа — выход. Выключенное правило —
  *  серое и зачёркнутое, со своим номером */
-function rulesSummary(rules) {
+/** Список правил словами. tr = "c" — с местами для трафика клиента по правилам (окно клиента, 1.24.0) */
+function rulesSummary(rules, tr = "") {
   if (!rules.length) return `<p class="muted small" style="margin:0">${esc(t("ov.no_rules"))}</p>`;
   return `<ol class="summary rule-sum">${rules.map((r, i) => {
     const n = r.lists.length;
@@ -304,7 +305,7 @@ function rulesSummary(rules) {
       .map(([k, ls]) => `<div class="small warn-text rule-warn">⚠ ${th(k, { lists: names(ls) })}</div>`).join("");
     return `<li class="${cls}"${r.enabled === false ? ` title="${esc(t("rl.off"))}"` : ""}>
       <span class="rule-n">${esc(fmtNum(i + 1))}.</span>${name ? `<div class="rule-name"><bdi>${esc(name)}</bdi></div>` : ""}
-      <div class="rule-row"><span class="rule-what">${ruleWhat(r)}</span><span class="rule-dash" aria-hidden="true">—</span>${outChip(r.outbound)}</div>${warn}</li>`;
+      <div class="rule-row"><span class="rule-what">${ruleWhat(r)}</span><span class="rule-dash" aria-hidden="true">—</span>${outChip(r.outbound)}${tr === "c" ? `<span class="small muted rule-tr" data-rtr-c="${esc(r.id)}"></span>` : ""}</div>${warn}</li>`;
   }).join("")}</ol>`;
 }
 /* Телефон: выход правила не влез в строку рядом со списками — показываем один список и «+N» (не влез и тогда —
@@ -504,6 +505,8 @@ async function refresh(auto = false) {
   // «Сервер» опрос тоже не перерисовывает, кроме блока «Движок AmneziaWG» (после смены движка он менялся только с
   // перезагрузкой страницы)
   if (auto && tab === "server" && !anyModal()) drawEngine();
+  // трафик по правилам (1.24.0) — только цифры в готовых местах строк
+  if (auto && tab === "routing" && !anyModal()) fillRuleTraffic();
   listsBusy = busy;
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;

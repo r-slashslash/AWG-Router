@@ -23,6 +23,13 @@ tx — отправлено клиенту (загрузка клиента).
 версии с ним — сумма итогов текущих клиентов), "sni" — {"pid", "vals"}: последние байты sniproxy.py по
 «клиент|выход» (его соединения не транзитные, nftables их не считает). Номер формата прежний: новые ключи старые версии
 просто не читают, и откат панели не обнуляет итоги клиентов.
+
+Трафик по правилам (1.24.0): таблица nftables awgr_racct (nftgen.racct_ruleset) считает по «адрес клиента | номер
+правила», sniproxy.py — по «клиент|выход|номер». Номер — место правила среди включённых правил клиента
+(RULE_DEFAULT_SLOT — «По умолчанию»); какое это правило, говорит движок (rule_of). У клиента "by_rule" — {месяц:
+{id правила | "_d": [rx, tx]}} за RULE_KEEP месяца ("_d" — его «По умолчанию»), "rules" — итоги правил по месяцам
+({id | "_default": {"months"}}; "_default" — «По умолчанию» клиентов с общими правилами и общим выходом), "racct" —
+последние значения счётчиков таблицы.
 """
 from __future__ import annotations
 
@@ -41,7 +48,13 @@ PATH = os.path.join(config.DATA_DIR, "traffic.json")
 MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 OUT_RE = re.compile(r"^(direct|[a-z0-9_]{1,24})$")
 ACCT_KEY_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\|[A-Za-z0-9_.@-]{1,15}$")
-SNI_KEY_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})\|(direct|[a-z0-9_]{1,24})$")
+# «клиент|выход» и (1.24.0) «клиент|выход|номер правила»
+SNI_KEY_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})\|(direct|[a-z0-9_]{1,24})(?:\|(\d{1,2}))?$")
+RACCT_KEY_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\|\d{1,2}$")
+RULE_RE = re.compile(r"^[a-z0-9_]{1,24}$")       # id правила (store.ID_RE), "_d", "_default"
+RULE_KEEP = 2            # трафик клиента по правилам — за этот и прошлый месяц (иначе файл растёт на клиентах × правилах)
+CLIENT_DEFAULT = "_d"    # «По умолчанию» самого клиента в by_rule
+GENERAL_DEFAULT = "_default"    # «По умолчанию» общих правил в итогах правил
 FORMAT = 2
 KEEP_MONTHS = 24
 SAVE_EVERY = 60
@@ -77,6 +90,18 @@ def _clean_months(v) -> dict:
             if isinstance(m, str) and MONTH_RE.match(m) and _pair(x)}
 
 
+def _clean_by_rule(v) -> dict:
+    out = {}
+    for mk, m in (v.items() if isinstance(v, dict) else ()):
+        if isinstance(mk, str) and MONTH_RE.match(mk) and isinstance(m, dict):
+            r = {k: _pair(x) for k, x in m.items() if isinstance(k, str) and RULE_RE.match(k) and _pair(x)}
+            if r:
+                out[mk] = r
+    for old in sorted(out)[:-RULE_KEEP]:
+        out.pop(old)
+    return out
+
+
 def _clean_by_out(v) -> dict:
     out = {}
     for m, outs in (v.items() if isinstance(v, dict) else ()):
@@ -97,6 +122,10 @@ class Traffic:
         self.acct_synced = False               # acct соответствует таблице (есть в файле)
         self.sni: dict = {}                    # {"pid", "vals"} — последние байты sniproxy.py
         self.server: dict = {"total": [0, 0], "months": {}}   # итог всего сервера
+        self.rules: dict[str, dict] = {}       # итоги правил: {id | "_default": {"months"}} (1.24.0)
+        self.racct: dict[str, list[int]] = {}  # последние значения счётчиков awgr_racct: {"ip|номер": [rx, tx]}
+        self.racct_synced = False
+        self.rrecent: dict[tuple[str, str], list[int]] = {}   # прирост по (правило, клиент) — для балансировки в правиле
         # прирост по (выход, клиент) с прошлого take_recent(): по нему считается текущая скорость
         # выходов (балансировка, карточки выходов); в файл не пишется
         self.recent: dict[tuple[str, str | None], list[int]] = {}
@@ -112,6 +141,11 @@ class Traffic:
             self.outs, self.acct = self._clean_outs(d.get("outs")), self._clean_acct(d.get("acct"))
             self.acct_synced = isinstance(d.get("acct"), dict)
             self.sni = self._clean_sni(d.get("sni"))
+            self.rules = self._clean_rules(d.get("rules"))
+            self.racct = {k: _pair(x) for k, x in (d.get("racct") or {}).items()
+                          if isinstance(k, str) and RACCT_KEY_RE.match(k) and _pair(x)} \
+                if isinstance(d.get("racct"), dict) else {}
+            self.racct_synced = isinstance(d.get("racct"), dict)
             if isinstance(d.get("server"), dict):
                 self.server = self._clean_server(d["server"])
             else:
@@ -212,6 +246,62 @@ class Traffic:
             r, self.recent = self.recent, {}
         return r
 
+    def update_rules(self, counters: dict[tuple[str, int], list[int]], rule_of, pk_of: dict[str, str],
+                     fresh: bool = False, now: float | None = None) -> None:
+        """Прирост счётчиков awgr_racct ({(ip, номер правила): [от клиента, к клиенту]}) → трафик правил клиентов и
+        итоги правил. rule_of(ip, номер) → (ключ у клиента, ключ итога или None) | None — не считать (правила с таким
+        номером у клиента уже нет). Первое чтение таблицы, которой нет в файле, — только точки отсчёта, как у
+        update_outs; fresh — таблицу только что поставили."""
+        now = time.time() if now is None else now
+        mk = month_key(now)
+        with self.lock:
+            baseline = not self.racct_synced and not fresh
+            seen = {}
+            for (ip, slot), cur in counters.items():
+                key = f"{ip}|{slot}"
+                if not RACCT_KEY_RE.match(key):
+                    continue
+                cur = [int(cur[0]), int(cur[1])]
+                seen[key] = cur
+                last = self.racct.get(key)
+                if last is None:
+                    if baseline:
+                        continue
+                    last = [0, 0]
+                delta = [cur[i] - last[i] if cur[i] >= last[i] else cur[i] for i in (0, 1)]
+                keys = rule_of(ip, slot) if any(delta) else None
+                if keys:
+                    self._add_rule(pk_of.get(ip), keys, delta, mk)
+            if seen != self.racct or not self.racct_synced:
+                self.racct = seen
+                self.racct_synced = True
+                self._dirty = True
+        if self._dirty and now - self._saved >= SAVE_EVERY:
+            self.save()
+
+    def _add_rule(self, pk: str | None, keys: tuple, delta: list[int], mk: str) -> None:
+        ck, tk = keys
+        if tk:
+            r = self.rules.setdefault(tk, {"months": {}})
+            _add(r["months"], mk, delta)
+            _trim(r["months"])
+        d = self.data.get(pk) if pk else None
+        if d is not None and ck:
+            br = d.setdefault("by_rule", {})
+            _add(br.setdefault(mk, {}), ck, delta)
+            for old in sorted(br)[:-RULE_KEEP]:
+                br.pop(old, None)
+            rr = self.rrecent.setdefault((ck, pk), [0, 0])
+            rr[0] += delta[0]
+            rr[1] += delta[1]
+        self._dirty = True
+
+    def take_recent_rules(self) -> dict[tuple[str, str], list[int]]:
+        """Прирост по (правило, клиент) с прошлого вызова — и обнуление."""
+        with self.lock:
+            r, self.rrecent = self.rrecent, {}
+        return r
+
     def _add_out(self, out: str, pk: str | None, delta: list[int], mk: str) -> None:
         rc = self.recent.setdefault((out, pk), [0, 0])
         rc[0] += delta[0]
@@ -227,10 +317,11 @@ class Traffic:
             _trim(bo)
 
     def update_sni(self, pid: int, vals: dict, valid: set[str], pk_of: dict[str, str],
-                   now: float | None = None) -> None:
+                   now: float | None = None, rule_of=None) -> None:
         """Байты sniproxy.py с запуска процесса pid ({"ip|выход": [от клиента, к клиенту]}) →
         прирост к выходам и разбивке клиентов. Новый процесс считает с нуля, поэтому его
-        значения — прирост целиком; повторное чтение того же файла ничего не добавляет."""
+        значения — прирост целиком; повторное чтение того же файла ничего не добавляет.
+        «ip|выход|номер» (1.24.0) — ещё и к правилу: rule_of(ip, номер) → (ключ у клиента, ключ итога) | None."""
         now = time.time() if now is None else now
         mk = month_key(now)
         with self.lock:
@@ -246,6 +337,10 @@ class Traffic:
                 delta = [cur[i] - prev[i] if cur[i] >= prev[i] else cur[i] for i in (0, 1)]
                 if any(delta) and m.group(2) in valid:
                     self._add_out(m.group(2), pk_of.get(m.group(1)), delta, mk)
+                if any(delta) and m.group(3) is not None and rule_of:
+                    keys = rule_of(m.group(1), int(m.group(3)))
+                    if keys:
+                        self._add_rule(pk_of.get(m.group(1)), keys, delta, mk)
             if seen != last or self.sni.get("pid") != pid:
                 self.sni = {"pid": pid, "vals": seen}
                 self._dirty = True
@@ -279,7 +374,8 @@ class Traffic:
             try:
                 with open(tmp, "w") as f:
                     json.dump({"_v": FORMAT, "clients": self.data, "outs": self.outs, "acct": self.acct,
-                               "sni": self.sni, "server": self.server}, f)
+                               "sni": self.sni, "server": self.server, "rules": self.rules,
+                               "racct": self.racct}, f)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp, self.path)
@@ -297,9 +393,10 @@ class Traffic:
     def replace(self, data: dict) -> None:
         """Восстановление из резервной копии. Итоги берём из копии, а точки отсчёта —
         текущие: счётчики интерфейса на этом сервере продолжают идти как шли."""
-        outs, server = {}, None
+        outs, server, rules = {}, None, {}
         if isinstance(data, dict) and data.get("_v") == FORMAT:
             outs = self._clean_outs(data.get("outs"))
+            rules = self._clean_rules(data.get("rules"))
             if isinstance(data.get("server"), dict):
                 server = self._clean_server(data["server"])
             data = data.get("clients") or {}
@@ -317,9 +414,13 @@ class Traffic:
                 bo = _clean_by_out(v.get("by_out"))
                 if bo:
                     rec["by_out"] = bo
+                br = _clean_by_rule(v.get("by_rule"))
+                if br:
+                    rec["by_rule"] = br
                 out[str(k)[:64]] = rec
             self.data = out
             self.outs = outs
+            self.rules = rules
             self.server = server or self._seed_server(out)
             self._dirty = True
         self.save()
@@ -330,6 +431,16 @@ class Traffic:
         for k, o in (v.items() if isinstance(v, dict) else ()):
             if isinstance(k, str) and OUT_RE.match(k) and isinstance(o, dict) and _pair(o.get("total")):
                 out[k] = {"total": _pair(o["total"]), "months": _clean_months(o.get("months"))}
+        return out
+
+    @staticmethod
+    def _clean_rules(v) -> dict:
+        out = {}
+        for k, o in (v.items() if isinstance(v, dict) else ()):
+            if isinstance(k, str) and RULE_RE.match(k) and isinstance(o, dict):
+                m = _clean_months(o.get("months"))
+                if m:
+                    out[k] = {"months": m}
         return out
 
     @staticmethod
@@ -401,6 +512,31 @@ class Traffic:
         return {"month_rx": m[0], "month_tx": m[1], "total_rx": t[0], "total_tx": t[1],
                 "history": [[k, v[0], v[1]] for k, v in hist]}
 
+    def rules_month(self, mk: str | None = None) -> dict[str, list[int]]:
+        """Итоги правил за месяц: {id | "_default": [rx, tx]}."""
+        mk = mk or month_key()
+        with self.lock:
+            return {k: list(m) for k, o in self.rules.items() if (m := (o.get("months") or {}).get(mk))}
+
+    def rule_used(self, rid: str) -> int:
+        """Трафик правила за текущий месяц (оба направления) — для месячного лимита правила."""
+        return sum(self.rules_month().get(rid) or [0, 0])
+
+    def client_rules(self, pk: str, mk: str | None = None) -> dict[str, list[int]]:
+        """Трафик клиента по правилам за месяц: {id правила | "_d": [rx, tx]}."""
+        mk = mk or month_key()
+        with self.lock:
+            m = ((self.data.get(pk) or {}).get("by_rule") or {}).get(mk) or {}
+            return {k: list(v) for k, v in m.items()}
+
+    def rule_top(self, rid: str, n: int = 5, mk: str | None = None) -> list[tuple[str, list[int]]]:
+        """Клиенты, больше всех потратившие по правилу за месяц: [(ключ, [rx, tx])], по убыванию."""
+        mk = mk or month_key()
+        with self.lock:
+            rows = [(pk, list(v)) for pk, d in self.data.items()
+                    if (v := (((d.get("by_rule") or {}).get(mk) or {}).get(rid))) and sum(v)]
+        return sorted(rows, key=lambda x: -sum(x[1]))[:n]
+
     def server_view(self) -> dict:
         """Трафик всего сервера: за текущий месяц и за всё время."""
         with self.lock:
@@ -411,4 +547,4 @@ class Traffic:
     def export(self) -> dict:
         with self.lock:
             return json.loads(json.dumps({"_v": FORMAT, "clients": self.data, "outs": self.outs,
-                                          "server": self.server}))
+                                          "server": self.server, "rules": self.rules}))

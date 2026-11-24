@@ -622,17 +622,21 @@ class Sniffer:
 
     def decide(self, client: str, name: str | None) -> tuple[dict, str | None]:
         """→ (куда: {"socks"} | {"mark"} | {"block"}, список). Без совпадения — метка политики."""
+        return self.decide_rule(client, name)[:2]
+
+    def decide_rule(self, client: str, name: str | None) -> tuple[dict, str | None, int | None]:
+        """decide и номер совпавшего правила в политике клиента (учёт трафика по правилам, 1.24.0; None — без него)."""
         pol = self.policy(client)
         if not pol:
             # клиента нет в настройках (панель только что их сменила, а nftables ещё прежние): его путь не
             # известен — закрыть, а не отпустить с меткой 0 по основной таблице мимо выхода
-            return {"block": True}, None
+            return {"block": True}, None, None
         if name:
             for rule in pol.get("rules") or []:
                 for lid in rule.get("lists") or []:
                     if match(name, self.lists.get(lid, set())):
-                        return rule.get("to") or {"mark": 0}, lid
-        return {"mark": int(pol.get("mark") or 0)}, None
+                        return rule.get("to") or {"mark": 0}, lid, rule.get("slot")
+        return {"mark": int(pol.get("mark") or 0)}, None, None
 
     # ------------------------------------------------------------ QUIC (UDP 443) по имени
     def open_queue(self) -> None:
@@ -761,19 +765,26 @@ class Sniffer:
     def miss_out(self, client: str, ip: str) -> str | None:
         """Выход соединения без совпадения по домену (для учёта): правила политики по адресам,
         затем выход по умолчанию — как цепочка q_* в nftables. None — блок или неизвестно."""
+        return self.miss(client, ip)[0]
+
+    def miss(self, client: str, ip: str) -> tuple[str | None, int | None]:
+        """miss_out и номер правила по адресам (или «По умолчанию»), если панель его дала (учёт по правилам)."""
         acct = self.policy(client).get("acct") or {}
         try:
-            for lids, out in acct.get("rules") or []:
+            for r in acct.get("rules") or []:
+                lids, out = r[0], r[1]
                 if any(ip in self.nets[lid] for lid in lids if lid in self.nets):
-                    return out
-        except ValueError:
-            return None
-        return acct.get("default")
+                    return out, (r[2] if len(r) > 2 else None)
+        except (ValueError, TypeError, IndexError):
+            return None, None
+        return acct.get("default"), acct.get("slot")
 
-    def counter(self, client: str, out: str | None) -> list | None:
+    def counter(self, client: str, out: str | None, slot: int | None = None) -> list | None:
+        """Байты по «клиент|выход» и (учёт по правилам) «клиент|выход|номер правила»."""
         if not out:
             return None
-        return self.bytes.setdefault(f"{client}|{out}", [0, 0])
+        key = f"{client}|{out}" if not isinstance(slot, int) or isinstance(slot, bool) else f"{client}|{out}|{slot}"
+        return self.bytes.setdefault(key, [0, 0])
 
     async def open_upstream(self, to: dict, name: str | None, dip: str, dport: int, data: bytes) -> socket.socket:
         """Соединение с сайтом по решению decide (через SOCKS5 или с меткой выхода) и отправка
@@ -822,7 +833,7 @@ class Sniffer:
                 return
             if name is None:
                 self.stats["no_name"] += 1
-            to, lid = self.decide(peer, name)
+            to, lid, slot = self.decide_rule(peer, name)
             if lid:
                 self.stats["matched"] += 1
                 self.stats["by_list"][lid] = self.stats["by_list"].get(lid, 0) + 1
@@ -830,7 +841,7 @@ class Sniffer:
                 return
             no_delay(sock)
             keepalive(sock)
-            cnt = self.counter(peer, to.get("acct") if lid else self.miss_out(peer, dip))
+            cnt = self.counter(peer, to.get("acct"), slot) if lid else self.counter(peer, *self.miss(peer, dip))
             act = [time.monotonic()]
             out = await self.open_upstream(to, name, dip, dport, data)
             if cnt is not None:

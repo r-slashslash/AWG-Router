@@ -107,6 +107,10 @@ def _state_view() -> dict:
                        "rules_mode": cp.get("rules_mode", "inherit"),
                        "rules": cp.get("rules") or [], "note": cp.get("note", "")},
             "default": out,
+            # трафик по своим правилам за месяц — только у клиентов со своими правилами (раздел «Правила клиентов»);
+            # остальным окно клиента берёт его отдельным запросом (/api/rule-traffic/…): опрос не должен расти
+            **({"rule_traffic": engine.traffic.client_rules(c["public_key"])}
+               if cp.get("rules_mode") == "custom" else {}),
             "balanced": pol["balanced"] and out != pol["default"],
             "effective": engine.resolve(out, st),
         })
@@ -145,6 +149,8 @@ def _state_view() -> dict:
                        "forced": None if config.EXIT_ENGINE == "auto" else config.EXIT_ENGINE,
                        "old": engine.module_warn, "min": KERNEL_MIN, **server.engine_offer(t)},
         "acct": {"state": engine.acct_state, "error": engine.acct_error},
+        # трафик по правилам за месяц (1.24.0): {id правила | "_default": [rx, tx]}; state — ok | off | None
+        "rule_traffic": {"state": engine.racct_state, "rules": engine.traffic.rules_month()},
         "lists": [{**routing.list_view(l), "refs": Store.list_refs(st, l["id"])} for l in st["lists"]],
         "sni": engine.sni_view(),
         "clients": rows,
