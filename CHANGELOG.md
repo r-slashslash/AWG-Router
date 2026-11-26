@@ -77,6 +77,11 @@ it grows, so every user-visible change gets a new version.
   the fallback DNS, then **Domain rules only for addresses from this DNS's answers**; the hints are shorter.
   **System → Panel address** no longer says it doesn't change client addresses.
 - The Telegram bot shows "direct — address".
+- **Panel texts are shorter**: about forty hints, placeholders and confirmations say the same in fewer words in all
+  four languages (country rules, load balancing, lists, exits, server, clients, Telegram, sign-in code, updates,
+  certificate, backup); "For example:" is gone from placeholders; client hints point to **Additional incoming
+  addresses** (the old section name was left there). Ten texts of the old address fields, unused since the start of
+  1.25.0, are removed.
 - **Route check resolves a name through the client's exit again**: since 1.21.0 (the engine split into a package) the
   lookup helper imported a module that no longer existed there, the error was swallowed, and names were resolved by
   the panel's own resolver — on a server in Russia, China or Iran possibly a spoofed address.
