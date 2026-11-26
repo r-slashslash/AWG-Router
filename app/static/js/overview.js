@@ -84,13 +84,12 @@ const COUNTRY_ORDER = { ru: ["ru", "cn", "ir"], zh: ["cn", "ru", "ir"], fa: ["ir
 function countryButtons() {
   if (S.routing.rules.length || !S.country_presets) return "";
   const order = (COUNTRY_ORDER[LANG] || COUNTRY_ORDER.ru).filter((cc) => S.country_presets[cc]);
-  return `<div class="cp-box"><p class="small muted">${esc(t("cp.hint"))}</p>
-    <div class="cp-btns">${order.map((cc) => `<button class="btn sm" data-cp="${cc}">${esc(t("cp.apply_" + cc))}</button>`).join("")}</div>
-    ${S.settings.panel_dns ? "" : `<p class="small muted">${esc(t("cp.dns_note"))}</p>`}</div>`;
+  return `<div class="cp-box">
+    <div class="cp-btns">${order.map((cc) => `<button class="btn sm" data-cp="${cc}">${esc(t("cp.apply_" + cc))}</button>`).join("")}</div></div>`;
 }
 async function applyCountry(cc, b) {
   const pseudo = Object.assign([{ dns: S.country_presets[cc].dns }], { _cc: true });
-  if (!panelDnsAsk(pseudo)) return;
+  if (!await panelDnsAsk(pseudo, b)) return;
   $$("[data-cp]").forEach((x) => { x.disabled = true; });
   try {
     await api("POST", "country-preset", { cc, apply: true });

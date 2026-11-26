@@ -82,6 +82,22 @@ it grows, so every user-visible change gets a new version.
   certificate, backup); "For example:" is gone from placeholders; client hints point to **Additional incoming
   addresses** (the old section name was left there). Ten texts of the old address fields, unused since the start of
   1.25.0, are removed.
+- **No browser pop-ups.** Every question before an action is the panel's own (`ask()` in `core.js`): a button on the
+  page asks in a bar at the top, like "Changes apply after saving" (`#askbar`, outside `main`, so polling doesn't
+  redraw it); a button in a window asks at the bottom of that window in place of its buttons. Esc, closing the window,
+  another question or another tab mean "no". Twenty-two `confirm()` calls are gone; only the browser's own "Leave
+  site?" when closing a tab with unsaved changes stays. Leaving the Routing or Server tab with unsaved changes no
+  longer asks: the tab stays and its save bar lights up "Save or discard the changes".
+- **Server → save bar says what saving does**: the AWG server restart (port, subnet, server-side parameters), AmneziaVPN
+  app clients that lose the server after a port change, and — after the first **Save** — what moves with the addresses
+  (`confirm: false`); the second **Save** saves.
+- **An orange "Clients will need new configs."** appears under a field whose unsaved change needs them: port, subnet,
+  server incoming address, DNS servers (with DNS on the server — the first one), **DNS on the server**, server-side
+  obfuscation parameters; in the client window after changing its address or masking; in the incoming address window
+  while the ticks differ. The hints no longer say it all the time.
+- **Overview**: "No rules — all traffic goes through the default exit."; the two hints under **Apply for …** are gone.
+  **System → Domain and certificate** is **Certificate settings**, without the panel address line; **Get a certificate
+  now** moved into that window.
 - **Route check resolves a name through the client's exit again**: since 1.21.0 (the engine split into a package) the
   lookup helper imported a module that no longer existed there, the error was swallowed, and names were resolved by
   the panel's own resolver — on a server in Russia, China or Iran possibly a spoofed address.

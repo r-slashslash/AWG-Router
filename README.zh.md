@@ -186,12 +186,12 @@ ssh -N -L PORT:127.0.0.1:PORT root@SERVER_IP
 ## 证书
 
 - 面板通过 [lego](https://go-acme.github.io/lego/) 为服务器 IP 或面板域名获取 Let's Encrypt 证书，经 80 端口验证，并在不重启的情况下续期。Let's Encrypt 只为 IP 地址签发有效期 6 天的证书（`shortlived` 配置），因此面板大约每 3 天续期一次。
-- **系统 → 面板地址**：打开面板所用的 IP 或域名，证书也签发给它；**系统 → 域名和证书**：选择 Let's Encrypt 或自有证书。使用自有证书时，填写服务器上证书（完整链）和私钥的路径，例如 certbot 的 `/etc/letsencrypt/live/example.com/fullchain.pem` 和 `privkey.pem`。面板会检查证书是否签发给面板地址、私钥是否匹配；certbot 续期后，面板会在几分钟内加载新证书。
+- **系统 → 面板地址**：打开面板所用的 IP 或域名，证书也签发给它；**系统 → 证书设置**：选择 Let's Encrypt 或自有证书。使用自有证书时，填写服务器上证书（完整链）和私钥的路径，例如 certbot 的 `/etc/letsencrypt/live/example.com/fullchain.pem` 和 `privkey.pem`。面板会检查证书是否签发给面板地址、私钥是否匹配；certbot 续期后，面板会在几分钟内加载新证书。
 - **通过 Cloudflare**（适用于 DNS 托管在 Cloudflare 的域名）：在同一窗口中选择 **如何验证域名 → 通过 Cloudflare**，并粘贴一个仅对该域名拥有 **Zone → Zone → Read** 和 **Zone → DNS → Edit** 权限的 Cloudflare API 令牌（在 Cloudflare 中：**My Profile → API Tokens → Create Token**）。这样 Let's Encrypt 会检查面板通过 Cloudflare API 添加的 TXT 记录，因此不需要 80 端口和网页服务器。面板在保存前会检查令牌；令牌只保存在此服务器上（`data/tls.json`，仅 root 可读），不包含在备份中，切换回 80 端口时会被删除。这类证书是普通的 90 天证书。这只用于获取证书：该域名在 Cloudflare 中的记录须为 **DNS only**（灰色云朵）——在 Cloudflare 代理之后（橙色云朵，新记录默认如此）无法通过域名打开面板。
 - 使用 IPv6 时（**面板地址** 为 IPv6，或 **服务器入站地址** 选择了 IPv6），证书同时签发给服务器的 IPv4 和 IPv6 地址，通过任一地址打开面板都不会出现警告。如果 Let's Encrypt 无法验证第二个地址（例如该地址的 80 端口被关闭），证书只签发给主地址，面板会在一天后再尝试第二个地址。通过 80 端口上的 Web 服务器验证时，证书只签发给主地址。
 - 面板地址只用于面板：客户端配置使用 **服务器** 选项卡中的 **服务器入站地址**，改动其中一个不会影响另一个。安装程序也会询问是否在配置中改用面板域名。
 - 如果签发失败，面板会使用临时自签名证书运行，浏览器会显示警告。每 30 分钟重试一次。
-- 状态和 **立即获取证书** 按钮位于 **系统** 选项卡。
+- 状态位于 **系统** 选项卡，**立即获取证书** 按钮在 **证书设置** 窗口中。
 
 ### 80 端口被网页服务器占用
 

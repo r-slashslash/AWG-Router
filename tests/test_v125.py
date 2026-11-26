@@ -1512,3 +1512,35 @@ class NameThroughExitTest(unittest.TestCase):
         with mock.patch("subprocess.run", return_value=done) as run:
             self.assertEqual(Engine.dns_via_mark(types.SimpleNamespace(pid=1), 0x2001, "example.org"), ["203.0.113.9"])
         self.assertIn("tgreq.py", run.call_args[0][0][-2])
+
+
+class InPanelQuestionsTest(unittest.TestCase):
+    """Вопросы перед действием — в самой панели (владелец 2026-11-27): ни одного окна браузера (confirm, alert,
+    prompt); кнопка на странице — полоса сверху, в окне — низ окна; поля, после изменения которых клиентам нужен
+    новый конфиг, показывают это оранжевой строкой."""
+
+    def setUp(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import panel_js
+        self.js = panel_js.source()
+        self.code = "\n".join(ln.split("//")[0] for ln in self.js.splitlines())
+
+    def test_no_browser_dialogs(self):
+        import re
+        self.assertEqual(re.findall(r"(?<![\w.])(?:window\.)?(?:confirm|alert|prompt)\(", self.code), [])
+        self.assertIn('"beforeunload"', self.js)            # закрытие вкладки браузера — только его окно
+
+    def test_ask(self):
+        self.assertIn('from.closest("dialog[open]")', self.js)      # кнопка в окне — вопрос внизу окна
+        self.assertIn('$("#askbar")', self.js)
+        html = open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "index.html"), encoding="utf-8").read()
+        self.assertLess(html.index('id="askbar"'), html.index('<main id="main">'))   # опрос перерисовывает только main
+        self.assertIn('if (askDone) askDone(false);', self.js.split("function goTab", 1)[1][:200])
+
+    def test_field_warnings(self):
+        for wid in ("w-port", "w-addr", "w-in", "w-dns", "w-pdns", "w-params", "c-host-warn", "c-cps-warn", "ra-note"):
+            self.assertIn(wid, self.js)
+        # перезапуск и клиенты из приложения AmneziaVPN — в полосе «Сохранить», не отдельным вопросом
+        bar = self.js.split("function srvBarWarn", 1)[1][:700]
+        self.assertIn("srv.confirm_restart", bar)
+        self.assertIn("srv.confirm_port_app", bar)

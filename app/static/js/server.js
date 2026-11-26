@@ -70,7 +70,7 @@ function viewServer() {
     <section class="section">
       <div class="section-head"><div><h2>${esc(t("srv.create_title"))}</h2><p class="muted small">${esc(t("srv.create_sub"))}</p></div></div>
       <div class="panel panel-pad" style="max-width:560px">
-        <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" id="i-port" min="1" max="65535" value="${20000 + Math.floor(Math.random() * 40000)}" style="max-width:160px"><span class="hint">${esc(t("srv.port_hint"))}</span></label>
+        <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" id="i-port" min="1" max="65535" value="${20000 + Math.floor(Math.random() * 40000)}" style="max-width:160px"></label>
         <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" id="i-subnet" dir="ltr" value="10.8.1.0/24" style="max-width:200px"></label>
         <button class="btn primary" id="i-create">${esc(t("srv.create_btn"))}</button>
       </div>
@@ -94,7 +94,7 @@ function viewServer() {
     return `<label class="field param ${meta.type === "text" || meta.type === "key" ? "param-wide" : ""}"><span><span class="pname" title="${esc(k)}">${esc(k)}</span>${side}</span>${input}${hint}${size}</label>`;
   };
   return `
-  <div class="savebar" id="s-bar" ${srvDirty() ? "" : "hidden"}><span id="s-bar-text">${esc(t("srv.save_hint"))}</span>
+  <div class="savebar" id="s-bar" ${srvDirty() ? "" : "hidden"}><div class="ask-text"><span id="s-bar-text">${esc(t("srv.save_hint"))}</span><div id="s-bar-warn" class="warn-line"></div></div>
     <span class="actions"><button class="btn sm" id="s-reset">${esc(t("btn.discard"))}</button><button class="btn sm primary" id="s-save">${esc(t("btn.save"))}</button></span></div>
   <div class="grid2 pair">
     <section class="section">
@@ -107,8 +107,8 @@ function viewServer() {
         </div>
         ${srvAddrFields()}
         <div class="row2">
-          <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" data-field="port" id="s-port" min="1" max="65535" value="${SRV.port}"><span class="hint">${esc(t("srv.port_hint"))}</span></label>
-          <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" data-field="address" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
+          <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" data-field="port" id="s-port" min="1" max="65535" value="${SRV.port}">${needConfigs("w-port")}</label>
+          <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" data-field="address" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span>${needConfigs("w-addr")}</label>
         </div>
         <div class="row2">
           <label class="field"><span>MTU</span><input type="number" data-field="client_mtu" id="s-mtu" min="1100" max="1500" value="${SRV.client_mtu}"><span class="hint">${esc(t("srv.mtu_hint"))}</span></label>
@@ -119,10 +119,11 @@ function viewServer() {
     <section class="section">
       <div class="section-head"><h2>${esc(t("srv.clients_title"))}</h2></div>
       <div class="panel panel-pad">
-        <label class="field"><span>${esc(t("srv.dns_servers"))}</span><input type="text" data-field="client_dns" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span></label>
+        <label class="field"><span>${esc(t("srv.dns_servers"))}</span><input type="text" data-field="client_dns" id="s-dns" dir="ltr" value="${esc((SRV.client_dns || []).join(", "))}"><span class="hint">${esc(t("srv.dns_hint"))}</span>${needConfigs("w-dns")}</label>
         <div class="field">
           <label class="check"><input type="checkbox" id="s-pdns" ${SRV.panel_dns ? "checked" : ""}><span>${esc(t("srv.panel_dns"))}</span></label>
           <span class="hint">${esc(t("srv.panel_dns_hint", { addr: SRV.panel_dns_addr || "—" }))}</span>
+          ${needConfigs("w-pdns")}
           ${panelDnsStatus()}
         </div>
         <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select data-field="panel_dns_enc" id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
@@ -141,7 +142,7 @@ function viewServer() {
   </div>
   <section class="section">
     <div class="section-head">
-      <div><h2>${esc(t("srv.obf_title"))}</h2><p class="muted small">${esc(t("srv.obf_sub"))}</p></div>
+      <div><h2>${esc(t("srv.obf_title"))}</h2><p class="muted small">${esc(t("srv.obf_sub"))}</p>${needConfigs("w-params")}</div>
       <button class="btn" id="s-gen">${esc(t("srv.generate"))}</button>
     </div>
     <div class="panel panel-pad">
@@ -239,11 +240,11 @@ function engineChooser(E, m) {
 
 let engChoosing = false;   // выбор движка отправлен и ещё идёт (сервер перезапускается): drawEngine ждёт
 
-async function engChoose(v) {
+async function engChoose(v, from) {
   const E = S.awg_engine || {};
   if (v === E.server) return;
   if (srvKeepTyped()) return;
-  if (!confirm(t(v === "go" ? "eng.to_go_confirm" : "eng.to_kernel_confirm"))) return;
+  if (!await ask(t(v === "go" ? "eng.to_go_confirm" : "eng.to_kernel_confirm"), { from, ok: t("btn.continue") })) return;
   $$("[data-eng-choose]").forEach((x) => x.disabled = true);
   engChoosing = true;
   try {
@@ -270,7 +271,7 @@ function drawEngine() {
   bindEngine(fresh);
 }
 function bindEngine(root) {
-  $$("[data-eng-choose]", root).forEach((b) => b.onclick = () => engChoose(b.dataset.engChoose));
+  $$("[data-eng-choose]", root).forEach((b) => b.onclick = () => engChoose(b.dataset.engChoose, b));
   $$("[data-eng]", root).forEach((b) => b.onclick = () => engAction(b.dataset.eng, b));
   const ec = $("#eng-copy", root);
   if (ec) ec.onclick = () => copyText(KERNEL_CMD);
@@ -314,13 +315,13 @@ async function engAction(act, b) {
     return;
   }
   if (act === "restart") {
-    if (!confirm(t("srv.restart_confirm"))) return;
+    if (!await ask(t("srv.restart_confirm"), { from: b, ok: t("srv.restart") })) return;
     try { await api("POST", "server/restart", {}); toast(t("srv.restarting")); } catch (e) { toast(e.message, true); }
     refresh();
     return;
   }
   if (act === "install") {
-    if (!confirm(t("eng.inst_confirm"))) return;
+    if (!await ask(t("eng.inst_confirm"), { from: b })) return;
     if (b) b.disabled = true;
     try {
       await api("POST", "engine/install", {});
@@ -346,7 +347,7 @@ function engWatch() {
     if (!engWatching) return;
     engWatching = false;
     if (engJob.state === "done") {
-      if (confirm(t("eng.inst_restart"))) {
+      if (await ask(t("eng.inst_restart"), { ok: t("srv.restart") })) {
         try { await api("POST", "server/restart", {}); toast(t("srv.restarting")); } catch (e) { toast(e.message, true); }
         refresh();
       }
@@ -388,6 +389,44 @@ function clientHostHint(val) {
   if (host.includes(":") && !A.v6_listen) out.push(`<span class="warn-text">${esc(t("srv.v6_not_listening", { port: SRV.port }))}</span>`);
   if (!v6.length) out.push(esc(t("srv.no_v6")));
   return out.join(" ");
+}
+/** Оранжевая строка у поля, когда его изменение требует новых конфигов (владелец 2026-11-27); видна, пока
+    изменение не сохранено */
+function needConfigs(id) {
+  return `<span class="hint warn-text" id="${id}" hidden>${esc(t("srv.need_configs"))}</span>`;
+}
+let srvAddrAsk = null;   // что сервер сказал о переносе адресов (confirm: false): строки в полосе, «Сохранить» ещё раз — да
+/** что меняется в несохранённом: серверные параметры маскировки, порт, подсеть */
+function srvChanges() {
+  const changed = Object.keys(SRV.params).filter((k) => (srvDraft[k] || "") !== (SRV.params[k] || ""));
+  const pt = $("#s-port").value.trim(), addr = $("#s-addr");
+  const port = pt === "" || +pt === 0 ? SRV.port : +pt;
+  return { changed, port, serverSide: changed.some((k) => SRV.param_meta[k].side === "server"),
+    portMoved: port !== SRV.port, subnet: !SRV.subnet_locked && !!addr && addr.value.trim() !== SRV.address };
+}
+/** строки в полосе «Сохранить»: что будет при сохранении (раньше — окна браузера перед сохранением) */
+function srvBarWarn() {
+  const c = srvChanges(), out = [];
+  if (c.serverSide || c.portMoved || c.subnet) out.push(t(SRV.kind === "container" && c.serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"));
+  // клиенты из приложения AmneziaVPN: их ключ только на устройстве, новый конфиг с новым портом панель не выдаст
+  const appMade = c.portMoved ? S.clients.filter((x) => !x.has_config).length : 0;
+  if (appMade) out.push(t("srv.confirm_port_app", { n: appMade }));
+  return out.concat(srvAddrAsk || []);
+}
+/** оранжевые строки у полей: порт, подсеть, входящий адрес, DNS в конфигах, «DNS на сервере», серверные параметры */
+function srvFieldWarns() {
+  const c = srvChanges(), show = (id, on) => { const el = $("#" + id); if (el) el.hidden = !on; };
+  const orig = (sel) => { const el = $(sel); return el && el.dataset.orig !== undefined ? el.dataset.orig : null; };
+  const list = (v) => (v || "").split(/[\s,]+/).filter(Boolean);
+  const pdns = $("#s-pdns").checked, d0 = list(orig("#s-dns")), d1 = list($("#s-dns").value);
+  // с «DNS на сервере» в конфиге — адрес сервера и первый из серверов DNS (users.profile_dns)
+  const dnsMoved = pdns ? d0[0] !== d1[0] : d0.join() !== d1.join();
+  show("w-port", c.portMoved);
+  show("w-addr", c.subnet);
+  show("w-in", orig("#s-in") !== null && $("#s-in").value !== orig("#s-in"));
+  show("w-dns", orig("#s-dns") !== null && dnsMoved);
+  show("w-pdns", pdns !== !!SRV.panel_dns);
+  show("w-params", c.serverSide);
 }
 function srvDirty() {
   if (!SRV || !srvDraft) return false;
@@ -449,7 +488,14 @@ bind.server = () => {
     } catch (e) { toast(e.message, true); }
     b.disabled = false;
   };
-  const showBar = () => { $("#s-bar").hidden = !srvDirty(); };
+  const showBar = () => {
+    srvAddrAsk = null;                            // поля изменились — сервер спросит о переносах заново
+    $("#s-bar").hidden = !srvDirty();
+    const txt = $("#s-bar-text");
+    txt.textContent = t("srv.save_hint"); txt.classList.remove("ask-warn");
+    $("#s-bar-warn").innerHTML = srvBarWarn().map((x) => `<div>${esc(x)}</div>`).join("");
+    srvFieldWarns();
+  };
   ["#s-in", "#s-extra", "#s-out-main", "#s-out", "#s-dns", "#s-pdns-enc", "#s-fb-in", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar; el.onchange = showBar;
@@ -478,7 +524,7 @@ bind.server = () => {
   if (om) om.onchange = () => { $("#s-out-sees").innerHTML = outMainSees(om.value); showBar(); };
   showBar();
   $("#s-restart").onclick = async () => {
-    if (saveFirst() || !confirm(t("srv.restart_confirm"))) return;
+    if (saveFirst() || !await ask(t("srv.restart_confirm"), { from: $("#s-restart") })) return;
     const b = $("#s-restart");
     b.disabled = true;
     try { await api("POST", "server/restart", {}); toast(t("srv.restarting")); }
@@ -487,7 +533,7 @@ bind.server = () => {
   };
   $("#s-gen").onclick = async () => {
     if (srvKeepTyped(false)) return;              // параметры маскировки в черновике сохранятся, поля — нет
-    if (!confirm(t("srv.generate_confirm"))) return;
+    if (!await ask(t("srv.generate_confirm"), { from: $("#s-gen") })) return;
     const r = await api("POST", "server/generate", {});
     srvDraft = { ...srvDraft, ...r.params };
     render();
@@ -496,23 +542,17 @@ bind.server = () => {
   $("#s-reset").onclick = () => { srvDraft = null; render(); };
   $("#s-save").onclick = async () => {
     const changed = {};
-    for (const k of Object.keys(SRV.params)) if ((srvDraft[k] || "") !== (SRV.params[k] || "")) changed[k] = srvDraft[k] || "";
-    const serverSide = Object.keys(changed).some((k) => SRV.param_meta[k].side === "server");
-    // пустое поле или 0 — порт не меняется; неверный порт — ошибка у поля сразу, а не после двух предупреждений
-    const portText = $("#s-port").value.trim(), addr = $("#s-addr").value.trim();
-    const port = portText === "" || +portText === 0 ? SRV.port : +portText;
+    for (const k of srvChanges().changed) changed[k] = srvDraft[k] || "";
+    // пустое поле или 0 — порт не меняется; неверный порт — ошибка у поля сразу
+    const addr = $("#s-addr").value.trim(), port = srvChanges().port;
     const portErr = !Number.isInteger(port) || port < 1 || port > 65535 ? t("srv.bad_port")
       : port !== SRV.port && port === 53 ? t("srv.port_dns", { port }) : null;      // 53 — DNS на сервере
     if (portErr) { toast(portErr, true); markField({ field: "port" }, $("#main")); return; }
-    const restart = serverSide || port !== SRV.port || (!SRV.subnet_locked && addr !== SRV.address);
-    if (restart && !confirm(t(SRV.kind === "container" && serverSide ? "srv.confirm_restart_amnezia" : "srv.confirm_restart"))) return;
-    // клиенты из приложения AmneziaVPN: их ключ только на устройстве, новый конфиг с новым портом панель не выдаст
-    const appMade = port !== SRV.port ? S.clients.filter((c) => !c.has_config).length : 0;
-    if (appMade && !confirm(t("srv.confirm_port_app", { n: appMade }))) return;
-    // адреса (1.25.0): входящий — из выбора, исходящие — основной и дополнительные; сначала сервер говорит, что
-    // переедет и где стоят убранные адреса (confirm: false), после «Да» — сохраняет
+    // перезапуск сервера и клиенты из приложения AmneziaVPN — уже в полосе (srvBarWarn): «Сохранить» и есть «да».
+    // Адреса (1.25.0): сначала сервер говорит, что переедет и где стоят убранные адреса (confirm: false) — это
+    // встаёт в полосу, и второе «Сохранить» сохраняет
     const body = { client_host: $("#s-in").value, extra_hosts: $("#s-extra").value,
-      out_main: $("#s-out-main").value, out_hosts: $("#s-out").value, confirm: false, client_dns: $("#s-dns").value,
+      out_main: $("#s-out-main").value, out_hosts: $("#s-out").value, confirm: !!srvAddrAsk, client_dns: $("#s-dns").value,
       panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value,
       fallback_dns_on: $("#s-fb").checked, fallback_dns: $("#s-fb-in").value,
       client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
@@ -521,10 +561,13 @@ bind.server = () => {
     if (!SRV.subnet_locked) body.address = addr;
     $("#s-save").disabled = true;
     try {
-      let r = await api("PUT", "server", body);
+      const r = await api("PUT", "server", body);
       if (r.confirm) {
-        if (!confirm(addrConfirmText(r.confirm))) { $("#s-save").disabled = false; return; }
-        r = await api("PUT", "server", { ...body, confirm: true });
+        srvAddrAsk = addrConfirmText(r.confirm).split("\n\n");
+        $("#s-bar-warn").innerHTML = srvBarWarn().map((x) => `<div>${esc(x)}</div>`).join("");
+        flashBar($("#s-bar"));
+        $("#s-save").disabled = false;
+        return;
       }
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
       reconnectToast(r);

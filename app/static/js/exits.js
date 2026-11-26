@@ -83,13 +83,13 @@ bind.exits = () => {
     try { await api("PUT", "upstreams/" + i.dataset.toggle, { enabled: i.checked }); refresh(); }
     catch (err) { toast(err.message, true); i.checked = !i.checked; }
   });
-  $$("[data-del]").forEach((b) => b.onclick = () => deleteUpstream(upstreamById(b.dataset.del)));
+  $$("[data-del]").forEach((b) => b.onclick = () => deleteUpstream(upstreamById(b.dataset.del), b));
 };
 
 /** удаление выхода: если он где-то используется — выбрать, что встанет на его место */
-async function deleteUpstream(u) {
+async function deleteUpstream(u, from) {
   if (!u.refs.length) {
-    if (!confirm(t("ex.delete_confirm", { name: u.name }))) return;
+    if (!await ask(t("ex.delete_confirm", { name: u.name }), { from, ok: t("btn.delete"), danger: true })) return;
     try { await api("DELETE", "upstreams/" + u.id); toast(t("toast.exit_deleted")); refresh(); }
     catch (err) { if (!(err instanceof AuthError)) toast(err.message, true); }
     return;

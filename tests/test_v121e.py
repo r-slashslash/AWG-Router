@@ -425,7 +425,8 @@ class UiGuardsTest(unittest.TestCase):
         self.js = panel_js.source()
 
     def test_server_tab_leave_guard(self):
-        self.assertIn('if (tab === "server" && srvDirty()) return confirm(t("srv.leave"));', self.js)
+        # 1.25.0: окна браузера нет — вкладка не меняется, полоса «Сохранить» загорается
+        self.assertIn('tab === "server" && srvDirty() ? $("#s-bar")', self.js)
         self.assertIn('(tab === "server" && srvDirty())', self.js.split('"beforeunload"', 1)[1][:200])
 
     def test_stale_state_dropped(self):

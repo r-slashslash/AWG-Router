@@ -234,6 +234,12 @@ Every string exists in four languages (ru, en, zh, fa) in `app/static/i18n.js`; 
 `Msg("key", **params)` and the browser translates it. Telegram texts are in `notify.TEXTS` and `tgbot.py`; when the bot
 has to show a panel message (an error), `app/uitext.py` reads the same dictionaries from `i18n.js`.
 
+Questions before an action are the panel's own, never the browser's `confirm()` (1.25.0): `ask()` in `core.js` puts a
+button-on-the-page question into the bar `#askbar` above `main` (polling redraws only `main`) and a button-in-a-window
+question into that window's footer. Unsaved changes on Routing and Server keep the tab and light up its save bar; what
+saving the Server tab does (restart, AmneziaVPN app clients, addresses that move) is listed in that bar, and fields
+whose change needs new client configs say so in orange under the field.
+
 ## Other parts
 
 | Module | What it does |

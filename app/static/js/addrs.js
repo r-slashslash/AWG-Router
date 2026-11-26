@@ -153,7 +153,7 @@ function outMainSees(v) {
 function srvAddrFields() {
   return `
     <label class="field"><span>${esc(t("srv.in_host"))}</span><select data-field="client_host" id="s-in">${inOptions()}</select>
-      <span class="hint" id="s-in-hint">${clientHostHint(SRV.client_host)}</span></label>
+      <span class="hint" id="s-in-hint">${clientHostHint(SRV.client_host)}</span>${needConfigs("w-in")}</label>
     <label class="field"><span>${esc(t("srv.in_extra"))}</span><input type="text" data-field="extra_hosts" id="s-extra" dir="ltr" placeholder="203.0.113.20, vpn2.example.com" value="${esc((SRV.extra_hosts || []).join(", "))}">
       <span class="hint">${esc(t("srv.in_extra_hint"))}</span>${addrStatusHtml("in")}</label>
     <label class="field"><span>${esc(t("srv.out_host"))}</span><select data-field="out_main" id="s-out-main">${outMainOptions()}</select>
@@ -161,7 +161,8 @@ function srvAddrFields() {
     <label class="field"><span>${esc(t("srv.out_extra"))}</span><input type="text" data-field="out_hosts" id="s-out" dir="ltr" placeholder="198.51.100.7, 198.51.100.8" value="${esc((SRV.out_hosts || []).join(", "))}">
       <span class="hint">${esc(t("srv.out_extra_hint"))}</span>${addrStatusHtml("out")}</label>`;
 }
-/** «Да / Нет» перед сохранением адресов: что переедет на новый основной, что стоит на убранном, кому новый конфиг */
+/** Что сервер скажет перед сохранением адресов (в полосе «Сохранить»): что переедет на новый основной, что стоит на
+    убранном, кому новый конфиг. Абзацы — через пустую строку. */
 function addrConfirmText(c) {
   const parts = [];
   const more = (n, shown) => (n > shown ? " " + t("ra.more", { n: n - shown }) : "");
@@ -169,7 +170,6 @@ function addrConfirmText(c) {
     to: c.to === "system" ? addrOf("direct@system") : c.to, where: tm(c.moved) + more(c.moved_n, c.moved.length) }));
   if (c.removed) parts.push(t("addr.confirm_removed", { where: tm(c.removed) + more(c.removed_n, c.removed.length) }));
   if (c.clients) parts.push(t("addr.confirm_clients", { where: tm(c.clients) + more(c.clients_n, c.clients.length) }));
-  parts.push(t("addr.confirm_q"));
   return parts.join("\n\n");
 }
 
@@ -236,11 +236,15 @@ function openAddrIn(h) {
   const body = `<div class="addr-head"><b dir="ltr" class="mono">${esc(h)}</b>
       <div class="small ${s.cls}">${s.dot ? `<span class="dot ${s.dot}"></span>` : ""}${esc(t(s.key, { error: s.error ? tm(s.error) : "—" }))}</div></div>
     <p class="small muted">${th(isMain ? "ra.in_text_main" : "ra.in_text", { main: `<bdi dir="ltr">${esc(main)}</bdi>` })}</p>
-    <p class="small addr-note">${esc(t("ra.in_note"))}</p>
     <label class="field"><span>${esc(t("ra.find"))}</span><input type="search" id="ra-q" placeholder="${esc(t("ra.find_ph"))}"></label>
     <div id="ra-rows">${rows || `<p class="muted small">${esc(t("cl.empty"))}</p>`}</div>
+    <p class="small warn-text" id="ra-note" hidden>${esc(t("ra.in_note"))}</p>
     <p class="small muted">${esc(t("ra.in_same", { field: t("cl.host") }))}</p>`;
   openModal(t("ra.in_title"), body, `<button class="btn ghost" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="ra-ok">${esc(t("btn.save"))}</button>`);
+  // кому меняется адрес — тем новый конфиг: строка, пока галочки не как были
+  $$("#ra-rows input[data-pk]").forEach((i) => i.onchange = () => {
+    $("#ra-note").hidden = !$$("#ra-rows input[data-pk]").some((x) => x.checked !== x.defaultChecked);
+  });
   $("#ra-q").oninput = (e) => {
     const q = e.target.value.trim().toLowerCase();
     $$("#ra-rows [data-q]").forEach((r) => { r.hidden = q && !r.dataset.q.includes(q); });
@@ -332,7 +336,7 @@ function bindPanelAddr() {
             challenge: T.challenge || "http", cf_token: "", force });
           if (r.confirm) {
             btn.disabled = false;
-            if (confirm(tm(r.confirm) + "\n\n" + t("tls.dns_force"))) return save(true);
+            if (await ask(tm(r.confirm), { from: btn, ok: t("tls.dns_force"), warn: true })) return save(true);
             return;
           }
           if (r.warn) toast(tm(r.warn), true);

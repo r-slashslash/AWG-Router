@@ -33,7 +33,6 @@ function viewSystem() {
       <div class="actions" style="margin-top:12px">
         ${pub ? `<button class="btn sm" id="tls-setup">${esc(t("sy.tls_setup"))}</button>` : ""}
         ${pub && T.port80 && T.source === "letsencrypt" && !W ? `<button class="btn sm primary" id="tls-web">${esc(t("sy.tls_port80_btn"))}</button>` : ""}
-        ${pub && T.source === "letsencrypt" && !T.port80 ? `<button class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button>` : ""}
         ${pub && W ? `<button class="btn sm ghost" id="tls-web-rm">${esc(t("sy.tls_web_remove"))}</button>` : ""}
         <button class="btn sm" id="upd-check">${esc(t("sy.check_updates"))}</button>
         ${standalone() ? "" : `<button type="button" class="btn sm" id="app-phone">${esc(t("app.btn"))}</button>`}
@@ -92,13 +91,6 @@ bind.system = () => {
     }
     catch (e) { toast(e.message, true); }
   };
-  const rn = $("#tls-renew");
-  if (rn) rn.onclick = async () => {
-    rn.disabled = true; toast(t("toast.applying"));
-    try { const r = await api("POST", "tls/renew", {}); toast(t(r.ok ? "toast.tls_ok" : "toast.tls_fail"), !r.ok); }
-    catch (e) { toast(e.message, true); }
-    refresh();
-  };
   const ts = $("#tls-setup");
   if (ts) ts.onclick = tlsModal;
   const tw = $("#tls-web");
@@ -110,7 +102,7 @@ bind.system = () => {
   const tr = $("#tls-web-rm");
   if (tr) tr.onclick = async () => {
     const W = S.panel.tls.web;
-    if (!confirm(t("web.remove_confirm", { file: W.file || webLabel(W), server: webLabel(W) }))) return;
+    if (!await ask(t("web.remove_confirm", { file: W.file || webLabel(W), server: webLabel(W) }), { from: tr, danger: true })) return;
     try { await api("POST", "tls/web", { action: "remove" }); toast(t("web.removed")); } catch (e) { toast(e.message, true); }
     refresh();
   };
@@ -140,7 +132,6 @@ function webLabel(w) {
 }
 function tlsModal() {
   const T = S.panel.tls || {};
-  const ip = S.panel.ip || "";
   let src = T.source === "custom" ? "custom" : "letsencrypt";
   // как Let's Encrypt проверяет домен (1.24.0): порт 80 (или веб-сервер на нём) либо запись в DNS через API Cloudflare
   let ch = T.challenge === "cloudflare" ? "cloudflare" : "http";
@@ -148,7 +139,6 @@ function tlsModal() {
   // адрес панели — поле «Адрес панели» на вкладке (1.25.0); здесь — только откуда сертификат и как подтвердить домен
   const dom = T.domain || "";
   const body = `
-    <p class="small muted" style="margin-top:0">${th("tls.for_host", { host: `<bdi dir="ltr">${esc(T.host || ip || "—")}</bdi>` })}</p>
     <div class="field"><span>${esc(t("tls.source"))}</span>
       <div class="seg" id="tls-src"><button type="button" data-v="letsencrypt">${esc(t("tls.src_le"))}</button><button type="button" data-v="custom">${esc(t("tls.src_custom"))}</button></div>
       <span class="hint" id="tls-src-hint"></span></div>
@@ -162,7 +152,20 @@ function tlsModal() {
       <label class="field"><span>${esc(t("tls.cert"))}</span><input type="text" id="tls-cert" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.cert || "")}" placeholder="${esc(certPh)}"></label>
       <label class="field"><span>${esc(t("tls.key"))}</span><input type="text" id="tls-key" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.key || "")}" placeholder="${esc(keyPh)}"></label>
     </div>`;
-  openModal(t("tls.title"), body, `<button class="btn ghost" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="tls-apply">${esc(t("tls.apply"))}</button>`);
+  // «Получить сертификат сейчас» — здесь же, под настройками (владелец 2026-11-27): с теми, что сохранены; пока порт 80
+  // занят веб-сервером без нашей проверки — нет (сначала «Настроить проверку через веб-сервер»). Не в низу окна: на
+  // телефоне три кнопки там не помещаются
+  const renew = T.source === "letsencrypt" && !T.port80
+    ? `<div class="actions"><button type="button" class="btn sm" id="tls-renew">${esc(t("sy.tls_renew"))}</button></div>` : "";
+  openModal(t("tls.title"), body + renew, `<button class="btn ghost" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="tls-apply">${esc(t("tls.apply"))}</button>`);
+  const rn = $("#tls-renew");
+  if (rn) rn.onclick = async () => {
+    rn.disabled = true; toast(t("toast.applying"));
+    try { const r = await api("POST", "tls/renew", {}); toast(t(r.ok ? "toast.tls_ok" : "toast.tls_fail"), !r.ok); }
+    catch (e) { toast(e.message, true); }
+    rn.disabled = false;
+    refresh();
+  };
   const paths = () => {
     const d = (dom || T.host || "").toLowerCase() || "example.com";
     return { cert: `/etc/letsencrypt/live/${d}/fullchain.pem`, key: `/etc/letsencrypt/live/${d}/privkey.pem` };
@@ -192,7 +195,7 @@ function tlsModal() {
         challenge: viaCf() ? "cloudflare" : "http", cf_token: viaCf() ? $("#tls-cf").value.trim() : "" });
       if (r.confirm) {
         btn.disabled = false;
-        if (confirm(tm(r.confirm) + "\n\n" + t("tls.dns_force"))) return apply(true);
+        if (await ask(tm(r.confirm), { from: btn, ok: t("tls.dns_force"), warn: true })) return apply(true);
         return;
       }
       if (r.warn) toast(tm(r.warn), true);
@@ -338,7 +341,7 @@ function bindUpdate() {
   $$("[data-update]").forEach((b) => b.onclick = async () => {
     const v = S.version || {};
     const stop = (S.settings.on_stop || "keep") === "restore" ? "sy.update_confirm_restore" : "sy.update_confirm_keep";
-    if (!confirm(t(stop, { version: v.latest || "?", setting: t("sy.on_stop") }))) return;
+    if (!await ask(t(stop, { version: v.latest || "?", setting: t("sy.on_stop") }), { from: b, warn: true })) return;
     b.disabled = true;
     try {
       const r = await api("POST", "update/run", {});

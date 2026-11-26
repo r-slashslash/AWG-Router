@@ -354,7 +354,7 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0, pick = null
   };
   if (del) {
     $("#rw-del", m).onclick = async () => {
-      if (!confirm(t("rw.delete_confirm"))) return;
+      if (!await ask(t("rw.delete_confirm"), { from: $("#rw-del", m), ok: t("btn.delete"), danger: true })) return;
       try { await del.fn(); closeModal2(); } catch (err) { toast(err.message, true); }
     };
   }
@@ -367,9 +367,9 @@ function withRule(rules, i, r) {
 }
 /** «DNS на сервере» для своего DNS страны. Выключен, а клиенты уже есть — спросить: в выданных конфигах прежний
     DNS, им нужно заново отсканировать QR. false — человек отказался (ничего не применяем). */
-function panelDnsAsk(rules) {
+async function panelDnsAsk(rules, from) {
   if (S.settings.panel_dns || (rules && !(rules._cc && rules.some((x) => x.dns && x.dns.length)))) return true;
-  return !S.clients.length || confirm(t("cp.dns_confirm"));
+  return !S.clients.length || ask(t("cp.dns_confirm"), { from, warn: true });
 }
 async function panelDnsOn(rules) {
   if (S.settings.panel_dns || (rules && !(rules._cc && rules.some((x) => x.dns && x.dns.length)))) return;

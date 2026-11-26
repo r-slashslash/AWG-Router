@@ -397,6 +397,19 @@ select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: 
 @keyframes savebar-flash { 50% { box-shadow: 0 0 0 4px var(--primary), 0 8px 24px rgba(0,0,0,.2); } }
 @media (prefers-reduced-motion: reduce) { .savebar.flash { animation: none; } }
 .savebar .btn:not(.primary) { background: transparent; color: var(--bg); border-color: color-mix(in srgb, var(--bg) 40%, transparent); }
+.savebar .btn.danger-solid, .ask-in .btn.danger-solid { background: var(--bad); color: #fff; border-color: var(--bad); }
+/* вопросы панели вместо окон браузера (1.25.0): полоса сверху и низ окна; оранжевое — что изменится */
+/* полоса вопроса — вне main (опрос перерисовывает main), с его же шириной и отступами */
+.askbar { max-width: 1148px; margin: 22px auto -8px; }
+@media (max-width: 1180px) { .askbar { margin-inline: 16px; } }
+.ask-box { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; width: 100%; }
+.ask-in { flex: 1 1 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.ask-text { min-width: 0; flex: 1 1 260px; }
+.ask-text > div + div { margin-top: 4px; }
+.ask-in .actions, .ask-box .actions { display: flex; gap: 8px; margin-inline-start: auto; }
+.ask-warn, .savebar .warn-line { color: var(--warn-on-ink, #f0b44c); }
+.ask-in .ask-warn { color: var(--warn); }
+:root[data-theme="dark"] { --warn-on-ink: #9a5b00; }
 
 /* ---------- trace ---------- */
 .trace-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
@@ -563,8 +576,6 @@ bdi.mono { white-space: nowrap; }
   border-radius: 999px; padding: 0 8px; margin-inline-start: 6px; white-space: nowrap; vertical-align: 1px; }
 .addr-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 .addr-head b.mono { font-size: 1.25rem; }
-.addr-note { padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 10%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
 .addr-row { align-items: flex-start; padding: 8px 2px; margin: 0; border-bottom: 1px solid var(--rule); min-height: 44px; box-sizing: border-box; }
 .addr-row:last-child { border-bottom: 0; }
 .addr-row input { width: 18px; height: 18px; flex: none; }

@@ -211,14 +211,17 @@ bind.clients = () => {
 
 function goTab(name) {
   if (!leaveOk()) return;
+  if (askDone) askDone(false);                  // вопрос в полосе сверху — о кнопке прежней вкладки
   if (tab === "server" && name !== "server") { SRV = null; srvDraft = null; }
   tab = name; history.replaceState(null, "", "#" + tab); render(); window.scrollTo(0, 0);
 }
-/** Уход с вкладки с несохранёнными правками: правила маршрутизации и настройки сервера — спросить. */
+/** Уход с вкладки с несохранёнными правками маршрутизации или сервера: вкладка не меняется, полоса «Сохранить»
+    загорается — «Сохраните или отмените изменения» (владелец 2026-11-27: окон браузера нет). */
 function leaveOk() {
-  if (tab === "routing" && routingDirty()) return confirm(t("rt.leave"));
-  if (tab === "server" && srvDirty()) return confirm(t("srv.leave"));
-  return true;
+  const bar = tab === "routing" && routingDirty() ? $("#savebar") : tab === "server" && srvDirty() ? $("#s-bar") : null;
+  if (!bar) return true;
+  barLeave(bar);
+  return false;
 }
 
 /** Свой адрес сервера в конфиге клиента (#37): «как у всех» и адреса с вкладки «Сервер».
@@ -230,7 +233,7 @@ function hostSelect(id, cur, hint = "cl.host_hint") {
   if (cur && !opts.some(([v]) => v === cur)) opts.push([cur, cur]);
   return `<label class="field"><span>${esc(t("cl.host"))}</span>
     <select id="${id}" dir="auto">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
-    <span class="hint">${esc(t(hint))}</span></label>`;
+    <span class="hint">${esc(t(hint))}</span>${id === "c-host" ? `<span class="hint warn-text" id="c-host-warn" hidden>${esc(t("cl.need_config"))}</span>` : ""}</label>`;
 }
 
 function addClient() {
@@ -395,10 +398,11 @@ function editClient(pk, section = null) {
     hostSel.disabled = true;
     try {
       const r = await api("PUT", "hosts/" + encodeURIComponent(pk), { host: hostSel.value });
-      c.host = r.host; toast(t("cl.host_saved")); loadConnect(); refresh();
+      c.host = r.host; toast(t("cl.host_saved")); $("#c-host-warn").hidden = false; loadConnect(); refresh();
     } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); hostSel.value = c.host || ""; }
     hostSel.disabled = false;
   };
+  let cpsChanged = false;           // маскировку меняли в этом окне: строка «понадобится новый конфиг» остаётся
   const loadCps = async () => {
     const box = $("#c-cps-box");
     let info;
@@ -414,14 +418,15 @@ function editClient(pk, section = null) {
         <select id="c-cps"><option value="server" ${cur === "server" ? "selected" : ""}>${esc(srvLabel)}</option>
           ${presets.map((p) => `<option value="${p.id}" ${cur === p.id ? "selected" : ""}>${esc(cpsName(p.id))}</option>`).join("")}
           <option value="custom" ${cur === "custom" ? "selected" : ""}>${esc(t("cps.custom"))}</option></select>
-        <span class="hint">${esc(t("cl.cps_hint"))}</span></label>
+        <span class="hint">${esc(t("cl.cps_hint"))}</span>
+        <span class="hint warn-text" id="c-cps-warn" ${cpsChanged ? "" : "hidden"}>${esc(t("cl.need_config"))}</span></label>
       <div id="c-cps-custom" hidden></div>`;
     const sel = $("#c-cps"), custom = $("#c-cps-custom");
     const save = async (body) => {
       sel.disabled = true;
       try {
         const r = await api("PUT", "cps/" + encodeURIComponent(pk), body);
-        c.cps = r.cps; toast(t("cl.cps_saved")); loadConnect(); refresh();
+        c.cps = r.cps; toast(t("cl.cps_saved")); cpsChanged = true; $("#c-cps-warn").hidden = false; loadConnect(); refresh();
       } catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
       sel.disabled = false;
     };
@@ -565,7 +570,7 @@ function editClient(pk, section = null) {
     } catch (e) { toast(e.message, true); }
   };
   $("#c-delete").onclick = async () => {
-    if (!confirm(t("cl.delete_confirm", { name: c.name || c.ip }))) return;
+    if (!await ask(t("cl.delete_confirm", { name: c.name || c.ip }), { from: $("#c-delete"), ok: t("btn.delete"), danger: true })) return;
     try {
       await api("DELETE", "users/" + encodeURIComponent(pk));
       closeModal(); toast(t("toast.client_deleted")); refresh();
@@ -597,7 +602,7 @@ function bindClientLinks(c, reopen) {
   if (bot) bot.onclick = () => copyText(c.bot_url);
   if (!renew) return;
   renew.onclick = async () => {
-    if (c.share_url && !confirm(t("cl.links_renew_confirm"))) return;
+    if (c.share_url && !await ask(t("cl.links_renew_confirm"), { from: renew })) return;
     renew.disabled = true;
     try {
       await api("POST", (c.share_url ? "shares-renew/" : "shares/") + encodeURIComponent(pk));

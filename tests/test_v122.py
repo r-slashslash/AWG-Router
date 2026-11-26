@@ -1379,12 +1379,12 @@ class CountryPresetTest(unittest.TestCase):
         self.assertIn('{ ru: ["ru", "cn", "ir"], zh: ["cn", "ru", "ir"], fa: ["ir", "ru", "cn"] }', ov)
         self.assertIn('api("POST", "country-preset", { cc, apply: true })', ov)
         rt = read("app", "static", "js", "routing.js")
-        self.assertIn("return !S.clients.length || confirm(t(\"cp.dns_confirm\"));", rt)   # клиенты есть — спросить
+        self.assertIn('return !S.clients.length || ask(t("cp.dns_confirm"), { from, warn: true });', rt)   # клиенты есть — спросить
         self.assertIn('await api("PUT", "server", { panel_dns: true });', rt)
         # 1.23.0 (владелец, 2026-11-20): готовые правила страны — только кнопки «Применить для …» (вопрос про DNS на
         # сервере — до запроса); в окне правила список страны — просто список, правила её доменов он не добавляет
-        self.assertIn("if (!panelDnsAsk(pseudo)) return;", ov)
-        self.assertLess(ov.index("if (!panelDnsAsk(pseudo)) return;"), ov.index('api("POST", "country-preset", { cc, apply: true })'))
+        self.assertIn("if (!await panelDnsAsk(pseudo, b)) return;", ov)
+        self.assertLess(ov.index("if (!await panelDnsAsk(pseudo, b)) return;"), ov.index('api("POST", "country-preset", { cc, apply: true })'))
         self.assertNotIn("countryPick", rt)
         self.assertNotIn("panelDnsAsk", read("app", "static", "js", "clients.js"))
         self.assertNotIn("cascade", read("app", "static", "js", "server.js").replace("srv.panel_dns_cascade", ""))

@@ -81,9 +81,10 @@ function bindClientRules() {
     const box = $(".cr-rules", card);
     $("[data-cr-add]", card).onclick = () => openClientRule(c.public_key);
     $("[data-cr-reset]", card).onclick = async (e) => {
-      if (!confirm(t("cr.reset_confirm", { name: c.name || c.ip }))) return;
-      e.target.disabled = true;
-      try { await saveClientRules(c, { rules_mode: "inherit", rules: [] }); } catch (err) { toast(err.message, true); e.target.disabled = false; }
+      const btn = e.currentTarget;
+      if (!await ask(t("cr.reset_confirm", { name: c.name || c.ip }), { from: btn, danger: true })) return;
+      btn.disabled = true;
+      try { await saveClientRules(c, { rules_mode: "inherit", rules: [] }); } catch (err) { toast(err.message, true); btn.disabled = false; }
     };
     $("[data-cr-out]", card).onchange = async (e) => {
       try { await saveClientRules(c, { outbound: e.target.value }); } catch (err) { toast(err.message, true); }

@@ -97,6 +97,55 @@ function flashBar(el) {
   el.classList.add("flash");
 }
 
+/** Вопрос перед действием — в самой панели, не окном браузера (владелец 2026-11-27): кнопка на странице — полоса
+   сверху (#askbar, как «Изменения применятся после сохранения»), кнопка в окне — внизу этого окна, на месте его
+   кнопок. warn — текст оранжевым (что изменится). → true, если нажата кнопка действия; новый вопрос, уход с вкладки,
+   закрытие окна и Esc — false. */
+let askDone = null;
+function ask(text, { from = null, ok = "", danger = false, warn = false } = {}) {
+  if (askDone) askDone(false);
+  const dlg = from && from.closest ? from.closest("dialog[open]") : null;
+  const foot = dlg ? $(".modal-foot", dlg) : null;
+  const label = ok || (from && from.textContent.trim()) || t("btn.continue");
+  return new Promise((resolve) => {
+    const box = document.createElement("div");
+    box.className = foot ? "ask-in" : "ask-box";
+    box.innerHTML = `<div class="ask-text${warn ? " ask-warn" : ""}">${String(text).split(/\n{2,}/).map((p) => `<div>${esc(p)}</div>`).join("")}</div>
+      <span class="actions"><button type="button" class="btn sm" data-ask="0">${esc(t("btn.cancel"))}</button><button type="button" class="btn sm ${danger ? "danger-solid" : "primary"}" data-ask="1">${esc(label)}</button></span>`;
+    const bar = $("#askbar"), hidden = foot ? [...foot.children].filter((x) => !x.hidden) : [];
+    const onClose = () => done(false);
+    const onKey = (e) => { if (e.key === "Escape") done(false); };
+    function done(v) {
+      if (askDone !== done) return;
+      askDone = null;
+      box.remove();
+      hidden.forEach((x) => { x.hidden = false; });
+      if (foot) dlg.removeEventListener("close", onClose);
+      else { bar.hidden = true; document.removeEventListener("keydown", onKey); }
+      resolve(v);
+    }
+    askDone = done;
+    if (foot) {
+      hidden.forEach((x) => { x.hidden = true; });
+      foot.append(box);
+      dlg.addEventListener("close", onClose);
+    } else {
+      bar.replaceChildren(box);
+      bar.hidden = false;
+      document.addEventListener("keydown", onKey);
+      flashBar(bar);
+    }
+    $$("[data-ask]", box).forEach((b) => b.onclick = () => done(b.dataset.ask === "1"));
+    $(`[data-ask="${danger ? 0 : 1}"]`, box).focus({ preventScroll: true });
+  });
+}
+/** Уход с вкладки с несохранённым: вкладка не меняется, полоса «Сохранить» загорается — «Сохраните или отмените». */
+function barLeave(bar) {
+  const s = $("span", bar);
+  if (s) { s.textContent = t("bar.leave"); s.classList.add("ask-warn"); }
+  flashBar(bar);
+}
+
 class AuthError extends Error {}
 async function api(method, path, body, timeoutMs = 0, headers = null) {
   const opt = { method, headers: { ...(headers || {}) }, credentials: "same-origin" };
