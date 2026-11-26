@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from . import config, tlsconf, webfront
+from . import config, srcnet, tlsconf, webfront
 from .i18n import Msg
 
 log = logging.getLogger("awgr.tls")
@@ -285,7 +285,14 @@ class TLSManager:
         try:
             token = self.cf_token(names[0]) if "--dns" in cmd else ""
             env = {**os.environ, "CF_DNS_API_TOKEN": token} if token else None
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=240, env=env)
+            src = srcnet.source()
+            if src:
+                # «С какого адреса выходит сам сервер» (1.25.0): lego к адресу не привязать — свой посредник CONNECT
+                with srcnet.ConnectProxy(src) as px:
+                    env = {**(env or os.environ), "HTTPS_PROXY": px.url, "https_proxy": px.url, "NO_PROXY": ""}
+                    p = subprocess.run(cmd, capture_output=True, text=True, timeout=240, env=env)
+            else:
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=240, env=env)
         except (OSError, subprocess.TimeoutExpired) as e:
             self.error = str(e)[:300]
             log.warning("lego: %s", e)
@@ -475,7 +482,7 @@ def _cf_get(path: str, token: str) -> tuple[int, dict]:
     req = urllib.request.Request(CF_API + path, headers={"Authorization": f"Bearer {token}",
                                                          "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with srcnet.urlopen(req, 10) as r:
             return r.status, json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:

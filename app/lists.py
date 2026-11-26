@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import config, domains
+from . import config, domains, srcnet
 from .i18n import Msg
 
 COUNTRY_SOURCES = [
@@ -239,7 +239,7 @@ def whole_lines(text: str, framed: bool) -> str:
 def _fetch_direct(url: str, timeout: int = 30) -> tuple[str, bool]:
     """→ (текст, framed — у ответа есть Content-Length или chunked)."""
     req = urllib.request.Request(url, headers={"User-Agent": "awg-router/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with srcnet.urlopen(req, timeout) as r:            # с адреса, с которого выходит сам сервер (1.25.0)
         if r.status != 200:
             raise RuntimeError(f"HTTP {r.status}")
         data = _read_limited(r, FETCH_MAX + 1, time.monotonic() + FETCH_DEADLINE)

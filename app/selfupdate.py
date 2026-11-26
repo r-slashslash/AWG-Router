@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from . import config, hostnet, system
+from . import config, hostnet, srcnet, system
 from .i18n import Msg, MsgError
 
 log = logging.getLogger("awgr.selfupdate")
@@ -147,7 +147,10 @@ def start(current: str, target: str | None) -> dict:
     _write_state(s)
     with open(LOG, "w") as f:
         f.write(f"Update from the panel: {current} -> {target or '?'}\n")
-    script = (f'cd "{d}" && bash "{d}/install.sh" --update >>"{d}/data/update.log" 2>&1; '
+    # «С какого адреса выходит сам сервер» (1.25.0): install.sh качает с него (curl --interface, AWGR_FROM)
+    src = srcnet.source()
+    pre = f"AWGR_FROM={src} " if src and re.fullmatch(r"[0-9.]{7,15}", src) else ""
+    script = (f'cd "{d}" && {pre}bash "{d}/install.sh" --update >>"{d}/data/update.log" 2>&1; '
               f'echo "exit=$?" >>"{d}/data/update.log"')
     p = _host(["systemd-run", "--unit", UNIT, "--collect", "--quiet",
                "--description", "AWG Router update", "/bin/bash", "-c", script])

@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 
-from .. import awgconf, config, nftgen, system
+from .. import awgconf, config, nftgen, srcaddr, system
 from ..i18n import Msg
 from ..store import Store
 from .common import APP_DIR
@@ -26,15 +26,23 @@ class DiagMixin:
         (PID, fwmark) — через туннель выхода в сети сервера AWG. Выход выбирается так же,
         как для клиентов: не работает — его резервный выход. direct=False (Telegram, 1.23.0): выбранный выход
         не уводит запрос напрямую и резервом «Напрямую» — такой выход считается неработающим."""
-        if out == "direct" or config.DRY_RUN:
+        st = self.store.snapshot()
+        if (out == "direct" and not srcaddr.main(st)) or config.DRY_RUN:
             return None
-        name = (Store.upstream(self.store.snapshot(), out[3:]) or {}).get("name", out) \
-            if out.startswith("up:") else out
-        eff = self.resolve(out, self.store.snapshot())
-        if eff == "direct":
-            if not direct:
+        name = (Store.upstream(st, out[3:]) or {}).get("name", out) \
+            if out.startswith("up:") else srcaddr.split(out)[1] or out
+        eff = self.resolve(out, st)
+        if isinstance(eff, nftgen.Addr):
+            # «Напрямую — адрес» (1.25.0): из сети сервера AWG с меткой адреса — тем же путём, что клиенты; не работает —
+            # блок выше, а не адрес системы
+            t = self.target
+            if not t:
                 raise system.SysError(Msg("tg.via_down", name=name))
-            return None
+            return t.pid, nftgen.addr_mark(eff.k)
+        if eff == "direct":
+            if not direct and not srcaddr.is_direct(out):
+                raise system.SysError(Msg("tg.via_down", name=name))
+            return None                 # «Напрямую» с адреса системы (выбран он сам или резерв выхода)
         if eff == "block":
             raise system.SysError(Msg("tg.via_blocked", name=name))
         t = self.target

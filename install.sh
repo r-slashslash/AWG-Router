@@ -22,6 +22,10 @@ set -uo pipefail
 
 REPO="${AWGR_REPO:-r-slashslash/AWG-Router}"
 BRANCH="${AWGR_BRANCH:-main}"
+# An update started from the panel downloads from the address the server goes out from (1.25.0, System > "Which
+# address the server itself uses"): the panel passes it as AWGR_FROM. Unset (from the console) - as before.
+curl() { command curl ${AWGR_FROM:+--interface "$AWGR_FROM"} "$@"; }
+
 INSTALL_DIR="${AWGR_DIR:-/opt/awg-router}"
 
 # Downloads the code from GitHub into $1 (settings in .env and data/ are kept).
@@ -219,7 +223,8 @@ random_port() { # $1 min, $2 max, $3 check
 public_ip() {
   local ip=""
   for u in https://api.ipify.org https://ifconfig.me/ip https://ipv4.icanhazip.com; do
-    ip=$(curl -4fsS --max-time 6 "$u" 2>/dev/null | tr -d '[:space:]') && [[ "$ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && { echo "$ip"; return; }
+    # the system's own address, not the panel's chosen one (command curl: past the AWGR_FROM wrapper)
+    ip=$(command curl -4fsS --max-time 6 "$u" 2>/dev/null | tr -d '[:space:]') && [[ "$ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && { echo "$ip"; return; }
   done
   ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'
 }

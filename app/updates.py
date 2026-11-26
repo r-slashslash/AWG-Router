@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.request
 
+from . import srcnet
 from .version import VERSION
 
 log = logging.getLogger("awgr.updates")
@@ -28,7 +29,7 @@ INTERVAL = 6 * 3600
 def release_version() -> str:
     """Версия последнего релиза по адресу, на который переадресует /releases/latest."""
     req = urllib.request.Request(RELEASE_URL, method="HEAD")
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with srcnet.urlopen(req, 20) as r:
         final = r.geturl()
     m = re.search(r"/releases/tag/v?(\d+(?:\.\d+)+)/?$", final)
     if not m:
@@ -38,7 +39,7 @@ def release_version() -> str:
 
 def branch_version() -> str:
     req = urllib.request.Request(URL, headers={"Cache-Control": "no-cache"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with srcnet.urlopen(req, 20) as r:
         text = r.read(4096).decode("utf-8", "replace")
     m = re.search(r'VERSION\s*=\s*"([\d.]+)"', text)
     if not m:

@@ -619,3 +619,13 @@ class AddrsMixin:
             except (OSError, system.SysError) as e:
                 log.warning("Docker networks: %s", e)
         return done
+
+    # ------------------------------------------------------------------ свои соединения сервера
+    def own_src(self, want: str) -> str | None:
+        """Адрес для своих соединений сервера («С какого адреса выходит сам сервер»): выбранный, если он работает и есть
+        в системе, иначе None — адрес системы (не блок: без обновлений и сертификата сервер оставлять нельзя)."""
+        if not want or not self.addr_ok(want):
+            return None
+        if config.DRY_RUN:
+            return want
+        return want if want in self._host_v4() else None

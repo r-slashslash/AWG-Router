@@ -9,7 +9,7 @@ import os
 import re
 import time
 
-from . import config, lists, notify, tgbot
+from . import config, lists, notify, srcnet, tgbot
 from .engine import Engine
 from .i18n import MsgError, to_json
 from .store import Store
@@ -91,6 +91,7 @@ def _fetch_via_exit(url: str) -> tuple[str, bool]:
 
 
 lists.alt_fetch = None if config.DRY_RUN else _fetch_via_exit
+srcnet.source_fn = lambda: engine.own_src(store.peek(lambda st: (st.get("settings") or {}).get("own_src") or ""))
 tls.on_fail = lambda exp: notifier.event(
     "tls", "tls_fail", cooldown=12 * 3600,
     date=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp or 0)))

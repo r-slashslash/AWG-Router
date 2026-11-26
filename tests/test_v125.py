@@ -691,3 +691,70 @@ class ReconnectApiTest(unittest.TestCase):
         self.assertNotIn("reconnect", routing.put_routing(Req({"default": "direct", "rules": [{**r1, "comment": "x"}]})))
         self.assertTrue(routing.put_routing(Req({"default": "direct", "rules": [{**r1, "outbound": "block"}]}))
                         .get("reconnect"))
+
+
+class OwnConnectionsTest(unittest.TestCase):
+    """Свои соединения сервера — с выбранного адреса; перестал работать — адрес системы (не блок)."""
+
+    def test_own_src_falls_back(self):
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e._addr_rt = {A: {"state": "ok"}, B: {"state": "failed"}}
+        self.assertEqual(e.own_src(A), A)
+        self.assertIsNone(e.own_src(B))
+        self.assertIsNone(e.own_src(""))
+
+    def test_urlopen_binds_source(self):
+        from unittest import mock
+        from app import srcnet
+        seen = {}
+
+        class Conn(srcnet.http.client.HTTPSConnection):
+            def __init__(self, host, **kw):
+                seen.update(kw)
+                raise OSError("stop")
+        with mock.patch.object(srcnet, "source_fn", lambda: A), \
+                mock.patch.object(srcnet.http.client, "HTTPSConnection", Conn):
+            with self.assertRaises(OSError):
+                srcnet.urlopen("https://example.com/", 5)
+        self.assertEqual(seen.get("source_address"), (A, 0))
+
+    def test_urlopen_without_source_as_before(self):
+        from unittest import mock
+        from app import srcnet
+        with mock.patch.object(srcnet, "source_fn", lambda: None), \
+                mock.patch.object(srcnet.urllib.request, "urlopen", return_value="r") as u:
+            self.assertEqual(srcnet.urlopen("https://example.com/", 5), "r")
+        u.assert_called_once()
+
+    def test_connect_proxy(self):
+        """Посредник для lego: CONNECT с привязанным адресом (здесь — 127.0.0.1) и пересылка в обе стороны."""
+        import socket
+        import threading
+        from app import srcnet
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+
+        def echo():
+            c, a = srv.accept()
+            c.sendall(b"from " + a[0].encode() + b":" + c.recv(10))
+            c.close()
+        threading.Thread(target=echo, daemon=True).start()
+        with srcnet.ConnectProxy("127.0.0.1") as px:
+            c = socket.create_connection(("127.0.0.1", px.port), timeout=5)
+            c.sendall(f"CONNECT 127.0.0.1:{srv.getsockname()[1]} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+            self.assertIn(b"200", c.recv(100))
+            c.sendall(b"hi")
+            self.assertEqual(c.recv(100), b"from 127.0.0.1:hi")
+            c.close()
+        srv.close()
+
+    def test_installer_curl_from_address(self):
+        """install.sh из панели качает с выбранного адреса (AWGR_FROM), а свой IP узнаёт как раньше."""
+        root = os.path.join(os.path.dirname(__file__), "..")
+        with open(os.path.join(root, "install.sh")) as f:
+            sh = f.read()
+        self.assertIn('curl() { command curl ${AWGR_FROM:+--interface "$AWGR_FROM"} "$@"; }', sh)
+        pub = sh[sh.index("public_ip() {"):sh.index("\n}\n", sh.index("public_ip() {"))]
+        self.assertIn("command curl -4fsS", pub)
