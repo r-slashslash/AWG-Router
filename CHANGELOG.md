@@ -62,8 +62,11 @@ it grows, so every user-visible change gets a new version.
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't
-  answer. The panel resolves a service name itself (cached, `Engine.dns_lookup`; saving from the panel refuses a name
-  that doesn't resolve) and gives dnsproxy.py `tls://name#ip`. On disk and in backups a rule's `dns` keeps only plain
+  answer. A service name on a Direct path is resolved by the panel (cached, `Engine.dns_lookup`) and given to
+  dnsproxy.py as `tls://name#ip`; on a path through an exit the panel doesn't look it up (that query would leave the
+  server past the exit) — dnsproxy.py asks the shared DNS servers through the same exit (`_name_addr`, cached by TTL).
+  Saving from the panel refuses a new name that doesn't resolve the way the rule goes (`Engine.dns_names_check`; through
+  an exit — from the AWG network with the exit's mark). On disk and in backups a rule's `dns` keeps only plain
   addresses and the whole list goes to `dns_all`, so 1.24 asks the usual servers for such a rule instead of failing.
 - **Apply for Iran** uses Shecan's current address `94.232.174.194` (it was `178.22.122.100`, `185.51.200.2`; rules
   made earlier keep theirs).
@@ -71,6 +74,9 @@ it grows, so every user-visible change gets a new version.
   the fallback DNS, then **Domain rules only for addresses from this DNS's answers**; the hints are shorter.
   **System → Panel address** no longer says it doesn't change client addresses.
 - The Telegram bot shows "direct — address".
+- **Route check resolves a name through the client's exit again**: since 1.21.0 (the engine split into a package) the
+  lookup helper imported a module that no longer existed there, the error was swallowed, and names were resolved by
+  the panel's own resolver — on a server in Russia, China or Iran possibly a spoofed address.
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.
 - Going back to 1.24.x: Direct with an address goes from the system address there (not blocked), exits connect from

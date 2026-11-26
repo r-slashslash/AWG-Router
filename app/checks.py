@@ -181,8 +181,8 @@ def rules(st: dict, rules, self_dns: str | None = None, look=None) -> list[dict]
     """Правила «списки → выход» (общие и клиента). self_dns — адрес, на котором слушает DNS на сервере: свой DNS
     правила с ним бесполезен (DNS на сервере не спрашивает сам себя, имена ушли бы к общим серверам), поэтому
     при сохранении из панели он не принимается; копии и выходы проверяют без него, как до 1.22.0. look — при
-    сохранении из панели: имена шифрованных серверов своего DNS должны разбираться (dnsaddr.lookup) — иначе ошибка у
-    поля, а не правило, чьи сайты молча не открываются."""
+    сохранении из панели: имена шифрованных серверов своего DNS должны разбираться тем путём, которым пойдёт правило
+    (Engine.dns_names_check) — иначе ошибка у поля, а не правило, чьи сайты молча не открываются."""
     if not isinstance(rules, list) or len(rules) > config.MAX_RULES:
         bad("err.bad_rules")
     out = []
@@ -240,7 +240,7 @@ def rules(st: dict, rules, self_dns: str | None = None, look=None) -> list[dict]
                 dns = rule_dns(r.get("dns"))
                 if self_dns and any(dnsaddr.host(e) == self_dns for e in dns):
                     bad(Msg("err.rule_dns_self", value=self_dns))
-                dns_names_known(dns, look)
+                dns_names_known(dns, look, out[-1]["outbound"], st)
             if dns:
                 out[-1]["dns"] = dns
     return out
@@ -258,11 +258,14 @@ def rule_dns(v) -> list[str]:
         bad(Msg("err.rule_dns_many", n=RULE_DNS_MAX) if e.why == "many" else Msg("err.rule_dns_bad", value=e.value))
 
 
-def dns_names_known(entries, look) -> None:
-    """Сохранение из панели (look — dnsaddr.lookup): имя шифрованного DNS, у которого нет адреса, — ошибка."""
-    names = dnsaddr.names(entries)
+def dns_names_known(entries, look, out: str = "direct", st: dict | None = None) -> None:
+    """Сохранение из панели: имя шифрованного DNS, у которого нет адреса, — ошибка. look(имена, выход) ищет их тем путём,
+    которым пойдёт правило (Engine.dns_names_check: через выход — через выход). Имена, которые уже стоят в правилах
+    (st), не проверяются: сохранение правил (включить, переставить) не ждёт поиска."""
+    have = {n for r in dnsaddr.rules_of(st) for n in dnsaddr.names(r.get("dns"))} if st else set()
+    names = [n for n in dnsaddr.names(entries) if n not in have]
     if look and names:
-        got = look(names)
+        got = look(names, out)
         for n in names:
             if n not in got:
                 bad(Msg("err.dns_name", name=n))

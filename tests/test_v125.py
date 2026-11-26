@@ -1031,13 +1031,13 @@ class OwnDnsEntriesTest(unittest.TestCase):
         out = checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "tls://dns.google, 77.88.8.8"}])
         self.assertEqual(out[0]["dns"], ["tls://dns.google", "77.88.8.8"])
         for rule, look, key in (({"dns": "tls://10.8.1.1"}, None, "err.rule_dns_self"),     # сам DNS на сервере
-                                ({"dns": "tls://dns.google"}, lambda n: {}, "err.dns_name"),
+                                ({"dns": "tls://dns.google"}, lambda n, o: {}, "err.dns_name"),
                                 ({"dns": "yandex"}, None, "err.rule_dns_bad")):
             with self.assertRaises(HTTPError) as cm:
                 checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", **rule}], "10.8.1.1", look)
             self.assertEqual((cm.exception.detail.key, cm.exception.field), (key, "rule_dns_0"))
         checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "tls://dns.google"}], "10.8.1.1",
-                     lambda n: {"dns.google": "8.8.8.8"})                                    # имя есть — сохраняется
+                     lambda n, o: {"dns.google": "8.8.8.8"})                                 # имя есть — сохраняется
 
     def test_disk_form(self):
         from app import dnsaddr
@@ -1370,3 +1370,125 @@ class NamedEncryptedDnsProcessTest(unittest.TestCase):
         r = self.ask("mitm.example")                  # имя не то, что в сертификате — отказ, обычным не спрашивает
         self.assertEqual(r[3] & 0xF, dnsproxy.RC_SERVFAIL)
         self.assertEqual(self.up.queries, q0)
+
+
+class NameThroughExitTest(unittest.TestCase):
+    """Адрес имени шифрованного DNS (владелец 2026-11-26: «сделать»): у правила через выход панель имя не ищет — адрес
+    спрашивается у общих серверов DNS через этот же выход; «напрямую» — адрес ищет панель. Проверка при сохранении —
+    тем путём, которым пойдёт правило. Заодно: «Проверка маршрута» снова разбирает имя через выход клиента (импорт TGREQ)."""
+
+    EXIT = 0x2001
+
+    def _proxy(self, servers):
+        from app import dnsproxy
+        d = tempfile.mkdtemp()
+        lst = os.path.join(d, "l1.txt")
+        with open(lst, "w") as f:
+            f.write("site.example\n")
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                       "encrypt": "doh", "default": {"mark": 0, "tcp": False}, "routes": {},
+                       "dom": {"lists": {"l1": lst}, "policies": {"p_global": [
+                           [["l1"], {"mark": self.EXIT, "tcp": False}, servers, False]]}, "clients": {}, "set": None}}, f)
+        return dnsproxy.Proxy(conf)
+
+    def _ask(self, p, name):
+        import asyncio
+        from app import dnsproxy
+        from tests.test_v115 import q_msg
+
+        async def go():
+            q = q_msg(name)
+            return await p.resolve(q, dnsproxy.parse_query(q), "10.8.1.5")
+        return asyncio.run(go())
+
+    def test_proxy_finds_the_address_through_the_exit(self):
+        import socket
+        from app import dnsproxy
+        from tests.test_v115 import a_reply
+        p = self._proxy(["tls://dns.google", "77.88.8.8"])
+        calls, plain = [], []
+
+        async def enc(msg, server, mark, mode):
+            calls.append((server, mark, mode))
+            q = dnsproxy.parse_query(msg)
+            if server == "1.1.1.1":                       # общий сервер: адрес имени сервиса
+                return a_reply(msg, ["198.51.100.53"], ttl=300) if q["name"] == "dns.google." else None
+            return a_reply(msg, ["203.0.113.7"])
+
+        async def udp(msg, server, mark):
+            plain.append(server)
+            return a_reply(msg, ["203.0.113.8"])
+        p._enc, p._udp = enc, udp
+        out = self._ask(p, "site.example")
+        self.assertIn(socket.inet_aton("203.0.113.7"), out)
+        self.assertEqual(calls, [("1.1.1.1", self.EXIT, "doh"), ("tls://dns.google#198.51.100.53", self.EXIT, "dot")])
+        self.assertEqual(plain, [])
+        calls.clear()
+        self._ask(p, "www.site.example")
+        self.assertEqual(calls, [("tls://dns.google#198.51.100.53", self.EXIT, "dot")])   # адрес — из кэша
+        # общий сервер адреса не знает — запись не спрашивается, следующая — да
+        p2 = self._proxy(["tls://no-such.example", "77.88.8.8"])
+
+        async def nx(msg, server, mark, mode):
+            calls.append((server, mark, mode))
+            return a_reply(msg, [], rcode=dnsproxy.RC_NXDOMAIN)
+        p2._enc, p2._udp = nx, udp
+        calls.clear()
+        self._ask(p2, "site.example")
+        self.assertEqual([c[0] for c in calls], ["1.1.1.1"])
+        self.assertEqual(plain, ["77.88.8.8"])
+
+    def test_panel_looks_up_only_for_direct(self):
+        from unittest import mock
+        from app import config, dnsaddr, nftgen
+        from app.engine import Engine
+        from app.engine import dns as edns
+        e = Engine.__new__(Engine)
+        with mock.patch.object(config, "DRY_RUN", False), \
+                mock.patch.object(dnsaddr, "lookup", return_value={"dns.google": "8.8.8.8"}) as look:
+            self.assertEqual(e.dns_entries(["tls://dns.google", "77.88.8.8"], direct=False),
+                             ["tls://dns.google", "77.88.8.8"])
+            look.assert_not_called()                                  # через выход — панель не спрашивает
+            self.assertEqual(e.dns_entries(["tls://dns.google"]), ["tls://dns.google#8.8.8.8"])
+        self.assertTrue(edns._direct({"mark": 0}))
+        self.assertTrue(edns._direct({"mark": nftgen.addr_mark(1)}))
+        self.assertFalse(edns._direct({"mark": self.EXIT}))
+        self.assertFalse(edns._direct(None))
+
+    def test_save_check_goes_the_rule_way(self):
+        import types
+        from unittest import mock
+        from app import config
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e.store = mock.Mock(snapshot=lambda: {})
+        e.target = types.SimpleNamespace(pid=4242)
+        e.rt = {"u1": types.SimpleNamespace(num=1)}
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(e, "resolve", return_value=1), \
+                mock.patch.object(Engine, "dns_via_mark", return_value=["8.8.8.8"]) as via, \
+                mock.patch.object(e, "dns_lookup") as direct:
+            self.assertEqual(e.dns_names_check(["dns.google"], "up:u1"), {"dns.google": "8.8.8.8"})
+            self.assertEqual(e.dns_names_check(["dns.google"], "up:u1"), {"dns.google": "8.8.8.8"})
+        self.assertEqual(via.call_count, 1)                           # второй раз — из кэша
+        direct.assert_not_called()                                    # не в сети панели, мимо выхода
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(e, "resolve", return_value="block"):
+            self.assertEqual(e.dns_names_check(["x.example"], "block"), {"x.example": "?"})   # проверить нечем
+        # уже стоящие в правилах имена при сохранении не ищутся
+        st = {**json.loads(json.dumps(DEFAULT_STATE)), "lists": [{"id": "l_dom", "kind": "domains", "name": "x"}]}
+        st["routing"]["rules"] = [{"id": "r1", "lists": ["l_dom"], "outbound": "direct", "dns": ["tls://dns.google"]}]
+        asked = []
+        checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "tls://dns.google, tls://dns.quad9.net"}],
+                     None, lambda n, o: (asked.append((n, o)), {x: "1" for x in n})[1])
+        self.assertEqual(asked, [(["dns.quad9.net"], "direct")])
+
+    def test_route_check_helper_imports(self):
+        import subprocess
+        import types
+        from unittest import mock
+        from app.engine import Engine
+        done = subprocess.CompletedProcess([], 0, stdout=b'{"ips": ["203.0.113.9"]}', stderr=b"")
+        with mock.patch("subprocess.run", return_value=done) as run:
+            self.assertEqual(Engine.dns_via_mark(types.SimpleNamespace(pid=1), 0x2001, "example.org"), ["203.0.113.9"])
+        self.assertIn("tgreq.py", run.call_args[0][0][-2])

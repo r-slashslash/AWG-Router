@@ -584,7 +584,9 @@ class ServerManager:
                 me = self._dns_live() or panel_dns_addr(sc)
                 if me and any(dnsaddr.host(e) == me for e in fb):
                     raise UserError(Msg("srv.fallback_dns_self", value=me))     # спрашивал бы сам себя
-                names = dnsaddr.names(fb)
+                # новые имена (уже вписанные не проверяются: сохранение «Сервера» не ждёт поиска) — в сети панели:
+                # запасной работает только на пути «напрямую»
+                names = [n for n in dnsaddr.names(fb) if n not in dnsaddr.names(cur["settings"].get("fallback_dns"))]
                 got = self.e.dns_lookup(names) if names else {}
                 for n in names:
                     if n not in got:

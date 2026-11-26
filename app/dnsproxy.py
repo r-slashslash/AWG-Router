@@ -21,9 +21,11 @@ TLS-соединения держатся открытыми (пул на пар
 работает), иначе — UDP, а при обрезанном ответе — TCP.
 
 Свой DNS правила по доменам и запасной DNS пути «напрямую» (1.25.0) — записи: «77.88.8.8» — обычный DNS,
-«tls://имя[:порт]» — DoT, «https://имя[:порт]/путь» — DoH; у имени панель дописывает адрес: «tls://dns.google#8.8.8.8»
-(имён в сети сервера AWG не разобрать). Как вписан, так и спрашивается (srv): шифрованный, который не ответил, без
-шифрования не спрашивается; не ответила первая запись — спрашивается вторая.
+«tls://имя[:порт]» — DoT, «https://имя[:порт]/путь» — DoH. Как вписан, так и спрашивается (srv): шифрованный, который не
+ответил, без шифрования не спрашивается; не ответила первая запись — спрашивается вторая. Адрес имени сервиса: на пути
+«напрямую» его дописывает панель («tls://dns.google#8.8.8.8»: в сети сервера AWG системного резолвера нет); на пути через
+выход панель его не ищет (её запрос ушёл бы с сервера мимо выхода, владелец 2026-11-26) — адрес спрашивается у общих
+серверов DNS тем же путём, через выход (_name_addr, кэш по TTL).
 
 Правила по доменам (с 1.21.0, настройка dom). Имя из правила по доменам политики клиента
 разбирается через выход этого правила, а не через основной: соединение с сайтом уйдёт в этот
@@ -97,6 +99,9 @@ RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
 
 # ---------------------------------------------------------------- разбор DNS
 _SRV: dict[str, tuple] = {}
+NAME_TTL_MIN, NAME_TTL_MAX = 60, 3600      # с: адрес имени сервиса DNS держится по TTL ответа в этих пределах
+NAME_FAIL = 60                             # с: не нашёлся — столько не спрашиваем снова
+NAMES_MAX = 256
 
 
 def srv(entry: str) -> tuple:
@@ -126,6 +131,12 @@ def srv(entry: str) -> tuple:
         _SRV.clear()
     _SRV[entry] = out
     return out
+
+
+def a_query(name: str) -> bytes:
+    """Запрос адреса IPv4 имени (с флагом рекурсии)."""
+    labels = b"".join(bytes([len(x)]) + x.encode("ascii") for x in name.rstrip(".").split(".") if x)
+    return struct.pack("!6H", secrets.randbelow(65536), 0x0100, 1, 0, 0, 0) + labels + b"\x00" + struct.pack("!HH", T_A, 1)
 
 
 def skip_name(msg: bytes, off: int) -> int:
@@ -440,6 +451,7 @@ class Proxy:
             self.cache_bytes = 0
             # и «не отвечают напрямую» было о прежних серверах, прежнем шифровании или прежнем запасном
             self.dpaths = {}
+        self.names = {}                              # адреса имён сервисов DNS: пути и общие серверы могли смениться
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -705,6 +717,13 @@ class Proxy:
         servfail = None
         for server in servers or self.cfg.get("upstreams") or []:
             mode = srv(server)[0] if servers else main
+            if servers and mode != "plain" and not srv(server)[1]:
+                # имя сервиса без адреса (путь через выход): адрес — у общих серверов DNS этим же путём
+                addr = await self._name_addr(srv(server)[2], mark, tcp)
+                if not addr:
+                    self._fail(server, "no address")
+                    continue
+                server = server + "#" + addr
             if mode == "plain" and server == self.self_addr:
                 continue        # общий сервер = адрес этого DNS: спрашивал бы сам себя по кругу (Г20 проверки 1.23.0)
             qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
@@ -730,6 +749,29 @@ class Proxy:
             self.last_ok = time.time()
             return reply
         return servfail
+
+    async def _name_addr(self, name: str, mark: int, tcp: bool) -> str | None:
+        """Адрес имени шифрованного сервиса DNS для пути mark — у общих серверов DNS из настроек тем же путём (через
+        выход — через выход). Кэш по (путь, имя) на TTL ответа (NAME_TTL_MIN…NAME_TTL_MAX); не нашёлся — None на
+        NAME_FAIL, чтобы запросы клиентов не ждали его каждый раз."""
+        cache = self.__dict__.setdefault("names", {})
+        now = time.monotonic()
+        hit = cache.get((mark, name))
+        if hit and hit[1] > now:
+            return hit[0]
+        ip, ttl = None, NAME_FAIL
+        try:
+            query = a_query(name)
+            reply = await self.forward(query, parse_query(query), mark, tcp)
+            got = answer_v4(reply) if reply and reply[3] & 0xF == 0 else []
+        except (ValueError, UnicodeError, struct.error, IndexError, TypeError):
+            got = []
+        if got:
+            ip, ttl = got[0][0], max(NAME_TTL_MIN, min(int(got[0][1]), NAME_TTL_MAX))
+        if len(cache) >= NAMES_MAX:
+            cache.clear()
+        cache[(mark, name)] = (ip, now + ttl)
+        return ip
 
     def _fail(self, server: str, e) -> None:
         if isinstance(e, asyncio.TimeoutError):

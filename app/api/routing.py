@@ -57,7 +57,7 @@ def put_routing(req):
         bal = checks.balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
         strict = checks.strict(body["strict"] if "strict" in body else st["routing"].get("strict"))
         st["routing"] = {"default": checks.outbound(st, body.get("default")),
-                         "rules": checks.rules(st, body.get("rules", []), engine.dns_listen(), engine.dns_lookup)}
+                         "rules": checks.rules(st, body.get("rules", []), engine.dns_listen(), engine.dns_names_check)}
         keep_quota_marks(old_rules, st["routing"]["rules"])
         if bal:
             st["routing"]["balance"] = bal

@@ -188,6 +188,11 @@ def for_proxy(entry: str, ips: dict) -> str:
 
 
 # ---------------------------------------------------------------- диск и копии
+def rules_of(st: dict):
+    """Все правила состояния: общие и свои правила клиентов."""
+    return _rules(st)
+
+
 def _rules(st: dict):
     r = st.get("routing")
     if isinstance(r, dict):

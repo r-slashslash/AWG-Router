@@ -70,15 +70,22 @@ class DiagMixin:
             mark = nftgen.mark_for(eff)
             u = next((x for x in st["upstreams"] if x["num"] == eff), None)
             via = "up:" + u["id"] if u else "direct"
-        from .notify import TGREQ
-        p = subprocess.run(["nsenter", "-t", str(t.pid), "-n", "--", sys.executable, TGREQ, str(mark)],
-                           input=json.dumps({"dns": host}).encode() + b"\n", capture_output=True, timeout=20)
+        ips = self.dns_via_mark(t, mark, host)
+        if not ips:
+            raise system.SysError(Msg("tr.no_dns_path"))
+        return ips[0], via
+
+    @staticmethod
+    def dns_via_mark(t, mark: int, host: str) -> list[str]:
+        """Адреса IPv4 имени из сети сервера AWG с меткой пути (tgreq.py: 1.1.1.1 / 8.8.8.8 этим путём); [] — нет."""
+        from ..notify import TGREQ
         try:
+            p = subprocess.run(["nsenter", "-t", str(t.pid), "-n", "--", sys.executable, TGREQ, str(mark)],
+                               input=json.dumps({"dns": host}).encode() + b"\n", capture_output=True, timeout=20)
             ips = json.loads(p.stdout.decode(errors="replace")).get("ips") or []
-            ip = str(ipaddress.IPv4Address(ips[0]))
-        except (ValueError, IndexError, TypeError, AttributeError):
-            raise system.SysError(Msg("tr.no_dns_path")) from None
-        return ip, via
+            return [str(ipaddress.IPv4Address(x)) for x in ips]
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+            return []
 
     def alt_routes(self, via: str) -> list[str]:
         """Другие пути к Telegram, когда выбранный не работает: выходы, которые сейчас работают
