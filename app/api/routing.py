@@ -202,7 +202,8 @@ def add_list(req):
 def country_preset(req):
     """Готовое правило страны (countries.PRESETS): список страны по адресам и список её доменов — готовые или новые;
     с apply — ещё и два правила «Напрямую» в конце общих: по доменам со своим DNS страны и по адресам («Применить
-    для …»), и запасной DNS для «Напрямую» — DNS страны. Без apply — только списки."""
+    для …»), и запасной DNS для «Напрямую» — DNS страны. Правило её доменов уже есть — у него обновляется «Свой DNS»
+    (1.25.0, владелец 2026-11-27: после смены адреса Shecan повторное нажатие даёт нынешний). Без apply — только списки."""
     body = req.json()
     p = countries.preset(body.get("cc"))
     if not p:
@@ -227,7 +228,11 @@ def country_preset(req):
             made.append(dom)
         if body.get("apply"):
             r = st["routing"]
-            # второе нажатие (две открытые вкладки) не добавляет те же правила ещё раз
+            # второе нажатие (две открытые вкладки) не добавляет те же правила ещё раз, а «Свой DNS» уже стоящего
+            # правила доменов страны становится нынешним DNS страны (вписанный руками тоже — как у запасного)
+            for x in r["rules"]:
+                if x["lists"] == [dom] and x["outbound"] == "direct":
+                    x["dns"] = list(p["dns"])
             have = {(tuple(x["lists"]), x["outbound"]) for x in r["rules"]}
             r["rules"] = checks.rules(st, list(r["rules"]) + [x for x in (
                 {"lists": [dom], "outbound": "direct", "enabled": True, "comment": "", "dns": list(p["dns"])},

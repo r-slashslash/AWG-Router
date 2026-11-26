@@ -68,8 +68,9 @@ it grows, so every user-visible change gets a new version.
   Saving from the panel refuses a new name that doesn't resolve the way the rule goes (`Engine.dns_names_check`; through
   an exit — from the AWG network with the exit's mark). On disk and in backups a rule's `dns` keeps only plain
   addresses and the whole list goes to `dns_all`, so 1.24 asks the usual servers for such a rule instead of failing.
-- **Apply for Iran** uses Shecan's current address `94.232.174.194` (it was `178.22.122.100`, `185.51.200.2`; rules
-  made earlier keep theirs).
+- **Apply for Iran** uses Shecan's current address `94.232.174.194` (it was `178.22.122.100`, `185.51.200.2`).
+  Pressing **Apply for …** again sets the country's current DNS in its existing domain rule too (a DNS typed there by
+  hand is replaced, like the fallback DNS); before, the button left that rule as it was.
 - **Server → DNS**: **DNS query encryption** comes right under **DNS on the server** (it is for those servers), then
   the fallback DNS, then **Domain rules only for addresses from this DNS's answers**; the hints are shorter.
   **System → Panel address** no longer says it doesn't change client addresses.

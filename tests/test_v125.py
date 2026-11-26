@@ -1275,6 +1275,15 @@ class FallbackDnsSettingTest(unittest.TestCase):
             s = panel.store.snapshot()["settings"]
             self.assertEqual((s["fallback_dns"], s["fallback_dns_on"]), (["94.232.174.194"], True))
             self.assertEqual(panel.store.snapshot()["routing"]["rules"][0]["dns"], ["94.232.174.194"])
+            # правило `.ir` прежней кнопки (адреса Shecan до 2026) или с DNS, вписанным руками: повторное нажатие
+            # обновляет его «Свой DNS» и не добавляет второе правило (владелец 2026-11-27)
+            panel.store.mutate(lambda st: st["routing"]["rules"][0].update(dns=["178.22.122.100", "185.51.200.2"]))
+            panel.store.mutate(lambda st: st["routing"]["rules"][1].update(enabled=False))
+            routing.country_preset(Req({"cc": "ir", "apply": True}))
+            rules = panel.store.snapshot()["routing"]["rules"]
+            self.assertEqual(len(rules), 2)
+            self.assertEqual(rules[0]["dns"], ["94.232.174.194"])
+            self.assertFalse(rules[1]["enabled"])                        # остальное в правилах — как было
         finally:
             panel.store.mutate(lambda st: st["routing"].update(rules=[]))
 
