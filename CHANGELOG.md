@@ -35,7 +35,8 @@ it grows, so every user-visible change gets a new version.
   own (`OWN_SETTINGS`), places with an address this server doesn't have go to the main one and the panel says where.
 - **Open connections follow a manual change**: saving routing, a client, an exit or an address window compares every
   client's path before and after and closes only the connections whose path changed — conntrack entries in the AWG
-  network over netlink (`ctflush.py`, by client and destination), the domain handler's own connections
+  network over netlink (`ctflush.py`, by client and destination; only the clients' entries are kept in memory, not the
+  whole table of a busy server), the domain handler's own connections
   (`sniproxy.drop`) and QUIC verdicts of clients whose domain rules changed — then says "Open connections will
   reconnect over the new path". Load balancing moves and fallbacks close nothing, as before.
 - **The server's own connections** (panel updates, lists, lego through a local CONNECT proxy, `install.sh` via
@@ -62,11 +63,13 @@ it grows, so every user-visible change gets a new version.
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't
-  answer. A service name on a Direct path is resolved by the panel (cached, `Engine.dns_lookup`) and given to
-  dnsproxy.py as `tls://name#ip`; on a path through an exit the panel doesn't look it up (that query would leave the
-  server past the exit) — dnsproxy.py asks the shared DNS servers through the same exit (`_name_addr`, cached by TTL).
-  Saving from the panel refuses a new name that doesn't resolve the way the rule goes (`Engine.dns_names_check`; through
-  an exit — from the AWG network with the exit's mark). On disk and in backups a rule's `dns` keeps only plain
+  answer. A service name on the Direct path from the system address is resolved by the panel (cached,
+  `Engine.dns_lookup`) and given to dnsproxy.py as `tls://name#ip`; on a path through an exit or **Direct — address** the
+  panel doesn't look it up (that query would leave the server past the exit or from the system address) — dnsproxy.py
+  looks it up the same way (`_name_addr`, cached by TTL): the shared DNS servers through that exit or from that address;
+  from an address, when they don't answer, also the fallback entries that are addresses and the shared servers as plain
+  DNS. Saving from the panel refuses a new name that doesn't resolve the way the rule goes (`Engine.dns_names_check`;
+  through an exit or from an address — from the AWG network with that mark). On disk and in backups a rule's `dns` keeps only plain
   addresses and the whole list goes to `dns_all`, so 1.24 asks the usual servers for such a rule instead of failing.
 - **Apply for Iran** uses Shecan's current address `94.232.174.194` (it was `178.22.122.100`, `185.51.200.2`).
   Pressing **Apply for …** again makes the country's rules what the first press made: Direct, on, the domain rule with

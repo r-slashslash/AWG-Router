@@ -184,9 +184,11 @@ asks the fallback DNS (`direct_fallback`: **Server → Fallback DNS for "Direct"
 them again with one query in the background; a fallback that doesn't answer is skipped the same way. Paths through an
 exit and names of a domain rule without a path (its exit down or "Block") never fall back.
 A rule's own DNS and the fallback DNS are entries (`app/dnsaddr.py`): an IPv4 (plain DNS), `https://name/path` (DoH) or
-`tls://name` (DoT), each asked exactly as written (`dnsproxy.srv`). A service name on a Direct path is resolved by the
-panel (`Engine.dns_lookup`) and passed as `tls://name#ip`; on a path through an exit dnsproxy.py asks the shared DNS
-servers through that exit (`_name_addr`), so the lookup never leaves past the exit. On disk and in backups a rule's `dns` keeps the plain addresses only,
+`tls://name` (DoT), each asked exactly as written (`dnsproxy.srv`). A service name on the Direct path from the system
+address is resolved by the panel (`Engine.dns_lookup`) and passed as `tls://name#ip`; on a path through an exit or
+**Direct — address** dnsproxy.py looks it up the same way (`_name_addr`): the shared DNS servers through that exit or from
+that address (from an address also the fallback entries that are addresses, then the shared servers as plain DNS, when
+they don't answer encrypted), so the lookup never leaves past the exit or from another address. On disk and in backups a rule's `dns` keeps the plain addresses only,
 the whole list goes to `dns_all` (`dnsaddr.to_disk` / `from_disk`), so an older panel asks the usual servers instead.
 
 The panel looks at the handler every second: it touches a heartbeat file every second, and a handler that

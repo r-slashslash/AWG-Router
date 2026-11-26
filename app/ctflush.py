@@ -59,8 +59,10 @@ def raw_attr(data: bytes, want: int) -> bytes | None:
     return None
 
 
-def entry(payload: bytes) -> dict | None:
-    """Сообщение ctnetlink (после nfgenmsg) → {"src", "dst", "proto", "dport", "mark", "tuple", "extra"}."""
+def entry(payload: bytes, want: set | frozenset | None = None) -> dict | None:
+    """Сообщение ctnetlink (после nfgenmsg) → {"src", "dst", "proto", "dport", "mark", "tuple", "extra"}. want — адреса
+    клиентов, чьи записи нужны: запись другого отправителя — None сразу после адреса, без разбора остального (в таблице
+    сервера сотни тысяч чужих соединений: Docker, сайты, другие программы — их в памяти не держим)."""
     a = attrs(payload)
     orig = a.get(CTA_TUPLE_ORIG)
     if orig is None:
@@ -69,12 +71,15 @@ def entry(payload: bytes) -> dict | None:
     ip = attrs(t.get(CTA_TUPLE_IP, b""))
     if CTA_IP_V4_SRC not in ip or CTA_IP_V4_DST not in ip:
         return None
+    src = socket.inet_ntoa(ip[CTA_IP_V4_SRC])
+    if want is not None and src not in want:
+        return None
     pr = attrs(t.get(CTA_TUPLE_PROTO, b""))
     proto = pr.get(CTA_PROTO_NUM, b"\0")[0]
     dport = struct.unpack("!H", pr[CTA_PROTO_DST_PORT])[0] if CTA_PROTO_DST_PORT in pr else 0
     mark = struct.unpack("!I", a[CTA_MARK])[0] if len(a.get(CTA_MARK, b"")) == 4 else 0
     extra = b"".join(x for x in (raw_attr(payload, CTA_ZONE), raw_attr(payload, CTA_ID)) if x)
-    return {"src": socket.inet_ntoa(ip[CTA_IP_V4_SRC]), "dst": socket.inet_ntoa(ip[CTA_IP_V4_DST]), "proto": proto,
+    return {"src": src, "dst": socket.inet_ntoa(ip[CTA_IP_V4_DST]), "proto": proto,
             "dport": dport, "mark": mark, "tuple": raw_attr(payload, CTA_TUPLE_ORIG), "extra": extra}
 
 
@@ -95,7 +100,8 @@ def messages(data: bytes):
         i += (ln + 3) & ~3
 
 
-def dump(sock: socket.socket) -> list[dict]:
+def dump(sock: socket.socket, want: set | frozenset | None = None) -> list[dict]:
+    """Все записи conntrack (want — только записи этих отправителей, см. entry)."""
     sock.send(_msg(IPCTNL_MSG_CT_GET, NLM_F_REQUEST | NLM_F_DUMP, 1, b""))
     out = []
     while True:
@@ -110,7 +116,7 @@ def dump(sock: socket.socket) -> list[dict]:
                 if err:
                     raise OSError(-err, "ctnetlink dump")
                 continue
-            e = entry(body[4:])
+            e = entry(body[4:], want)
             if e:
                 out.append(e)
     return out
@@ -194,8 +200,7 @@ def main() -> None:
     with socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_NETFILTER) as s:
         s.bind((0, 0))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 22)
-        entries = dump(s)
-        mine = [e for e in entries if e["src"] in (job.get("clients") or {}) or e["src"] in (job.get("quic") or ())]
+        mine = dump(s, frozenset(job.get("clients") or {}) | frozenset(job.get("quic") or ()))
         todo = changed(job, mine)
         print(json.dumps({"seen": len(mine), "deleted": delete(s, todo)}))
 

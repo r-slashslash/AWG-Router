@@ -599,6 +599,30 @@ class CtFlushTest(unittest.TestCase):
         self.assertTrue(e["tuple"].startswith(b"\x00") or e["tuple"])
         self.assertIn(b"\x07", e["extra"])          # номер записи — в запросе на удаление (не удалить чужую)
 
+    def test_only_clients_kept(self):
+        """Записи других отправителей (Docker, сайты, программы хоста) не разбираются дальше адреса и не копятся в
+        памяти: на нагруженном сервере их сотни тысяч (проверка 1.25.0, А12)."""
+        import struct
+        from app import ctflush
+        want = frozenset({"10.8.1.2"})
+        self.assertIsNone(ctflush.entry(self.message("172.17.0.5", "8.8.8.8"), want))
+        self.assertEqual(ctflush.entry(self.message("10.8.1.2", "8.8.8.8"), want)["dst"], "8.8.8.8")
+        self.assertEqual(ctflush.entry(self.message("172.17.0.5", "8.8.8.8"))["src"], "172.17.0.5")    # без want — все
+
+        def nl(body):                                # сообщение netlink: заголовок, nfgenmsg, тело
+            return struct.pack("=IHHII", 20 + len(body), (1 << 8), 2, 1, 0) + struct.pack("=BBH", 2, 0, 0) + body
+        blob = b"".join(nl(self.message(s, "1.1.1.1")) for s in ("10.8.1.2", "172.17.0.5", "10.8.1.2", "192.0.2.9")) \
+            + struct.pack("=IHHII", 20, ctflush.NLMSG_DONE, 2, 1, 0) + b"\0" * 4
+
+        class Sock:
+            def send(self, data):
+                pass
+
+            def recv(self, n):
+                return blob
+        self.assertEqual([e["src"] for e in ctflush.dump(Sock(), want)], ["10.8.1.2", "10.8.1.2"])
+        self.assertEqual(len(ctflush.dump(Sock())), 4)
+
     def test_changed(self):
         from app import ctflush
         E = lambda src, dst, **kw: ctflush.entry(self.message(src, dst, **kw))  # noqa: E731
@@ -1472,10 +1496,11 @@ class NameThroughExitTest(unittest.TestCase):
                              ["tls://dns.google", "77.88.8.8"])
             look.assert_not_called()                                  # через выход — панель не спрашивает
             self.assertEqual(e.dns_entries(["tls://dns.google"]), ["tls://dns.google#8.8.8.8"])
-        self.assertTrue(edns._direct({"mark": 0}))
-        self.assertTrue(edns._direct({"mark": nftgen.addr_mark(1)}))
-        self.assertFalse(edns._direct({"mark": self.EXIT}))
-        self.assertFalse(edns._direct(None))
+        # панель ищет имя только для пути с адреса системы; «Напрямую — адрес» — сам dnsproxy.py с этого адреса (А11)
+        self.assertTrue(edns._system({"mark": 0}))
+        self.assertFalse(edns._system({"mark": nftgen.addr_mark(1)}))
+        self.assertFalse(edns._system({"mark": self.EXIT}))
+        self.assertFalse(edns._system(None))
 
     def test_save_check_goes_the_rule_way(self):
         import types
@@ -1502,6 +1527,107 @@ class NameThroughExitTest(unittest.TestCase):
         checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "tls://dns.google, tls://dns.quad9.net"}],
                      None, lambda n, o: (asked.append((n, o)), {x: "1" for x in n})[1])
         self.assertEqual(asked, [(["dns.quad9.net"], "direct")])
+
+    def test_save_check_from_the_address(self):
+        """«Напрямую — адрес»: новое имя при сохранении ищется с этого адреса (метка адреса, tgreq.py), а не в сети
+        панели с адреса системы (проверка 1.25.0, А11)."""
+        import types
+        from unittest import mock
+        from app import config, nftgen
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e.store = mock.Mock(snapshot=lambda: {})
+        e.target = types.SimpleNamespace(pid=4242)
+        e.rt = {}
+        with mock.patch.object(config, "DRY_RUN", False), \
+                mock.patch.object(e, "resolve", return_value=nftgen.Addr("198.51.100.7", 2)), \
+                mock.patch.object(Engine, "dns_via_mark", return_value=["8.8.8.8"]) as via, \
+                mock.patch.object(e, "dns_lookup") as panel:
+            self.assertEqual(e.dns_names_check(["dns.google"], "direct@198.51.100.7"), {"dns.google": "8.8.8.8"})
+        self.assertEqual(via.call_args[0][1:], (nftgen.addr_mark(2), "dns.google"))
+        panel.assert_not_called()
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(e, "resolve", return_value="direct"), \
+                mock.patch.object(e, "dns_lookup", return_value={"dns.google": "8.8.4.4"}) as panel:
+            self.assertEqual(e.dns_names_check(["dns.google"], "direct"), {"dns.google": "8.8.4.4"})
+        panel.assert_called_once()                                    # с адреса системы — в сети панели, как было
+
+    def test_rule_from_an_address_gets_no_panel_address(self):
+        """Правило «Напрямую — адрес» со своим DNS по имени: dnsproxy.py получает запись без адреса, который нашла бы
+        панель (А11), а правило «Напрямую» — с ним."""
+        from unittest import mock
+        from app import config, dnsaddr, nftgen
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        a = nftgen.Addr("198.51.100.7", 1)
+        pol = {"rules": [], "default": "direct", "domain": [(["l1"], "direct@198.51.100.7"), (["l2"], "direct")],
+               "dns": [(["l1"], "direct@198.51.100.7", ["tls://dns.google"]), (["l2"], "direct", ["tls://dns.google"])]}
+        with mock.patch.object(config, "DRY_RUN", False), \
+                mock.patch.object(Engine, "_policies", return_value=(pol, {})), \
+                mock.patch.object(Engine, "_up_list", return_value=[]), \
+                mock.patch.object(Engine, "sticky_nums", return_value=set()), \
+                mock.patch.object(Engine, "resolve", side_effect=lambda o, st: a if o.startswith("direct@") else o), \
+                mock.patch.object(dnsaddr, "lookup", return_value={"dns.google": "8.8.8.8"}):
+            e.rt = {}
+            dom = e.dns_domains({"upstreams": []}, False)
+        rules = next(iter(dom["policies"].values()))
+        self.assertEqual(rules[0][1], {"mark": nftgen.addr_mark(1), "tcp": False})
+        self.assertEqual(rules[0][2], ["tls://dns.google"])
+        self.assertEqual(rules[1][2], ["tls://dns.google#8.8.8.8"])
+
+    def test_proxy_finds_the_address_from_the_address(self):
+        """dnsproxy.py на пути «Напрямую — адрес»: адрес, который дописала панель, не берётся — имя ищется этим путём:
+        у общих серверов, если они не ответили — у запасного с адресом, потом у общих без шифрования (А11). Путь через
+        выход — только у общих серверов, как было."""
+        import asyncio
+        import socket
+        from app import dnsproxy, nftgen
+        from tests.test_v115 import a_reply, q_msg
+        m = nftgen.addr_mark(1)
+        d = tempfile.mkdtemp()
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                       "encrypt": "doh", "default": {"mark": m, "tcp": False}, "routes": {},
+                       "direct_fallback": ["tls://dns.google#8.8.8.8", "77.88.8.8"],
+                       "addr_marks": [nftgen.ADDR_LO, nftgen.ADDR_HI]}, f)
+        p = dnsproxy.Proxy(conf)
+        calls = []
+
+        async def enc(msg, server, mark, mode):
+            calls.append((server, mark, mode))
+            q = dnsproxy.parse_query(msg)
+            if server == "1.1.1.1":
+                return None                               # общие по DoH этим путём не отвечают (Россия)
+            return a_reply(msg, ["203.0.113.7"]) if q["name"] == "site.example." else None
+
+        async def udp(msg, server, mark):
+            calls.append((server, mark, "plain"))
+            q = dnsproxy.parse_query(msg)
+            if server == "77.88.8.8" and q["name"] == "dns.google.":
+                return a_reply(msg, ["198.51.100.53"])
+            return None
+
+        async def tcp(msg, server, mark):
+            return None
+        p._enc, p._udp, p._tcp = enc, udp, tcp
+
+        async def go(name):
+            q = q_msg(name)
+            return await p.resolve(q, dnsproxy.parse_query(q), "10.8.1.5")
+        out = asyncio.run(go("site.example"))
+        self.assertIn(socket.inet_aton("203.0.113.7"), out)
+        self.assertNotIn(("tls://dns.google#8.8.8.8", m, "dot"), calls)          # подсказка панели не взята
+        self.assertIn(("tls://dns.google#198.51.100.53", m, "dot"), calls)       # адрес — найден этим путём
+        self.assertTrue(all(c[1] == m for c in calls))                           # всё — с меткой адреса
+        # общие не ответили (путь «не отвечает»): имя сервиса — у запасного с адресом, без ожидания общих по DoH
+        self.assertEqual([c for c in calls if c[0] == "77.88.8.8"][0], ("77.88.8.8", m, "plain"))
+        self.assertEqual(calls.count(("1.1.1.1", m, "doh")), 1)
+        # «напрямую» с адреса системы — подсказка панели остаётся
+        self.assertEqual(dnsproxy._no_hint("tls://dns.google#8.8.8.8"), "tls://dns.google")
+        self.assertEqual(dnsproxy._no_hint("77.88.8.8"), "77.88.8.8")
+        self.assertTrue(dnsproxy._literal("tls://1.1.1.1:853"))
+        self.assertTrue(dnsproxy._literal("77.88.8.8"))
+        self.assertFalse(dnsproxy._literal("https://dns.google/dns-query#8.8.8.8"))
 
     def test_route_check_helper_imports(self):
         import subprocess
@@ -1533,7 +1659,8 @@ class InPanelQuestionsTest(unittest.TestCase):
     def test_ask(self):
         self.assertIn('from.closest("dialog[open]")', self.js)      # кнопка в окне — вопрос внизу окна
         self.assertIn('$("#askbar")', self.js)
-        html = open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "index.html"), encoding="utf-8").read()
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "index.html"), encoding="utf-8") as f:
+            html = f.read()
         self.assertLess(html.index('id="askbar"'), html.index('<main id="main">'))   # опрос перерисовывает только main
         self.assertIn('if (askDone) askDone(false);', self.js.split("function goTab", 1)[1][:200])
 

@@ -84,7 +84,7 @@ class DnsMixin:
                 for lids, o, servers in p["dns"]:
                     eff = self.resolve(o, st)
                     r = route(eff) if eff != "block" else None
-                    rules.append([list(lids), r, self.dns_entries(servers, _direct(r)),
+                    rules.append([list(lids), r, self.dns_entries(servers, _system(r)),
                                   with_set and tuple(lids) in in_dom])
             else:
                 for lids, o in p.get("domain") or ():
@@ -103,18 +103,20 @@ class DnsMixin:
                 "set": [config.NFT_TABLE, nftgen.DOM_SET] if with_set and pols else None}
 
     def dns_entries(self, entries, direct: bool = True) -> list[str]:
-        """Записи своего или запасного DNS для dnsproxy.py. На пути «напрямую» у имени шифрованного сервиса — его адрес
-        (dnsaddr.for_proxy; из кэша, устаревшие и новые разбираются здесь, не дольше dnsaddr.LOOKUP_TIMEOUT). На пути
-        через выход (direct=False) панель имя не разбирает: её запрос ушёл бы с сервера мимо выхода (владелец 2026-11-26),
-        адрес найдёт dnsproxy.py у общих серверов DNS через этот выход."""
+        """Записи своего или запасного DNS для dnsproxy.py. На пути «напрямую» с адреса системы у имени шифрованного
+        сервиса — его адрес (dnsaddr.for_proxy; из кэша, устаревшие и новые разбираются здесь, не дольше
+        dnsaddr.LOOKUP_TIMEOUT): панель в сети хоста выходит с того же адреса. На пути через выход и «Напрямую — адрес»
+        (direct=False) панель имя не разбирает: её запрос ушёл бы с сервера мимо выхода (владелец 2026-11-26) или с адреса
+        системы, а не с выбранного (проверка 1.25.0, А11) — адрес найдёт dnsproxy.py тем же путём (_name_addr)."""
         entries = [e for e in entries or () if isinstance(e, str)]
         ips = self.dns_lookup(dnsaddr.names(entries)) if direct else {}
         return [dnsaddr.for_proxy(e, ips) for e in entries]
 
     def dns_names_check(self, names, out: str) -> dict[str, str]:
         """Сохранение правила из панели: находятся ли имена шифрованного своего DNS — тем путём, которым пойдёт правило
-        (out — его выход): через выход — запросом из сети сервера AWG с меткой выхода (tgreq.py, как «Проверка маршрута»),
-        «напрямую» — в сети панели (dns_lookup). Проверить нечем (выход не работает, блок, демо) — все имена «есть»."""
+        (out — его выход): через выход и «Напрямую — адрес» — запросом из сети сервера AWG с меткой пути (tgreq.py, как
+        «Проверка маршрута»), «напрямую» с адреса системы — в сети панели (dns_lookup). Проверить нечем (выход не
+        работает, блок, демо) — все имена «есть»."""
         names = list(names)
         if not names:
             return {}
@@ -125,18 +127,21 @@ class DnsMixin:
             eff = "block"
         if config.DRY_RUN or eff == "block":
             return {n: "?" for n in names}
-        if eff == "direct" or isinstance(eff, nftgen.Addr):
+        if eff == "direct":
             return self.dns_lookup(names)
         t = getattr(self, "target", None)
-        if not t or eff not in {r.num for r in self.rt.values()}:
+        addr = isinstance(eff, nftgen.Addr)
+        if not t or not addr and eff not in {r.num for r in self.rt.values()}:
             return {n: "?" for n in names}
-        cache = self.__dict__.setdefault("_dns_via", {})      # (выход, имя) → (адрес | None, когда)
+        # через выход — с его меткой; «Напрямую — адрес» — с меткой адреса (с него, а не с адреса системы, А11)
+        mark = nftgen.addr_mark(eff.k) if addr else nftgen.mark_for(eff)
+        cache = self.__dict__.setdefault("_dns_via", {})      # (метка пути, имя) → (адрес | None, когда)
         now, got = time.monotonic(), {}
         for n in names:
-            hit = cache.get((eff, n))
+            hit = cache.get((mark, n))
             if not hit or now - hit[1] > (NAME_EVERY if hit[0] else NAME_RETRY):
-                ips = self.dns_via_mark(t, nftgen.mark_for(eff), n)
-                hit = cache[(eff, n)] = (ips[0] if ips else None, now)
+                ips = self.dns_via_mark(t, mark, n)
+                hit = cache[(mark, n)] = (ips[0] if ips else None, now)
             if hit[0]:
                 got[n] = hit[0]
         return got
@@ -292,6 +297,6 @@ def _down(ok_at, fail_at) -> bool:
     return f > float(ok_at or 0) and time.time() - f < 900
 
 
-def _direct(route) -> bool:
-    """Путь запросов DNS — «напрямую» (с адреса системы или «Напрямую — адрес»), а не через выход и не блок."""
-    return bool(route) and (not route.get("mark") or nftgen.ADDR_LO <= int(route["mark"]) <= nftgen.ADDR_HI)
+def _system(route) -> bool:
+    """Путь запросов DNS — «напрямую» с адреса системы (метка 0): только на нём адрес имени сервиса DNS ищет панель."""
+    return bool(route) and not route.get("mark")
