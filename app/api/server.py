@@ -12,10 +12,12 @@ from ..panel import (app, engine, panel_url, store, tls, updates,
                      user_errors, write_status)
 from ..users import UserError
 from ..version import VERSION
-from .. import checks
+from .. import checks, srcaddr
 
 # Ошибки настроек сервера (users.update_server) → поле формы «Сервер»; ошибки параметров AWG — по ключу
 SERVER_FIELDS = {"srv.bad_host": "public_host", "srv.bad_extra_host": "extra_hosts",
+                 "srv.bad_out_host": "out_hosts", "srv.out_hosts_max": "out_hosts", "srv.bad_out_main": "out_main",
+                 "srv.out_main_removed": "out_main",
                  "srv.bad_client_host": "client_host", "srv.bad_dns": "client_dns", "srv.dns_v6": "client_dns",
                  "srv.bad_mtu": "client_mtu", "srv.bad_keepalive": "client_keepalive",
                  "srv.bad_dns_enc": "panel_dns_enc", "srv.bad_port": "port", "srv.port_failed": "port",
@@ -76,6 +78,12 @@ def put_server(req):
         res = engine.srv.update_server(body)
     except (UserError, MsgError) as e:
         bad(e.msg, field=server_field(e.msg))
+    if "confirm" in res:
+        return res                     # браузер спросит «Да / Нет» и пришлёт снова (адреса не сохранены)
+    # адреса: проверить сейчас; сохранили снова — и неработавшие проверяются с начала
+    if "out_hosts" in body or "extra_hosts" in body or "client_host" in body:
+        st = store.snapshot()
+        engine.addrs_wake(retry=[*srcaddr.out_hosts(st), *engine.inbound_ips(st)])
     engine.reconcile_soon()
     if tls.names() != names:
         tls.reconfigure()              # адрес панели или второй адрес сертификата сменился

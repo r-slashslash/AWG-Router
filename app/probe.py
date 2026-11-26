@@ -1,6 +1,7 @@
 """Проверка выхода. Запускается внутри сети контейнера Amnezia:
-    nsenter -t PID -n -- python3 probe.py <fwmark> [--udp] [имя=IP ...]
-Помечает свои сокеты fwmark'ом, поэтому идёт тем же путём, что и трафик клиентов.
+    nsenter -t PID -n -- python3 probe.py <fwmark> [--udp] [--src=IP] [имя=IP ...]
+Помечает свои сокеты fwmark'ом, поэтому идёт тем же путём, что и трафик клиентов. --src (1.25.0) — сокеты
+привязаны к этому адресу сервера: так проверяется добавленный адрес (выходит ли с него интернет).
 Печатает JSON: внешний IP, страна, задержка, для --udp — проходит ли UDP (QUIC)."""
 import ipaddress
 import json
@@ -15,6 +16,7 @@ SO_MARK = 36
 MARK = 0          # аргументы — в main(): модуль импортируют и тесты
 UDP = False
 HOSTS: dict = {}  # адреса, которые панель разобрала сама: резолвера контейнера Amnezia может не быть
+SRC = ""          # адрес отправителя (--src)
 TARGETS = ("1.1.1.1", "8.8.8.8")
 
 
@@ -26,6 +28,8 @@ def sock(host, port, timeout=6, kind=socket.SOCK_STREAM):
             s.setsockopt(socket.SOL_SOCKET, SO_MARK, MARK)
         s.settimeout(timeout)
         try:
+            if SRC:
+                s.bind((SRC, 0))
             if kind == socket.SOCK_STREAM:
                 s.connect(addr)
             return s, addr
@@ -151,10 +155,11 @@ def udp_ok(timeout=3):
 
 
 def main():
-    global MARK, UDP, HOSTS
+    global MARK, UDP, HOSTS, SRC
     MARK = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     UDP = "--udp" in sys.argv[2:]
-    HOSTS = dict(a.split("=", 1) for a in sys.argv[2:] if "=" in a)
+    SRC = next((a[6:] for a in sys.argv[2:] if a.startswith("--src=")), "")
+    HOSTS = dict(a.split("=", 1) for a in sys.argv[2:] if "=" in a and not a.startswith("--"))
     res = {"ok": False}
     lat, err = [], None
     for host in TARGETS:

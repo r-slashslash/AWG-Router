@@ -26,6 +26,7 @@ from ..i18n import Msg, msg_of
 from ..store import TEXT_KINDS, Store
 from ..traffic import Traffic
 from ..users import ServerManager
+from .addrs import AddrsMixin
 from .common import DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, UpRT, _sha, log
 from .diag import DiagMixin
 from .dns import DnsMixin
@@ -45,7 +46,7 @@ CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
 
 
-class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMixin, DiagMixin):
+class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMixin, DiagMixin, AddrsMixin):
     def __init__(self, store: Store):
         self.store = store
         self.lock = threading.RLock()
@@ -163,6 +164,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         threading.Thread(target=self._loop, name="reconcile", daemon=True).start()
         threading.Thread(target=self._lists_loop, name="lists", daemon=True).start()
         threading.Thread(target=self._detect_host, name="public-ip", daemon=True).start()
+        threading.Thread(target=self._watch_addrs, name="addresses", daemon=True).start()    # адреса сервера (1.25.0)
         threading.Thread(target=self._watch_sni, name="sni-watch", daemon=True).start()
         if not config.DRY_RUN:
             threading.Thread(target=self._watch_connecting, name="exit-connecting", daemon=True).start()

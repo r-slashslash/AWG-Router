@@ -61,6 +61,8 @@ TEXTS = {
         "late": "🕓 Событие произошло {time}: сообщение ждало, пока появится связь с Telegram.",
         "exit_down": "⚠️ Выход «{name}» перестал работать. Клиенты, которые шли через него, переключены на резервный выход.",
         "exit_up": "✅ Выход «{name}» снова работает.",
+        "addr_down": "⚠️ Исходящий адрес {addr} перестал работать. Всё, что шло с него, заблокировано; выходы, которые подключались с него, — на резервных.",
+        "addr_up": "✅ Исходящий адрес {addr} снова работает.",
         "exit_quota": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца трафик идёт через «{to}».",
         "exit_quota_direct": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца трафик идёт напрямую.",
         "exit_quota_block": "📦 Выход «{name}»: исчерпан лимит {gb} ГБ за месяц. До начала следующего месяца трафик заблокирован.",
@@ -120,6 +122,8 @@ TEXTS = {
         "late": "🕓 This happened at {time}: the message waited until Telegram became reachable.",
         "exit_down": "⚠️ Exit “{name}” stopped working. Clients that used it have been switched to the fallback exit.",
         "exit_up": "✅ Exit “{name}” is working again.",
+        "addr_down": "⚠️ Outgoing address {addr} stopped working. Everything that went from it is blocked; exits that connected from it are on their fallbacks.",
+        "addr_up": "✅ Outgoing address {addr} is working again.",
         "exit_quota": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Until next month traffic goes through “{to}”.",
         "exit_quota_direct": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Until next month traffic goes direct.",
         "exit_quota_block": "📦 Exit “{name}”: the monthly {gb} GB limit is used up. Until next month traffic is blocked.",
@@ -179,6 +183,8 @@ TEXTS = {
         "late": "🕓 事件发生于 {time}：消息一直等到能连上 Telegram 才发出。",
         "exit_down": "⚠️ 出口“{name}”已停止工作。经由它的客户端已切换到备用出口。",
         "exit_up": "✅ 出口“{name}”已恢复工作。",
+        "addr_down": "⚠️ 出站地址 {addr} 已停止工作。经由它的流量都已阻止；从它连接的出口已切换到备用。",
+        "addr_up": "✅ 出站地址 {addr} 已恢复工作。",
         "exit_quota": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量经由“{to}”。",
         "exit_quota_direct": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量直连。",
         "exit_quota_block": "📦 出口“{name}”：本月 {gb} GB 流量限额已用完。下个月之前流量被阻止。",
@@ -238,6 +244,8 @@ TEXTS = {
         "late": "🕓 این رویداد در {time} رخ داد: پیام تا برقراری ارتباط با تلگرام منتظر ماند.",
         "exit_down": "⚠️ خروجی «{name}» از کار افتاد. کلاینت‌هایی که از آن می‌رفتند به خروجی پشتیبان منتقل شدند.",
         "exit_up": "✅ خروجی «{name}» دوباره کار می‌کند.",
+        "addr_down": "⚠️ آدرس خروجی {addr} از کار افتاد. هر چه از آن می‌رفت مسدود شد؛ خروجی‌هایی که از آن وصل می‌شدند روی پشتیبان هستند.",
+        "addr_up": "✅ آدرس خروجی {addr} دوباره کار می‌کند.",
         "exit_quota": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک از «{to}» می‌رود.",
         "exit_quota_direct": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک مستقیم می‌رود.",
         "exit_quota_block": "📦 خروجی «{name}»: سقف ماهانهٔ {gb} گیگابایت تمام شد. تا ماه بعد ترافیک مسدود است.",
@@ -295,12 +303,14 @@ TEXTS = {
 }
 
 # событие движка → (категория, текст)
-STATE_PAIRS = {k: p for p in (("exit_down", "exit_up"), ("mem_high", "mem_ok"), ("cpu_high", "cpu_ok"),
+STATE_PAIRS = {k: p for p in (("exit_down", "exit_up"), ("addr_down", "addr_up"), ("mem_high", "mem_ok"), ("cpu_high", "cpu_ok"),
                                 ("dom_strict_on", "dom_strict_off")) for k in p}
 ENGINE_EVENTS = {
     "ev.container_recovered": ("server", "container_recovered"),
     "ev.upstream_failed": ("exit", "exit_down"),
     "ev.upstream_ok": ("exit", "exit_up"),
+    "ev.addr_down": ("exit", "addr_down"),       # исходящий адрес сервера перестал работать (1.25.0)
+    "ev.addr_up": ("exit", "addr_up"),
     "ev.upstream_quota": ("exit", "exit_quota"),
     "ev.upstream_quota_notify": ("exit", "exit_quota_notify"),
     "ev.upstream_quota_direct": ("exit", "exit_quota_direct"),
@@ -764,7 +774,7 @@ class Notifier:
         # пара состояний («выход лёг» / «снова работает»): смена состояния после последнего отправленного
         # сообщения уходит всегда, иначе у «мигающего» выхода последним в чате осталось бы «снова работает»
         pair = STATE_PAIRS.get(key)
-        subj = (pair, (refs or {}).get("uid") or params.get("name")) if pair else None
+        subj = (pair, (refs or {}).get("uid") or params.get("name") or params.get("addr")) if pair else None
         last = self.__dict__.setdefault("_state", {})
         changed = subj is not None and last.get(subj, key) != key
         if now - self._sent.get(sig, 0) < (self.COOLDOWN if cooldown is None else cooldown) and not changed:
@@ -816,7 +826,8 @@ class Notifier:
         m = ENGINE_EVENTS.get(msg.key)
         if m:
             self.event(m[0], m[1], refs={k: v for k, v in msg.p.items() if k in ("pk", "uid")},
-                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min", "version", "error", "n")})
+                       **{k: v for k, v in msg.p.items() if k in ("name", "gb", "to", "date", "days", "iface", "pct", "min", "version", "error", "n",
+                                                            "addr")})
         fn = getattr(self, "client_fn", None)
         if fn and msg.p.get("pk"):
             try:

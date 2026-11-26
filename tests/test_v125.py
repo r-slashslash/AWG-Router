@@ -244,3 +244,164 @@ class ServerSettingsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeHost:
+    """Сеть хоста для адресов: какие IPv4 на интерфейсах, что добавлено и убрано, что отвечают проверки."""
+
+    def __init__(self, eng, present=None):
+        self.addrs = {"203.0.113.5": {"dev": "eth0", "label": "eth0"}, **(present or {})}
+        self.added, self.removed, self.probe = [], [], {}
+        self.boot = "boot-1"
+        eng._host_v4 = lambda: dict(self.addrs)
+        eng._wan = lambda: {"dev": "eth0", "gw": "203.0.113.1", "src": "203.0.113.5"}
+        eng._addr_add = self.add
+        eng._addr_del = self.delete
+        eng._addr_probe = lambda ip: self.probe.get(ip, {"ok": True, "ip": ip, "cc": "DE"})
+
+    def add(self, ip, dev):
+        self.added.append(ip)
+        self.addrs[ip] = {"dev": dev, "label": dev + ":awgr"}
+        return True
+
+    def delete(self, ip, dev):
+        self.removed.append(ip)
+        self.addrs.pop(ip, None)
+
+
+class AddressesInSystemTest(unittest.TestCase):
+    """Адрес, которого нет в системе, панель добавляет сама и проверяет; не работает — убирает; только свои."""
+
+    def setUp(self):
+        from app.engine import Engine
+        from app.engine import addrs as addrs_mod
+        self.addrs_mod = addrs_mod
+        self.dir = tempfile.mkdtemp()
+        self._data = config_patch(self.dir)
+        self.store = Store(os.path.join(self.dir, "state.json"))
+        self.eng = Engine(self.store)
+        self.events = []
+        self.eng.event = lambda level, msg: self.events.append(msg.key)
+        self.host = FakeHost(self.eng)
+        self.boot = mock_boot(self.host)
+
+    def tearDown(self):
+        self.boot.stop()
+        self._data.stop()
+
+    def tick(self, **settings):
+        if settings:
+            self.store.mutate(lambda s: s["settings"].update(settings))
+        self.eng._addr_tick(self.store.snapshot())
+
+    def test_added_checked_and_removed(self):
+        self.tick(out_hosts=[A])
+        self.assertEqual(self.host.added, [A])
+        self.assertTrue(self.eng.addr_ok(A))
+        with open(os.path.join(self.dir, "own-addrs")) as f:
+            self.assertEqual(f.read(), f"eth0 {A}\n")      # для awg-router uninstall
+        self.tick(out_hosts=[])
+        self.assertEqual(self.host.removed, [A])
+
+    def test_bad_on_first_check_is_removed(self):
+        self.host.probe[C] = {"ok": False, "err": "no_connection", "detail": "timed out"}
+        self.tick(out_hosts=[C])
+        self.assertEqual(self.eng.addr_state(C), "bad")
+        self.assertIn("ev.addr_bad", self.events)
+        self.tick()
+        self.assertEqual(self.host.removed, [C])            # не работает — сразу убран
+        self.tick()
+        self.assertEqual(self.host.added, [C])              # и не добавляется снова, пока его не впишут заново
+        self.eng.addrs_wake(retry=[C])
+        self.host.probe.pop(C)
+        self.tick()
+        self.assertTrue(self.eng.addr_ok(C))
+
+    def test_down_and_up_after_two_failures(self):
+        self.tick(out_hosts=[A])
+        self.host.probe[A] = {"ok": False, "err": "no_connection"}
+        rt = self.eng.addr_rt()[A]
+        rt["at"] = 0
+        self.tick()
+        self.assertTrue(self.eng.addr_ok(A))                 # одна неудача — ещё работает
+        rt["at"] = 0
+        self.tick()
+        self.assertEqual(self.eng.addr_state(A), "failed")
+        self.assertIn("ev.addr_down", self.events)
+        self.assertIn(A, self.host.addrs)                    # работал: остаётся в системе, проверяется дальше
+        self.host.probe.pop(A)
+        rt["at"] = 0
+        self.tick()
+        self.assertTrue(self.eng.addr_ok(A))
+        self.assertIn("ev.addr_up", self.events)
+
+    def test_human_address_never_touched(self):
+        self.host.addrs[B] = {"dev": "eth0", "label": "eth0"}
+        self.tick(out_hosts=[B])
+        self.assertEqual(self.host.added, [])
+        self.tick(out_hosts=[])
+        self.assertEqual(self.host.removed, [])
+
+    def test_reboot_readds_own_only(self):
+        self.tick(out_hosts=[A, B])
+        self.host.addrs.pop(A)                       # перезагрузка: своих адресов нет
+        self.host.addrs[B] = {"dev": "eth0", "label": "eth0"}     # B теперь в настройках сети системы (без метки)
+        self.host.boot = "boot-2"
+        self.tick()
+        self.assertEqual(self.host.added.count(A), 2)
+        self.assertIn("ev.addr_readded", self.events)
+        self.tick(out_hosts=[])
+        self.assertEqual(sorted(self.host.removed), [A])     # B — уже не наш
+
+    def test_network_restart_readds(self):
+        self.tick(out_hosts=[A])
+        self.host.addrs.pop(A)                       # перезапустили сеть системы — та же загрузка
+        self.tick()
+        self.assertEqual(self.host.added, [A, A])
+
+    def test_inbound_public_face_not_added(self):
+        """Облако с 1:1 NAT (AWS): входящий IP = адрес, который видят сайты, — он уже «на сервере»."""
+        self.eng.public_v4 = "54.0.0.10"
+        self.tick(extra_hosts=["54.0.0.10", "vpn2.example.com", B])
+        self.assertEqual(self.host.added, [B])              # домен — нет; IP, видный снаружи, — тоже нет
+        self.assertTrue(self.eng.addr_ok("54.0.0.10"))
+
+    def test_uninstall_removes_own(self):
+        self.host.addrs[B] = {"dev": "eth0", "label": "eth0"}
+        self.tick(out_hosts=[A, B])
+        self.assertEqual(self.eng.remove_own_addrs(), [A])
+        self.assertEqual(self.host.removed, [A])
+
+    def test_view(self):
+        self.tick(out_hosts=[A], out_main=A)
+        v = self.eng.addrs_view(self.store.snapshot())
+        self.assertEqual(v["main"], A)
+        self.assertEqual(v["system"]["ip"], "203.0.113.5")
+        self.assertEqual(v["out"][0]["state"], "ok")
+        self.assertTrue(v["out"][0]["ours"])
+
+
+def config_patch(d):
+    from unittest import mock
+    from app import config
+    p = mock.patch.object(config, "DATA_DIR", d)
+    p.start()
+    return p
+
+
+def mock_boot(host):
+    from unittest import mock
+    from app.engine import addrs
+    p = mock.patch.object(addrs, "boot_id", lambda: host.boot)
+    p.start()
+    return p
+
+
+class AddrNotifyTest(unittest.TestCase):
+    def test_texts(self):
+        from app import notify
+        for lang in notify.LANGS:
+            self.assertIn("{addr}", notify.TEXTS[lang]["addr_down"])
+            self.assertIn("{addr}", notify.TEXTS[lang]["addr_up"])
+        self.assertIn(A, notify.render("ru", "addr_down", addr=A))
+        self.assertEqual(notify.ENGINE_EVENTS["ev.addr_down"], ("exit", "addr_down"))

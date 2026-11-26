@@ -135,6 +135,7 @@ def _state_view() -> dict:
         "phase": engine.phase(),
         "routing": st["routing"],
         "hosts": {"default": engine.srv.client_host(st), "choices": engine.srv.host_choices(st)},
+        "addrs": engine.addrs_view(st),         # исходящие и входящие адреса сервера (1.25.0)
         "global_effective": engine.resolve(engine.default_out(st, None), st),
         "settings": {**st["settings"], "telegram": notify.public_view(notify.cfg_of(st))},
         "country_presets": countries.view(),     # «Применить для …» и выбор страны в правиле

@@ -3492,6 +3492,16 @@ Object.assign(I18N.fa, {
 
 /* 1.25.0: входящие и исходящие адреса сервера */
 Object.assign(I18N.ru, {
+  "ev.addr_readded": "Адрес {addr} снова добавлен в систему сервера (после перезагрузки или перезапуска сети)",
+  "ev.addr_bad": "Адрес {addr} не работает: {error}. Убран из системы сервера",
+  "ev.addr_down": "Исходящий адрес {addr} перестал работать: {error}. Всё, что шло с него, заблокировано",
+  "ev.addr_up": "Исходящий адрес {addr} снова работает",
+  "addr.no_wan": "у сервера нет маршрута по умолчанию — не на какой интерфейс добавить адрес",
+  "addr.add_failed": "система не дала добавить адрес",
+  "addr.gone": "адреса больше нет в системе сервера",
+  "addr.no_internet": "не выходит в интернет ({detail})",
+  "addr.docker_gw": "Docker сделал сеть этого адреса основной для контейнера сервера — сеть отключена",
+  "addr.docker": "сеть Docker: {error}",
   "ref.exit_bind": "подключение выхода «{name}»",
   "ref.own_src": "свои соединения сервера",
   "err.unknown_address": "Такого исходящего адреса у сервера нет: {value}",
@@ -3502,6 +3512,16 @@ Object.assign(I18N.ru, {
   "ev.restored_addrs": "В копии были адреса, которых у этого сервера нет: {where} — теперь с основного исходящего адреса",
 });
 Object.assign(I18N.en, {
+  "ev.addr_readded": "Address {addr} is added to the server's system again (after a reboot or a network restart)",
+  "ev.addr_bad": "Address {addr} doesn't work: {error}. Removed from the server's system",
+  "ev.addr_down": "Outgoing address {addr} stopped working: {error}. Everything that went from it is blocked",
+  "ev.addr_up": "Outgoing address {addr} is working again",
+  "addr.no_wan": "the server has no default route — no interface to add the address to",
+  "addr.add_failed": "the system refused to add the address",
+  "addr.gone": "the address is no longer in the server's system",
+  "addr.no_internet": "no internet from it ({detail})",
+  "addr.docker_gw": "Docker made this address's network the main one of the server container — the network is disconnected",
+  "addr.docker": "Docker network: {error}",
   "ref.exit_bind": "how exit “{name}” connects",
   "ref.own_src": "the server's own connections",
   "err.unknown_address": "The server has no such outgoing address: {value}",
@@ -3512,6 +3532,16 @@ Object.assign(I18N.en, {
   "ev.restored_addrs": "The backup used addresses this server doesn't have: {where} — now from the main outgoing address",
 });
 Object.assign(I18N.zh, {
+  "ev.addr_readded": "地址 {addr} 已重新添加到服务器系统（重启或网络重启之后）",
+  "ev.addr_bad": "地址 {addr} 不可用：{error}。已从服务器系统中删除",
+  "ev.addr_down": "出站地址 {addr} 已停止工作：{error}。经由它的流量都已阻止",
+  "ev.addr_up": "出站地址 {addr} 已恢复工作",
+  "addr.no_wan": "服务器没有默认路由——没有可添加地址的网卡",
+  "addr.add_failed": "系统拒绝添加该地址",
+  "addr.gone": "该地址已不在服务器系统中",
+  "addr.no_internet": "无法通过它访问互联网（{detail}）",
+  "addr.docker_gw": "Docker 把这个地址的网络设为了服务器容器的主网络——已断开该网络",
+  "addr.docker": "Docker 网络：{error}",
   "ref.exit_bind": "出口「{name}」的连接",
   "ref.own_src": "服务器自身的连接",
   "err.unknown_address": "服务器没有这个出站地址：{value}",
@@ -3522,6 +3552,16 @@ Object.assign(I18N.zh, {
   "ev.restored_addrs": "备份中使用了本服务器没有的地址：{where}——现在改用主出站地址",
 });
 Object.assign(I18N.fa, {
+  "ev.addr_readded": "آدرس {addr} دوباره به سیستم سرور افزوده شد (پس از راه‌اندازی دوباره یا راه‌اندازی دوبارهٔ شبکه)",
+  "ev.addr_bad": "آدرس {addr} کار نمی‌کند: {error}. از سیستم سرور حذف شد",
+  "ev.addr_down": "آدرس خروجی {addr} از کار افتاد: {error}. هر چه از آن می‌رفت مسدود شد",
+  "ev.addr_up": "آدرس خروجی {addr} دوباره کار می‌کند",
+  "addr.no_wan": "سرور مسیر پیش‌فرض ندارد — رابطی برای افزودن آدرس نیست",
+  "addr.add_failed": "سیستم اجازهٔ افزودن آدرس را نداد",
+  "addr.gone": "این آدرس دیگر در سیستم سرور نیست",
+  "addr.no_internet": "از آن به اینترنت راه نیست ({detail})",
+  "addr.docker_gw": "Docker شبکهٔ این آدرس را شبکهٔ اصلی کانتینر سرور کرد — شبکه جدا شد",
+  "addr.docker": "شبکهٔ Docker: {error}",
   "ref.exit_bind": "اتصال خروجی «{name}»",
   "ref.own_src": "اتصال‌های خود سرور",
   "err.unknown_address": "سرور چنین آدرس خروجی ندارد: {value}",

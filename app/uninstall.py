@@ -1,4 +1,5 @@
-"""Removes the panel's routing (nftables table, ip rules, tunnels) from the AWG server.
+"""Removes the panel's routing (nftables table, ip rules, tunnels) from the AWG server, and the server addresses
+the panel added itself (and its Docker networks for them).
 
 Run while the panel is stopped:  docker compose run --rm awg-router python3 -m app.uninstall
 The AmneziaWG server itself and its clients are left untouched. The panel's Let's Encrypt validation
@@ -19,6 +20,12 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         print(f"Could not remove the Let's Encrypt validation file from the web server: {e}")
     eng = Engine(Store())
+    try:
+        gone = eng.remove_own_addrs()     # адреса, которые добавила панель (1.25.0), и её сети Docker
+        if gone:
+            print("Removed the panel's server addresses: " + ", ".join(gone))
+    except Exception as e:  # noqa: BLE001
+        print(f"Could not remove the panel's server addresses: {e}")
     try:
         eng.target = system.discover()
     except Exception as e:  # noqa: BLE001
