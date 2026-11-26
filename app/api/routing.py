@@ -198,12 +198,16 @@ def add_list(req):
     return {"id": lid, **(refresh_now_or_bg(lid) or {})}
 
 
+# что остаётся у правила страны при повторном «Применить для …»: имя, ограничения скорости, месячный лимит и его отметки
+KEEP_ON_APPLY = ("id", "comment", "quota", "quota_action", "quota_hit", "quota_warned", "rate_down", "rate_up")
+
+
 @app.post("/api/country-preset")
 def country_preset(req):
     """Готовое правило страны (countries.PRESETS): список страны по адресам и список её доменов — готовые или новые;
     с apply — ещё и два правила «Напрямую» в конце общих: по доменам со своим DNS страны и по адресам («Применить
-    для …»), и запасной DNS для «Напрямую» — DNS страны. Правило её доменов уже есть — у него обновляется «Свой DNS»
-    (1.25.0, владелец 2026-11-27: после смены адреса Shecan повторное нажатие даёт нынешний). Без apply — только списки."""
+    для …»), и запасной DNS для «Напрямую» — DNS страны. Повторное нажатие (1.25.0, владелец 2026-11-27) снова делает
+    правила страны такими, как при первом. Без apply — только списки."""
     body = req.json()
     p = countries.preset(body.get("cc"))
     if not p:
@@ -228,16 +232,16 @@ def country_preset(req):
             made.append(dom)
         if body.get("apply"):
             r = st["routing"]
-            # второе нажатие (две открытые вкладки) не добавляет те же правила ещё раз, а «Свой DNS» уже стоящего
-            # правила доменов страны становится нынешним DNS страны (вписанный руками тоже — как у запасного)
-            for x in r["rules"]:
-                if x["lists"] == [dom] and x["outbound"] == "direct":
-                    x["dns"] = list(p["dns"])
-            have = {(tuple(x["lists"]), x["outbound"]) for x in r["rules"]}
-            r["rules"] = checks.rules(st, list(r["rules"]) + [x for x in (
-                {"lists": [dom], "outbound": "direct", "enabled": True, "comment": "", "dns": list(p["dns"])},
-                {"lists": [cc], "outbound": "direct", "enabled": True, "comment": ""})
-                if (tuple(x["lists"]), x["outbound"]) not in have])
+            # и повторное нажатие (владелец 2026-11-27): правила страны — снова такие, как делает кнопка: «Напрямую»,
+            # включены, у правила доменов — нынешний DNS страны, в конце общих (как при первом нажатии). Ограничения
+            # скорости, месячный лимит и имя, добавленные человеком, остаются; балансировка уходит — у «Напрямую» её нет.
+            # Другие правила с тем же единственным списком убираются: раньше в списке они перехватывали бы сайты страны
+            def country_rule(lists: list, extra: dict) -> dict:
+                old = next((x for x in r["rules"] if x["lists"] == lists), None) or {}
+                keep = {k: old[k] for k in KEEP_ON_APPLY if k in old}
+                return {"comment": "", **keep, "lists": lists, "outbound": "direct", "enabled": True, **extra}
+            mine = [country_rule([dom], {"dns": list(p["dns"])}), country_rule([cc], {})]
+            r["rules"] = checks.rules(st, [x for x in r["rules"] if x["lists"] not in ([dom], [cc])] + mine)
             # и запасной DNS для «Напрямую» — DNS этой страны, включён (1.25.0, владелец 2026-11-26: заменяет вписанный)
             st["settings"].update(fallback_dns=list(p["dns"]), fallback_dns_on=True)
         return {"country": cc, "domains": dom, "made": made}

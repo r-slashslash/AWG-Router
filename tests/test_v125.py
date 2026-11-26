@@ -1275,17 +1275,28 @@ class FallbackDnsSettingTest(unittest.TestCase):
             s = panel.store.snapshot()["settings"]
             self.assertEqual((s["fallback_dns"], s["fallback_dns_on"]), (["94.232.174.194"], True))
             self.assertEqual(panel.store.snapshot()["routing"]["rules"][0]["dns"], ["94.232.174.194"])
-            # правило `.ir` прежней кнопки (адреса Shecan до 2026) или с DNS, вписанным руками: повторное нажатие
-            # обновляет его «Свой DNS» и не добавляет второе правило (владелец 2026-11-27)
-            panel.store.mutate(lambda st: st["routing"]["rules"][0].update(dns=["178.22.122.100", "185.51.200.2"]))
-            panel.store.mutate(lambda st: st["routing"]["rules"][1].update(enabled=False))
+            # повторное нажатие (владелец 2026-11-27): правила страны — снова как при первом. Правило `.ir` прежней
+            # кнопки (адреса Shecan до 2026), выключенное, с другим выходом и ограничением скорости; перед ним — ещё
+            # одно правило с тем же списком; после — чужое правило
+            dom, cc = panel.store.snapshot()["routing"]["rules"][0]["lists"][0], "ir"
+            panel.store.mutate(lambda st: st["lists"].append({"id": "de", **checks.list_fields(
+                {"kind": "country", "source": "de"})}))
+            panel.store.mutate(lambda st: st["routing"].update(rules=[
+                {"id": "r_dup", "lists": [cc], "outbound": "block", "enabled": True, "comment": ""},
+                {"id": "r_dom", "lists": [dom], "outbound": "block", "enabled": False, "comment": "Иран",
+                 "dns": ["178.22.122.100", "185.51.200.2"], "rate_down": 10},
+                {"id": "r_cc", "lists": [cc], "outbound": "direct", "enabled": False, "comment": ""},
+                {"id": "r_other", "lists": ["de"], "outbound": "block", "enabled": True, "comment": ""}]))
             routing.country_preset(Req({"cc": "ir", "apply": True}))
             rules = panel.store.snapshot()["routing"]["rules"]
-            self.assertEqual(len(rules), 2)
-            self.assertEqual(rules[0]["dns"], ["94.232.174.194"])
-            self.assertFalse(rules[1]["enabled"])                        # остальное в правилах — как было
+            self.assertEqual([x["id"] for x in rules], ["r_other", "r_dom", "r_dup"])    # в конце, без повтора
+            self.assertEqual({k: rules[1][k] for k in ("outbound", "enabled", "dns", "rate_down", "comment")},
+                             {"outbound": "direct", "enabled": True, "dns": ["94.232.174.194"], "rate_down": 10,
+                              "comment": "Иран"})
+            self.assertEqual((rules[2]["outbound"], rules[2]["enabled"]), ("direct", True))
         finally:
             panel.store.mutate(lambda st: st["routing"].update(rules=[]))
+            panel.store.mutate(lambda st: st.update(lists=[x for x in st["lists"] if x["id"] != "de"]))
 
     def test_backup_keeps_it(self):
         st = json.loads(json.dumps(DEFAULT_STATE))
