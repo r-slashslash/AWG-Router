@@ -63,7 +63,9 @@ MAX_INFLIGHT = 512          # одновременных запросов к с�
 # не раньше чем через DIRECT_RETRY и одним запросом в фоне: DoH из России «зависает» до ENC_TIMEOUT на каждом
 # сервере, и проба с запросом клиента раз в две минуты на 10 с останавливала бы имена всем, кто идёт напрямую.
 # Только «напрямую»: имена клиентов, которые идут через выход, и имена из правил по доменам, у которых сейчас нет
-# пути (выход подключается, лежит или «блок»), мимо выхода не уходят никогда.
+# пути (выход подключается, лежит или «блок»), мимо выхода не уходят никогда. «Напрямую» — и с адреса системы (метка 0),
+# и «Напрямую — адрес» (1.25.0, метки адресов из cfg addr_marks): у каждого пути своё «шифрованный не отвечает», и
+# местный DNS спрашивается тем же путём — с того же адреса, не с другого.
 DIRECT_RETRY = 120.0
 
 DOT_PORT, DOH_PORT = 853, 443
@@ -341,7 +343,25 @@ async def doh_query(conn: Conn, msg: bytes, host: str) -> bytes:
 
 
 # ---------------------------------------------------------------- сервер
+class DirectPath:
+    """Шифрованный DNS на одном пути «напрямую»: когда последний раз ответил и не ответил, down — не отвечает (имена у
+    местного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая проба (asyncio.Task)."""
+    __slots__ = ("ok_at", "fail_at", "down", "retry_at", "probe")
+
+    def __init__(self):
+        self.ok_at = self.fail_at = 0.0
+        self.down, self.retry_at, self.probe = False, 0.0, None
+
+
+def _dp_attr(name: str) -> property:
+    """Прежние имена (direct_down и др.) — путь с адреса системы, метка 0: их читают статистика и тесты."""
+    return property(lambda s: getattr(s._dp(0), name), lambda s, v: setattr(s._dp(0), name, v))
+
+
 class Proxy:
+    direct_ok_at, direct_fail_at = _dp_attr("ok_at"), _dp_attr("fail_at")
+    direct_down, direct_retry_at, _direct_probe = _dp_attr("down"), _dp_attr("retry_at"), _dp_attr("probe")
+
     def __init__(self, conf_path: str):
         self.conf_path = conf_path
         self.cfg: dict = {}
@@ -350,11 +370,8 @@ class Proxy:
         self.cache_bytes = 0
         self.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
         self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
-        # шифрованный DNS на пути «напрямую»: когда последний раз ответил и когда не ответил ни один сервер;
-        # direct_down — не отвечает, имена у местного DNS; direct_retry_at — когда пробовать снова (в фоне)
-        self.direct_ok_at = self.direct_fail_at = 0.0
-        self.direct_down, self.direct_retry_at = False, 0.0
-        self._direct_probe = None            # идущая проба шифрованного (asyncio.Task)
+        # шифрованный DNS на путях «напрямую»: метка пути (0 — адрес системы) → DirectPath
+        self.dpaths: dict[int, DirectPath] = {}
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
         self.pools: dict[tuple, Pool] = {}
@@ -378,8 +395,7 @@ class Proxy:
             self.cache.clear()                       # другие серверы — старые ответы не нужны
             self.cache_bytes = 0
             # и «шифрованный не отвечает напрямую» был о прежних серверах или прежнем шифровании
-            self.direct_ok_at = self.direct_fail_at = 0.0
-            self.direct_down, self.direct_retry_at = False, 0.0
+            self.dpaths = {}
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -473,6 +489,20 @@ class Proxy:
             except (OSError, subprocess.SubprocessError) as e:
                 print(f"dnsproxy: nft: {e}", flush=True)
 
+    def _dp(self, mark: int) -> DirectPath:
+        d = self.__dict__.setdefault("dpaths", {})          # тесты собирают Proxy и через __new__
+        p = d.get(mark)
+        if p is None:
+            p = d[mark] = DirectPath()
+        return p
+
+    def is_direct(self, mark: int) -> bool:
+        """Путь «напрямую»: с адреса системы (метка 0) или «Напрямую — адрес» (метки адресов, cfg addr_marks)."""
+        if not mark:
+            return True
+        lo, hi = ((getattr(self, "cfg", None) or {}).get("addr_marks") or (0, -1))[:2]
+        return lo <= mark <= hi
+
     def route(self, ip: str) -> dict | None:
         """Путь запросов клиента: {"mark", "tcp"}; None — блок."""
         r = (self.cfg.get("routes") or {}).get(ip, "default")
@@ -533,17 +563,18 @@ class Proxy:
         self.inflight += 1
         try:
             cfg = getattr(self, "cfg", None) or {}       # тесты собирают Proxy без load()
-            enc_direct = not servers and mark == 0 and (cfg.get("encrypt") or "plain") != "plain"
+            enc_direct = not servers and self.is_direct(mark) and (cfg.get("encrypt") or "plain") != "plain"
             fb = tuple(cfg.get("direct_fallback") or ()) if enc_direct and fallback else ()
             reply = None
-            if fb and getattr(self, "direct_down", False):
-                self._probe_direct(query, q, tcp)          # клиент не ждёт: шифрованный пробуется в фоне
+            if fb and self._dp(mark).down:
+                self._probe_direct(query, q, tcp, mark)    # клиент не ждёт: шифрованный пробуется в фоне
             else:
                 reply = await self.forward(query, q, mark, tcp, servers)
                 if enc_direct:
-                    self._direct_seen(reply is not None, bool(fb))
+                    self._direct_seen(reply is not None, bool(fb), mark)
             if reply is None and fb:
-                reply = await self.forward(query, q, mark, tcp, fb)          # местный DNS, обычный
+                # местный DNS, обычный — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого
+                reply = await self.forward(query, q, mark, tcp, fb)
                 if reply is not None:
                     self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
         finally:
@@ -566,31 +597,33 @@ class Proxy:
             self.cache_bytes += len(reply)
         return struct.pack("!H", q["id"]) + reply[2:]
 
-    def _direct_seen(self, ok: bool, fallback: bool) -> None:
-        """Ответил ли шифрованный DNS на пути «напрямую» (ответ SERVFAIL — тоже ответ: сервер на связи, сломан сайт).
-        Не ответил и есть местный DNS — имена «напрямую» идут к нему, шифрованный пробуется снова через DIRECT_RETRY."""
+    def _direct_seen(self, ok: bool, fallback: bool, mark: int = 0) -> None:
+        """Ответил ли шифрованный DNS на пути «напрямую» mark (ответ SERVFAIL — тоже ответ: сервер на связи, сломан
+        сайт). Не ответил и есть местный DNS — имена этого пути идут к нему, шифрованный пробуется снова через
+        DIRECT_RETRY. У каждого пути своё: адрес системы и второй адрес могут выходить через разных провайдеров."""
+        p = self._dp(mark)
         if ok:
-            self.direct_ok_at, self.direct_down = time.time(), False
+            p.ok_at, p.down = time.time(), False
             return
-        self.direct_fail_at = time.time()
+        p.fail_at = time.time()
         if fallback:
-            self.direct_down, self.direct_retry_at = True, time.monotonic() + DIRECT_RETRY
+            p.down, p.retry_at = True, time.monotonic() + DIRECT_RETRY
 
-    def _probe_direct(self, query: bytes, q: dict, tcp: bool) -> None:
+    def _probe_direct(self, query: bytes, q: dict, tcp: bool, mark: int = 0) -> None:
         """Шифрованный DNS не отвечает напрямую: раз в DIRECT_RETRY один запрос клиента спрашивается у него ещё раз — в
-        фоне, а клиент сразу получает ответ местного DNS. Ответил — имена «напрямую» снова идут к шифрованному."""
-        probe = getattr(self, "_direct_probe", None)
-        if time.monotonic() < getattr(self, "direct_retry_at", 0.0) or (probe and not probe.done()):
+        фоне, тем же путём, а клиент сразу получает ответ местного DNS. Ответил — имена пути снова идут к шифрованному."""
+        p = self._dp(mark)
+        if time.monotonic() < p.retry_at or (p.probe and not p.probe.done()):
             return
-        self.direct_retry_at = time.monotonic() + DIRECT_RETRY
+        p.retry_at = time.monotonic() + DIRECT_RETRY
 
         async def run():
             try:
-                reply = await self.forward(query, q, 0, tcp)
+                reply = await self.forward(query, q, mark, tcp)
             except Exception:  # noqa: BLE001  — проба не должна ронять цикл; считаем, что не ответил
                 reply = None
-            self._direct_seen(reply is not None, True)
-        self._direct_probe = asyncio.get_running_loop().create_task(run())
+            self._direct_seen(reply is not None, True, mark)
+        p.probe = asyncio.get_running_loop().create_task(run())
 
     async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = ()) -> bytes | None:
         """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. servers — свой DNS правила по
@@ -724,6 +757,8 @@ class Proxy:
                                "encrypt": self.cfg.get("encrypt") or "plain", "last_ok": self.last_ok,
                                "last_error": self.last_error, "last_error_at": self.last_error_at,
                                "direct_ok_at": self.direct_ok_at, "direct_fail_at": self.direct_fail_at,
+                               # пути «Напрямую — адрес» (1.25.0): метка → [ответил, не ответил]
+                               "addr_direct": {str(m): [p.ok_at, p.fail_at] for m, p in self.dpaths.items() if m},
                                "fallback": list(self.cfg.get("direct_fallback") or ()),
                                **self.stats}, f)
                 os.replace(p + ".tmp", p)

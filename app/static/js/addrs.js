@@ -304,7 +304,7 @@ function panelAddrFields() {
   const P = S.panel || {}, T = P.tls || {}, A = S.addrs || {};
   const host = (P.access !== "ssh" && T.host) || P.ip || "";
   const fell = A.own_src && A.own_now && A.own_now !== A.own_src;
-  return `<label class="field"><span>${esc(t("sy.panel_host"))}</span><input type="text" id="sy-host" data-field="tls_domain" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(host)}" data-orig="${esc(host)}" placeholder="203.0.113.10">
+  return `<label class="field"><span>${esc(t("sy.panel_host"))}</span><input type="text" id="sy-host" data-field="tls_domain public_host" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(host)}" data-orig="${esc(host)}" placeholder="203.0.113.10">
       <span class="hint">${esc(t("sy.panel_host_hint"))}</span></label>
     <label class="field"><span>${esc(t("sy.own_src"))}</span><select id="sy-own" data-field="own_src">${ownSrcOptions()}</select>
       ${fell ? `<span class="hint warn-text">${th("sy.own_fell", { addr: `<bdi dir="ltr">${esc(A.own_now)}</bdi>` })}</span>` : ""}

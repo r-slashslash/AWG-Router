@@ -880,3 +880,92 @@ class InstallerHostTest(unittest.TestCase):
     def test_bad_file_ignored(self):
         s = self._store({"client_host": "203.0.113.5"}, "203.0.113.5", "bad host!")
         self.assertEqual(s["client_host"], "203.0.113.5")
+
+
+class AddrDirectDnsTest(unittest.TestCase):
+    """Запасной местный DNS и у «Напрямую — адрес» (владелец 2026-11-26): шифрованный DNS из России, Китая, Ирана не
+    отвечает — имена клиентов на втором адресе спрашиваются у местного DNS страны сервера тем же путём (с того же адреса,
+    метка адреса), у каждого пути своё «не отвечает»; путь через выход — по-прежнему никогда."""
+
+    AM = 0x2101                     # метка адреса 1
+
+    def _proxy(self):
+        from app import dnsproxy, nftgen
+        d = tempfile.mkdtemp()
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                       "encrypt": "doh", "direct_fallback": ["77.88.8.8"], "default": {"mark": 0, "tcp": False},
+                       "addr_marks": [nftgen.ADDR_LO, nftgen.ADDR_HI],
+                       "routes": {"10.8.1.5": {"mark": self.AM, "tcp": False},
+                                  "10.8.1.7": {"mark": 0x2001, "tcp": False}}}, f)
+        return dnsproxy.Proxy(conf)
+
+    def _run(self, p, ip, name):
+        import asyncio
+        from app import dnsproxy
+        from tests.test_v115 import q_msg
+
+        async def go():
+            query = q_msg(name)
+            r = await p.resolve(query, dnsproxy.parse_query(query), ip)
+            pr = p._dp(p.route(ip)["mark"]).probe
+            if pr:
+                await pr
+            return r
+        return asyncio.run(go())
+
+    def test_address_path_falls_back_from_the_same_address(self):
+        import socket
+        from tests.test_v115 import a_reply
+        p = self._proxy()
+        enc, plain = [], []
+
+        async def blocked(msg, server, mark, mode):
+            enc.append((server, mark))
+            raise OSError("reset")
+
+        async def udp(msg, server, mark):
+            plain.append((server, mark))
+            return a_reply(msg, ["203.0.113.7"])
+        p._enc, p._udp = blocked, udp
+        out = self._run(p, "10.8.1.5", "google.com")
+        self.assertIn(socket.inet_aton("203.0.113.7"), out)
+        self.assertEqual(enc, [("1.1.1.1", self.AM)])
+        self.assertEqual(plain, [("77.88.8.8", self.AM)])          # местный — с того же адреса, не с адреса системы
+        self.assertTrue(p._dp(self.AM).down)
+        self.assertFalse(p.direct_down)                            # путь адреса системы о сбое не знает
+        self._run(p, "10.8.1.5", "example.org")
+        self.assertEqual(len(enc), 1)                              # второе имя — сразу у местного
+        self.assertEqual(plain[-1], ("77.88.8.8", self.AM))
+        # путь через выход (метка выхода) — никогда к местному
+        plain.clear()
+        self._run(p, "10.8.1.7", "example.net")
+        self.assertEqual(plain, [])
+        # проба шифрованного в фоне — тем же путём
+        p._dp(self.AM).retry_at = 0
+        self._run(p, "10.8.1.5", "example.com")
+        self.assertEqual(enc[-1], ("1.1.1.1", self.AM))
+
+    def test_server_tab_warns_for_an_address_path(self):
+        import time
+        import types
+        from unittest import mock
+        from app import config
+        from app.engine import Engine
+        from app.engine import dns as edns
+        e = Engine.__new__(Engine)
+        e.dns_state = {"state": "on", "listen": "10.8.1.1", "encrypt": "doh"}
+        e.dns = types.SimpleNamespace(proc=types.SimpleNamespace(pid=4242))
+        path = os.path.join(tempfile.mkdtemp(), "dns-stats.json")
+        now = time.time()
+        with open(path, "w") as f:
+            json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 1, "direct_fail_at": 0, "fallback": ["77.88.8.8"],
+                       "addr_direct": {str(self.AM): [now - 60, now - 5]}}, f)
+        with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
+            self.assertEqual(e.dns_view().get("direct_down"), {"fallback": ["77.88.8.8"]})
+        with open(path, "w") as f:
+            json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 1, "fallback": ["77.88.8.8"],
+                       "addr_direct": {str(self.AM): [now - 1, now - 5]}}, f)     # снова отвечает
+        with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
+            self.assertNotIn("direct_down", e.dns_view())

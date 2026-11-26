@@ -143,8 +143,10 @@ class DnsMixin:
                "upstreams": client_dns(st["settings"]), "encrypt": enc,
                "default": default, "routes": routes, "dom": dom,
                # запасной DNS для пути «напрямую»: шифрованный DNS из России, Китая и Ирана часто не проходит, а
-               # клиенты, которые идут напрямую, и так идут через провайдера сервера (countries.local_dns)
-               "direct_fallback": countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else []}
+               # клиенты, которые идут напрямую, и так идут через провайдера сервера (countries.local_dns). Страна —
+               # сервера, и для «Напрямую — адрес» (1.25.0): провайдер тот же, его метки — addr_marks
+               "direct_fallback": countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else [],
+               "addr_marks": [nftgen.ADDR_LO, nftgen.ADDR_HI]}
         mt = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in dom["lists"].values()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
         key = f"{t.key}|{listen}"
@@ -204,12 +206,15 @@ class DnsMixin:
                     err_at = float(s.get("last_error_at") or 0)
                     if err_at > float(s.get("last_ok") or 0) and time.time() - err_at < 300:
                         v["upstream_error"] = s.get("last_error") or "?"
-                    # шифрованный DNS не отвечает на пути «напрямую» (последняя попытка — неудачная, за 15 минут):
-                    # клиентам, которые идут напрямую, имена ищет местный DNS или (без него) никто
-                    fail_at = float(s.get("direct_fail_at") or 0)
-                    if fail_at > float(s.get("direct_ok_at") or 0) and time.time() - fail_at < 900 \
+                    # шифрованный DNS не отвечает на пути «напрямую» — с адреса системы или с любого «Напрямую — адрес»
+                    # (1.25.0; последняя попытка — неудачная, за 15 минут): клиентам, которые идут напрямую, имена ищет
+                    # местный DNS или (без него) никто
+                    paths = [(s.get("direct_ok_at"), s.get("direct_fail_at")), *(s.get("addr_direct") or {}).values()]
+                    down = [float(f or 0) for o, f in paths if float(f or 0) > float(o or 0)]
+                    fail_at = max(down, default=0.0)
+                    if fail_at and time.time() - fail_at < 900 \
                             and s.get("encrypt") != "plain":         # без шифрования совет «выберите его» ни к чему
                         v["direct_down"] = {"fallback": [str(x) for x in s.get("fallback") or []][:2]}
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError):
                 pass
         return v

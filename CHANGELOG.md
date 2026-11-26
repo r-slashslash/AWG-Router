@@ -48,6 +48,10 @@ it grows, so every user-visible change gets a new version.
   `public_host`, a domain to the TLS domain) no longer moves clients; the certificate window lost its domain field.
   `install.sh` hands an address change of its own to the panel once (`data/client-host`): configs on the old address
   follow it, as before 1.25.0.
+- **DNS on the server follows the address**: names of a client on Direct — address are asked from that address, and
+  when encrypted DNS doesn't answer there (Russia, China, Iran), from the server country's local DNS — also from that
+  address (`addr_marks` in the dnsproxy config; each Direct path keeps its own "encrypted doesn't answer" state, the
+  Server tab warns when any of them does). Paths through an exit still never fall back.
 - The Telegram bot shows "direct — address".
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.
