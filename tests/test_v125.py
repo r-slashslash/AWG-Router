@@ -1057,7 +1057,8 @@ class LocalEncryptedDnsTest(unittest.TestCase):
         p = self._proxy("dot")
         calls = self._wire(p, local_enc_ok=False)
         self._run(p, "yandex.ru")
-        self.assertEqual(calls, [("enc", "1.1.1.1", "dot", 0), ("enc", "77.88.8.8", "dot", 0), ("plain", "77.88.8.8", 0)])
+        self.assertEqual(calls, [("enc", "1.1.1.1", "dot", 0), ("enc", "77.88.8.8", "dot", 0),
+                                 ("enc", "77.88.8.8", "doh", 0), ("plain", "77.88.8.8", 0)])
         self.assertTrue(p._dp(0).loc_down)
         calls.clear()
         self._run(p, "vk.com")                       # оба не отвечают — клиент не ждёт, сразу обычный
@@ -1067,6 +1068,30 @@ class LocalEncryptedDnsTest(unittest.TestCase):
         self._run(p, "mail.ru")
         self.assertEqual(calls[0], ("plain", "77.88.8.8", 0))
         self.assertIn(("enc", "77.88.8.8", "dot", 0), calls)
+
+    def test_other_method_when_the_first_fails(self):
+        """Яндекс по DoH (HTTP/1.1) не отвечает, по DoT — да (проверка 2026-11-26): местный сервер пробуется и другим
+        способом, и сработавший запоминается — следующие имена сразу им."""
+        from tests.test_v115 import a_reply
+        p = self._proxy("doh")
+        calls = []
+
+        async def enc(msg, server, mark, mode):
+            calls.append((server, mode))
+            if server == "77.88.8.8" and mode == "dot":
+                return a_reply(msg, ["203.0.113.8"])
+            raise OSError("DoH: no answer")
+
+        async def udp(msg, server, mark):
+            calls.append((server, "plain"))
+            return a_reply(msg, ["203.0.113.9"])
+        p._enc, p._udp = enc, udp
+        self._run(p, "yandex.ru")
+        self.assertEqual(calls, [("1.1.1.1", "doh"), ("77.88.8.8", "doh"), ("77.88.8.8", "dot")])
+        calls.clear()
+        self._run(p, "vk.com")
+        self.assertEqual(calls, [("77.88.8.8", "dot")])          # запомнил DoT
+        self.assertFalse(p._dp(0).loc_down)
 
     def test_exit_path_never_asks_local(self):
         p = self._proxy()

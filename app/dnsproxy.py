@@ -385,6 +385,7 @@ class Proxy:
         self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
         # шифрованный DNS на путях «напрямую»: метка пути (0 — адрес системы) → DirectPath
         self.dpaths: dict[int, DirectPath] = {}
+        self.loc_modes: dict[str, str] = {}               # местный DNS страны → способ шифрования, который отвечает
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
         self.pools: dict[tuple, Pool] = {}
@@ -408,7 +409,7 @@ class Proxy:
             self.cache.clear()                       # другие серверы — старые ответы не нужны
             self.cache_bytes = 0
             # и «шифрованный не отвечает напрямую» был о прежних серверах или прежнем шифровании
-            self.dpaths = {}
+            self.dpaths, self.loc_modes = {}, {}
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -628,17 +629,31 @@ class Proxy:
 
                 async def run():
                     try:
-                        r = await self.forward(query, q, mark, tcp, servers, mode=mode)
+                        r = await self._local_ask(query, q, mark, tcp, servers, mode)
                     except Exception:  # noqa: BLE001  — проба не должна ронять цикл
                         r = None
                     self._local_seen(p, r is not None)
                 p.loc_probe = asyncio.get_running_loop().create_task(run())
             return None
-        reply = await self.forward(query, q, mark, tcp, servers, mode=mode)
+        reply = await self._local_ask(query, q, mark, tcp, servers, mode)
         self._local_seen(p, reply is not None)
         if reply is not None:
             self.stats["direct_local_enc"] = self.stats.get("direct_local_enc", 0) + 1
         return reply
+
+    async def _local_ask(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, mode: str) -> bytes | None:
+        """Местные серверы по очереди, каждый — сначала способом из настроек, потом другим (DoH ↔ DoT): проверка 2026-11-26
+        из России и с машины GitHub — Яндекс по DoH на HTTP/1.1 не отвечает (только DoT), DNSPod из России — наоборот,
+        только DoH. Способ, который сработал, сервер запоминает (loc_modes; новые настройки — заново)."""
+        modes = self.__dict__.setdefault("loc_modes", {})
+        for server in servers:
+            first = modes.get(server, mode)
+            for m in (first, "dot" if first == "doh" else "doh"):
+                reply = await self.forward(query, q, mark, tcp, (server,), mode=m)
+                if reply is not None:
+                    modes[server] = m
+                    return reply
+        return None
 
     @staticmethod
     def _local_seen(p: DirectPath, ok: bool) -> None:

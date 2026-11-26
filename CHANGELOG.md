@@ -56,8 +56,10 @@ it grows, so every user-visible change gets a new version.
   country's local DNS is asked with the same DoH/DoT (`direct_fallback_enc`: Yandex `77.88.8.8` as
   `common.dot.dns.yandex.net`; Alibaba `223.5.5.5` as `dns.alidns.com`, DNSPod `1.12.12.12` as `doh.pub`/`dot.pub` —
   `dnsproxy.tls_name`), and plain local DNS only if that doesn't answer either (with its own background retry). Iran
-  keeps plain Shecan. The Server tab says which one answers. Yandex, Alibaba and DNSPod in the "DNS" field now work with
-  encryption too (their certificates are checked by name).
+  keeps plain Shecan. Each local server is tried with the configured method and then the other one, and the one that
+  answers is remembered: checked 2026-11-26 from the test server in Russia and a GitHub machine, Yandex answers only DoT
+  (its DoH doesn't answer HTTP/1.1), DNSPod from Russia only DoH. The Server tab says which one answers. Their
+  certificates are checked by their names, so they also work as encrypted servers in the "DNS" field (Yandex — DoT).
 - The Telegram bot shows "direct — address".
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.
