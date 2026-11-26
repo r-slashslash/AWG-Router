@@ -257,7 +257,8 @@ class FakeHost:
         eng._wan = lambda: {"dev": "eth0", "gw": "203.0.113.1", "src": "203.0.113.5"}
         eng._addr_add = self.add
         eng._addr_del = self.delete
-        eng._addr_probe = lambda ip: self.probe.get(ip, {"ok": True, "ip": ip, "cc": "DE"})
+        eng._addr_probe = lambda ip, k=None: self.probe.get(ip, {"ok": True, "ip": ip, "cc": "DE"})
+        self.paths = []
 
     def add(self, ip, dev):
         self.added.append(ip)
@@ -284,15 +285,20 @@ class AddressesInSystemTest(unittest.TestCase):
         self.eng.event = lambda level, msg: self.events.append(msg.key)
         self.host = FakeHost(self.eng)
         self.boot = mock_boot(self.host)
+        from app import system
+        self.t = system.DemoTarget()
 
     def tearDown(self):
         self.boot.stop()
         self._data.stop()
 
     def tick(self, **settings):
+        """Круг адресов и проход движка (пути адресов): исходящий адрес «работает» после проверки своим путём."""
         if settings:
             self.store.mutate(lambda s: s["settings"].update(settings))
-        self.eng._addr_tick(self.store.snapshot())
+        for _ in range(2):
+            self.eng._addr_tick(self.store.snapshot())
+            self.eng._addr_pass(self.t, self.store.snapshot())
 
     def test_added_checked_and_removed(self):
         self.tick(out_hosts=[A])
@@ -405,3 +411,140 @@ class AddrNotifyTest(unittest.TestCase):
             self.assertIn("{addr}", notify.TEXTS[lang]["addr_up"])
         self.assertIn(A, notify.render("ru", "addr_down", addr=A))
         self.assertEqual(notify.ENGINE_EVENTS["ev.addr_down"], ("exit", "addr_down"))
+
+
+class RulesetAddrTest(unittest.TestCase):
+    """nftgen: «Напрямую — адрес» — своя метка, подмена адреса раньше MASQUERADE сервера, защита после подмены."""
+    INFRA = {1: {"ip": A, "dev": "eth0", "gw": "203.0.113.1", "nat": "snat"}}
+
+    def gen(self, gp, cps=None, **kw):
+        from app import nftgen
+        return nftgen.generate("awg0", {"l1": ["203.0.113.0/24"]}, [{"num": 1, "snat": "10.9.0.2", "mtu": 1280}],
+                               gp, cps or {}, kw.pop("sniff", None), **kw)
+
+    def test_chains_and_guard(self):
+        from app import nftgen
+        a = nftgen.Addr(A, 1)
+        txt = self.gen({"rules": [(["l1"], a)], "default": "direct", "domain": []}, addrs=self.INFRA)
+        self.assertIn("ip daddr @l_l1 goto o_a1", txt)
+        self.assertIn("chain o_a1 {\n\t\tmeta mark set 0x2101 accept", txt)
+        self.assertIn("type nat hook postrouting priority srcnat - 1", txt)
+        self.assertIn(f'meta mark 0x2101 oifname "eth0" snat to {A}', txt)
+        self.assertIn(f"meta mark 0x2101 ip saddr != {A} drop", txt)                   # после подмены — только с него
+        self.assertIn('meta mark 0x2101 oifname != "eth0" reject', txt)               # пересылка — только этим путём
+        self.assertIn("meta mark 0x2101-0x2110 meta mark != { 0x2101 } drop", txt)     # номер без пути — никуда
+
+    def test_address_without_path_is_block(self):
+        from app import config, nftgen
+        txt = self.gen({"rules": [], "default": nftgen.Addr(A, 3), "domain": []}, addrs={})
+        self.assertIn(f"chain o_a3 {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept", txt)
+        self.assertNotIn("c_addr_nat", txt)
+        self.assertIn("meta mark 0x2101-0x2110 drop", txt)
+
+    def test_hold_rules_block_addresses(self):
+        """Правила «до панели» (после перезагрузки ip rule адресов ещё нет): адрес — блок, а не адрес системы."""
+        from app import nftgen
+        txt = self.gen({"rules": [], "default": nftgen.Addr(A, 1), "domain": []}, addrs=None)
+        self.assertNotIn("meta mark set 0x2101", txt)
+
+    def test_container_masquerade(self):
+        from app import nftgen
+        txt = self.gen({"rules": [], "default": nftgen.Addr(A, 1), "domain": []},
+                       addrs={1: {"ip": A, "dev": "eth1", "gw": "172.18.0.1", "nat": "masq"}})
+        self.assertIn('meta mark 0x2101 oifname "eth1" masquerade', txt)
+        self.assertNotIn("ip saddr != ", txt)
+
+    def test_quic_and_sniproxy_paths(self):
+        from app import nftgen
+        a = nftgen.Addr(A, 1)
+        txt = self.gen({"rules": [(["l1"], a)], "default": "direct", "domain": [(["d1"], "direct@" + A)]},
+                       sniff=10443, quic=True, addrs=self.INFRA)
+        self.assertIn("chain oq_a1 {\n\t\tmeta mark set 0x2101 accept", txt)
+        self.assertIn("0x40002101", txt)          # решение QUIC «этот адрес» берётся из conntrack, пока путь есть
+
+    def test_policy_key_by_slot(self):
+        from app import nftgen
+        p1, _ = nftgen.layout({"rules": [], "default": nftgen.Addr(A, 1)}, {"10.8.1.2": {"rules": [],
+                              "default": nftgen.Addr(A, 1)}}, set())
+        self.assertEqual(list(p1), ["p_global"])          # тот же адрес — та же политика
+
+    @unittest.skipUnless(__import__("shutil").which("nft") and os.geteuid() == 0, "nft -c — только от root")
+    def test_kernel_accepts(self):
+        import subprocess
+        from app import nftgen
+        a = nftgen.Addr(A, 1)
+        txt = self.gen({"rules": [(["l1"], a)], "default": a, "domain": [(["d1"], "direct@" + A)],
+                        "slots": [0], "dslots": [1]}, sniff=10443, labels=True, addrs=self.INFRA,
+                       limits={0: (125000, 0)})     # QUIC — в net-tests: в песочнице нет nft_queue
+        p = subprocess.run(["unshare", "-n", "nft", "-c", "-f", "-"], input=txt, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+
+class ResolveAddrTest(unittest.TestCase):
+    """Engine.resolve: «Напрямую — адрес» — Addr, только если адрес работает и его путь стоит; иначе блок."""
+
+    def eng(self, **settings):
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e.health, e.rt = {"u1": {"healthy": True}}, {}
+        e._addr_rt = {A: {"state": "ok"}, B: {"state": "failed"}}
+        e._addr_live = {1: {"ip": A, "dev": "eth0"}, 2: {"ip": B, "dev": "eth0"}}
+        e.over_quota = lambda u: False
+        st = state(out_hosts=[A, B], **settings)
+        return e, st
+
+    def test_direct_paths(self):
+        from app import nftgen
+        e, st = self.eng()
+        self.assertEqual(e.resolve("direct", st), "direct")                 # основной — адрес системы
+        self.assertEqual(e.resolve("direct@" + A, st), nftgen.Addr(A, 1))
+        self.assertEqual(e.resolve("direct@" + B, st), "block")             # не работает — блок, не адрес системы
+        e._addr_live.pop(1)
+        self.assertEqual(e.resolve("direct@" + A, st), "block")             # путь не встал — тоже блок
+        e2, st2 = self.eng(out_main=A)
+        self.assertEqual(e2.resolve("direct", st2), nftgen.Addr(A, 1))        # основной — второй адрес
+        self.assertEqual(e2.resolve("direct@system", st2), "direct")
+
+    def test_exit_from_failed_address_is_down(self):
+        e, st = self.eng()
+        st["upstreams"][0]["bind"] = B
+        st["upstreams"][0]["fallback"] = "direct"
+        self.assertEqual(e.resolve("up:u1", st), "direct")      # выход с неработающего адреса — его резерв
+        st["upstreams"][0]["bind"] = A
+        self.assertEqual(e.resolve("up:u1", st), 1)
+
+    def test_exit_mark(self):
+        from app import nftgen
+        e, st = self.eng()
+        e._addr_rec_cache = {"slots": {A: 1, B: 2}, "ours": {}, "ever": []}
+        self.assertEqual(e.exit_mark(st, st["upstreams"][0]), 0)
+        st["upstreams"][0]["bind"] = B
+        self.assertEqual(e.exit_mark(st, st["upstreams"][0]), nftgen.addr_mark(2))
+
+
+class ExitBindTest(unittest.TestCase):
+    def test_fwmark_in_setconf(self):
+        from app import awgconf
+        conf = "[Interface]\nPrivateKey = x\nFwMark = 51820\n\n[Peer]\nPublicKey = y\n"
+        out = awgconf.with_fwmark(conf, 0x2101)
+        self.assertEqual(out.count("FwMark"), 1)
+        self.assertIn("[Interface]\nFwMark = 0x2101\n", out)
+        self.assertNotIn("FwMark", awgconf.with_fwmark(conf, 0))
+
+    def test_hev_mark(self):
+        from app import socks
+        self.assertIn("  mark: 8449\n", socks.hev_config("awgr1", 1, "198.51.100.9", {"port": 1080}, mark=0x2101))
+        self.assertNotIn("mark:", socks.hev_config("awgr1", 1, "198.51.100.9", {"port": 1080}))
+
+    def test_helper_paths(self):
+        """Посредник правил по доменам и DNS на сервере ведут «Напрямую — адрес» с меткой адреса; учёт — «Напрямую»."""
+        from app import nftgen
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e.resolve = lambda out, st: nftgen.Addr(A, 1)
+        self.assertEqual(Engine._sni_target(e, {}, "direct@" + A), {"mark": 0x2101, "acct": "direct"})
+        self.assertEqual(Engine._quic_mark(e, {}, "direct@" + A), 0x2101)
+        self.assertEqual(Engine._acct_label({}, nftgen.Addr(A, 1)), "direct")
+        e.rt, e.parsed = {}, None
+        route = Engine._dns_route_fn(e, {"upstreams": []})
+        self.assertEqual(route(nftgen.Addr(A, 1)), {"mark": 0x2101, "tcp": False})

@@ -398,6 +398,20 @@ def resolve_many(hosts, timeout: float) -> dict[str, str]:
     return dict(res)
 
 
+def with_fwmark(setconf: str, mark: int) -> str:
+    """Текст `awg setconf` с меткой внешних пакетов туннеля (FwMark, 1.25.0): с какого исходящего адреса сервер
+    подключается к выходу. 0 — без метки (адрес системы); своя FwMark конфига выхода заменяется."""
+    lines = [ln for ln in setconf.split("\n") if ln.split("=", 1)[0].strip().lower() != "fwmark"]
+    if not mark:
+        return "\n".join(lines)
+    out = []
+    for ln in lines:
+        out.append(ln)
+        if ln.strip().lower() == "[interface]":
+            out.append(f"FwMark = {int(mark):#x}")
+    return "\n".join(out)
+
+
 def setconf_for(pc: UpstreamConf, ip: str) -> str:
     """Текст для `awg setconf` с уже найденным адресом Endpoint (`resolve_host`)."""
     host, port = split_endpoint(pc.endpoint)

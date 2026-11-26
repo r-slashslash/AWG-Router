@@ -58,6 +58,8 @@ class SniMixin:
         через прокси часто не работает и шёл бы к адресу из DNS клиента); «блок» — отказ.
         Неработающий выход — его резерв, как у TCP."""
         eff = self.resolve(out, st)
+        if isinstance(eff, nftgen.Addr):
+            return nftgen.addr_mark(eff.k)      # «Напрямую — адрес»: его метка, как у туннеля выхода
         if eff == "direct":
             return config.QUIC_DIRECT_MARK
         if isinstance(eff, int):
@@ -92,6 +94,8 @@ class SniMixin:
         eff = self.resolve(out, st)
         if eff == "block":
             return {"block": True}
+        if isinstance(eff, nftgen.Addr):
+            return {"mark": nftgen.addr_mark(eff.k), "acct": "direct"}      # трафик — в «Напрямую»
         if eff == "direct":
             return {"mark": 0, "acct": "direct"}
         u = next((x for x in st["upstreams"] if x["num"] == eff), None)
@@ -108,8 +112,9 @@ class SniMixin:
 
     @staticmethod
     def _acct_label(st: dict, out) -> str | None:
-        """Выход после резолва → ключ учёта трафика: "direct" | id выхода | None (блок)."""
-        if out == "direct":
+        """Выход после резолва → ключ учёта трафика: "direct" | id выхода | None (блок). «Напрямую — адрес» — тоже
+        «Напрямую»: в «За месяц по выходам» отдельной строки у адреса нет (решение владельца 2026-11-26)."""
+        if out == "direct" or isinstance(out, nftgen.Addr):
             return "direct"
         if out == "block":
             return None

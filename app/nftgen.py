@@ -165,7 +165,30 @@ class Sticky(int):
         return f"Sticky({int(self)})"
 
 
+class Addr(str):
+    """«Напрямую» с дополнительного исходящего адреса (1.25.0): строка "direct@<адрес>" (так её видят браузер, журнал и
+    ключи политик sniproxy.py), k — номер адреса: метка addr_mark(k) → ip rule → своя таблица маршрутов. Не число: везде,
+    где isinstance(…, int), — выход через туннель, а это не он."""
+
+    def __new__(cls, ip: str, k: int):
+        o = str.__new__(cls, "direct@" + ip)
+        o.ip, o.k = ip, int(k)
+        return o
+
+    def __repr__(self) -> str:
+        return f"Addr({self.ip!r}, {self.k})"
+
+
+def addr_mark(k: int) -> int:
+    return config.ADDR_MARK_BASE + int(k)
+
+
+ADDR_LO, ADDR_HI = config.ADDR_MARK_BASE + 1, config.ADDR_MARK_BASE + config.ADDR_MAX
+
+
 def out_chain(out) -> str:
+    if isinstance(out, Addr):
+        return f"o_a{out.k}"
     if out == "direct":
         return "o_direct"
     if out == "block":
@@ -176,7 +199,9 @@ def out_chain(out) -> str:
 
 
 def _okey(o):
-    """Выход в ключе политики: Sticky(N) и N — разные цепочки."""
+    """Выход в ключе политики: Sticky(N) и N — разные цепочки; адрес — по номеру."""
+    if isinstance(o, Addr):
+        return ("addr", o.k)
     return ("sticky", int(o)) if isinstance(o, Sticky) else o
 
 
@@ -275,7 +300,8 @@ def layout(global_policy: dict, client_policies: dict[str, dict], up_nums: set[i
     balance — номера рабочих выходов балансировки: Sticky на другой выход становится обычным."""
     def norm(policy: dict) -> dict:
         # выход на несуществующий туннель → блок (безопасный вариант)
-        fix = lambda o: o if o in ("direct", "block") or o in up_nums else "block"
+        # «Напрямую — адрес» приходит уже проверенным (Engine.resolve: адрес работает и его путь стоит)
+        fix = lambda o: o if isinstance(o, Addr) or o in ("direct", "block") or o in up_nums else "block"  # noqa: E731
         # Sticky — только на рабочий выход балансировки (у «По умолчанию» и у правил с балансировкой, 1.24.0)
         unstick = lambda o: int(o) if isinstance(o, Sticky) and int(o) not in balance else o  # noqa: E731
         rules = [(l, unstick(fix(o))) for l, o in policy["rules"]]
@@ -329,6 +355,20 @@ def sniff_marks(policies: dict, slots: dict | None = None) -> dict[str, int]:
     slots.clear()
     slots.update(new)
     return {n: config.SNIFF_OUT_BASE + new[keys[n]] for n in names}
+
+
+def _addr_guard(addrs: dict[int, dict], verdict: str, post: bool = False) -> list[str]:
+    """Защита «Напрямую — адрес» (1.25.0): пакет с меткой адреса K уходит только через интерфейс своего пути (post — и
+    после подмены — только с этим адресом на хосте); метка номера без пути — никуда. Только точные метки панели."""
+    out = []
+    for k, a in sorted(addrs.items()):
+        m = addr_mark(k)
+        out.append(f'\t\tmeta mark {m:#x} oifname != "{a["dev"]}" {verdict}')
+        if post and a.get("nat") == "snat":
+            out.append(f"\t\tmeta mark {m:#x} ip saddr != {a['ip']} {verdict}")
+    known = ", ".join(f"{addr_mark(k):#x}" for k in sorted(addrs))
+    out.append(f"\t\tmeta mark {ADDR_LO:#x}-{ADDR_HI:#x} " + (f"meta mark != {{ {known} }} " if known else "") + verdict)
+    return out
 
 
 def _own_lim() -> str:
@@ -387,7 +427,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
              quic: bool = False, strict: bool = False, slots: dict | None = None, labels: bool = False,
-             limits: dict[int, tuple[int, int]] | None = None) -> str:
+             limits: dict[int, tuple[int, int]] | None = None, addrs: dict[int, dict] | None = None) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
@@ -398,11 +438,19 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     strict — правила по доменам сейчас не действуют (sniff_port None), а выбрано «тогда блокировать»:
     у клиентов с правилами по доменам весь трафик (кроме местных сетей и самого сервера) — в блок.
     labels — учёт трафика по правилам (1.24.0): правила политик ставят метку conntrack (ct label) со своим номером.
-    limits — ограничения скорости правил (1.24.0, только с labels): {номер j: (к клиентам, от клиентов) байт/с; 0 — нет}."""
+    limits — ограничения скорости правил (1.24.0, только с labels): {номер j: (к клиентам, от клиентов) байт/с; 0 — нет}.
+    addrs — исходящие адреса, чей путь стоит (1.25.0): {номер K: {"ip", "dev", "nat"}}; dev — интерфейс, через который
+    уходит «Напрямую — адрес» (на хосте — интерфейс маршрута по умолчанию, в контейнере — сеть Docker адреса), nat:
+    "snat" (на хосте: подменить адрес отправителя на этот) | "masq" (в контейнере: адрес этой сети, дальше — Docker).
+    Адрес без пути — блок (o_a<K> ставит метку блока): метка адреса без своего ip rule ушла бы по основной таблице —
+    «Напрямую» с адреса системы."""
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
     policies, client_map = layout(global_policy, client_policies, up_nums, balance)
+    addrs = {int(k): v for k, v in (addrs or {}).items() if 1 <= int(k) <= config.ADDR_MAX}
+    addr_ks = sorted({o.k for p in policies.values() for o in [p["default"], *(o for _, o in p["rules"])]
+                      if isinstance(o, Addr)} | set(addrs))
     marks = sniff_marks(policies, slots) if sniff_port else {}
 
     used_lists = sorted({lid for p in policies.values() for l, _ in p["rules"] for lid in l})
@@ -470,6 +518,9 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 
     out.append("\tchain o_direct {\n\t\taccept\n\t}")
     out.append(f"\tchain o_block {{\n\t\tmeta mark set {config.MARK_BLOCK:#x} accept\n\t}}")
+    for k in addr_ks:
+        m = addr_mark(k) if k in addrs else config.MARK_BLOCK
+        out.append(f"\tchain o_a{k} {{\n\t\tmeta mark set {m:#x} accept\n\t}}")
     no_quic = {u["num"] for u in upstreams if u.get("no_quic")}
     for u in sorted(upstreams, key=lambda x: x["num"]):
         out.append(f"\tchain o_u{u['num']} {{\n{_no_quic(u['num'] in no_quic)}"
@@ -489,6 +540,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         # основная таблица) — отказ, а не путь мимо выхода
         f'\t\tmeta mark & {EXIT_MASK:#x} == {config.MARK_BASE:#x} oifname != "{config.IFACE_PREFIX}*" '
         "reject with icmp type admin-prohibited",
+        *_addr_guard(addrs, "reject with icmp type admin-prohibited"),
     ]
     for u in sorted(upstreams, key=lambda x: x["num"]):
         ifn = f"{config.IFACE_PREFIX}{u['num']}"
@@ -518,7 +570,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         # Решение из conntrack — только если его путь ещё есть: метка выхода, который остановили, без
         # своего ip rule пошла бы по основной таблице, то есть мимо выхода напрямую. Такой поток QUIC
         # дальше блокируется (строка блока QUIC в политике), и браузер переходит на TCP.
-        live = sorted({mark_for(n) for n in up_nums}
+        live = sorted({mark_for(n) for n in up_nums} | {addr_mark(k) for k in addrs}
                       | {config.QUIC_PASS_MARK, config.QUIC_DIRECT_MARK, config.MARK_BLOCK})
         restore = ", ".join(f"{m | config.QUIC_CT_BIT:#x}" for m in live)
         out.append(f"""\tchain c_quic {{
@@ -539,8 +591,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 \t}}""")
         # соединения sniproxy.py без совпадения по домену: обычные правила политики клиента
         # (метка политики → цепочка q_*; смена метки в type route — новый выбор маршрута)
-        oq = lambda o: "oq_direct" if o == "direct" else "oq_block" if o == "block" else \
-            f"oqb_u{int(o)}" if isinstance(o, Sticky) else f"oq_u{int(o)}"
+        oq = lambda o: f"oq_a{o.k}" if isinstance(o, Addr) else "oq_direct" if o == "direct" else \
+            "oq_block" if o == "block" else f"oqb_u{int(o)}" if isinstance(o, Sticky) else f"oq_u{int(o)}"
         vm = ", ".join(f"{m:#x} : goto q_{n}" for n, m in marks.items())
         out.append(f"""\tchain c_output {{
 \t\ttype route hook output priority mangle; policy accept;
@@ -551,6 +603,9 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                 f"\tchain q_{n} {{", f"\tchain q_{n} {{\n\t\tip daddr @local4 goto oq_direct", 1))
         out.append("\tchain oq_direct {\n\t\tmeta mark set 0x0 accept\n\t}")
         out.append("\tchain oq_block {\n\t\treject with tcp reset\n\t}")
+        for k in addr_ks:
+            out.append(f"\tchain oq_a{k} {{\n\t\tmeta mark set {addr_mark(k):#x} accept\n\t}}" if k in addrs
+                       else f"\tchain oq_a{k} {{\n\t\treject with tcp reset\n\t}}")
         for u in sorted(upstreams, key=lambda x: x["num"]):
             out.append(f"\tchain oq_u{u['num']} {{\n\t\tmeta mark set {mark_for(u['num']):#x} accept\n\t}}")
         for n in alive:
@@ -578,6 +633,20 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                # метка выхода не совпала бы с ip rule — соединение ушло бы мимо выхода. Только метки панели: на сервере
                # «на хосте» здесь и пакеты других программ (Tailscale метит свои 0x40000 и 0x80000)
                f"\t\t{_own_lim()} drop\n\t}}")
+
+    if addrs:
+        # «Напрямую — адрес»: подмена адреса отправителя раньше MASQUERADE сервера (iptables, srcnat): для соединения
+        # действует первая цепочка, сделавшая NAT. Только по меткам панели — пакеты других программ сюда не попадают
+        nat = []
+        for k, a in sorted(addrs.items()):
+            to = f"snat to {a['ip']}" if a.get("nat") == "snat" else "masquerade"
+            nat.append(f'\t\tmeta mark {addr_mark(k):#x} oifname "{a["dev"]}" {to}')
+        out.append("\tchain c_addr_nat {\n\t\ttype nat hook postrouting priority srcnat - 1; policy accept;\n"
+                   + "\n".join(nat) + "\n\t}")
+    # после подмены адреса: пакет с меткой адреса ушёл не через свой интерфейс или (на хосте) не с этим адресом —
+    # в никуда, а не с адреса системы. Номер адреса без пути — тоже (его метку ставит только панель)
+    out.append("\tchain c_addr_post {\n\t\ttype filter hook postrouting priority srcnat + 1; policy accept;\n"
+               + "\n".join(_addr_guard(addrs, "drop", post=True)) + "\n\t}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat; policy accept;"]

@@ -7,7 +7,9 @@
   * панель узнаёт о запуске контейнера из потока событий Docker (system.docker_events);
   * панель видит, что этот контейнер сам ставит правила (метка в /opt/amnezia/start.sh);
   * смена порта (1.22.0, system.recreate_with_port): свой контейнер (папка на диске хоста), контейнер «как у
-    AmneziaVPN» (файлы внутри, вторая сеть) и возврат прежнего, когда новый порт занят.
+    AmneziaVPN» (файлы внутри, вторая сеть) и возврат прежнего, когда новый порт занят;
+  * исходящий адрес (1.25.0): сеть Docker с com.docker.network.host_ipv4 подключается к контейнеру без перезапуска,
+    маршрут по умолчанию контейнера не меняется, «Напрямую — адрес» уходит с этого адреса, сеть убрали — блок.
 
 Только на одноразовой машине (машина GitHub Actions): нужны root, Docker, awg в PATH (для ключей).
 Запуск: sudo env PATH=<bin>:$PATH python3 tests/container_e2e.py
@@ -22,6 +24,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app import awgserver, nftgen, system  # noqa: E402
+from app.engine import Engine  # noqa: E402
+from app.store import Store  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 IMAGE, NAME = "awgr-server-e2e", "amnezia-awg-e2e"
@@ -155,6 +159,77 @@ def port_change(results, data, sc) -> None:
         busy.close()
 
 
+SITE_NS, SITE_IP, HOST_IP, SECOND = "awgrsite", "172.31.250.254", "172.31.250.1", "172.31.250.7"
+MARKED = r"""
+import socket,sys
+s=socket.socket(); s.settimeout(4)
+if int(sys.argv[2]): s.setsockopt(socket.SOL_SOCKET, 36, int(sys.argv[2]))
+try:
+    s.connect((sys.argv[1], 80)); print(s.recv(100).decode())
+except OSError as e: print("FAIL", e)
+"""
+
+
+def addr_net(results) -> None:
+    """Исходящий адрес в режиме контейнера (1.25.0): «сайт» в своей сети за вторым адресом хоста."""
+    sh("ip", "netns", "add", SITE_NS, check=False)
+    sh("ip", "link", "add", "awgrsite0", "type", "veth", "peer", "name", "awgrsite1")
+    sh("ip", "link", "set", "awgrsite1", "netns", SITE_NS)
+    sh("ip", "addr", "add", f"{HOST_IP}/24", "dev", "awgrsite0")
+    sh("ip", "addr", "add", f"{SECOND}/32", "dev", "awgrsite0", "label", "awgrsite0:aw")   # «добавлен панелью»
+    sh("ip", "link", "set", "awgrsite0", "up")
+    for c in (["ip", "addr", "add", f"{SITE_IP}/24", "dev", "awgrsite1"], ["ip", "link", "set", "awgrsite1", "up"],
+              ["ip", "link", "set", "lo", "up"], ["ip", "route", "add", "default", "via", HOST_IP]):
+        sh("ip", "netns", "exec", SITE_NS, *c)
+    site = subprocess.Popen(["ip", "netns", "exec", SITE_NS, sys.executable,
+                             os.path.join(ROOT, "tests", "e2e_servers.py"), "http", "SITE", SITE_IP])
+    time.sleep(0.5)
+    d = tempfile.mkdtemp()
+    try:
+        st = Store(os.path.join(d, "state.json"))
+        st.mutate(lambda s: s["settings"].update(out_hosts=[SECOND]))
+        eng = Engine(st)
+        eng.addr_rt()[SECOND] = {"state": "ok", "seen": SECOND}      # проверка адреса — отдельно (юнит-тесты)
+        t = system._container_target(NAME)
+        before = eng._ct_default(t)
+        eng._addr_pass(t, st.snapshot())
+        k = eng._addr_rec()["slots"].get(SECOND)
+        net = system.docker_get(f"/networks/zz-awgr-out-{k}") or {}
+        results.append(("сеть Docker адреса создана с host_ipv4",
+                         (net.get("Options") or {}).get("com.docker.network.host_ipv4") == SECOND, net.get("Options")))
+        attached = (system.docker_get(f"/containers/{NAME}/json") or {})["NetworkSettings"]["Networks"]
+        results.append(("сеть подключена к контейнеру сервера без перезапуска", f"zz-awgr-out-{k}" in attached,
+                        list(attached)))
+        results.append(("маршрут по умолчанию контейнера не поменялся", eng._ct_default(t) == before,
+                        (before, eng._ct_default(t))))
+        live = getattr(eng, "_addr_live", {})
+        results.append(("путь адреса встал (интерфейс сети внутри контейнера)", bool(live.get(k)), live))
+        path = os.path.join(d, "r.nft")
+        with open(path, "w") as f:
+            f.write(nftgen.generate("awg0", {}, [], {"rules": [], "default": "direct", "domain": []}, {}, None,
+                                    addrs=live))
+        r = t.ns(["nft", "-f", path], check=False)
+        results.append(("правила с путём адреса встали в контейнере", r.returncode == 0, r.stderr))
+
+        def get(mark):
+            return t.ns([sys.executable, "-c", MARKED, SITE_IP, str(mark)], check=False, timeout=15).stdout.strip()
+        got = get(nftgen.addr_mark(k))
+        results.append(("«Напрямую — адрес» из контейнера: сайт видит второй адрес", got == f"SITE from {SECOND}", got))
+        got = get(0)
+        results.append(("«Напрямую» из контейнера: адрес хоста, как раньше", got == f"SITE from {HOST_IP}", got))
+        eng._net_drop(t, f"zz-awgr-out-{k}", True)
+        eng._addr_routes = eng._addr_nets = None
+        eng._addr_pass(t, st.snapshot())
+        got = get(nftgen.addr_mark(k))
+        results.append(("сеть адреса убрали: метка адреса — никуда, не с адреса хоста", got.startswith("FAIL"), got))
+        eng.remove_own_addrs()
+    finally:
+        site.kill()
+        sh("ip", "netns", "del", SITE_NS, check=False)
+        sh("ip", "link", "del", "awgrsite0", check=False)
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     results = []
     data = tempfile.mkdtemp()
@@ -197,6 +272,9 @@ def main():
                         up and table.returncode != 0, table.stdout[-200:]))
 
         port_change(results, data, sc)
+        run_container(data)
+        wait_awg0()
+        addr_net(results)
     finally:
         sh("docker", "rm", "-f", NAME, check=False)
         for n in sh("docker", "ps", "-aq", "--filter", f"name={NAME}-old-", check=False).stdout.split():

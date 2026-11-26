@@ -49,7 +49,8 @@ def _yq(s: str) -> str:
     return "'" + str(s).replace("'", "''") + "'"
 
 
-def hev_config(iface: str, num: int, server_ip: str, s: dict) -> str:
+def hev_config(iface: str, num: int, server_ip: str, s: dict, mark: int = 0) -> str:
+    """Настройки hev-socks5-tunnel. mark (1.25.0) — метка его сокетов к прокси: с какого исходящего адреса сервера."""
     lines = [
         "tunnel:",
         f"  name: {_yq(iface)}",
@@ -62,6 +63,8 @@ def hev_config(iface: str, num: int, server_ip: str, s: dict) -> str:
     ]
     if s.get("user"):
         lines += [f"  username: {_yq(s['user'])}", f"  password: {_yq(s.get('password', ''))}"]
+    if mark:
+        lines.append(f"  mark: {int(mark)}")
     # log-file — явно: новые версии hev (2.10+) по умолчанию не пишут никуда, а причину отказа панель читает из его вывода
     lines += ["misc:", "  log-file: stderr", "  log-level: warn", "  connect-timeout: 10000", "  limit-nofile: 65535"]
     return "\n".join(lines) + "\n"
@@ -83,6 +86,24 @@ def _recv(s: socket.socket, n: int) -> bytes:
     return buf
 
 
+def _connect(host: str, port: int, timeout: float, mark: int = 0) -> socket.socket:
+    """Соединение с прокси; mark — метка сокета (SO_MARK): тот же путь, что у hev с этого исходящего адреса."""
+    if not mark:
+        return socket.create_connection((host, port), timeout=timeout)
+    last = None
+    for fam, typ, proto, _, addr in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        s = socket.socket(fam, typ, proto)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, 36, int(mark))        # SO_MARK
+            s.settimeout(timeout)
+            s.connect(addr)
+            return s
+        except OSError as e:
+            last = e
+            s.close()
+    raise last or OSError("connect failed")
+
+
 def client_hello() -> bytes:
     """Начало TLS 1.2 (ClientHello без имени сервера): любой сервер на 443 отвечает на него
     рукопожатием или TLS-ошибкой, то есть байтами, которых от закрытого пути не бывает."""
@@ -97,13 +118,13 @@ def client_hello() -> bytes:
 
 def connect_check(host: str, port: int, user: str = "", password: str = "",
                   target: tuple[str, int] = CHECK_TARGETS[0], timeout: float = 8,
-                  data: bool = False) -> float:
+                  data: bool = False, mark: int = 0) -> float:
     """Вход на прокси и CONNECT к target. Возвращает время в мс или бросает SocksError.
     data — после CONNECT послать начало TLS и дождаться ответа цели (`socks.no_data`, если из-за
     прокси ничего не пришло): так видно, что за прокси что-то есть. Время тогда — до первого ответа."""
     t0 = time.monotonic()
     try:
-        s = socket.create_connection((host, port), timeout=timeout)
+        s = _connect(host, port, timeout, mark)
     except OSError as e:
         raise SocksError(Msg("socks.unreachable", error=str(e)[:120])) from None
     try:
@@ -155,7 +176,7 @@ def check(conf: dict) -> dict:
     for target in CHECK_TARGETS:
         try:
             ms = connect_check(conf["host"], conf["port"], conf.get("user", ""),
-                               conf.get("password", ""), target, data=True)
+                               conf.get("password", ""), target, data=True, mark=int(conf.get("mark") or 0))
             return {"ok": True, "ms": ms, "error": None, "at": time.time()}
         except SocksError as e:
             err = e.msg

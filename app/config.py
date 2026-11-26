@@ -74,6 +74,14 @@ RULE_PRIO_BASE = 20000         # приоритет ip rule = 20000 + N
 MARK_BLOCK = 0xB10C
 NFT_TABLE = "awgr"
 MAX_UPSTREAMS = 200
+# «Напрямую» с дополнительного исходящего адреса номер K (1.25.0): метка ADDR_MARK_BASE + K → ip rule
+# ADDR_PRIO_BASE + K → таблица ADDR_TABLE_BASE + K (маршрут по умолчанию с этим адресом отправителя; на хосте —
+# и подмена адреса в цепочке c_addr_nat, в контейнере — через сеть Docker адреса). K = 1 … srcaddr.OUT_HOSTS_MAX (16).
+# Метки — младшие 16 бит, рядом с метками выходов 0x20xx; на пакете целиком, без лишних битов (ip rule сравнивает всё)
+ADDR_MARK_BASE = 0x2100
+ADDR_TABLE_BASE = 2300
+ADDR_PRIO_BASE = 20300
+ADDR_MAX = 16
 # Правила по доменам (sniproxy.py): порт на адресе сервера в туннеле, куда
 # nftables перенаправляет TCP 80/443 клиентов с такими правилами
 SNI_PROXY_PORT = int(os.environ.get("SNI_PROXY_PORT", "10443"))
@@ -110,4 +118,6 @@ RULE_LIM_SHIFT = 16
 RULE_LIM_TAG = 0xE1F0
 # Младшие 16 бит меток панели, у которых могут быть биты номера ограничения (метки сокетов посредника): выходы
 # MARK_BASE + N, политики sniproxy.py, RULE_LIM_TAG. Другие метки с этими битами — чужие, их не трогаем
-RULE_LIM_OWN = f"{MARK_BASE:#x}-{MARK_BASE + 0xFF:#x}, {SNIFF_OUT_BASE:#x}-{QUIC_PASS_MARK - 1:#x}, {RULE_LIM_TAG:#x}"
+# MARK_BASE + N, исходящие адреса ADDR_MARK_BASE + K (1.25.0), политики sniproxy.py, RULE_LIM_TAG
+RULE_LIM_OWN = (f"{MARK_BASE:#x}-{MARK_BASE + 0xFF:#x}, {ADDR_MARK_BASE + 1:#x}-{ADDR_MARK_BASE + ADDR_MAX:#x}, "
+                f"{SNIFF_OUT_BASE:#x}-{QUIC_PASS_MARK - 1:#x}, {RULE_LIM_TAG:#x}")

@@ -50,6 +50,8 @@ class DnsMixin:
                 pass
 
         def route(eff):
+            if isinstance(eff, nftgen.Addr):        # «Напрямую — адрес»: DNS тем же путём, что и трафик клиента
+                return {"mark": nftgen.addr_mark(eff.k), "tcp": False}
             if eff == "direct":
                 return {"mark": 0, "tcp": False}
             if isinstance(eff, int) and (eff in running or config.DRY_RUN):

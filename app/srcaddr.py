@@ -19,12 +19,13 @@ import copy
 import ipaddress
 import re
 
+from . import config
 from .i18n import Msg
 
 DIRECT = "direct"
 PFX = "direct@"
 SYSTEM = "system"
-OUT_HOSTS_MAX = 16          # дополнительных исходящих адресов (столько номеров меток и таблиц маршрутов)
+OUT_HOSTS_MAX = config.ADDR_MAX   # дополнительных исходящих адресов (столько номеров меток и таблиц маршрутов)
 SUFFIX = "_src"
 
 

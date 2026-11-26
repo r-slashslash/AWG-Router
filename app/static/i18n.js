@@ -3492,6 +3492,8 @@ Object.assign(I18N.fa, {
 
 /* 1.25.0: входящие и исходящие адреса сервера */
 Object.assign(I18N.ru, {
+  "addr.no_slot": "у адреса {addr} нет свободного номера",
+  "addr.path": "путём «Напрямую — адрес» сайты видят другой адрес ({detail})",
   "ev.addr_readded": "Адрес {addr} снова добавлен в систему сервера (после перезагрузки или перезапуска сети)",
   "ev.addr_bad": "Адрес {addr} не работает: {error}. Убран из системы сервера",
   "ev.addr_down": "Исходящий адрес {addr} перестал работать: {error}. Всё, что шло с него, заблокировано",
@@ -3512,6 +3514,8 @@ Object.assign(I18N.ru, {
   "ev.restored_addrs": "В копии были адреса, которых у этого сервера нет: {where} — теперь с основного исходящего адреса",
 });
 Object.assign(I18N.en, {
+  "addr.no_slot": "address {addr} has no free number",
+  "addr.path": "on the “Direct — address” path websites see another address ({detail})",
   "ev.addr_readded": "Address {addr} is added to the server's system again (after a reboot or a network restart)",
   "ev.addr_bad": "Address {addr} doesn't work: {error}. Removed from the server's system",
   "ev.addr_down": "Outgoing address {addr} stopped working: {error}. Everything that went from it is blocked",
@@ -3532,6 +3536,8 @@ Object.assign(I18N.en, {
   "ev.restored_addrs": "The backup used addresses this server doesn't have: {where} — now from the main outgoing address",
 });
 Object.assign(I18N.zh, {
+  "addr.no_slot": "地址 {addr} 没有空闲编号",
+  "addr.path": "经「直连 — 地址」路径时网站看到的是另一个地址（{detail}）",
   "ev.addr_readded": "地址 {addr} 已重新添加到服务器系统（重启或网络重启之后）",
   "ev.addr_bad": "地址 {addr} 不可用：{error}。已从服务器系统中删除",
   "ev.addr_down": "出站地址 {addr} 已停止工作：{error}。经由它的流量都已阻止",
@@ -3552,6 +3558,8 @@ Object.assign(I18N.zh, {
   "ev.restored_addrs": "备份中使用了本服务器没有的地址：{where}——现在改用主出站地址",
 });
 Object.assign(I18N.fa, {
+  "addr.no_slot": "آدرس {addr} شمارهٔ آزاد ندارد",
+  "addr.path": "در مسیر «مستقیم — آدرس» سایت‌ها آدرس دیگری می‌بینند ({detail})",
   "ev.addr_readded": "آدرس {addr} دوباره به سیستم سرور افزوده شد (پس از راه‌اندازی دوباره یا راه‌اندازی دوبارهٔ شبکه)",
   "ev.addr_bad": "آدرس {addr} کار نمی‌کند: {error}. از سیستم سرور حذف شد",
   "ev.addr_down": "آدرس خروجی {addr} از کار افتاد: {error}. هر چه از آن می‌رفت مسدود شد",

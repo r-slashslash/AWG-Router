@@ -81,7 +81,7 @@ class ReconcileOrderTest(unittest.TestCase):
             return ok("[]")
         return ok()
 
-    def start_up(self, t, uid, u, pc, h):
+    def start_up(self, t, uid, u, pc, h, mark=0):
         self.e.rt[uid] = UpRT(u["num"], h, t.key)
         self.log.append(("tunnel", u["num"]))
 

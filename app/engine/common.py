@@ -54,6 +54,7 @@ class UpRT:
         self.socks_ip: str | None = None        # адрес прокси SOCKS5 (имя разрешает панель)
         self.engine = "go"                      # go (amneziawg-go) | kernel (модуль ядра amneziawg)
         self.reresolved = 0.0                   # когда последний раз заново разбирали имя из Endpoint
+        self.mark = 0                           # метка внешних пакетов (подключение с исходящего адреса, 1.25.0)
 
 
 class HelperRT:

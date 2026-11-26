@@ -28,7 +28,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from .. import awgconf, config, srcaddr, system
+from .. import awgconf, config, nftgen, srcaddr, system
 from ..i18n import Msg
 from .common import APP_DIR, log
 
@@ -323,12 +323,17 @@ class AddrsMixin:
                 rt[ip] = {"state": "checking", "at": now}
         if not due:
             return
-        with ThreadPoolExecutor(max_workers=min(8, len(due))) as ex:
-            for ip, res in zip(due, ex.map(self._addr_probe, due)):
-                self._addr_result(ip, ip in out_ips, res)
+        # исходящий адрес, чей путь стоит, проверяется этим путём (метка адреса из сети сервера AWG — как трафик
+        # клиентов, в контейнере — через сеть Docker адреса); пока пути нет — сокетом, привязанным к адресу
+        live = {x.get("ip"): k for k, x in (getattr(self, "_addr_live", None) or {}).items()}
+        jobs = [(ip, live.get(ip) if ip in out_ips else None) for ip in due]
+        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
+            for (ip, k), res in zip(jobs, ex.map(lambda j: self._addr_probe(*j), jobs)):
+                self._addr_result(ip, ip in out_ips, res, path=k is not None)
 
-    def _addr_probe(self, ip: str) -> dict:
-        """probe.py с сокетами, привязанными к адресу: выходит ли с него интернет, какой адрес видят сайты, страна."""
+    def _addr_probe(self, ip: str, k: int | None = None) -> dict:
+        """probe.py: выходит ли с адреса интернет, какой адрес видят сайты, страна. k — путём «Напрямую — адрес» (метка
+        адреса в сети сервера AWG); без k — сокетами, привязанными к адресу, в сети панели (это сеть хоста)."""
         if config.DRY_RUN:
             if ipaddress.IPv4Address(ip) in ipaddress.IPv4Network("192.0.2.0/24"):     # демо: так выглядит неработающий
                 return {"ok": False, "err": "no_connection", "detail": "timed out"}
@@ -337,21 +342,37 @@ class AddrsMixin:
             hosts = [f"{h}={a}" for h, a in awgconf.resolve_many(PROBE_HOSTS, 4).items()]
         except Exception:  # noqa: BLE001
             hosts = []
-        p = system.run(["python3", PROBE, "0", f"--src={ip}", *hosts], check=False, timeout=40)
+        t = self.target
+        if k is not None and t and t.exists:
+            p = t.ns(["python3", PROBE, str(nftgen.addr_mark(k)), *hosts], check=False, timeout=40)
+        else:
+            p = system.run(["python3", PROBE, "0", f"--src={ip}", *hosts], check=False, timeout=40)
         try:
             return json.loads(p.stdout)
         except ValueError:
             return {"ok": False, "err": "no_answer", "detail": (p.stderr or p.stdout or "").strip()[:200]}
 
-    def _addr_result(self, ip: str, outbound: bool, res: dict) -> None:
+    def _addr_result(self, ip: str, outbound: bool, res: dict, path: bool = False) -> None:
+        """Итог проверки. Исходящий адрес «работает» только после проверки своим путём: сайты видят то же, что с сокета,
+        привязанного к адресу (иначе подмена адреса не сработала: Docker без host_ipv4, чужой NAT раньше нашего)."""
         rt = self.addr_rt()
         x = rt.setdefault(ip, {"state": "checking"})
         now = time.time()
         r = self._addr_rec()
         ever = ip in r["ever"]
+        seen = res.get("ip")
+        if res.get("ok") and path and x.get("bind_seen") and seen and seen != x["bind_seen"]:
+            res = {"ok": False, "err": "path", "detail": f"{seen} ≠ {x['bind_seen']}"}
+        if res.get("ok") and outbound and not path:
+            x["bind_seen"] = seen
+            x.update(seen=seen or x.get("seen"), cc=res.get("cc") or x.get("cc"), at=now)
+            if x.get("state") in (None, "checking"):
+                x["state"] = "checking"         # интернет с адреса есть; «работает» — после проверки своим путём
+                self.trigger()
+                return
         if res.get("ok"):
             was = x.get("state")
-            x.update(state="ok", seen=res.get("ip") or x.get("seen"), cc=res.get("cc") or x.get("cc"), error=None,
+            x.update(state="ok", seen=seen or x.get("seen"), cc=res.get("cc") or x.get("cc"), error=None,
                      at=now, fails=0)
             if not ever:
                 r["ever"].append(ip)
@@ -362,8 +383,12 @@ class AddrsMixin:
             if was != "ok":
                 self.trigger()          # правила: «Напрямую — адрес» снова через него
             return
-        err = Msg("addr.gone") if res.get("err") == "gone" else Msg("addr.no_internet", detail=str(
-            res.get("detail") or res.get("err") or "")[:120])
+        if res.get("err") == "gone":
+            err = Msg("addr.gone")
+        elif res.get("err") == "path":
+            err = Msg("addr.path", detail=res.get("detail") or "")
+        else:
+            err = Msg("addr.no_internet", detail=str(res.get("detail") or res.get("err") or "")[:120])
         x["fails"] = int(x.get("fails") or 0) + 1
         x["at"], x["error"] = now, err
         if not ever and x.get("state") in (None, "checking"):
@@ -379,6 +404,86 @@ class AddrsMixin:
             if outbound:
                 self.event("error", Msg("ev.addr_down", addr=ip, error=err))
             self.trigger()              # всё через этот адрес — в блок
+
+    # ------------------------------------------------------------------ путь «Напрямую — адрес» (проход движка)
+    def _addr_pass(self, t: system.Target, st: dict, add_only: bool = True) -> None:
+        """add_only (до правил nftables с метками адресов): пути адресов — сеть Docker (контейнер), ip rule и таблица с
+        маршрутом по умолчанию через свой интерфейс (на хосте — с этим адресом отправителя); _addr_live — адреса, чей
+        путь стоит (только их Engine.resolve отдаёт как Addr). Иначе (конец прохода) — убрать ip rule и таблицы
+        номеров, которых больше нет: метку ушедшего адреса прежние правила nftables ставили до этого прохода."""
+        slots = self.addr_slots(st)
+        if not add_only:
+            self._sync_addr_routes(t, slots, {}, add_only=False)
+            return
+        infra: dict[int, dict] = {}
+        if t.kind == "container":
+            for k, n in self._sync_addr_nets(t, st).items():
+                infra[k] = {"ip": n["ip"], "dev": n["dev"], "gw": n["gw"], "nat": "masq"}
+        else:
+            wan = self._wan()
+            host = self._host_v4()
+            for ip, k in slots.items():
+                if ip in host and wan.get("dev") and self.addr_state(ip) != "bad":
+                    infra[k] = {"ip": ip, "dev": wan["dev"], "gw": wan.get("gw") or "", "nat": "snat"}
+        ok = self._sync_addr_routes(t, slots, infra, add_only=True)
+        live = {k: v for k, v in infra.items() if k in ok}
+        if set(live) != set(getattr(self, "_addr_live", None) or {}):
+            self.addrs_wake()           # путь появился или пропал — проверить адрес этим путём сейчас
+        self._addr_live = live
+
+    def _sync_addr_routes(self, t: system.Target, slots: dict[str, int], infra: dict[int, dict],
+                          add_only: bool) -> set[int]:
+        """ip rule «метка адреса K → таблица ADDR_TABLE_BASE + K» для всех номеров из списка и в таблице — unreachable
+        (адрес пропал — блок, а не основная таблица) и маршрут по умолчанию пути (infra). → номера, чей маршрут встал.
+        Маршруты заново — когда поменялись пути или прошло ROUTES_EVERY (адрес исчезает с маршрутом вместе)."""
+        want = set(slots.values())
+        lo, hi = config.ADDR_PRIO_BASE + 1, config.ADDR_PRIO_BASE + config.ADDR_MAX
+        cmds = []
+        present = set()
+        for rule in self._ip_rules(t):
+            prio = rule.get("priority", 0)
+            if not lo <= prio <= hi:
+                continue
+            k = prio - config.ADDR_PRIO_BASE
+            ok = k in want and str(rule.get("table")) == str(config.ADDR_TABLE_BASE + k) and \
+                int(str(rule.get("fwmark", "0")), 0) == nftgen.addr_mark(k)
+            if ok and k not in present:
+                present.add(k)
+            elif not add_only or k in want:
+                cmds.append(["rule", "del", "priority", str(prio)])
+                if k not in want:
+                    cmds.append(["route", "flush", "table", str(config.ADDR_TABLE_BASE + k)])
+        if not add_only:
+            for c in cmds:
+                t.ns(["ip", *c], check=False)
+            return set()
+        for k in sorted(want - present):
+            cmds.append(["rule", "add", "fwmark", hex(nftgen.addr_mark(k)), "lookup", str(config.ADDR_TABLE_BASE + k),
+                         "priority", str(config.ADDR_PRIO_BASE + k)])
+        key = (t.key, tuple(sorted((k, tuple(sorted(v.items()))) for k, v in infra.items())), tuple(sorted(want)))
+        cache = getattr(self, "_addr_routes", None)
+        if not cmds and cache and cache[0] == key and time.time() - cache[1] < 60:
+            return cache[2]
+        for c in cmds:
+            t.ns(["ip", *c], check=False)
+        ok = set()
+        for k in sorted(want):
+            table = str(config.ADDR_TABLE_BASE + k)
+            t.ns(["ip", "route", "replace", "unreachable", "default", "metric", "4096", "table", table], check=False)
+            a = infra.get(k)
+            if not a:
+                t.ns(["ip", "route", "del", "default", "metric", "0", "table", table], check=False)
+                continue
+            cmd = ["ip", "route", "replace", "default", *(["via", a["gw"]] if a.get("gw") else []), "dev", a["dev"]]
+            if a.get("nat") == "snat":
+                cmd += ["src", a["ip"]]
+            p = t.ns([*cmd, "table", table], check=False)
+            if p.returncode == 0:
+                ok.add(k)
+            else:
+                log.warning("address %s: route: %s", a["ip"], (p.stderr or "").strip()[:200])
+        self._addr_routes = (key, time.time(), ok)
+        return ok
 
     # ------------------------------------------------------------------ для браузера
     def addrs_view(self, st: dict) -> dict:

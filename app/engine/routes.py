@@ -6,7 +6,7 @@ import json
 import os
 import time
 
-from .. import balance, config, nftgen, shaping, system
+from .. import balance, config, nftgen, shaping, srcaddr, system
 from ..i18n import Msg
 from ..store import Store
 from .common import RUN_DIR, log
@@ -19,15 +19,21 @@ class RoutesMixin:
 
     # --------------------------------------------------------------- policy
     def resolve(self, out: str, st: dict, depth: int = 0):
-        """Выход из настроек → фактический: 'direct' | 'block' | номер туннеля."""
-        if out in ("direct", "block"):
-            return out
+        """Выход из настроек → фактический: 'direct' (с адреса системы) | Addr (с дополнительного исходящего адреса,
+        1.25.0) | 'block' | номер туннеля."""
+        if out == "block" or (out == "direct" and not srcaddr.main(st)):
+            return out                  # «Напрямую» с адреса системы — как до 1.25.0
+        if srcaddr.is_direct(out):
+            return self.direct_out(out, st)
         if depth > 6:
             return "block"
         if out.startswith("up:"):
             u = Store.upstream(st, out[3:])
             if not u:
                 return "block"
+            if u.get("enabled", True) and srcaddr.bind_of(st, u) != srcaddr.SYSTEM and not self.bind_ok(st, u):
+                # адрес, с которого выход подключается к своему серверу, не работает: выход — неработающий, его резерв
+                return self.resolve(u.get("fallback") or "direct", st, depth + 1)
             known = u["id"] in self.health     # нет записи: проверки ещё не было (первый проход после запуска панели)
             h = self.health.get(u["id"], {})
             if u.get("enabled", True) and h.get("healthy"):
@@ -43,6 +49,37 @@ class RoutesMixin:
                 return "block"
             return self.resolve(u.get("fallback") or "direct", st, depth + 1)
         return "block"
+
+    def direct_out(self, out: str, st: dict):
+        """«Напрямую» (основной исходящий адрес) или «Напрямую — адрес» → 'direct' (адрес системы) | Addr | 'block':
+        адрес не работает или его путь ещё не стоит (сеть Docker, ip rule, подмена адреса) — блок, а не адрес системы:
+        молча с другого адреса ничего не уходит (решение владельца 2026-11-26)."""
+        a = srcaddr.split(out)[1] or srcaddr.main(st) or srcaddr.SYSTEM
+        if a == srcaddr.SYSTEM:
+            return "direct"
+        live = getattr(self, "_addr_live", None) or {}
+        k = next((k for k, x in live.items() if x.get("ip") == a), None)
+        if k is None or not self.addr_ok(a):
+            return "block"
+        return nftgen.Addr(a, k)
+
+    def bind_ok(self, st: dict, u: dict) -> bool:
+        """Выход может подключиться к своему серверу: с адреса системы — всегда, с исходящего адреса — если тот
+        работает и его путь стоит (иначе туннель стучится в никуда: маршрут адреса — unreachable)."""
+        b = srcaddr.bind_of(st, u)
+        if b == srcaddr.SYSTEM:
+            return True
+        return isinstance(self.direct_out(srcaddr.PFX + b, st), nftgen.Addr)
+
+    def exit_mark(self, st: dict, u: dict) -> int:
+        """Метка внешних пакетов туннеля выхода («Подключаться с адреса»): 0 — адрес системы, иначе метка адреса."""
+        b = srcaddr.bind_of(st, u)
+        if b == srcaddr.SYSTEM:
+            return 0
+        k = self.addr_slot(b)
+        if not k:                       # адресов больше, чем номеров: не бывает (srcaddr.OUT_HOSTS_MAX = ADDR_MAX)
+            raise system.SysError(Msg("addr.no_slot", addr=b))
+        return nftgen.addr_mark(k)
 
     def policy_for(self, st: dict, pk: str | None) -> dict:
         """Политика в терминах настроек (до резолва), с учётом настроек клиента."""
@@ -373,7 +410,9 @@ class RoutesMixin:
                                frozenset() if hold else self.sticky_nums(),
                                dom_filter=sniff_port is not None and self.dom_filter_on(st), quic=quic,
                                strict=sniff_port is None and self.strict(st), slots=self._sniff_slots, labels=labels,
-                               limits=self.limit_rates(st) if labels else None)
+                               limits=self.limit_rates(st) if labels else None,
+                               # правила «до панели» — без путей адресов: после перезагрузки их ip rule ещё нет
+                               addrs=None if hold else (getattr(self, "_addr_live", None) or {}))
 
     def limit_rates(self, st: dict) -> dict[int, tuple[int, int]]:
         """Ограничения скорости правил для nftgen: {номер j: (к клиентам, от клиентов) байт/с; 0 — без ограничения}."""

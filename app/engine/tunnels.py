@@ -112,8 +112,9 @@ class TunnelsMixin:
             self._stop_up(uid)
 
     def _start_up(self, t: system.Target, uid: str, u: dict, pc: awgconf.UpstreamConf,
-                  conf_hash: str) -> None:
+                  conf_hash: str, mark: int = 0) -> None:
         r = UpRT(u["num"], conf_hash, t.key)
+        r.mark = mark               # «Подключаться с адреса» (1.25.0): метка внешних пакетов туннеля, 0 — адрес системы
         ifn = r.iface
         t.ns(["ip", "link", "del", ifn], check=False)
         if pc.kind == "socks5":
@@ -140,6 +141,7 @@ class TunnelsMixin:
                     raise system.SysError(e.msg) from None
             self._v6_route(t, ip)
             setconf = awgconf.setconf_for(pc, ip)
+        setconf = awgconf.with_fwmark(setconf, mark)
         r.engine = self.exit_engine()
         kernel_err = None       # awg setconf на модуле не прошёл: ошибка модуля или самого конфига
         if r.engine == "kernel":
@@ -335,7 +337,7 @@ class TunnelsMixin:
         path = os.path.join(RUN_DIR, f"{r.iface}.yml")      # в нём пароль прокси — только для root
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            f.write(socks.hev_config(r.iface, r.num, ip, pc.socks))
+            f.write(socks.hev_config(r.iface, r.num, ip, pc.socks, mark=getattr(r, "mark", 0)))
         logp = os.path.join(LOG_DIR, f"{r.iface}.log")
         with open(logp, "w") as logf:
             r.proc = subprocess.Popen(["nsenter", "-t", str(t.pid), "-n", "--", socks.HEV, path],
@@ -403,7 +405,13 @@ class TunnelsMixin:
             except awgconf.ConfigError as e:
                 self.health[uid] = {"state": "error", "error": e.msg}
                 continue
-            h = _sha((pc.setconf if pc.kind == "awg" else pc.raw) + str(pc.mtu))
+            try:
+                mark = self.exit_mark(st, u)
+            except system.SysError as e:
+                self.health[uid] = {"state": "error", "error": e.msg}
+                continue
+            # с другого адреса — другой туннель: метка внешних пакетов задаётся при запуске
+            h = _sha((pc.setconf if pc.kind == "awg" else pc.raw) + str(pc.mtu) + (f"|{mark:#x}" if mark else ""))
             sig = f"{h}|{t.key}"
             f = self._up_fail.get(uid)
             if f and f["sig"] != sig:
@@ -435,7 +443,7 @@ class TunnelsMixin:
                     self._waiting.add(uid)
                     continue                            # интерфейса сервера ещё нет: см. engine_pending
                 try:
-                    self._start_up(t, uid, u, pc, h)
+                    self._start_up(t, uid, u, pc, h, mark)
                 except Exception as e:  # noqa: BLE001
                     self._stop_up(uid)
                     self._failed_up(uid, sig, msg_of(e), u)
@@ -613,7 +621,8 @@ class TunnelsMixin:
                                     "error": None if r.num != 2 else Msg("socks.timeout")}
         res = self._socks_res.get(uid)
         if (not res or now - res["at"] >= socks.CHECK_EVERY) and uid not in self._socks_busy:
-            conf = self.parsed(u).socks
+            # с того же адреса, с которого к прокси подключается hev (1.25.0)
+            conf = {**self.parsed(u).socks, **({"mark": r.mark} if getattr(r, "mark", 0) else {})}
             self._socks_busy.add(uid)
 
             ip = r.socks_ip if not config.DRY_RUN else None

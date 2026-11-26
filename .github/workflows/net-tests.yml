@@ -90,6 +90,11 @@ jobs:
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/netns_e2e.py
 
+      - name: Server outgoing addresses (addrs_e2e.py)
+        # 1.25.0: «Напрямую — адрес», защита, выходы AWG и SOCKS5 со второго адреса
+        if: always()
+        run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/addrs_e2e.py
+
       - name: Real AmneziaWG tunnel (awg_real_e2e.py)
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/awg_real_e2e.py

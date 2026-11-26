@@ -444,6 +444,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 self.target = t
                 self.applied_hash = None
                 self._shape = {}
+                self._addr_live, self._addr_routes, self._addr_nets = {}, None, None   # в новой сети путей адресов нет
                 self._sysctl(t)
             elif t.kind == "host" and not config.DRY_RUN:
                 # интерфейс сервера на хосте пересоздаётся при перезапуске службы — с настройкой по умолчанию
@@ -494,6 +495,13 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 log.exception("exit traffic")
             self.balancer.feed(self.traffic.take_recent(), time.time())
 
+            # пути исходящих адресов (1.25.0): сеть Docker, ip rule, таблицы — до выходов (туннель подключается с адреса)
+            # и до правил nftables с метками адресов; не встал путь — «Напрямую — адрес» блокируется (Engine.resolve)
+            try:
+                self._addr_pass(t, st)
+            except Exception:  # noqa: BLE001
+                log.exception("addresses")
+                self._addr_live = {}
             self._sync_upstreams(t, st)
             # ip rule запущенных выходов — сразу, до DNS на сервере и правил nftables с их метками
             self._sync_rules(t, add_only=True)
@@ -576,6 +584,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             self._save_hold(t, st)
             self._sync_rules(t)
             try:
+                self._addr_pass(t, st, add_only=False)      # ip rule адресов, которых больше нет
+            except Exception:  # noqa: BLE001
+                log.exception("addresses")
+            try:
                 self._sync_v6(t)
             except Exception:  # noqa: BLE001
                 log.exception("ipv6 table")
@@ -644,8 +656,14 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                             t.ns(["ip", "rule", "del", "priority", str(prio)], check=False)
                             t.ns(["ip", "route", "flush", "table",
                                   str(config.TABLE_BASE + prio - config.RULE_PRIO_BASE)], check=False)
+                        # пути исходящих адресов (1.25.0); сами адреса и сети Docker убирает только удаление панели
+                        if config.ADDR_PRIO_BASE < prio <= config.ADDR_PRIO_BASE + config.ADDR_MAX:
+                            t.ns(["ip", "rule", "del", "priority", str(prio)], check=False)
+                            t.ns(["ip", "route", "flush", "table",
+                                  str(config.ADDR_TABLE_BASE + prio - config.ADDR_PRIO_BASE)], check=False)
                 except ValueError:
                     pass
+                self._addr_live, self._addr_routes = {}, None
             self.applied_hash = None
 
     def shutdown(self) -> None:

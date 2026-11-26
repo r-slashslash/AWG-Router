@@ -6,7 +6,10 @@
     python3 e2e_servers.py dns   <ip> <имя>=<A|CNAME:имя> …  DNS :53 (UDP и TCP), зона из аргументов
     python3 e2e_servers.py socks <ip> <порт> [<логин> <пароль> [<имя>=<ip> …]]   SOCKS5: CONNECT
                                                          (в т. ч. по имени из списка) и UDP ASSOCIATE
+С переменной AWGR_PEERS=<файл> SOCKS5 дописывает туда адрес каждого, кто подключился (tests/addrs_e2e.py: с какого
+адреса сервера пришёл выход).
 """
+import os
 import select
 import socket
 import struct
@@ -251,8 +254,12 @@ def socks5(ip, port, user="", pw=""):
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((ip, int(port)))
     s.listen(64)
+    peers = os.environ.get("AWGR_PEERS")
     while True:
-        c, _ = s.accept()
+        c, a = s.accept()
+        if peers:
+            with open(peers, "a") as f:
+                f.write(a[0] + "\n")
         threading.Thread(target=socks_client, args=(c, user, pw), daemon=True).start()
 
 

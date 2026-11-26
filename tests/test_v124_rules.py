@@ -756,7 +756,7 @@ class RuleSpeedTest(unittest.TestCase):
         self.assertEqual(sniproxy.with_lim(0xD105, 0), 0xD105)
         own = nftgen._own_lim()
         self.assertIn(f"meta mark & {0xFFFFFFFF ^ config.RULE_LIM_MASK:#x} {{ {config.RULE_LIM_OWN} }}", own)
-        self.assertEqual(config.RULE_LIM_OWN, "0x2000-0x20ff, 0xd100-0xe0ff, 0xe1f0")
+        self.assertEqual(config.RULE_LIM_OWN, "0x2000-0x20ff, 0x2101-0x2110, 0xd100-0xe0ff, 0xe1f0")
         text = nftgen.generate("awg0", {"ru": ["5.0.0.0/8"]}, [{"num": 1}], pol([(["ru"], 1)], slots=[0]), {},
                                labels=True, limits={7: (1, 1)})
         self.assertIn(f"{own} jump rl_lab", text)

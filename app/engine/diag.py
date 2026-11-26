@@ -54,7 +54,9 @@ class DiagMixin:
         if config.DRY_RUN or eff == "block" or not t or not t.exists:
             raise system.SysError(Msg("tr.no_dns_path"))
         mark, via = 0, "direct"
-        if isinstance(eff, int):
+        if isinstance(eff, nftgen.Addr):
+            mark, via = nftgen.addr_mark(eff.k), str(eff)       # «Напрямую — адрес» (1.25.0)
+        elif isinstance(eff, int):
             if eff not in {r.num for r in self.rt.values()}:
                 raise system.SysError(Msg("tr.no_dns_path"))
             mark = nftgen.mark_for(eff)
@@ -87,7 +89,7 @@ class DiagMixin:
         eff = self.resolve(out, st)
         if eff == "block":
             return {"ok": False, "error": Msg("probe.blocked")}
-        mark = 0 if eff == "direct" else nftgen.mark_for(eff)
+        mark = 0 if eff == "direct" else nftgen.addr_mark(eff.k) if isinstance(eff, nftgen.Addr) else nftgen.mark_for(eff)
         # у выхода SOCKS5 ещё и UDP: пропускает ли прокси QUIC (галочка выхода)
         socks = False
         if isinstance(eff, int):
@@ -97,6 +99,8 @@ class DiagMixin:
             except Exception:  # noqa: BLE001
                 pass
         if config.DRY_RUN:
+            if isinstance(eff, nftgen.Addr):
+                return {"ok": True, "ip": eff.ip, "cc": "DE", "latency_ms": 30, "via": eff}
             res = {"ok": True, "ip": "203.0.113.%d" % (10 + (eff if eff != "direct" else 0)),
                    "cc": "NL" if eff != "direct" else "RU", "latency_ms": 42, "via": eff}
             return {**res, "udp": False} if socks else res
