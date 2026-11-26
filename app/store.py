@@ -88,7 +88,8 @@ class Store:
             for k, v in DEFAULT_STATE.items():
                 self.state.setdefault(k, copy.deepcopy(v))
             self._texts = self._text_refs(self.state)
-            if self._upgrade() or not os.path.exists(path):     # нет файла — взяли запасную копию (_read)
+            moved = self._installer_host()
+            if self._upgrade() or moved or not os.path.exists(path):     # нет файла — взяли запасную копию (_read)
                 self._write()
         else:
             self.state = copy.deepcopy(DEFAULT_STATE)
@@ -124,6 +125,31 @@ class Store:
         if srcaddr.normalize(self.state):
             changed = True              # адрес, которого нет в списке сервера (файл правили руками): основной
         return changed
+
+    def _installer_host(self) -> bool:
+        """install.sh сменил адрес сервера (новый IP, ответ «какой адрес в конфигах»): файл client-host — прежний и
+        новый адрес. Конфиги, которые были на прежнем (входящий адрес сервера — он), переходят на новый, как до 1.25.0,
+        когда адрес клиентов брался из PUBLIC_HOST. Другой, выбранный в панели, остаётся. Файл — один раз."""
+        p = os.path.join(os.path.dirname(self.path), "client-host")
+        try:
+            with open(p, encoding="utf-8") as f:
+                old, new = (f.read().split("\n") + ["", ""])[:2]
+            os.remove(p)
+        except OSError:
+            return False
+        old, new = old.strip(), new.strip()
+        if not new or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", new):
+            return False
+        s = self.state.setdefault("settings", {})
+        if not s.get("client_host"):
+            Store.split_hosts(self.state)          # 1.24.0: адрес клиентов был PUBLIC_HOST — прежний
+        if s.get("client_host") not in (old, None, ""):
+            return False
+        s["client_host"] = new
+        extra = s.get("extra_hosts") if isinstance(s.get("extra_hosts"), list) else []
+        if not srcaddr.ipv4(new) and ":" not in new and new not in extra and len(extra) < 16:
+            s["extra_hosts"] = [new, *extra]
+        return True
 
     @staticmethod
     def split_hosts(state: dict) -> bool:

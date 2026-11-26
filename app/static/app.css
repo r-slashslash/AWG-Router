@@ -575,3 +575,4 @@ bdi.mono { white-space: nowrap; }
 .addr-st.ok { color: color-mix(in srgb, var(--ok) 78%, var(--ink)); }
 .addr-st.bad { color: color-mix(in srgb, var(--bad) 85%, var(--ink)); }
 @media (max-width: 560px) { .addr-cards { grid-template-columns: minmax(0, 1fr); } }
+.hint:empty { display: none; }      /* подсказка, которой пока нечего сказать («… подключается с адреса»), — без места */

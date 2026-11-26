@@ -80,7 +80,7 @@ TEXTS = {
         "ex_down": "🔴 {name} — не работает, его трафик: {to}",
         "ex_quota": "📦 {name} — лимит исчерпан, его трафик: {to}",
         "ex_none": "Выходов пока нет: весь трафик идёт напрямую. Выходы добавляются в панели.",
-        "o_direct": "напрямую", "o_block": "блокируется", "o_exit": "«{name}»",
+        "o_direct": "напрямую", "o_block": "блокируется", "o_exit": "«{name}»", "o_direct_at": "напрямую — {addr}",
         "cl_title": "<b>👥 Клиенты</b> · {n}", "cl_empty": "Клиентов пока нет.",
         "cl_legend": "🟢 в сети · ⚪ не в сети · ⏸ выключен",
         "cd_online": "🟢 В сети", "cd_seen": "⚪ Был в сети {ago} назад", "cd_never": "⚪ Ещё не подключался",
@@ -204,7 +204,7 @@ TEXTS = {
         "ex_down": "🔴 {name} — not working, its traffic: {to}",
         "ex_quota": "📦 {name} — limit used up, its traffic: {to}",
         "ex_none": "No exits yet: all traffic goes direct. Exits are added in the panel.",
-        "o_direct": "direct", "o_block": "blocked", "o_exit": "“{name}”",
+        "o_direct": "direct", "o_block": "blocked", "o_exit": "“{name}”", "o_direct_at": "direct — {addr}",
         "cl_title": "<b>👥 Clients</b> · {n}", "cl_empty": "No clients yet.",
         "cl_legend": "🟢 online · ⚪ offline · ⏸ turned off",
         "cd_online": "🟢 Online", "cd_seen": "⚪ Last seen {ago} ago", "cd_never": "⚪ Never connected",
@@ -327,7 +327,7 @@ TEXTS = {
         "ex_down": "🔴 {name} — 无法工作，其流量：{to}",
         "ex_quota": "📦 {name} — 限额已用完，其流量：{to}",
         "ex_none": "还没有出口：所有流量直连。出口在面板中添加。",
-        "o_direct": "直连", "o_block": "被阻止", "o_exit": "“{name}”",
+        "o_direct": "直连", "o_block": "被阻止", "o_exit": "“{name}”", "o_direct_at": "直连 — {addr}",
         "cl_title": "<b>👥 客户端</b> · {n}", "cl_empty": "还没有客户端。",
         "cl_legend": "🟢 在线 · ⚪ 离线 · ⏸ 已停用",
         "cd_online": "🟢 在线", "cd_seen": "⚪ {ago}前在线", "cd_never": "⚪ 从未连接",
@@ -445,7 +445,7 @@ TEXTS = {
         "ex_down": "🔴 {name} — کار نمی‌کند، ترافیک آن: {to}",
         "ex_quota": "📦 {name} — سقف تمام شده، ترافیک آن: {to}",
         "ex_none": "هنوز خروجی‌ای نیست: همهٔ ترافیک مستقیم می‌رود. خروجی‌ها در پنل اضافه می‌شوند.",
-        "o_direct": "مستقیم", "o_block": "مسدود", "o_exit": "«{name}»",
+        "o_direct": "مستقیم", "o_block": "مسدود", "o_exit": "«{name}»", "o_direct_at": "مستقیم — {addr}",
         "cl_title": "<b>👥 کلاینت‌ها</b> · {n}", "cl_empty": "هنوز کلاینتی نیست.",
         "cl_legend": "🟢 آنلاین · ⚪ آفلاین · ⏸ غیرفعال",
         "cd_online": "🟢 آنلاین", "cd_seen": "⚪ آخرین اتصال {ago} پیش", "cd_never": "⚪ هنوز وصل نشده",
@@ -1681,10 +1681,12 @@ class Bot:
             self._show(c, text, kb(self._back(c)), msg)
 
     def out_label(self, c: dict, out, st: dict) -> str:
-        """Выход из настроек ('direct' | 'block' | 'up:<id>') или фактический (номер туннеля)."""
+        """Выход из настроек ('direct' | 'direct@<адрес>' | 'block' | 'up:<id>') или фактический (номер туннеля)."""
         L = c["lang"]
-        if out == "direct":
+        if out == "direct" or out == "direct@system":
             return tr(L, "o_direct")
+        if isinstance(out, str) and out.startswith("direct@"):      # «Напрямую — адрес» (1.25.0)
+            return tr(L, "o_direct_at", addr=out[7:])
         if out == "block":
             return tr(L, "o_block")
         for u in st.get("upstreams", []):

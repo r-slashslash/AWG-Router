@@ -47,7 +47,7 @@ class InstallerTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
 
     def run_part(self, env_public, *, domain="", tls_domain=None, dns="203.0.113.5", reconf=0,
-                 answer="", ask_domain=1, panel_host=None):
+                 answer="", ask_domain=1, panel_host=None, client_host=None):
         with open(os.path.join(self.tmp, ".env"), "w") as f:
             f.write(f"AWGR_VERSION=2\nPANEL_PORT=4821\nPANEL_PASSWORD=x\nPANEL_BASE_PATH=/x\n"
                     f"PUBLIC_HOST={env_public}\n")
@@ -61,7 +61,13 @@ class InstallerTest(unittest.TestCase):
                 f.write(f'{{"domain": "{tls_domain}"}}')
         state = os.path.join(self.tmp, "data", "state.json")
         with open(state, "w") as f:
-            json.dump({"settings": {} if panel_host is None else {"public_host": panel_host}}, f)
+            st = {} if panel_host is None else {"public_host": panel_host}
+            if client_host is not None:
+                st["client_host"] = client_host
+            json.dump({"settings": st}, f)
+        hand = os.path.join(self.tmp, "data", "client-host")
+        if os.path.exists(hand):
+            os.remove(hand)
         env = dict(os.environ, TMP=self.tmp, FAKE_DNS=dns, ANSWER=answer, AWGR_PORT="4821")
         if domain is not None:
             env["AWGR_DOMAIN"] = domain
@@ -148,10 +154,24 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(v["PUBLIC_HOST"], "203.0.113.5")
         self.assertEqual(v["TLS_HOST"], "203.0.113.5")
 
-    def test_warns_when_panel_address_overrides(self):
-        _, out = self.run_part("", domain="vpn.example.com", panel_host="203.0.113.5")
-        self.assertIn("WARN The panel has its own server address 203.0.113.5", out)
-        self.assertIn("Server → Server public address", out)
+    def test_client_address_chosen_in_panel(self):
+        """1.25.0: адрес в конфигах панель хранит сама («Входящий адрес сервера») — установщик его показывает."""
+        _, out = self.run_part("203.0.113.5", domain="", client_host="198.51.100.20")
+        self.assertIn("Address in client configs: 198.51.100.20 (chosen in the panel: Server → Server incoming address)",
+                      out)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "data", "client-host")))
+
+    def test_address_change_handed_to_panel(self):
+        """Установщик сменил адрес (ответ «домен в конфиги»): панель получит прежний и новый — один раз, при запуске."""
+        _, out = self.run_part("203.0.113.5", domain="vpn.example.com", client_host="203.0.113.5", answer="1")
+        self.assertIn("Address in client configs: vpn.example.com", out)
+        with open(os.path.join(self.tmp, "data", "client-host")) as f:
+            self.assertEqual(f.read(), "203.0.113.5\nvpn.example.com\n")
+
+    def test_warns_when_panel_address_differs(self):
+        _, out = self.run_part("203.0.113.5", domain="", panel_host="198.51.100.30")
+        self.assertIn("WARN The panel address set in the panel is 198.51.100.30", out)
+        self.assertIn("System → Panel address", out)
 
     def test_no_warning_when_panel_address_matches(self):
         _, out = self.run_part("", domain="vpn.example.com", panel_host="vpn.example.com")

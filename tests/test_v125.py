@@ -849,3 +849,34 @@ class AddrWindowsApiTest(unittest.TestCase):
         self.assertNotIn(pk, panel.store.snapshot().get("chost") or {})
         with self.assertRaises(HTTPError):
             addrs.put_addr_in(Req({"host": "198.51.100.99", "clients": [pk]}))
+
+
+class InstallerHostTest(unittest.TestCase):
+    """install.sh сменил адрес сервера: конфиги на прежнем адресе переходят на новый (как до 1.25.0), выбранный в
+    панели другой адрес остаётся; файл client-host — один раз."""
+
+    def _store(self, settings, old, new):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "state.json")
+        st = json.loads(json.dumps(DEFAULT_STATE))
+        st["settings"].update(settings)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+        with open(os.path.join(d, "client-host"), "w", encoding="utf-8") as f:
+            f.write(f"{old}\n{new}\n")
+        s = Store(p)
+        self.assertFalse(os.path.exists(os.path.join(d, "client-host")))
+        return s.snapshot()["settings"]
+
+    def test_follows_installer(self):
+        s = self._store({"client_host": "203.0.113.5"}, "203.0.113.5", "vpn.example.com")
+        self.assertEqual(s["client_host"], "vpn.example.com")
+        self.assertIn("vpn.example.com", s["extra_hosts"])
+
+    def test_own_choice_kept(self):
+        s = self._store({"client_host": "198.51.100.20"}, "203.0.113.5", "203.0.113.9")
+        self.assertEqual(s["client_host"], "198.51.100.20")
+
+    def test_bad_file_ignored(self):
+        s = self._store({"client_host": "203.0.113.5"}, "203.0.113.5", "bad host!")
+        self.assertEqual(s["client_host"], "203.0.113.5")

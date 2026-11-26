@@ -892,10 +892,12 @@ fi
 
 # ------------------------------------------------------------------ settings
 step "Preparing settings"
-# PUBLIC_HOST is the address in client configs: the server's IP or a domain.
+# PUBLIC_HOST is the server's address, the server's IP or a domain: the panel opens at it, and client configs use
+# it until the panel's own "Server incoming address" differs (since 1.25.0 the panel keeps that address itself).
 # SERVER_IP is always the IP: the domain check compares DNS answers with it.
 is_ipv4() { [[ "$1" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; }
 PUBLIC_HOST="$(envget PUBLIC_HOST)"
+OLD_PUBLIC_HOST="$PUBLIC_HOST"
 if [ -n "$PUBLIC_HOST" ] && is_ipv4 "$PUBLIC_HOST" && [ "$RECONF" = 0 ]; then
   SERVER_IP="$PUBLIC_HOST"
 else
@@ -1016,13 +1018,25 @@ if [ "$ACCESS" = public ] && [ -n "$PANEL_DOMAIN" ] \
   fi
   if [[ "$ans" =~ ^[Yy] ]]; then PUBLIC_HOST="$PANEL_DOMAIN"; else PUBLIC_HOST="$ip_host"; fi
 fi
-ok "Address in client configs: $PUBLIC_HOST"
-# Server → Server public address in the panel is kept in data/state.json and overrides PUBLIC_HOST
-PANEL_HOST_SET=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["settings"].get("public_host") or "")' \
-  "$DIR/data/state.json" 2>/dev/null || true)
-if [ -n "$PANEL_HOST_SET" ] && [ "$PANEL_HOST_SET" != "$PUBLIC_HOST" ]; then
-  warn "The panel has its own server address $PANEL_HOST_SET, so client configs use it, not $PUBLIC_HOST."
-  warn "To use $PUBLIC_HOST, change it in the panel: Server → Server public address"
+# The panel keeps the address in client configs itself (Server → Server incoming address, 1.25.0) and the panel
+# address it was given (System → Panel address); both live in data/state.json.
+st_get() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["settings"].get(sys.argv[2]) or "")' \
+  "$DIR/data/state.json" "$1" 2>/dev/null || true; }
+CLIENT_HOST_SET="$(st_get client_host)"
+PANEL_HOST_SET="$(st_get public_host)"
+if [ -f "$DIR/data/state.json" ] && [ -n "$OLD_PUBLIC_HOST" ] && [ "$PUBLIC_HOST" != "$OLD_PUBLIC_HOST" ]; then
+  # the address changed here (new IP, the domain question): configs that used the old one follow it, as before
+  # 1.25.0. The panel applies it on start, only if configs still use the old address
+  printf '%s\n%s\n' "$OLD_PUBLIC_HOST" "$PUBLIC_HOST" > "$DIR/data/client-host"
+  [ "$CLIENT_HOST_SET" = "$OLD_PUBLIC_HOST" ] && CLIENT_HOST_SET="$PUBLIC_HOST"
+fi
+if [ -n "$CLIENT_HOST_SET" ] && [ "$CLIENT_HOST_SET" != "$PUBLIC_HOST" ]; then
+  ok "Address in client configs: $CLIENT_HOST_SET (chosen in the panel: Server → Server incoming address)"
+else
+  ok "Address in client configs: $PUBLIC_HOST"
+fi
+if [ -n "$PANEL_HOST_SET" ] && [ "$PANEL_HOST_SET" != "$PUBLIC_HOST" ] && [ -z "$PANEL_DOMAIN" ]; then
+  warn "The panel address set in the panel is $PANEL_HOST_SET, not $PUBLIC_HOST: change it in System → Panel address"
 fi
 TLS_HOST="${PANEL_DOMAIN:-$PUBLIC_HOST}"
 

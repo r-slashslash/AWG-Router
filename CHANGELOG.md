@@ -5,8 +5,55 @@ it grows, so every user-visible change gets a new version.
 
 ## 1.25.0 — unreleased
 
+- **Outgoing server addresses.** **Server → Additional outgoing addresses** takes other IPv4 addresses of this server
+  (up to 16); the panel adds them to the system itself (host: `ip addr add … label <dev>:awgr`, recorded in
+  `data/addrs.json` and `data/own-addrs`, re-added after a reboot, removed with the field or on uninstall; container
+  mode: a Docker network `zz-awgr-out-K` with `com.docker.network.host_ipv4`, attached to the AWG container) and checks
+  each: a probe through the address's mark must see the same address as a probe bound to it. **Server outgoing
+  address** picks the main one (default — the system address). Every exit choice (Default, rules, their fallbacks and
+  quota actions, clients and their own rules, exits' fallbacks and quota actions, the Telegram path) lists **Direct —
+  address** per address, main first; in memory `direct@<ip>`/`direct@system`, on disk and in backups `direct` plus
+  `<field>_src`, so 1.24 reads Direct. Each address has its own mark (`ADDR_MARK_BASE + K`), `ip rule` and table
+  (`default via gw src IP`); host mode swaps the sender in `c_addr_nat` (`srcnat - 1`, before any masquerade).
+  Guards in `c_forward` and `c_addr_post` drop a marked packet leaving another way, from another address after NAT,
+  or with an unknown mark of the range; while rules are put in before the panel, address marks block.
+- **An address that stops working blocks, never leaks.** Two failed checks of an address that worked → `failed`:
+  what goes through it is blocked, its card on **Routing** is red, exit choices mark it "not working", an exit
+  connecting from it counts as down and follows its fallback, and Telegram gets `addr_down`/`addr_up`. An address that
+  never worked is taken out of the system (`bad`) until the Server tab is saved again.
+- **Exits connect from an address**: an exit's `bind` (**Connect from address** in its window, or the outgoing
+  address window) puts the address's mark on the tunnel itself (`FwMark` in the AmneziaWG config, `mark` in
+  hev-socks5-tunnel, `SO_MARK` in the SOCKS5 check). Under an exit through another server, exit choices say which
+  address it connects from.
+- **Routing → Server addresses**: incoming address cards (how many clients have each in their config) and outgoing
+  ones (what websites see and the country, where it is used); their windows tick clients (`PUT /api/addr-in`) or
+  Direct places and exits (`PUT /api/addr-out`, places from `GET /api/addr-places`). Unticked — back to the main
+  address. The route check shows the address.
+- **Changing the main outgoing address moves** everything on plain Direct to the new one; before saving, the Server
+  tab asks (`confirm: false` → what moves, where removed addresses are used, which clients lose their incoming
+  address). Removing a used address puts its places on the main one. Restoring a backup: addresses are the server's
+  own (`OWN_SETTINGS`), places with an address this server doesn't have go to the main one and the panel says where.
+- **Open connections follow a manual change**: saving routing, a client, an exit or an address window compares every
+  client's path before and after and closes only the connections whose path changed — conntrack entries in the AWG
+  network over netlink (`ctflush.py`, by client and destination), the domain handler's own connections
+  (`sniproxy.drop`) and QUIC verdicts of clients whose domain rules changed — then says "Open connections will
+  reconnect over the new path". Load balancing moves and fallbacks close nothing, as before.
+- **The server's own connections** (panel updates, lists, lego through a local CONNECT proxy, `install.sh` via
+  `AWGR_FROM`) can go out from a chosen address: **System → Address the server itself goes out from**; if it stops
+  working, from the system address.
+- **Incoming address apart from the panel address.** **Server incoming address** (`client_host`, now always written:
+  `Store.split_hosts` on every start, a domain also goes to `extra_hosts`) and **Additional incoming addresses** (IPs or
+  domains; a missing IP is added to the system and checked like an outgoing one; 1:1 NAT as on AWS counts as present)
+  replace **Server public address** and **Address in configs**. **System → Panel address** (an IP goes to
+  `public_host`, a domain to the TLS domain) no longer moves clients; the certificate window lost its domain field.
+  `install.sh` hands an address change of its own to the panel once (`data/client-host`): configs on the old address
+  follow it, as before 1.25.0.
+- The Telegram bot shows "direct — address".
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.
+- Going back to 1.24.x: Direct with an address goes from the system address there (not blocked), exits connect from
+  it too, and addresses the panel added stay in the system until a reboot (the container mode's Docker networks stay
+  until removed; they carry no traffic there).
 
 ## 1.24.0 — 2026-11-25
 

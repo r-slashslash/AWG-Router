@@ -28,9 +28,10 @@ namespace, and enters the network of the AWG container with `nsenter`.
 |---|---|
 | Start | `app/main.py` (`python3 -m app.main`) |
 | Shared objects: state, engine, HTTPS, notifications, the web app | `app/panel.py` |
-| API by topic | `app/api/`: `auth` (login, sessions, 2FA, `same_origin`), `clients` (clients, limits, masking, the client's page `/s/…`), `exits`, `routing` (rules, lists, route check), `server` (AWG server, engine, HTTPS, updates), `state` (`/api/state`, settings), `backup`, `telegram` (settings and bot control) |
+| API by topic | `app/api/`: `auth` (login, sessions, 2FA, `same_origin`), `clients` (clients, limits, masking, the client's page `/s/…`), `exits`, `routing` (rules, lists, route check), `addrs` (the windows of Routing → Server addresses, 1.25.0), `server` (AWG server, engine, HTTPS, updates), `state` (`/api/state`, settings), `backup`, `telegram` (settings and bot control) |
+| Server addresses (1.25.0) | `app/srcaddr.py` (the "Direct — address" value in memory, on disk and in backups, every place an exit is chosen), `app/engine/addrs.py` (adding, checking and removing addresses, Docker networks), `app/srcnet.py` (the panel's own connections from a chosen address), `app/ctflush.py` (closing connections whose path changed) |
 | Input checks, one per kind of thing | `app/checks.py`; the server's client settings in `users.py` |
-| Engine (`Engine`, one class in parts) | `app/engine/`: `__init__` (the pass, loops, events), `tunnels` (exits' tunnels, health, traffic, quotas), `routes` (routing decisions, nftables, ip rule), `sni` (domain rules, QUIC by name), `dns` (DNS on the server), `server` (AWG server, kernel module, rules "before the panel"), `speed` (`tc`), `diag` (exit check, route check), `common` |
+| Engine (`Engine`, one class in parts) | `app/engine/`: `__init__` (the pass, loops, events), `tunnels` (exits' tunnels, health, traffic, quotas), `routes` (routing decisions, nftables, ip rule), `sni` (domain rules, QUIC by name), `dns` (DNS on the server), `server` (AWG server, kernel module, rules "before the panel"), `addrs` (server addresses), `speed` (`tc`), `diag` (exit check, route check), `common` |
 | Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` — rules and the rule window with its lists, also used for a client's own rules, `clientrules` — the Client rules section of Routing (1.24.0), `exits`, `server`, `system`, `settings` — Telegram, password, backup); a window over a window (the rule window over the client window) is the second `dialog`, `#modal2`, `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
 
 ## The AWG server ("Target")
@@ -110,6 +111,45 @@ where packets arrive. `sniproxy.py` passes `j` in `RULE_LIM_MASK` of its sockets
 `type route` chain `rl_lab` in output turns it into labels and takes it off before the route is chosen again; the
 proxy uses it only once a ruleset with `rl_lab` is in (`_rlim_key`), and `c_guard_post` drops packets still carrying
 it. Numbers `j` are kept between passes (`Engine.rule_limits`).
+
+### Server addresses (1.25.0)
+
+Incoming addresses only change what goes into client configs (`settings.client_host`, `extra_hosts`, a client's own
+`chost`); since 1.25.0 `client_host` is always written (`Store.split_hosts`), so the panel address
+(`settings.public_host`, `PUBLIC_HOST`, the TLS domain) no longer moves clients. `install.sh` hands its own address
+change to the panel once through `data/client-host` (`Store._installer_host`).
+
+Outgoing addresses (`settings.out_hosts`, the main one `out_main`, "" — the system address):
+
+- In memory every exit field (`srcaddr.slots`: Default, rules, their fallbacks and quota actions, clients, exits'
+  fallbacks and quota actions, the Telegram path) can be `direct@<ip>` or `direct@system`; plain `direct` is the main
+  address. On disk and in backups it is `direct` plus `<field>_src` (`srcaddr.to_disk` / `from_disk`), so 1.24 reads
+  Direct and sends it from the system address. An exit's `bind` is the address it connects from. `srcaddr.normalize`
+  turns an unknown address into the main one and reports where (backup restore, a removed address).
+- `Engine.resolve` gives `direct` (the system address), an `nftgen.Addr` or `block`: an address is used only while
+  its state is `ok` and its path is live (`_addr_live`); otherwise the traffic is blocked, never sent from another
+  address. An exit whose `bind` doesn't work counts as down and follows its fallback.
+- Address K (1..`ADDR_MAX`) has the mark `ADDR_MARK_BASE + K`, an `ip rule` `ADDR_PRIO_BASE + K` and a table
+  `ADDR_TABLE_BASE + K`. Host mode: the address on the WAN interface (label `<dev>:awgr`, recorded in `data/addrs.json`
+  and `data/own-addrs` for uninstall), `default via gw dev wan src IP` in the table and `snat` in `c_addr_nat`
+  (`srcnat - 1`, before Docker's and the system's masquerade). Container mode: a Docker network
+  `zz-awgr-out-K` with `com.docker.network.host_ipv4`, attached to the AWG container with the lowest gateway
+  priority; if Docker makes it the container's default anyway, the panel detaches it and marks the address failed.
+  Guards: `c_forward` rejects a marked packet leaving through the wrong interface or with an unknown mark in the
+  range; `c_addr_post` (`srcnat + 1`) drops it after NAT when the sender isn't the address. While rules are put in
+  before the panel (`awgr-hold`), address marks block.
+- States (`addr_rt`): `checking` → `ok` (the path probe through the mark sees the same address as a probe bound to
+  it), `failed` after two failed checks of an address that worked (events and Telegram `addr_down`/`addr_up`),
+  `bad` — never worked, taken out of the system until the Server tab is saved again. An incoming IP that equals the
+  public address or what an outgoing address is seen as counts as present (1:1 NAT, AWS).
+- An exit connecting from an address carries its mark: `FwMark` in the AmneziaWG config (`awgconf.with_fwmark`),
+  `mark` in hev-socks5-tunnel, `SO_MARK` in the SOCKS5 health check.
+- The panel's own connections (updates, lists, lego through `srcnet.ConnectProxy`, `install.sh` via `AWGR_FROM`) go
+  from `settings.own_src` while it works, else from the system address (`Engine.own_src`).
+- A manual change of an exit choice (`api.routing.mutate_paths`) compares every client's path before and after
+  (`Engine.paths`); only connections whose path changed are closed: `ctflush.py` in the AWG network (conntrack over
+  netlink, by client and destination), `sniproxy.drop` for the domain handler, QUIC verdicts of clients whose domain
+  rules changed. Balancing moves and fallbacks never close anything.
 
 ## Domain rules
 
