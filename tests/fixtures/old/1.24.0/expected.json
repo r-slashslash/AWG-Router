@@ -1,0 +1,1274 @@
+{
+ "backup": {
+  "clean": {
+   "chost": {
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": "198.51.100.20"
+   },
+   "clients": {
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+     "name": "alice",
+     "note": "phone",
+     "outbound": "up:ue48fc0",
+     "rules": [
+      {
+       "comment": "home",
+       "enabled": true,
+       "id": "r_0aa7ae",
+       "lists": [
+        "la6af18"
+       ],
+       "outbound": "direct"
+      }
+     ],
+     "rules_mode": "custom"
+    },
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+     "name": "bob",
+     "note": "",
+     "outbound": "block",
+     "rules": [],
+     "rules_mode": "inherit"
+    }
+   },
+   "cps": {
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+     "preset": "icloud"
+    },
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+     "preset": "custom",
+     "values": {
+      "I1": "<b 0x0102030405060708>",
+      "I2": "",
+      "I3": "",
+      "I4": "",
+      "I5": ""
+     }
+    }
+   },
+   "keys": {
+    "IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs=": "TR1ZKHv/J3eC60KrLtCpd+n9XrhJjUlPVRoW3f+90gc=",
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": "7O0DH3UhrADi34qt/uztq1agg/tlMCEwqg6MJ2sbCvY=",
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": "FT+FcQ838dMivSLjRZJEd8M8Ig0zf4dBn5X03OZwX/E="
+   },
+   "limits": {
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1900000000,
+     "period": "month",
+     "quota": 21474836480,
+     "quota_done": null,
+     "quota_warned": null,
+     "rate_down": 5.0,
+     "rate_up": 1.0
+    },
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1800000000,
+     "period": "total",
+     "quota": 1610612736,
+     "quota_done": null,
+     "quota_warned": null
+    }
+   },
+   "lists": [
+    {
+     "id": "la6af18",
+     "kind": "manual",
+     "name": "Office",
+     "source": "203.0.113.0/24\n198.51.100.0/25 # склад\n192.0.2.7\n2001:db8::/32"
+    },
+    {
+     "id": "l9d582b",
+     "kind": "domains",
+     "name": "Sites",
+     "source": "example.com\n*.example.org\n# comment\nhttps://lists.example/d.txt"
+    },
+    {
+     "id": "lf6b7e5",
+     "kind": "asn",
+     "name": "AS64496 AS64511",
+     "source": "AS64496 AS64511"
+    },
+    {
+     "id": "l94f52b",
+     "kind": "url",
+     "name": "Feed",
+     "source": "https://lists.example/nets.txt"
+    },
+    {
+     "id": "de",
+     "kind": "country",
+     "name": "Germany",
+     "source": "de"
+    },
+    {
+     "id": "l4f9186",
+     "kind": "domains",
+     "name": "Proxy",
+     "source": "a.example\nb.example"
+    },
+    {
+     "id": "ru",
+     "kind": "country",
+     "name": "",
+     "source": "ru"
+    },
+    {
+     "id": "cn",
+     "kind": "country",
+     "name": "",
+     "source": "cn"
+    }
+   ],
+   "routing": {
+    "balance": {
+     "on": true,
+     "skip": [
+      "u269732"
+     ]
+    },
+    "default": "up:u34fe9c",
+    "rules": [
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_7cf151",
+      "lists": [
+       "l4f9186",
+       "l9d582b"
+      ],
+      "outbound": "up:ue48fc0"
+     },
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_0d1edf",
+      "lists": [
+       "la6af18"
+      ],
+      "outbound": "up:ue48fc0"
+     },
+     {
+      "comment": "geo",
+      "enabled": true,
+      "id": "r_665e03",
+      "lists": [
+       "ru",
+       "cn"
+      ],
+      "outbound": "direct"
+     },
+     {
+      "comment": "Proxy",
+      "enabled": true,
+      "id": "r_e248be",
+      "lists": [
+       "la6af18"
+      ],
+      "outbound": "up:ue48fc0"
+     },
+     {
+      "comment": "off",
+      "enabled": false,
+      "id": "r_dcee3c",
+      "lists": [
+       "l9d582b"
+      ],
+      "outbound": "block"
+     },
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_9c6148",
+      "lists": [
+       "lf6b7e5",
+       "l94f52b",
+       "de"
+      ],
+      "outbound": "direct"
+     }
+    ],
+    "strict": true
+   },
+   "settings": {
+    "client_dns": [
+     "1.1.1.1",
+     "9.9.9.9"
+    ],
+    "client_keepalive": "25",
+    "client_mtu": 1380,
+    "dom_filter": true,
+    "list_update_hours": 12,
+    "on_stop": "restore",
+    "panel_dns": true,
+    "panel_dns_enc": "doh",
+    "shaping": {
+     "down": 200.0,
+     "up": 100.0
+    },
+    "telegram": {
+     "backup": "weekly",
+     "backup_error": null,
+     "backup_last": null,
+     "backup_pw": "tg-backup-pass",
+     "chat_id": "-1001234567",
+     "client_notify": true,
+     "clients": true,
+     "control": true,
+     "enabled": true,
+     "events": {
+      "clients": true,
+      "exit": true,
+      "login": false,
+      "monthly": false,
+      "server": true,
+      "system": true,
+      "tls": true,
+      "update": true
+     },
+     "fallback": true,
+     "lang": "ru",
+     "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "via": "up:u34fe9c"
+    }
+   },
+   "shares": {
+    "0gT0tvsT2vpScN9-YbDt34TY": {
+     "created": 1795660116.0763547,
+     "pk": "IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs="
+    },
+    "CL2ZQSR-axoUYu8_OXzC3rkv": {
+     "created": 1795660116.0622182,
+     "pk": "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY="
+    },
+    "XCsjLttl9UrMtff-HW2xJ5YD": {
+     "created": 1795660116.069838,
+     "pk": "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI="
+    }
+   },
+   "upgraded": [
+    "rule_names",
+    "client_bot",
+    "bot_switch"
+   ],
+   "upstreams": [
+    {
+     "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+     "created": 1795660117.6134014,
+     "enabled": true,
+     "fallback": "block",
+     "id": "u34fe9c",
+     "name": "NL",
+     "num": 1,
+     "quota": 53687091200,
+     "quota_action": "up:ue48fc0",
+     "quota_hit": null,
+     "quota_warned": null,
+     "rate_down": 50.0,
+     "rate_up": 10.0
+    },
+    {
+     "config": "socks5://user:pass@198.51.100.9:1080",
+     "created": 1795660117.620051,
+     "enabled": true,
+     "fallback": "up:u34fe9c",
+     "id": "ue48fc0",
+     "name": "Proxy",
+     "num": 2,
+     "own_list": "l4f9186",
+     "quic": true,
+     "quota": 2684354560,
+     "quota_action": "block",
+     "quota_hit": null,
+     "quota_warned": null
+    },
+    {
+     "config": "socks5://198.51.100.10:1080",
+     "created": 1795660117.636817,
+     "enabled": false,
+     "fallback": "block",
+     "id": "u269732",
+     "name": "Spare",
+     "num": 3,
+     "quota": null,
+     "quota_action": "notify",
+     "quota_hit": null,
+     "quota_warned": null
+    }
+   ],
+   "version": 1
+  },
+  "restored": {
+   "chost": {},
+   "clients": {
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+     "name": "alice",
+     "note": "phone",
+     "outbound": "up:ue48fc0",
+     "rules": [
+      {
+       "comment": "home",
+       "enabled": true,
+       "id": "r_0aa7ae",
+       "lists": [
+        "la6af18"
+       ],
+       "outbound": "direct"
+      }
+     ],
+     "rules_mode": "custom"
+    },
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+     "name": "bob",
+     "note": "",
+     "outbound": "block",
+     "rules": [],
+     "rules_mode": "inherit"
+    }
+   },
+   "cps": {
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+     "preset": "icloud"
+    },
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+     "preset": "custom",
+     "values": {
+      "I1": "<b 0x0102030405060708>",
+      "I2": "",
+      "I3": "",
+      "I4": "",
+      "I5": ""
+     }
+    }
+   },
+   "keys": {
+    "IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs=": "TR1ZKHv/J3eC60KrLtCpd+n9XrhJjUlPVRoW3f+90gc=",
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": "7O0DH3UhrADi34qt/uztq1agg/tlMCEwqg6MJ2sbCvY=",
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": "FT+FcQ838dMivSLjRZJEd8M8Ig0zf4dBn5X03OZwX/E="
+   },
+   "limits": {
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1900000000,
+     "period": "month",
+     "quota": 21474836480,
+     "quota_done": null,
+     "quota_warned": null,
+     "rate_down": 5.0,
+     "rate_up": 1.0
+    },
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+     "auto_off": null,
+     "exp_done": null,
+     "exp_warned": null,
+     "expires": 1800000000,
+     "period": "total",
+     "quota": 1610612736,
+     "quota_done": null,
+     "quota_warned": null
+    }
+   },
+   "lists": [
+    {
+     "id": "la6af18",
+     "kind": "manual",
+     "name": "Office",
+     "source": "203.0.113.0/24\n198.51.100.0/25 # склад\n192.0.2.7\n2001:db8::/32"
+    },
+    {
+     "id": "l9d582b",
+     "kind": "domains",
+     "name": "Sites",
+     "source": "example.com\n*.example.org\n# comment\nhttps://lists.example/d.txt"
+    },
+    {
+     "id": "lf6b7e5",
+     "kind": "asn",
+     "name": "AS64496 AS64511",
+     "source": "AS64496 AS64511"
+    },
+    {
+     "id": "l94f52b",
+     "kind": "url",
+     "name": "Feed",
+     "source": "https://lists.example/nets.txt"
+    },
+    {
+     "id": "de",
+     "kind": "country",
+     "name": "Germany",
+     "source": "de"
+    },
+    {
+     "id": "l4f9186",
+     "kind": "domains",
+     "name": "Proxy",
+     "source": "a.example\nb.example"
+    },
+    {
+     "id": "ru",
+     "kind": "country",
+     "name": "",
+     "source": "ru"
+    },
+    {
+     "id": "cn",
+     "kind": "country",
+     "name": "",
+     "source": "cn"
+    }
+   ],
+   "routing": {
+    "balance": {
+     "on": true,
+     "skip": [
+      "u269732"
+     ]
+    },
+    "default": "up:u34fe9c",
+    "rules": [
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_7cf151",
+      "lists": [
+       "l4f9186",
+       "l9d582b"
+      ],
+      "outbound": "up:ue48fc0"
+     },
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_0d1edf",
+      "lists": [
+       "la6af18"
+      ],
+      "outbound": "up:ue48fc0"
+     },
+     {
+      "comment": "geo",
+      "enabled": true,
+      "id": "r_665e03",
+      "lists": [
+       "ru",
+       "cn"
+      ],
+      "outbound": "direct"
+     },
+     {
+      "comment": "Proxy",
+      "enabled": true,
+      "id": "r_e248be",
+      "lists": [
+       "la6af18"
+      ],
+      "outbound": "up:ue48fc0"
+     },
+     {
+      "comment": "off",
+      "enabled": false,
+      "id": "r_dcee3c",
+      "lists": [
+       "l9d582b"
+      ],
+      "outbound": "block"
+     },
+     {
+      "comment": "",
+      "enabled": true,
+      "id": "r_9c6148",
+      "lists": [
+       "lf6b7e5",
+       "l94f52b",
+       "de"
+      ],
+      "outbound": "direct"
+     }
+    ],
+    "strict": true
+   },
+   "settings": {
+    "client_dns": [
+     "1.1.1.1",
+     "9.9.9.9"
+    ],
+    "client_keepalive": "25",
+    "client_mtu": 1380,
+    "dom_filter": true,
+    "list_update_hours": 12,
+    "on_stop": "restore",
+    "panel_dns": true,
+    "panel_dns_enc": "doh",
+    "shaping": {
+     "down": 200.0,
+     "up": 100.0
+    },
+    "telegram": {
+     "backup": "weekly",
+     "backup_error": null,
+     "backup_last": null,
+     "backup_pw": "tg-backup-pass",
+     "chat_id": "-1001234567",
+     "client_notify": true,
+     "clients": true,
+     "control": true,
+     "enabled": true,
+     "events": {
+      "clients": true,
+      "exit": true,
+      "login": false,
+      "monthly": false,
+      "server": true,
+      "system": true,
+      "tls": true,
+      "update": true
+     },
+     "fallback": true,
+     "lang": "ru",
+     "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "via": "up:u34fe9c"
+    }
+   },
+   "shares": {
+    "0gT0tvsT2vpScN9-YbDt34TY": {
+     "created": 1795660116.0763547,
+     "pk": "IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs="
+    },
+    "CL2ZQSR-axoUYu8_OXzC3rkv": {
+     "created": 1795660116.0622182,
+     "pk": "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY="
+    },
+    "XCsjLttl9UrMtff-HW2xJ5YD": {
+     "created": 1795660116.069838,
+     "pk": "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI="
+    }
+   },
+   "upgraded": [
+    "rule_names",
+    "client_bot",
+    "bot_switch"
+   ],
+   "upstreams": [
+    {
+     "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+     "created": 1795660117.6134014,
+     "enabled": true,
+     "fallback": "block",
+     "id": "u34fe9c",
+     "name": "NL",
+     "num": 1,
+     "quota": 53687091200,
+     "quota_action": "up:ue48fc0",
+     "quota_hit": null,
+     "quota_warned": null,
+     "rate_down": 50.0,
+     "rate_up": 10.0
+    },
+    {
+     "config": "socks5://user:pass@198.51.100.9:1080",
+     "created": 1795660117.620051,
+     "enabled": true,
+     "fallback": "up:u34fe9c",
+     "id": "ue48fc0",
+     "name": "Proxy",
+     "num": 2,
+     "own_list": "l4f9186",
+     "quic": true,
+     "quota": 2684354560,
+     "quota_action": "block",
+     "quota_hit": null,
+     "quota_warned": null
+    },
+    {
+     "config": "socks5://198.51.100.10:1080",
+     "created": 1795660117.636817,
+     "enabled": false,
+     "fallback": "block",
+     "id": "u269732",
+     "name": "Spare",
+     "num": 3,
+     "quota": null,
+     "quota_action": "notify",
+     "quota_hit": null,
+     "quota_warned": null
+    }
+   ],
+   "version": 1
+  },
+  "server": {
+   "conf": "[Interface]\nPrivateKey = 7vhEIqiuy0QJo9S0de0ri0jiVNPI5WmVizOdAjE1+HI=\nAddress = 10.8.1.0/24\nListenPort = 47823\nJc = 4\nJmin = 10\nJmax = 50\nS1 = 12\nS2 = 12\nS3 = 12\nS4 = 12\nH1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\nHeaderProtectionKey = Z3P+NHBkFFio419ounhd67zMtYJxblf1vysb3g2P8mk=\nContentPaddingAddition = 10-100\nRekeyAfterTime = 100-120\nRekeyTimeout = 3-7\nRejectAfterTime = 150-180\nKeepaliveTimeout = 5-15\nMaxHandshakeAttempts = 15-20\nRandomTrailers = on\nDisableCookies = on\n# I1 = <r 2><b 0x818000010001000000010669636c6f756403636f6d0000010001c00c000100010000><r 2><b 0x000411fd900a00002904d0000000000000>\n\n[Peer]\nPublicKey = 9vZkVuq1DjEoEQMoyAyuLwkUY4dxzcHpQiygBCT5k1s=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.1/32\n\n[Peer]\nPublicKey = QkFekl/nbbdZY3cBFgg00+T5Urq7qdsQCqdhhV4/VKo=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.2/32\n\n[Peer]\nPublicKey = opd3MCjs9Mrb9WKCZ5Sqy9evLsiXdk2lMUUXRFsWgzM=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.3/32\n\n[Peer]\nPublicKey = ltcNkd4ssrVzgxONkczIdOlJDT7ymO8SA3RguAKzFFA=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.4/32\n\n[Peer]\nPublicKey = ecqOkSuRd/X9oUydpqQOVg0KqyHzud1ZgewOPKJoVss=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.5/32\n\n[Peer]\nPublicKey = kKailFHhogOZHI6MSmKzp7qN+vSY36mYbmY+PA0TJFw=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.6/32\n\n[Peer]\nPublicKey = TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.7/32\n\n[Peer]\nPublicKey = qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=\nPresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\nAllowedIPs = 10.8.1.8/32\n\n#awgr:disabled\n# [Peer]\n# PublicKey = IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs=\n# PresharedKey = ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\n# AllowedIPs = 10.8.1.9/32\n",
+   "files": {
+    "clientsTable": "[\n    {\n        \"clientId\": \"9vZkVuq1DjEoEQMoyAyuLwkUY4dxzcHpQiygBCT5k1s=\",\n        \"userData\": {\n            \"clientName\": \"Anna iPhone\",\n            \"creationDate\": \"Thu Nov 26 10:28:35 2026\"\n        }\n    },\n    {\n        \"clientId\": \"QkFekl/nbbdZY3cBFgg00+T5Urq7qdsQCqdhhV4/VKo=\",\n        \"userData\": {\n            \"clientName\": \"Anna MacBook\",\n            \"creationDate\": \"Thu Nov 26 10:28:35 2026\"\n        }\n    },\n    {\n        \"clientId\": \"opd3MCjs9Mrb9WKCZ5Sqy9evLsiXdk2lMUUXRFsWgzM=\",\n        \"userData\": {\n            \"clientName\": \"Dad\",\n            \"creationDate\": \"Thu Nov 26 10:28:35 2026\"\n        }\n    },\n    {\n        \"clientId\": \"ltcNkd4ssrVzgxONkczIdOlJDT7ymO8SA3RguAKzFFA=\",\n        \"userData\": {\n            \"clientName\": \"Office router\",\n            \"creationDate\": \"Thu Nov 26 10:28:35 2026\"\n        }\n    },\n    {\n        \"clientId\": \"ecqOkSuRd/X9oUydpqQOVg0KqyHzud1ZgewOPKJoVss=\",\n        \"userData\": {\n            \"clientName\": \"Living room TV\",\n            \"creationDate\": \"Thu Nov 26 10:28:35 2026\"\n        }\n    },\n    {\n        \"clientId\": \"kKailFHhogOZHI6MSmKzp7qN+vSY36mYbmY+PA0TJFw=\",\n        \"userData\": {\n            \"clientName\": \"Guest\",\n            \"creationDate\": \"Thu Nov 26 10:28:35 2026\"\n        }\n    },\n    {\n        \"clientId\": \"TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=\",\n        \"userData\": {\n            \"clientName\": \"alice\",\n            \"creationDate\": \"Thu Nov 26 10:28:36 2026\"\n        }\n    },\n    {\n        \"clientId\": \"qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=\",\n        \"userData\": {\n            \"clientName\": \"bob\",\n            \"creationDate\": \"Thu Nov 26 10:28:36 2026\"\n        }\n    },\n    {\n        \"clientId\": \"IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs=\",\n        \"userData\": {\n            \"clientName\": \"carol\",\n            \"creationDate\": \"Thu Nov 26 10:28:36 2026\"\n        }\n    }\n]",
+    "wireguard_psk.key": "ooIVW9ABWcFshLCrAjix5fov2dG1gSsf2bb/CX9LtT8=\n"
+   }
+  },
+  "traffic": {
+   "_v": 2,
+   "clients": {
+    "9vZkVuq1DjEoEQMoyAyuLwkUY4dxzcHpQiygBCT5k1s=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        20000,
+        150000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        9000,
+        75000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       40000,
+       300000
+      ]
+     },
+     "total": [
+      40000,
+      300000
+     ]
+    },
+    "IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        180000,
+        1350000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        81000,
+        675000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       360000,
+       2700000
+      ]
+     },
+     "total": [
+      360000,
+      2700000
+     ]
+    },
+    "QkFekl/nbbdZY3cBFgg00+T5Urq7qdsQCqdhhV4/VKo=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        40000,
+        300000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        18000,
+        150000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       80000,
+       600000
+      ]
+     },
+     "total": [
+      80000,
+      600000
+     ]
+    },
+    "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        140000,
+        1050000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        63000,
+        525000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       280000,
+       2100000
+      ]
+     },
+     "total": [
+      280000,
+      2100000
+     ]
+    },
+    "ecqOkSuRd/X9oUydpqQOVg0KqyHzud1ZgewOPKJoVss=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        100000,
+        750000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        45000,
+        375000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       200000,
+       1500000
+      ]
+     },
+     "total": [
+      200000,
+      1500000
+     ]
+    },
+    "kKailFHhogOZHI6MSmKzp7qN+vSY36mYbmY+PA0TJFw=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        120000,
+        900000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        54000,
+        450000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       240000,
+       1800000
+      ]
+     },
+     "total": [
+      240000,
+      1800000
+     ]
+    },
+    "ltcNkd4ssrVzgxONkczIdOlJDT7ymO8SA3RguAKzFFA=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        80000,
+        600000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        36000,
+        300000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       160000,
+       1200000
+      ]
+     },
+     "total": [
+      160000,
+      1200000
+     ]
+    },
+    "opd3MCjs9Mrb9WKCZ5Sqy9evLsiXdk2lMUUXRFsWgzM=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        60000,
+        450000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        27000,
+        225000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       120000,
+       900000
+      ]
+     },
+     "total": [
+      120000,
+      900000
+     ]
+    },
+    "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+     "by_out": {
+      "2026-11": {
+       "direct": [
+        160000,
+        1200000
+       ]
+      }
+     },
+     "by_rule": {
+      "2026-11": {
+       "_d": [
+        72000,
+        600000
+       ]
+      }
+     },
+     "last": null,
+     "months": {
+      "2026-11": [
+       320000,
+       2400000
+      ]
+     },
+     "total": [
+      320000,
+      2400000
+     ]
+    }
+   },
+   "outs": {
+    "direct": {
+     "months": {
+      "2026-11": [
+       900000,
+       6750000
+      ]
+     },
+     "total": [
+      900000,
+      6750000
+     ]
+    }
+   },
+   "rules": {
+    "_default": {
+     "months": {
+      "2026-11": [
+       405000,
+       3375000
+      ]
+     }
+    }
+   },
+   "server": {
+    "months": {
+     "2026-11": [
+      1800000,
+      13500000
+     ]
+    },
+    "total": [
+     1800000,
+     13500000
+    ]
+   }
+  }
+ },
+ "state": {
+  "await_first": {},
+  "chost": {
+   "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": "198.51.100.20"
+  },
+  "clients": {
+   "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+    "name": "alice",
+    "note": "phone",
+    "outbound": "up:ue48fc0",
+    "rules": [
+     {
+      "comment": "home",
+      "enabled": true,
+      "id": "r_0aa7ae",
+      "lists": [
+       "la6af18"
+      ],
+      "outbound": "direct"
+     }
+    ],
+    "rules_mode": "custom"
+   },
+   "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+    "name": "bob",
+    "note": "",
+    "outbound": "block",
+    "rules": [],
+    "rules_mode": "inherit"
+   }
+  },
+  "cps": {
+   "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+    "preset": "icloud"
+   },
+   "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+    "preset": "custom",
+    "values": {
+     "I1": "<b 0x0102030405060708>",
+     "I2": "",
+     "I3": "",
+     "I4": "",
+     "I5": ""
+    }
+   }
+  },
+  "keys": {
+   "IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs=": "TR1ZKHv/J3eC60KrLtCpd+n9XrhJjUlPVRoW3f+90gc=",
+   "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": "7O0DH3UhrADi34qt/uztq1agg/tlMCEwqg6MJ2sbCvY=",
+   "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": "FT+FcQ838dMivSLjRZJEd8M8Ig0zf4dBn5X03OZwX/E="
+  },
+  "limits": {
+   "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY=": {
+    "expires": 1900000000,
+    "period": "month",
+    "quota": 21474836480,
+    "quota_done": null,
+    "quota_warned": null,
+    "rate_down": 5.0,
+    "rate_up": 1.0
+   },
+   "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI=": {
+    "expires": 1800000000,
+    "period": "total",
+    "quota": 1610612736,
+    "quota_done": null,
+    "quota_warned": null
+   }
+  },
+  "lists": [
+   {
+    "addresses": 385,
+    "checked": 1795660117.5842538,
+    "count": 3,
+    "error": null,
+    "id": "la6af18",
+    "kind": "manual",
+    "name": "Office",
+    "skipped_v6": 1,
+    "source": "203.0.113.0/24\n198.51.100.0/25 # склад\n192.0.2.7\n2001:db8::/32",
+    "updated": 1795660117.5842535
+   },
+   {
+    "addresses": null,
+    "checked": 1795660117.927696,
+    "count": 2,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "lists.example: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+     }
+    },
+    "first": "example.com",
+    "id": "l9d582b",
+    "kind": "domains",
+    "name": "Sites",
+    "skipped_v6": 0,
+    "source": "example.com\n*.example.org\n# comment\nhttps://lists.example/d.txt",
+    "updated": 1795660117.9276955
+   },
+   {
+    "checked": 1795660117.941586,
+    "error": {
+     "$t": "list.asn_failed",
+     "p": {
+      "asn": 64496,
+      "detail": "ipverse: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; ripestat: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+     }
+    },
+    "id": "lf6b7e5",
+    "kind": "asn",
+    "name": "AS64496 AS64511",
+    "source": "AS64496 AS64511"
+   },
+   {
+    "checked": 1795660117.8282793,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "<urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+     }
+    },
+    "id": "l94f52b",
+    "kind": "url",
+    "name": "Feed",
+    "source": "https://lists.example/nets.txt"
+   },
+   {
+    "checked": 1795660117.8810885,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+     }
+    },
+    "id": "de",
+    "kind": "country",
+    "name": "Germany",
+    "source": "de"
+   },
+   {
+    "addresses": null,
+    "checked": 1795660117.6227272,
+    "count": 2,
+    "error": null,
+    "first": "a.example",
+    "id": "l4f9186",
+    "kind": "domains",
+    "name": "Proxy",
+    "skipped_v6": 0,
+    "source": "a.example\nb.example",
+    "updated": 1795660117.622727
+   },
+   {
+    "checked": 1795660117.9247024,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+     }
+    },
+    "id": "ru",
+    "kind": "country",
+    "name": "",
+    "source": "ru"
+   },
+   {
+    "checked": 1795660117.9327414,
+    "error": {
+     "$t": "list.fetch_failed",
+     "p": {
+      "detail": "raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; raw.githubusercontent.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>; www.ipdeny.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>"
+     }
+    },
+    "id": "cn",
+    "kind": "country",
+    "name": "",
+    "source": "cn"
+   }
+  ],
+  "routing": {
+   "balance": {
+    "on": true,
+    "skip": [
+     "u269732"
+    ]
+   },
+   "default": "up:u34fe9c",
+   "rules": [
+    {
+     "comment": "",
+     "enabled": true,
+     "id": "r_7cf151",
+     "lists": [
+      "l4f9186",
+      "l9d582b"
+     ],
+     "outbound": "up:ue48fc0"
+    },
+    {
+     "comment": "",
+     "enabled": true,
+     "id": "r_0d1edf",
+     "lists": [
+      "la6af18"
+     ],
+     "outbound": "up:ue48fc0"
+    },
+    {
+     "comment": "geo",
+     "enabled": true,
+     "id": "r_665e03",
+     "lists": [
+      "ru",
+      "cn"
+     ],
+     "outbound": "direct"
+    },
+    {
+     "comment": "Proxy",
+     "enabled": true,
+     "id": "r_e248be",
+     "lists": [
+      "la6af18"
+     ],
+     "outbound": "up:ue48fc0"
+    },
+    {
+     "comment": "off",
+     "enabled": false,
+     "id": "r_dcee3c",
+     "lists": [
+      "l9d582b"
+     ],
+     "outbound": "block"
+    },
+    {
+     "comment": "",
+     "enabled": true,
+     "id": "r_9c6148",
+     "lists": [
+      "lf6b7e5",
+      "l94f52b",
+      "de"
+     ],
+     "outbound": "direct"
+    }
+   ],
+   "strict": true
+  },
+  "settings": {
+   "client_dns": [
+    "1.1.1.1",
+    "9.9.9.9"
+   ],
+   "client_host": "198.51.100.21",
+   "client_keepalive": "25",
+   "client_mtu": 1380,
+   "dom_filter": true,
+   "extra_hosts": [
+    "198.51.100.20"
+   ],
+   "list_update_hours": 12,
+   "on_stop": "restore",
+   "panel_dns": true,
+   "panel_dns_enc": "doh",
+   "public_host": "vpn.example.com",
+   "shaping": {
+    "down": 200.0,
+    "up": 100.0
+   },
+   "telegram": {
+    "backup": "weekly",
+    "backup_error": null,
+    "backup_last": null,
+    "backup_pw": "tg-backup-pass",
+    "chat_id": "-1001234567",
+    "client_notify": true,
+    "clients": true,
+    "control": true,
+    "enabled": true,
+    "events": {
+     "clients": true,
+     "exit": true,
+     "login": false,
+     "monthly": false,
+     "server": true,
+     "system": true,
+     "tls": true,
+     "update": true
+    },
+    "fallback": true,
+    "lang": "ru",
+    "token": "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "via": "up:u34fe9c"
+   }
+  },
+  "shares": {
+   "0gT0tvsT2vpScN9-YbDt34TY": {
+    "created": 1795660116.0763547,
+    "pk": "IIu+wkvPUccNsuXpJjixv6dgTk72Sm9nGuaS5LbyZTs="
+   },
+   "CL2ZQSR-axoUYu8_OXzC3rkv": {
+    "created": 1795660116.0622182,
+    "pk": "TRpHnP7i9J2EEvG6EIcakUS8CbuAfsXfJcjiilKKMXY="
+   },
+   "XCsjLttl9UrMtff-HW2xJ5YD": {
+    "created": 1795660116.069838,
+    "pk": "qRBj4E8fTpjm2KdCzgE6vpygpd1pJSTdn3dnN7YLrgI="
+   }
+  },
+  "upgraded": [
+   "rule_names",
+   "client_bot",
+   "bot_switch"
+  ],
+  "upstreams": [
+   {
+    "config": "[Interface]\nAddress = 10.9.0.2/32\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\nPublicKey = HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.51.100.1:51820\n",
+    "created": 1795660117.6134014,
+    "enabled": true,
+    "fallback": "block",
+    "id": "u34fe9c",
+    "name": "NL",
+    "num": 1,
+    "quota": 53687091200,
+    "quota_action": "up:ue48fc0",
+    "quota_hit": null,
+    "quota_warned": null,
+    "rate_down": 50.0,
+    "rate_up": 10.0
+   },
+   {
+    "config": "socks5://user:pass@198.51.100.9:1080",
+    "created": 1795660117.620051,
+    "enabled": true,
+    "fallback": "up:u34fe9c",
+    "id": "ue48fc0",
+    "name": "Proxy",
+    "num": 2,
+    "own_list": "l4f9186",
+    "quic": true,
+    "quota": 2684354560,
+    "quota_action": "block"
+   },
+   {
+    "config": "socks5://198.51.100.10:1080",
+    "created": 1795660117.636817,
+    "enabled": false,
+    "fallback": "block",
+    "id": "u269732",
+    "name": "Spare",
+    "num": 3,
+    "quota": null,
+    "quota_action": "notify"
+   }
+  ],
+  "version": 1
+ }
+}

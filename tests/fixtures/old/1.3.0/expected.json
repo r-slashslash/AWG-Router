@@ -964,8 +964,12 @@
     "1.1.1.1",
     "9.9.9.9"
    ],
+   "client_host": "vpn.example.com",
    "client_keepalive": "25",
    "client_mtu": 1380,
+   "extra_hosts": [
+    "vpn.example.com"
+   ],
    "list_update_hours": 12,
    "on_stop": "restore",
    "public_host": "vpn.example.com",

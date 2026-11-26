@@ -12,7 +12,7 @@ import shutil
 import threading
 import time
 
-from . import config
+from . import config, srcaddr
 from .i18n import Msg, MsgError
 
 log = logging.getLogger("awgr.store")
@@ -118,7 +118,30 @@ class Store:
         if s.get("panel_dns") and "panel_dns_enc" not in s:
             s["panel_dns_enc"] = dns_enc
             changed = True
+        if Store.split_hosts(self.state):
+            changed = True
+        if srcaddr.normalize(self.state):
+            changed = True              # адрес, которого нет в списке сервера (файл правили руками): основной
         return changed
+
+    @staticmethod
+    def split_hosts(state: dict) -> bool:
+        """Входящий адрес сервера (адрес в конфигах клиентов, 1.25.0) отдельно от адреса панели: до 1.25.0 без своего
+        «Адреса в конфигах» клиенты брали внешний адрес сервера (public_host или PUBLIC_HOST из .env), и он же — адрес
+        панели. Теперь адрес клиентов записан явно, и смена адреса панели его не трогает. Каждый запуск, а не один раз:
+        панель до 1.25.0 могла снова оставить поле пустым («Внешний адрес сервера»), и после возврата клиенты не должны
+        уйти на адрес панели. Домен в выборе остаётся: он — в «Дополнительных входящих адресах». True — поменялось."""
+        s = state.setdefault("settings", {})
+        if s.get("client_host"):
+            return False
+        h = s.get("public_host") or config.PUBLIC_HOST
+        if not h:
+            return False
+        s["client_host"] = h
+        extra = s.get("extra_hosts") if isinstance(s.get("extra_hosts"), list) else []
+        if not srcaddr.ipv4(h) and ":" not in h and h not in extra and len(extra) < 16:
+            s["extra_hosts"] = [h, *extra]
+        return True
 
     @staticmethod
     def missing_dns_enc(src: dict) -> str:
@@ -215,7 +238,7 @@ class Store:
                 d = json.load(f)
             if not isinstance(d, dict):
                 raise ValueError("state is not an object")
-            return d
+            return srcaddr.from_disk(d)     # «Напрямую — адрес» (1.25.0): в памяти одной строкой "direct@…"
         try:
             return load(self.path)
         except (OSError, ValueError) as e:
@@ -247,7 +270,8 @@ class Store:
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+            # «Напрямую — адрес» — как поймёт панель до 1.25.0: "direct" и адрес рядом (srcaddr.to_disk)
+            json.dump(srcaddr.to_disk(state), f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
         # прежняя версия — жёсткой ссылкой рядом (тот же файл, без копирования): её читает _read
@@ -339,6 +363,7 @@ class Store:
                     if isinstance(l, dict) and l.get("kind") in TEXT_KINDS:
                         l["source"] = self._read_text(l)
                         l.pop("text", None)
+                st = srcaddr.to_disk(st)        # «Напрямую — адрес» в копии — как на диске (прежние выпуски поймут)
             return st
 
     def peek(self, fn):

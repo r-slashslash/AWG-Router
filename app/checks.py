@@ -11,11 +11,12 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 import math
 import re
 
-from . import awgconf, config, cps, domains, limits, lists, notify, shaping
+from . import awgconf, config, cps, domains, limits, lists, notify, shaping, srcaddr
 from .i18n import Msg, MsgError
 from .store import ID_RE, Store, new_id
 from .web import HTTPError
@@ -120,15 +121,60 @@ def client_key(pk) -> str:
 
 
 # ----------------------------------------------------------- куда идёт трафик
+# Проверка копии (clean_backup_state): «Напрямую — адрес» берётся с любым адресом по записи — какие адреса есть у этого
+# сервера, копия не знает; чужие адреса заменяет основным restore_state (srcaddr.normalize)
+_any_addr = contextvars.ContextVar("any_addr", default=False)
+
+
+@contextlib.contextmanager
+def any_address():
+    tok = _any_addr.set(True)
+    try:
+        yield
+    finally:
+        _any_addr.reset(tok)
+
+
 def outbound(st: dict, v, allow_inherit: bool = False) -> str:
-    """Выход: direct | block | up:<id> существующего выхода (у клиента ещё inherit — «как у всех»)."""
+    """Выход: direct | direct@<адрес> (1.25.0: «Напрямую» с исходящего адреса — system или один из дополнительных) |
+    block | up:<id> существующего выхода (у клиента ещё inherit — «как у всех»). «Напрямую — основной адрес» — просто
+    direct (srcaddr.fold): так он переезжает вместе с основным."""
     if not isinstance(v, str):
         bad("err.bad_outbound")
     if v in ("direct", "block") or (allow_inherit and v == "inherit"):
         return v
+    if v.startswith(srcaddr.PFX):
+        a = v[len(srcaddr.PFX):]
+        if _any_addr.get() and srcaddr.valid(a):
+            return v
+        if a == srcaddr.SYSTEM or a in srcaddr.out_hosts(st):
+            return srcaddr.fold(st, v)
+        bad(Msg("err.unknown_address", value=a[:60]))
     if v.startswith("up:") and Store.upstream(st, v[3:]):
         return v
     bad(Msg("err.unknown_outbound", value=v))
+
+
+def bind(st: dict, v) -> str:
+    """С какого исходящего адреса выход подключается к своему серверу («Подключаться с адреса», 1.25.0): "" —
+    основной, "system" или один из дополнительных. Основной записывается пустым: он переезжает вместе с основным."""
+    if v in (None, ""):
+        return ""
+    if not isinstance(v, str) or not srcaddr.valid(v):
+        bad("err.bad_value")
+    if not _any_addr.get() and v != srcaddr.SYSTEM and v not in srcaddr.out_hosts(st):
+        bad(Msg("err.unknown_address", value=v[:60]))
+    return "" if not _any_addr.get() and srcaddr.fold(st, srcaddr.PFX + v) == "direct" else v
+
+
+def own_src(st: dict, v) -> str:
+    """С какого адреса выходит сам сервер (обновления, списки, сертификат; 1.25.0): "" — как в системе, иначе один из
+    дополнительных исходящих адресов."""
+    if v in (None, ""):
+        return ""
+    if not isinstance(v, str) or v not in srcaddr.out_hosts(st):
+        bad(Msg("err.unknown_address", value=str(v)[:60]))
+    return v
 
 
 def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:

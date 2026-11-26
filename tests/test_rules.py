@@ -16,7 +16,7 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 
-from app import lists, traffic  # noqa: E402
+from app import lists, srcaddr, traffic  # noqa: E402
 from app.store import Store  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import backup, clients, exits, routing  # noqa: E402
@@ -195,6 +195,8 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                "settings.public_host",                  # внешний адрес этого сервера, а не из копии (restore_state)
                "settings.client_host",                  # адрес этого сервера, а не из копии
                "settings.extra_hosts",                  # тоже: дополнительные адреса этого сервера (#37)
+               "settings.out_hosts", "settings.out_main",   # исходящие адреса — этого сервера (1.25.0)
+               "settings.own_src",                      # с какого адреса выходит сам сервер — тоже
                "settings.telegram.backup_last", "settings.telegram.backup_error",
                "await_first"}                           # ждать первого подключения — только на этом сервере
 
@@ -217,7 +219,12 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                 clients.put_client_cps(R({"preset": "stun"}), pk)
                 panel.store.mutate(lambda s: s["settings"].update(panel_dns=True, panel_dns_enc="dot",
                                                                  shaping={"down": 100, "up": 50},
-                                                                 extra_hosts=["198.51.100.20"]))
+                                                                 extra_hosts=["198.51.100.20"],
+                                                                 out_hosts=["198.51.100.30"], own_src="198.51.100.30"))
+                # «Напрямую — второй адрес» у правила клиента и подключение выхода с него (1.25.0)
+                exits.edit_upstream(R({"bind": "198.51.100.30"}), x)
+                clients.put_client(R({"outbound": "up:" + x, "rules_mode": "custom", "note": "n",
+                                      "rules": [{"lists": ["ru"], "outbound": "direct@198.51.100.30"}]}), pk)
                 clients.put_client_host(R({"host": "198.51.100.20"}), pk)
                 panel.store.mutate(lambda s: s["routing"].update(balance={"on": True, "skip": [x]}, strict=True))
                 # правило с балансировкой (1.24.0) — его поля тоже в копии (без put_routing: тот удалил бы списки
@@ -231,7 +238,7 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                 panel.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"], routing=st0["routing"],
                                                      shares=st0["shares"], cps=st0["cps"], chost=st0.get("chost", {})))
                 panel.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping",
-                                                                                   "extra_hosts")])
+                                                                                   "extra_hosts", "out_hosts", "own_src")])
                 panel.store.mutate(lambda s: [s["routing"].pop(k, None) for k in ("balance", "strict")])
                 exits.del_upstream(R({"replace": "direct"}), x)
 
@@ -248,7 +255,8 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                     yield from walk(u, w, f"{path}[{i}]")
         norm = lambda p: re.sub(r"\[\d+\]", "[]", re.sub(r"\.[A-Za-z0-9+/]{43}=", ".<pk>", re.sub(
             r"shares\.[\w-]{20,}", "shares.<tok>", p)))
-        lost = {norm(p) for p in walk(st, new)} - self.DROPPED
+        self.assertIn("outbound_src", json.dumps(st))       # в копии адрес — рядом с "direct", как поймёт 1.24.0
+        lost = {norm(p) for p in walk(st, srcaddr.to_disk(new))} - self.DROPPED
         self.assertEqual(sorted(lost), [], "add these fields to clean_backup_state (or to DROPPED with a reason)")
 
 

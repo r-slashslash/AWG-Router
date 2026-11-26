@@ -8,6 +8,7 @@ import time
 
 from .. import (awgconf, checks, config, countries, hostnet, limits, lists, notify,
                 selfupdate, totp)
+from ..checks import field
 from ..i18n import Msg
 from ..panel import (app, engine, notifier, panel_origin, panel_url, store, tls, updates)
 from ..store import Store
@@ -190,6 +191,12 @@ def put_settings(req):
                 s["shaping"] = v
             else:
                 s.pop("shaping", None)
+        if "own_src" in body:
+            with field("own_src"):
+                if v := checks.own_src(st, body["own_src"]):
+                    s["own_src"] = v
+                else:
+                    s.pop("own_src", None)
     store.mutate(fn)
     if "shaping" in body:
         engine.trigger()

@@ -89,6 +89,7 @@ class OldFilesTest(unittest.TestCase):
         self.assertIn("1.21.0", vs)            # выпуск, с которого обновляются на 1.22.0
         self.assertIn("1.22.0", vs)            # выпуск, с которого обновляются на 1.23.0
         self.assertIn("1.23.1", vs)            # выпуск, с которого обновляются на 1.24.0
+        self.assertIn("1.24.0", vs)            # выпуск, с которого обновляются на 1.25.0
         for v in vs:
             self.assertTrue(os.path.exists(os.path.join(FIX, v, "expected.json")), v)
             if v != "1.0.0":

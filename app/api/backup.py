@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ import re
 import threading
 import time
 
-from .. import (awgconf, awgserver, checks, cps, notify,
+from .. import (awgconf, awgserver, checks, cps, notify, srcaddr,
                 system, users)
 from ..checks import bad
 from ..i18n import Msg, msg_of, to_json
@@ -134,11 +135,18 @@ def decrypt_backup(req):
     return {"backup": b}
 
 
-def restore_state(st: dict, new: dict) -> None:
+# свои у каждого сервера: адрес панели, входящие адреса (адрес в конфигах и дополнительные), исходящие адреса (1.25.0:
+# дополнительные, основной, с какого выходит сам сервер) и название — из копии не берутся (restore_state)
+OWN_SETTINGS = ("public_host", "client_host", "extra_hosts", "out_hosts", "out_main", "own_src", "panel_name")
+
+
+def restore_state(st: dict, new: dict) -> list:
     """Состояние из копии вместо текущего. Адреса и название этого сервера важнее, чем в копии (переезд): и свои из
     панели, и отсутствие своих — тогда остаётся PUBLIC_HOST из .env, а не IP старого сервера в конфигах, ссылке
-    и сертификате. Адрес клиента из копии (#37) остаётся, только если он есть и у этого сервера."""
-    own = {k: st["settings"].get(k) for k in ("public_host", "client_host", "extra_hosts", "panel_name")}
+    и сертификате. Адрес клиента из копии (#37) остаётся, только если он есть и у этого сервера. Исходящие адреса
+    сервера из копии никогда не добавляются в его систему (новый сервер назвался бы чужим адресом): правила, клиенты и
+    выходы с адресом, которого здесь нет, переходят на основной. → эти места (для сообщения)."""
+    own = {k: st["settings"].get(k) for k in OWN_SETTINGS}
     st.clear()
     st.update(new)
     for k, v in own.items():
@@ -147,6 +155,9 @@ def restore_state(st: dict, new: dict) -> None:
             st["settings"][k] = v
     ok = set(engine.srv.host_choices(st))
     st["chost"] = {k: v for k, v in (st.get("chost") or {}).items() if v in ok}
+    moved: list = []
+    srcaddr.normalize(st, moved)
+    return moved
 
 
 def clean_backup_state(new: dict) -> dict:
@@ -157,6 +168,11 @@ def clean_backup_state(new: dict) -> dict:
     есть». Неверное поле — ошибка с его именем (checks.backup_field); где копии прощалось и раньше — значение по
     умолчанию (checks.forgive). Здесь же чинится то, что прежние выпуски сохраняли иначе: круги резервов, «как
     резерв» у квоты, прежние имена шаблонов маскировки, IPv6 DNS, подписи правил с именем выхода."""
+    with checks.any_address():          # «Напрямую — адрес»: какие адреса есть у сервера, решает restore_state
+        return _clean_backup_state(srcaddr.from_disk(copy.deepcopy(new)) if srcaddr.pinned(new) else new)
+
+
+def _clean_backup_state(new: dict) -> dict:
     at, soft = checks.backup_field, checks.forgive
 
     def fail(path: str):
@@ -204,6 +220,8 @@ def clean_backup_state(new: dict) -> dict:
                 e[k] = v
         if "quic" in u and soft(lambda: checks.quic(u["quic"]), False) and pc.kind == "socks5":
             e["quic"] = True
+        if u.get("bind") not in (None, "") and (b := at(f + ".bind", lambda: checks.bind(st, u["bind"]))):
+            e["bind"] = b            # «Подключаться с адреса» (1.25.0); адрес чужого сервера снимет restore_state
         # свой список сайтов выхода (окно выхода): только если это список доменов из этой же
         # копии и он ещё не принадлежит другому выходу
         own = u.get("own_list")
@@ -382,8 +400,10 @@ def restore_backup(req):
             bad("err.backup_kind")
         sc, srv_files = clean_server_files(srv, t.kind)
 
-    store.mutate(lambda st: restore_state(st, new))
+    moved = store.mutate(lambda st: restore_state(st, new))
     engine.traffic.replace(b.get("traffic") or {})
+    if moved:
+        engine.event("warn", Msg("ev.restored_addrs", where=moved[:6], n=len(moved)))
     restarted = False
     if sc is not None:
         with engine.lock:
@@ -404,4 +424,7 @@ def restore_backup(req):
     engine.applied_hash = None
     engine.trigger()
     threading.Thread(target=lambda: engine.refresh_lists(False), daemon=True).start()
-    return {"ok": True, "restarted": restarted}
+    out = {"ok": True, "restarted": restarted}
+    if moved:                   # места с адресами, которых у этого сервера нет: теперь основной адрес
+        out.update(moved=moved[:6], moved_n=len(moved))
+    return out

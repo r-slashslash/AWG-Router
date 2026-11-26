@@ -13,7 +13,7 @@ import re
 import secrets
 import time
 
-from . import awgserver, config, cps, hostnet, system
+from . import awgserver, config, cps, hostnet, srcaddr, system
 from .awgserver import ServerConf
 from .i18n import Msg, MsgError
 
@@ -476,6 +476,8 @@ class ServerManager:
             "public_host": self.public_host(st),
             "client_host": s.get("client_host") or "",
             "extra_hosts": s.get("extra_hosts") or [],
+            "out_hosts": s.get("out_hosts") or [],          # дополнительные исходящие адреса (1.25.0)
+            "out_main": srcaddr.main(st),                   # основной исходящий: "" — адрес системы
             "addrs": self.host_addrs(sc.port),
             "client_dns": client_dns(s),
             "panel_dns": bool(s.get("panel_dns")),
@@ -531,6 +533,24 @@ class ServerManager:
                 settings_patch["public_host"] = None if not h or h.lower() == config.PUBLIC_HOST.lower() else h
             if "extra_hosts" in body:
                 settings_patch["extra_hosts"] = parse_extra_hosts(body["extra_hosts"])
+            cur = self.e.store.snapshot()
+            if "out_hosts" in body:               # дополнительные исходящие адреса (1.25.0): только IPv4
+                try:
+                    settings_patch["out_hosts"] = srcaddr.parse_out_hosts(body["out_hosts"])
+                except srcaddr.AddrError as e:
+                    raise UserError(e.msg) from None
+            if "out_main" in body:                # основной исходящий: "" — адрес системы
+                m = str(body["out_main"] or "").strip()
+                if m and m not in settings_patch.get("out_hosts", srcaddr.out_hosts(cur)):
+                    raise UserError(Msg("srv.bad_out_main"))
+                settings_patch["out_main"] = m
+            elif "out_hosts" in body and srcaddr.main(cur) and srcaddr.main(cur) not in settings_patch["out_hosts"]:
+                raise UserError(Msg("srv.out_main_removed", addr=srcaddr.main(cur)))   # основной — сначала другой
+            # браузер 1.25.0 сначала спрашивает (confirm: false), потом сохраняет (confirm: true); прежний — сохраняет сразу
+            if body.get("confirm") is False and ("out_hosts" in body or "out_main" in body or "extra_hosts" in body):
+                ask = self._addr_changes(cur, settings_patch)
+                if ask:
+                    return {"confirm": ask}
             if "client_host" in body:
                 ch = str(body["client_host"] or "").strip().strip("[]")
                 extra = settings_patch.get("extra_hosts", self.e.store.snapshot()["settings"].get("extra_hosts") or [])
@@ -612,9 +632,14 @@ class ServerManager:
                         st["settings"].pop("public_host", None)
                     if not st["settings"].get("extra_hosts"):
                         st["settings"].pop("extra_hosts", None)
+                    for k in ("out_hosts", "out_main"):
+                        if not st["settings"].get(k):
+                            st["settings"].pop(k, None)
                     # адрес, которого больше нет среди выбора, у клиента снимается: он снова «как у всех»
                     keep = set(self.host_choices(st))
                     st["chost"] = {k: v for k, v in (st.get("chost") or {}).items() if v in keep}
+                    # убранный исходящий адрес: где он стоял — основной; новый основной — «просто Напрямую» (переезд)
+                    srcaddr.normalize(st)
                 self.e.store.mutate(apply)
             host_changed = self.client_host(self.e.store.snapshot()) != host_before
             dns_changed = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live()) != dns_before
@@ -628,6 +653,34 @@ class ServerManager:
             return {"restarted": restart and changed_conf,
                     "server_side_changed": awgserver.server_side_changed(old, sc.params()),
                     "host_changed": host_changed, "dns_changed": dns_changed}
+
+    def _addr_changes(self, st: dict, patch: dict) -> dict | None:
+        """Что изменится от новых адресов, — до сохранения (окно «Да / Нет» в браузере): убранный исходящий адрес — где
+        он стоял (перейдёт на основной), смена основного — что на нём (переедет на новый), убранный входящий — у каких
+        клиентов он в конфиге (им нужен новый конфиг). None — спрашивать не о чем."""
+        out = {}
+        old = set(srcaddr.out_hosts(st))
+        if "out_hosts" in patch:
+            gone = [a for a in srcaddr.out_hosts(st) if a not in patch["out_hosts"]]
+            where = [m for a in gone for m in srcaddr.refs(st, a) if a != srcaddr.main(st)]
+            if where:
+                out["removed"] = where
+        if "out_main" in patch and patch["out_main"] != srcaddr.main(st) and \
+                (not patch["out_main"] or patch["out_main"] in patch.get("out_hosts", old)):
+            moved = srcaddr.refs(st, srcaddr.main(st) or srcaddr.SYSTEM)
+            if moved:
+                out["moved"] = moved
+                sys_v4 = getattr(self.e, "system_v4", lambda: None)() or srcaddr.SYSTEM
+                out["from"] = srcaddr.main(st) or sys_v4
+                out["to"] = patch["out_main"] or sys_v4
+        if "extra_hosts" in patch:
+            kept = set(self.host_choices({**st, "settings": {**st["settings"], **patch}}))
+            names = {pk: (st["clients"].get(pk) or {}).get("name") or pk[:8] for pk in st.get("chost") or {}}
+            lost = [Msg("ref.client", client=names[pk]) for pk, h in (st.get("chost") or {}).items() if h not in kept]
+            if lost:
+                out["clients"] = lost
+        return {k: (v[:8] if isinstance(v, list) else v) for k, v in out.items()} | \
+            {f"{k}_n": len(v) for k, v in out.items() if isinstance(v, list)} if out else None
 
     def upgrade_masking(self, t: system.Target) -> None:
         """Один раз на сервер: старый I1 AmneziaVPN → новый DNS-ответ icloud.com."""

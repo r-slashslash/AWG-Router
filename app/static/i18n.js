@@ -3490,6 +3490,48 @@ Object.assign(I18N.fa, {
   "rw.top": "بیشترین ترافیک این ماه",
 });
 
+/* 1.25.0: входящие и исходящие адреса сервера */
+Object.assign(I18N.ru, {
+  "ref.exit_bind": "подключение выхода «{name}»",
+  "ref.own_src": "свои соединения сервера",
+  "err.unknown_address": "Такого исходящего адреса у сервера нет: {value}",
+  "srv.bad_out_host": "{value} — не IPv4-адрес. Исходящий адрес — это IP",
+  "srv.out_hosts_max": "Дополнительных исходящих адресов — не больше {n}",
+  "srv.bad_out_main": "Исходящий адрес сервера — выберите из списка",
+  "srv.out_main_removed": "{addr} — исходящий адрес сервера. Сначала выберите другой, потом уберите этот",
+  "ev.restored_addrs": "В копии были адреса, которых у этого сервера нет: {where} — теперь с основного исходящего адреса",
+});
+Object.assign(I18N.en, {
+  "ref.exit_bind": "how exit “{name}” connects",
+  "ref.own_src": "the server's own connections",
+  "err.unknown_address": "The server has no such outgoing address: {value}",
+  "srv.bad_out_host": "{value} is not an IPv4 address. An outgoing address is an IP",
+  "srv.out_hosts_max": "No more than {n} additional outgoing addresses",
+  "srv.bad_out_main": "Pick the server's outgoing address from the list",
+  "srv.out_main_removed": "{addr} is the server's outgoing address. Pick another one first, then remove this one",
+  "ev.restored_addrs": "The backup used addresses this server doesn't have: {where} — now from the main outgoing address",
+});
+Object.assign(I18N.zh, {
+  "ref.exit_bind": "出口「{name}」的连接",
+  "ref.own_src": "服务器自身的连接",
+  "err.unknown_address": "服务器没有这个出站地址：{value}",
+  "srv.bad_out_host": "{value} 不是 IPv4 地址。出站地址是 IP",
+  "srv.out_hosts_max": "附加出站地址最多 {n} 个",
+  "srv.bad_out_main": "请从列表中选择服务器出站地址",
+  "srv.out_main_removed": "{addr} 是服务器出站地址。请先选择另一个，再删除它",
+  "ev.restored_addrs": "备份中使用了本服务器没有的地址：{where}——现在改用主出站地址",
+});
+Object.assign(I18N.fa, {
+  "ref.exit_bind": "اتصال خروجی «{name}»",
+  "ref.own_src": "اتصال‌های خود سرور",
+  "err.unknown_address": "سرور چنین آدرس خروجی ندارد: {value}",
+  "srv.bad_out_host": "{value} آدرس IPv4 نیست. آدرس خروجی یک IP است",
+  "srv.out_hosts_max": "حداکثر {n} آدرس خروجی اضافه",
+  "srv.bad_out_main": "آدرس خروجی سرور را از فهرست انتخاب کنید",
+  "srv.out_main_removed": "{addr} آدرس خروجی سرور است. اول آدرس دیگری انتخاب کنید، بعد این را حذف کنید",
+  "ev.restored_addrs": "نسخهٔ پشتیبان از آدرس‌هایی استفاده می‌کرد که این سرور ندارد: {where} — اکنون از آدرس خروجی اصلی",
+});
+
 /* Разделители: перечисление, фразы, ссылки */
 const SEP = {
   list: { zh: "、", fa: "، " }, phrase: { zh: "，", fa: "، " }, refs: { zh: "；", fa: "؛ " },

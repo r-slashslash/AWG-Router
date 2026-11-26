@@ -121,6 +121,9 @@ def add_upstream(req):
         u.update({k: v for k, v in rates.items() if v})
         if quic and pc.kind == "socks5":
             u["quic"] = True
+        with field("bind"):                     # «Подключаться с адреса» (1.25.0); пусто — основной
+            if b := checks.bind(st, body.get("bind")):
+                u["bind"] = b
         st["upstreams"].append(u)
         if body.get("make_default") and st["routing"]["default"] in ("direct", "block"):
             st["routing"]["default"] = "up:" + u["id"]
@@ -176,6 +179,12 @@ def edit_upstream(req, uid):
         if "fallback" in body:
             with field("fallback"):
                 u["fallback"] = checks.fallback(st, uid, body["fallback"])
+        if "bind" in body:
+            with field("bind"):
+                if b := checks.bind(st, body["bind"]):
+                    u["bind"] = b
+                else:
+                    u.pop("bind", None)
         if body.get("config"):
             pc = checks.exit_config(body["config"])
             # тип выхода не меняется: у AWG и SOCKS5 разные туннели, проверки и поля — это новый выход
