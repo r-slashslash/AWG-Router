@@ -1285,3 +1285,88 @@ class FallbackDnsSettingTest(unittest.TestCase):
         st["settings"]["fallback_dns"] = ["tls://dns.google"]
         s = backup.clean_backup_state(st)["settings"]
         self.assertEqual((s["fallback_dns"], s["fallback_dns_on"]), (["tls://dns.google"], True))
+
+
+class NamedEncryptedDnsProcessTest(unittest.TestCase):
+    """Настоящий dnsproxy.py и настоящий TLS: запасной DNS «tls://имя#адрес» соединяется с адресом и проверяет
+    сертификат по имени (не по адресу); свой DNS правила «https://имя/dns-query#адрес» — так же по DoH; чужое имя в
+    сертификате — отказ без обычного DNS."""
+
+    @classmethod
+    def setUpClass(cls):
+        import subprocess
+        from tests.test_v115 import TLSUpstreams
+        cls.dir = tempfile.mkdtemp()
+        cls.cert, key = os.path.join(cls.dir, "n.crt"), os.path.join(cls.dir, "n.key")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+                        "-nodes", "-days", "2", "-subj", "/CN=dns-test", "-addext", "subjectAltName=DNS:dns.test",
+                        "-keyout", key, "-out", cls.cert], capture_output=True, check=True)
+        cls.up = TLSUpstreams(cls.cert, key)
+        lst = os.path.join(cls.dir, "l1.txt")
+        with open(lst, "w") as f:
+            f.write("rule.example\n")
+        cls.conf = os.path.join(cls.dir, "dns.json")
+        from tests.test_v115 import free_port
+        cls.port = free_port()
+        cls.cfg = {"listen": "127.0.0.1", "port": cls.port, "clients": "127.0.0.0/8", "upstreams": ["127.0.0.2"],
+                   "encrypt": "dot", "default": {"mark": 0, "tcp": False}, "routes": {}, "ca_file": cls.cert,
+                   "dom": {"lists": {"l1": lst}, "policies": {"p_global": [
+                       [["l1"], {"mark": 0, "tcp": False}, ["https://dns.test/dns-query#127.0.0.1"], False]]},
+                       "clients": {}, "set": None}}
+        cls.proc = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.proc:
+            cls.proc.terminate()
+            cls.proc.wait(5)
+            cls.proc.stdout.close()
+        cls.up.close()
+
+    def start(self, **kw):
+        import signal
+        import socket
+        import subprocess
+        import time
+        from app import engine
+        with open(self.conf, "w") as f:
+            json.dump(dict(self.cfg, **kw), f)
+        if self.proc:
+            self.proc.send_signal(signal.SIGHUP)
+            time.sleep(0.4)
+            return
+        type(self).proc = subprocess.Popen([sys.executable, "-I", engine.dns.DNSPROXY, self.conf],
+                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        for _ in range(50):
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), 0.2):
+                    break
+            except OSError:
+                time.sleep(0.1)
+
+    def ask(self, name):
+        import socket
+        from tests.test_v115 import q_msg
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(20)
+            s.sendto(q_msg(name), ("127.0.0.1", self.port))
+            return s.recv(4096)
+
+    def test_named_entries(self):
+        import socket
+        from app import dnsproxy
+        dot, doh = self.up.dot.server_address[1], self.up.doh.server_address[1]
+        self.start(upstream_port=dot, direct_fallback=["tls://dns.test#127.0.0.1"])
+        q0 = self.up.queries
+        r = self.ask("site.example")                  # общий сервер не отвечает — запасной по DoT, имя dns.test
+        self.assertEqual(r[3] & 0xF, 0)
+        self.assertIn(socket.inet_aton("203.0.113.44"), r)
+        self.assertEqual(self.up.queries - q0, 1)
+        self.start(upstream_port=doh, direct_fallback=[])
+        r = self.ask("rule.example")                  # свой DNS правила по DoH, тот же сертификат по имени
+        self.assertIn(socket.inet_aton("203.0.113.44"), r)
+        q0 = self.up.queries
+        self.start(upstream_port=dot, direct_fallback=["tls://other.test#127.0.0.1"])
+        r = self.ask("mitm.example")                  # имя не то, что в сертификате — отказ, обычным не спрашивает
+        self.assertEqual(r[3] & 0xF, dnsproxy.RC_SERVFAIL)
+        self.assertEqual(self.up.queries, q0)
