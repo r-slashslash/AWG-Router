@@ -1225,7 +1225,7 @@ class RuleDnsTest(unittest.TestCase):
                         clients={"10.8.1.6": "p_1"})
         asked = []
 
-        async def forward(query, q, mark, tcp, servers=()):
+        async def forward(query, q, mark, tcp, servers=(), mode=None):     # mode — свой DNS с шифрованием (1.25.0)
             asked.append(servers)
             return a_reply(query, ["198.51.100.2" if servers else "203.0.113.2"])
         p.forward = forward

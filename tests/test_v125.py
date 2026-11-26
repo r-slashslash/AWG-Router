@@ -1133,3 +1133,85 @@ class LocalEncryptedDnsTest(unittest.TestCase):
                            "local_enc_ok_at": loc_ok}, f)
             with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
                 self.assertEqual(e.dns_view().get("direct_down"), want)
+
+
+class OwnDnsEncryptedTest(unittest.TestCase):
+    """Свой DNS правила (владелец 2026-11-26): известный сервер с шифрованием (Яндекс, Alibaba, DNSPod, Cloudflare,
+    Google, Quad9) — сначала шифрованным тем же путём, другим способом, если первый не отвечает; не ответил — обычным,
+    как раньше. Остальные серверы и «Без шифрования» в настройках — обычным DNS."""
+
+    def _proxy(self, own, mode="doh"):
+        from app import dnsproxy
+        d = tempfile.mkdtemp()
+        lst = os.path.join(d, "ru.txt")
+        with open(lst, "w") as f:
+            f.write("ru\n")
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                       "encrypt": mode, "default": {"mark": 0x2001, "tcp": False}, "routes": {},
+                       "dom": {"lists": {"l1": lst}, "policies": {"p_global": [[["l1"], {"mark": 0, "tcp": False},
+                                                                                  own, False]]},
+                               "clients": {}, "set": None}}, f)
+        return dnsproxy.Proxy(conf)
+
+    def _run(self, p, name):
+        import asyncio
+        from app import dnsproxy
+        from tests.test_v115 import q_msg
+
+        async def go():
+            query = q_msg(name)
+            r = await p.resolve(query, dnsproxy.parse_query(query), "10.8.1.5")
+            for st in p.own_paths.values():
+                if st.loc_probe:
+                    await st.loc_probe
+            return r
+        return asyncio.run(go())
+
+    def _wire(self, p, enc_ok=lambda server, mode: server == "77.88.8.8" and mode == "dot"):
+        from tests.test_v115 import a_reply
+        calls = []
+
+        async def enc(msg, server, mark, mode):
+            calls.append((server, mode, mark))
+            if enc_ok(server, mode):
+                return a_reply(msg, ["203.0.113.8"])
+            raise OSError("no answer")
+
+        async def udp(msg, server, mark):
+            calls.append((server, "plain", mark))
+            return a_reply(msg, ["203.0.113.9"])
+        p._enc, p._udp = enc, udp
+        return calls
+
+    def test_yandex_encrypted_first(self):
+        import socket
+        p = self._proxy(["77.88.8.8", "77.88.8.1"])
+        calls = self._wire(p)
+        out = self._run(p, "yandex.ru")
+        self.assertIn(socket.inet_aton("203.0.113.8"), out)
+        self.assertEqual(calls, [("77.88.8.8", "doh", 0), ("77.88.8.8", "dot", 0)])     # 77.88.8.1 — не известен
+        calls.clear()
+        self._run(p, "mail.ru")
+        self.assertEqual(calls, [("77.88.8.8", "dot", 0)])
+        self.assertEqual(p.stats["own_enc"], 2)
+
+    def test_plain_when_encrypted_fails(self):
+        p = self._proxy(["77.88.8.8", "77.88.8.1"])
+        calls = self._wire(p, enc_ok=lambda server, mode: False)
+        self._run(p, "yandex.ru")
+        self.assertEqual(calls[-1], ("77.88.8.8", "plain", 0))
+        calls.clear()
+        self._run(p, "mail.ru")                      # шифрованный «не отвечает» — сразу обычный, не ждём
+        self.assertEqual(calls, [("77.88.8.8", "plain", 0)])
+
+    def test_unknown_servers_and_plain_setting_stay_plain(self):
+        p = self._proxy(["178.22.122.100"])
+        calls = self._wire(p)
+        self._run(p, "a.ru")
+        self.assertEqual(calls, [("178.22.122.100", "plain", 0)])
+        p = self._proxy(["77.88.8.8"], mode="plain")
+        calls = self._wire(p)
+        self._run(p, "b.ru")
+        self.assertEqual(calls, [("77.88.8.8", "plain", 0)])

@@ -385,7 +385,8 @@ class Proxy:
         self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
         # шифрованный DNS на путях «напрямую»: метка пути (0 — адрес системы) → DirectPath
         self.dpaths: dict[int, DirectPath] = {}
-        self.loc_modes: dict[str, str] = {}               # местный DNS страны → способ шифрования, который отвечает
+        self.loc_modes: dict[tuple, str] = {}             # (путь, сервер) → способ шифрования, который отвечает
+        self.own_paths: dict[tuple, DirectPath] = {}      # свой DNS правила с шифрованием: (путь, серверы) → состояние
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
         self.pools: dict[tuple, Pool] = {}
@@ -409,7 +410,7 @@ class Proxy:
             self.cache.clear()                       # другие серверы — старые ответы не нужны
             self.cache_bytes = 0
             # и «шифрованный не отвечает напрямую» был о прежних серверах или прежнем шифровании
-            self.dpaths, self.loc_modes = {}, {}
+            self.dpaths, self.loc_modes, self.own_paths = {}, {}, {}
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -583,7 +584,11 @@ class Proxy:
             if fb and self._dp(mark).down:
                 self._probe_direct(query, q, tcp, mark)    # клиент не ждёт: шифрованный пробуется в фоне
             else:
-                reply = await self.forward(query, q, mark, tcp, servers)
+                # свой DNS правила: известный сервер с шифрованием (Яндекс, Alibaba, DNSPod…) — сначала шифрованным, тем
+                # же путём; не ответил — обычным, как до 1.25.0 (владелец 2026-11-26)
+                reply = await self._own_enc(query, q, tcp, mark, servers) if servers else None
+                if reply is None:
+                    reply = await self.forward(query, q, mark, tcp, servers)
                 if enc_direct:
                     self._direct_seen(reply is not None, bool(fb), mark)
             if reply is None and fb:
@@ -618,11 +623,29 @@ class Proxy:
         """Местный DNS страны с шифрованием (cfg direct_fallback_enc). Не ответил — путь до DIRECT_RETRY спрашивает
         местный без шифрования сразу, а этот пробуется одним запросом в фоне: клиент не ждёт зависший."""
         cfg = getattr(self, "cfg", None) or {}
-        servers = tuple(cfg.get("direct_fallback_enc") or ())
+        return await self._enc_first(query, q, tcp, mark, tuple(cfg.get("direct_fallback_enc") or ()), self._dp(mark),
+                                     "direct_local_enc")
+
+    async def _own_enc(self, query: bytes, q: dict, tcp: bool, mark: int, servers: tuple) -> bytes | None:
+        """Свой DNS правила с шифрованием: из его серверов — те, чьё имя для TLS известно (KNOWN_NAMES); у каждой пары
+        «путь, свои серверы» своё «не отвечает» (тот же DirectPath, поля loc)."""
+        known = tuple(s for s in servers if s in KNOWN_NAMES)
+        if not known:
+            return None
+        d = self.__dict__.setdefault("own_paths", {})
+        p = d.get((mark, servers))
+        if p is None:
+            p = d[(mark, servers)] = DirectPath()
+        return await self._enc_first(query, q, tcp, mark, known, p, "own_enc")
+
+    async def _enc_first(self, query: bytes, q: dict, tcp: bool, mark: int, servers: tuple, p: DirectPath,
+                         stat: str) -> bytes | None:
+        """servers с шифрованием (DoH/DoT из настроек, потом другим — _local_ask); не ответили — None и до DIRECT_RETRY
+        сразу None, а сами они пробуются одним запросом в фоне. Без шифрования в настройках — всегда None."""
+        cfg = getattr(self, "cfg", None) or {}
         mode = cfg.get("encrypt") or "plain"
         if not servers or mode == "plain":
             return None
-        p = self._dp(mark)
         if p.loc_down:
             if time.monotonic() >= p.loc_retry_at and not (p.loc_probe and not p.loc_probe.done()):
                 p.loc_retry_at = time.monotonic() + DIRECT_RETRY
@@ -638,20 +661,21 @@ class Proxy:
         reply = await self._local_ask(query, q, mark, tcp, servers, mode)
         self._local_seen(p, reply is not None)
         if reply is not None:
-            self.stats["direct_local_enc"] = self.stats.get("direct_local_enc", 0) + 1
+            self.stats[stat] = self.stats.get(stat, 0) + 1
         return reply
 
     async def _local_ask(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, mode: str) -> bytes | None:
         """Местные серверы по очереди, каждый — сначала способом из настроек, потом другим (DoH ↔ DoT): проверка 2026-11-26
         из России и с машины GitHub — Яндекс по DoH на HTTP/1.1 не отвечает (только DoT), DNSPod из России — наоборот,
-        только DoH. Способ, который сработал, сервер запоминает (loc_modes; новые настройки — заново)."""
+        только DoH. Способ, который сработал, запоминается для пары «путь, сервер» — из России и через выход ответ может
+        быть разным (loc_modes; новые настройки — заново)."""
         modes = self.__dict__.setdefault("loc_modes", {})
         for server in servers:
-            first = modes.get(server, mode)
+            first = modes.get((mark, server), mode)
             for m in (first, "dot" if first == "doh" else "doh"):
                 reply = await self.forward(query, q, mark, tcp, (server,), mode=m)
                 if reply is not None:
-                    modes[server] = m
+                    modes[(mark, server)] = m
                     return reply
         return None
 

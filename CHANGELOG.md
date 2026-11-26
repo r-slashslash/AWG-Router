@@ -60,6 +60,11 @@ it grows, so every user-visible change gets a new version.
   answers is remembered: checked 2026-11-26 from the test server in Russia and a GitHub machine, Yandex answers only DoT
   (its DoH doesn't answer HTTP/1.1), DNSPod from Russia only DoH. The Server tab says which one answers. Their
   certificates are checked by their names, so they also work as encrypted servers in the "DNS" field (Yandex — DoT).
+- **A domain rule's own DNS is encrypted when it can be**: an own DNS server whose TLS name is known (Yandex, Alibaba,
+  DNSPod, Cloudflare, Google, Quad9) is asked with the configured DoH/DoT first (then the other method), on the rule's
+  path, and as plain DNS only if that doesn't answer (`dnsproxy._own_enc`, its own "doesn't answer" state per path and
+  servers with a background retry). So after **Apply for Russia** the `.ru` names go to Yandex over DoT. Other servers
+  and "No encryption" stay plain, as before.
 - The Telegram bot shows "direct — address".
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.

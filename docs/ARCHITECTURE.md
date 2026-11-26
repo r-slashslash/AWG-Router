@@ -148,7 +148,8 @@ Outgoing addresses (`settings.out_hosts`, the main one `out_main`, "" — the sy
   DNS doesn't answer from the server's country) covers every Direct path — mark 0 and the address marks
   (`addr_marks`) — each with its own state (`dnsproxy.DirectPath`), always from the same address. The fallback asks the
   country's DNS with the same DoH/DoT first (`direct_fallback_enc`, names for TLS in `dnsproxy.KNOWN_NAMES`) and plain
-  DNS only if that doesn't answer either.
+  DNS only if that doesn't answer either. A domain rule's own DNS is asked the same way when its server's TLS name is known
+  (`dnsproxy._own_enc`), on the rule's path.
 - The panel's own connections (updates, lists, lego through `srcnet.ConnectProxy`, `install.sh` via `AWGR_FROM`) go
   from `settings.own_src` while it works, else from the system address (`Engine.own_src`).
 - A manual change of an exit choice (`api.routing.mutate_paths`) compares every client's path before and after
