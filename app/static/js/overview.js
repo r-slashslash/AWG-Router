@@ -5,7 +5,8 @@
 function viewOverview() {
   const counts = {}, assigned = {};
   for (const c of S.clients) {
-    counts[c.effective] = (counts[c.effective] || 0) + 1;
+    const e = isDirect(c.effective) ? "direct" : c.effective;     // «Напрямую» с любого адреса — одна строка
+    counts[e] = (counts[e] || 0) + 1;
     assigned[c.default] = (assigned[c.default] || 0) + 1;
   }
   const track = (cls, color, title, meta, side) => `

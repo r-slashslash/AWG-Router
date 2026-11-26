@@ -11,6 +11,7 @@ from ..i18n import Msg, MsgError, msg_of
 from ..panel import (app, engine, panel_url, store, tls, updates,
                      user_errors, write_status)
 from ..users import UserError
+from ..store import Store
 from ..version import VERSION
 from .. import checks, srcaddr
 
@@ -206,6 +207,16 @@ def _server_ips() -> list[str]:
     return [a for a in ips if a and tlsmgr._is_ip(a)]
 
 
+def _set_panel_ip(st: dict, ip: str) -> None:
+    """Адрес панели — IP: своя настройка, а то же, что PUBLIC_HOST в .env, — без своей (как на вкладке «Сервер»)."""
+    s = st["settings"]
+    Store.split_hosts(st)                  # адрес клиентов уже записан явно — смена адреса панели его не тронет
+    if ip.lower() == (config.PUBLIC_HOST or "").lower():
+        s.pop("public_host", None)
+    else:
+        s["public_host"] = ip
+
+
 def _need_web(host: str) -> dict | None:
     """Порт 80 занят веб-сервером, а проверка Let's Encrypt через него для host не настроена."""
     web = tlsconf.load().get("web")
@@ -259,6 +270,12 @@ def tls_set(req):
         if m:
             bad(m, field="cf_token")
     old_host = tls.host()
+    if domain and tlsmgr._is_ip(domain):
+        # «Адрес панели» — IP (1.25.0, вкладка «Система»): это адрес сервера в настройках (public_host), а не домен
+        # сертификата — так в сертификат по IP попадает и второй адрес (IPv6). Адреса клиентов он не трогает: у них
+        # свой «Входящий адрес сервера»
+        store.mutate(lambda st: _set_panel_ip(st, domain))
+        domain = ""
     # без проверки через Cloudflare токен на сервере не хранится
     tlsconf.update(domain=domain, source=src, cert=cert if src == "custom" else None,
                    key=key if src == "custom" else None, challenge="cloudflare" if token else None, cf_token=token)

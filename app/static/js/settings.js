@@ -26,10 +26,8 @@ function viewTelegram() {
         <select id="tg-lang" style="max-width:220px">${Object.entries(LANGS).map(([k, v]) =>
           `<option value="${k}" ${k === (c.enabled || c.token_set ? c.lang : LANG) ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
       <label class="field"><span>${esc(t("tg.via"))}</span>
-        <select data-field="via" id="tg-via" style="max-width:320px">${[["direct", t("out.direct")],
-          ...S.upstreams.map((u) => ["up:" + u.id, u.name])].map(([v, l]) =>
-          `<option value="${esc(v)}" ${v === (c.via || "direct") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
-        <span class="hint">${esc(t("tg.via_hint"))}</span></label>
+        <select data-field="via" id="tg-via" style="max-width:320px">${outOptions(c.via || "direct", { block: false })}</select>
+        <span class="hint">${esc(t("tg.via_hint"))}</span><span class="hint" id="tg-via-bind">${bindHintHtml(c.via || "")}</span></label>
       <label class="check" style="margin:0 0 14px"><input type="checkbox" id="tg-fb" ${c.fallback !== false ? "checked" : ""}><span>${esc(t("tg.fallback"))}</span></label>
       ${c.enabled && S.tg_path ? `<p class="small warn-text" style="margin:-6px 0 12px">${th("tg.path_now", { name: `<bdi>${esc(exitName(S.tg_path.via))}</bdi>` })}</p>` : ""}
       </div><div class="field"><span>${esc(t("tg.events"))}</span>
@@ -70,6 +68,8 @@ function viewBotState(b) {
   return out.join("");
 }
 function bindTelegram() {
+  const via = $("#tg-via");
+  if (via) via.addEventListener("change", () => { $("#tg-via-bind").innerHTML = bindHintHtml(via.value); });
   const body = () => {
     const events = {};
     TG_KINDS.forEach((k) => { events[k] = $("#tg-ev-" + k).checked; });

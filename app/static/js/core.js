@@ -190,7 +190,7 @@ function listName(id) {
   return l.kind === "country" ? countryName(l.source) : (l.source || l.id);
 }
 function exitName(v) {
-  if (v === "direct") return t("out.direct");
+  if (isDirect(v)) return directName(v);          // «Напрямую» или «Напрямую — адрес» (1.25.0)
   if (v === "block") return t("out.block");
   const u = typeof v === "string" && v.startsWith("up:") ? upstreamById(v.slice(3)) : null;
   return u ? u.name : t("out.deleted");
@@ -213,7 +213,7 @@ function ruleOutChip(r) {
   return `<span class="line bal-chip" title="${esc(t("bal.option"))}"><span aria-hidden="true">⚖</span> ${names.join(" · ") || esc(t("out.deleted"))}</span>`;
 }
 function outChip(v, extra = "") {
-  if (v === "direct") return `<span class="line direct">${esc(t("out.direct"))}${extra}</span>`;
+  if (isDirect(v)) return `<span class="line direct">${esc(directName(v))}${extra}</span>`;
   if (v === "block") return `<span class="line block">${esc(t("out.block"))}${extra}</span>`;
   if (typeof v === "string" && v.startsWith("up:")) {
     const u = upstreamById(v.slice(3));
@@ -224,21 +224,25 @@ function outChip(v, extra = "") {
 }
 /** чип фактического выхода (после резерва): direct | block | номер туннеля */
 function effChip(eff, wanted) {
-  const val = eff === "direct" || eff === "block" ? eff : "up:" + (upstreamByNum(eff) || {}).id;
-  if (wanted && wanted !== val) {
+  // фактический «direct» — с адреса системы; основной исходящий адрес — другой (1.25.0): это «Напрямую — адрес системы»
+  if (eff === "direct" && (S.addrs || {}).main) eff = "direct@system";
+  const val = isDirect(eff) || eff === "block" ? eff : "up:" + (upstreamByNum(eff) || {}).id;
+  if (wanted && !sameOut(wanted, val)) {
     const w = wanted.startsWith("up:") ? (upstreamById(wanted.slice(3)) || {}).name : null;
     const html = outChip(val, w ? ` <span class="sub">${th("out.instead", { name: `<bdi>${esc(w)}</bdi>` })}</span>` : "");
     return html.replace('class="line', 'class="line fallback');
   }
   return outChip(val);
 }
-function outOptions(selected, { inherit = null, exclude = null } = {}) {
+function outOptions(selected, { inherit = null, exclude = null, block = true } = {}) {
   const opts = [];
   if (inherit !== null) opts.push(["inherit", inherit]);
-  opts.push(["direct", t("out.direct")]);
+  // «Напрямую» — у каждого исходящего адреса своё, основной первым (1.25.0); неработающий — серый
+  opts.push(...directOptions(selected));
   for (const u of S.upstreams) if ("up:" + u.id !== exclude) opts.push(["up:" + u.id, u.name]);   // просто имя выхода: «Выход: Германия»
-  opts.push(["block", t("out.block")]);
-  return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(l)}</option>`).join("");
+  if (block) opts.push(["block", t("out.block")]);
+  const sel = opts.some(([v]) => v === selected) ? selected : isDirect(selected) ? "direct" : selected;
+  return opts.map(([v, l, off]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""} ${off ? "disabled" : ""}>${esc(l)}</option>`).join("");
 }
 /* балансировка и ограничение скорости */
 function balOn() { return !!(S.routing.balance && S.routing.balance.on); }
@@ -519,9 +523,9 @@ async function refresh(auto = false) {
   if (auto && g && !g.inert && !anyModal() && (busy || listsBusy || JSON.stringify(S.routing.rules) !== rulesDrawn)) drawRoutingRules();
   // «Сервер» опрос тоже не перерисовывает, кроме блока «Движок AmneziaWG» (после смены движка он менялся только с
   // перезагрузкой страницы)
-  if (auto && tab === "server" && !anyModal()) drawEngine();
+  if (auto && tab === "server" && !anyModal()) { drawEngine(); drawAddrStatus(); }     // и состояния адресов (1.25.0)
   // трафик по правилам (1.24.0) — только цифры в готовых местах строк
-  if (auto && tab === "routing" && !anyModal()) { fillRuleTraffic(); drawClientRules(); }
+  if (auto && tab === "routing" && !anyModal()) { fillRuleTraffic(); drawClientRules(); drawServerAddrs(); }
   listsBusy = busy;
   // при фоновом опросе не трогаем вкладки с формами и результатами проверок
   if (auto && !["overview", "clients", "exits"].includes(tab)) return;

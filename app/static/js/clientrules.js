@@ -42,9 +42,10 @@ function clientRulesHtml() {
 /** своя политика клиента с другими правилами или выходом — сразу на сервер (как «Сохранить» окна клиента) */
 async function saveClientRules(c, patch) {
   const p = c.policy;
-  await api("PUT", "clients/" + encodeURIComponent(c.public_key), {
+  const r = await api("PUT", "clients/" + encodeURIComponent(c.public_key), {
     outbound: p.outbound || "inherit", rules_mode: p.rules_mode || "inherit", rules: p.rules || [], note: p.note || "", ...patch });
   toast(t("toast.rules_saved"));
+  reconnectToast(r);
   await refresh();
   return true;
 }

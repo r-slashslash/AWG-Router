@@ -44,6 +44,11 @@ PROBE = os.path.join(APP_DIR, "probe.py")
 PROBE_HOSTS = ("ipinfo.io", "ifconfig.me")
 
 
+def srcnet_source(e, st: dict) -> str | None:
+    """С какого адреса сейчас выходит сам сервер (None — адрес системы): выбранный, если работает."""
+    return e.own_src((st.get("settings") or {}).get("own_src") or "")
+
+
 def rec_path() -> str:
     return os.path.join(config.DATA_DIR, "addrs.json")
 
@@ -487,7 +492,8 @@ class AddrsMixin:
 
     # ------------------------------------------------------------------ для браузера
     def addrs_view(self, st: dict) -> dict:
-        """Адреса для вкладок «Сервер», «Маршрутизация» и выбора выхода: адрес системы, исходящие и входящие (IP)."""
+        """Адреса для вкладок «Сервер», «Маршрутизация» и выбора выхода: адрес системы, исходящие и входящие (IP), а у
+        исходящих — где стоят (uses: места «Напрямую» и выходы, которые подключаются с адреса; ключ — IP или system)."""
         rt = self.addr_rt()
         own = self._addr_rec()["ours"]
 
@@ -495,10 +501,22 @@ class AddrsMixin:
             x = rt.get(ip) or {}
             return {"ip": ip, "state": x.get("state") or "checking", "seen": x.get("seen"), "cc": x.get("cc"),
                     "error": x.get("error"), "ours": ip in own}
+        uses: dict[str, dict] = {}
+        if srcaddr.out_hosts(st):
+            for _, o, f, label in srcaddr.places(st):
+                u = uses.setdefault(srcaddr.addr_of(st, o[f]), {"direct": [], "direct_n": 0, "exits": []})
+                u["direct_n"] += 1
+                if len(u["direct"]) < 4:
+                    u["direct"].append(label)
+            for x in st["upstreams"]:
+                uses.setdefault(srcaddr.bind_of(st, x), {"direct": [], "direct_n": 0, "exits": []})["exits"].append(
+                    x["name"])
         return {"system": {"ip": self.system_v4(), "seen": getattr(self, "public_v4", None),
                            "cc": getattr(self, "public_cc", None)},
-                "main": srcaddr.main(st), "out": [one(ip) for ip in srcaddr.out_hosts(st)],
-                "in": [one(ip) for ip in self.inbound_ips(st) if ip not in srcaddr.out_hosts(st)]}
+                "main": srcaddr.main(st), "own_src": (st.get("settings") or {}).get("own_src") or "",
+                "own_now": srcnet_source(self, st),
+                "out": [one(ip) for ip in srcaddr.out_hosts(st)],
+                "in": [one(ip) for ip in self.inbound_ips(st) if ip not in srcaddr.out_hosts(st)], "uses": uses}
 
     # ------------------------------------------------------------------ режим контейнера: сети Docker
     ADDR_NETS_EVERY = 60    # с: сверка сетей Docker не чаще (и сразу, когда поменялись адреса или контейнер)

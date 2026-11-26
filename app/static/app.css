@@ -543,3 +543,35 @@ label.btn { cursor: pointer; }
 .share-steps { margin: 0 0 16px; padding-inline-start: 22px; display: grid; gap: 4px; }
 bdi.mono { white-space: nowrap; }
 .warn-text { color: var(--warn); }
+
+/* Адреса сервера (1.25.0): карточки на «Маршрутизации», строки состояния на «Сервере», окна адресов */
+.ok-text { color: color-mix(in srgb, var(--ok) 78%, var(--ink)); }
+.bad-text { color: color-mix(in srgb, var(--bad) 85%, var(--ink)); }
+.addr-grp { font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin: 14px 2px 8px; }
+:root:lang(fa) .addr-grp, :root:lang(zh) .addr-grp { letter-spacing: 0; }
+.addr-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.addr-card { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 12px 12px 12px 14px; margin: 0;
+  font: inherit; color: inherit; text-align: start; cursor: pointer; }
+.addr-card:hover { border-color: var(--rule-strong); }
+.addr-card.down { border-color: color-mix(in srgb, var(--bad) 45%, var(--rule)); }
+.addr-card .chev { flex: none; color: var(--muted); }
+[dir="rtl"] .addr-card .chev { transform: scaleX(-1); }
+.addr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.addr-main b.mono, .addr-head b.mono { font-size: 1rem; font-weight: 500; }
+.addr-main .dot, .addr-head .dot { margin-inline-end: 6px; vertical-align: 1px; }
+.pill { display: inline-block; font-size: .75rem; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--rule);
+  border-radius: 999px; padding: 0 8px; margin-inline-start: 6px; white-space: nowrap; vertical-align: 1px; }
+.addr-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.addr-head b.mono { font-size: 1.25rem; }
+.addr-note { padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
+.addr-row { align-items: flex-start; padding: 8px 2px; margin: 0; border-bottom: 1px solid var(--rule); min-height: 44px; box-sizing: border-box; }
+.addr-row:last-child { border-bottom: 0; }
+.addr-row input { width: 18px; height: 18px; flex: none; }
+.addr-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.addr-now { display: block; }
+.addr-sts { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.addr-st { font-weight: 400; line-height: 1.4; overflow-wrap: anywhere; }
+.addr-st.ok { color: color-mix(in srgb, var(--ok) 78%, var(--ink)); }
+.addr-st.bad { color: color-mix(in srgb, var(--bad) 85%, var(--ink)); }
+@media (max-width: 560px) { .addr-cards { grid-template-columns: minmax(0, 1fr); } }

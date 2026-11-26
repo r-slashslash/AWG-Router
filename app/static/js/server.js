@@ -105,9 +105,7 @@ function viewServer() {
           <div><span>${esc(t("sy.iface"))}</span><b>${esc(SRV.iface)}</b></div>
           <div><span>${esc(t("srv.version"))}</span><b>${esc(SRV.version ? "AWG " + SRV.version : "WireGuard")}</b></div>
         </div>
-        <label class="field"><span>${esc(t("srv.public_host"))}</span><input type="text" data-field="public_host" id="s-host" dir="ltr" value="${esc(SRV.public_host)}" placeholder="203.0.113.10"><span class="hint">${esc(t("srv.public_host_hint"))}</span></label>
-        <label class="field"><span>${esc(t("srv.extra_hosts"))}</span><input type="text" data-field="extra_hosts" id="s-extra" dir="ltr" placeholder="203.0.113.20, vpn2.example.com" value="${esc((SRV.extra_hosts || []).join(", "))}"><span class="hint">${esc(t("srv.extra_hosts_hint"))}</span></label>
-        <label class="field"><span>${esc(t("srv.client_host"))}</span><select data-field="client_host" id="s-ch">${clientHostOptions()}</select><span class="hint" id="s-ch-hint">${clientHostHint(SRV.client_host)}</span></label>
+        ${srvAddrFields()}
         <div class="row2">
           <label class="field"><span>${esc(t("srv.port"))}</span><input type="number" data-field="port" id="s-port" min="1" max="65535" value="${SRV.port}"><span class="hint">${esc(t("srv.port_hint"))}</span></label>
           <label class="field"><span>${esc(t("srv.subnet"))}</span><input type="text" data-field="address" id="s-addr" dir="ltr" value="${esc(SRV.address)}" ${SRV.subnet_locked ? "disabled" : ""}><span class="hint">${esc(t(SRV.subnet_lock === "container" ? "srv.subnet_container_hint" : SRV.subnet_locked ? "srv.subnet_locked_hint" : "srv.subnet_hint"))}</span></label>
@@ -380,20 +378,11 @@ function sigTemplate(d) {
       <option value="" ${cur ? "" : "selected"} disabled>${esc(t("cps.custom"))}</option></select>
     <span class="hint">${esc(t("srv.cps_template_hint"))}</span></label>`;
 }
-/* Адрес сервера в конфигах клиентов: внешний адрес или найденный IPv4/IPv6 */
-function clientHostOptions() {
-  const A = SRV.addrs || {}, cur = SRV.client_host || "";
-  const opts = [["", t("srv.ch_main", { v: SRV.public_host || "—" })]];
-  if (A.v4 && A.v4 !== SRV.public_host) opts.push([A.v4, "IPv4 · " + A.v4]);
-  (A.v6 || []).forEach((ip) => { if (ip !== SRV.public_host) opts.push([ip, "IPv6 · " + ip]); });
-  (SRV.extra_hosts || []).forEach((h) => { if (h !== SRV.public_host && !opts.some(([v]) => v === h)) opts.push([h, t("srv.ch_extra", { v: h })]); });
-  if (cur && !opts.some(([v]) => v === cur)) opts.push([cur, (cur.includes(":") ? "IPv6 · " : "IPv4 · ") + cur]);
-  return opts.map(([v, label]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(label)}</option>`).join("");
-}
+/* подсказка под «Входящим адресом сервера» (выбор — inOptions в addrs.js) */
 function clientHostHint(val) {
   const A = SRV.addrs || {}, v6 = A.v6 || [];
   const host = val || SRV.public_host || "";
-  const out = [esc(t("srv.client_host_hint"))];
+  const out = [esc(t("srv.in_host_hint"))];
   if (val && val.includes(":") && !v6.includes(val)) out.push(`<span class="warn-text">${esc(t("srv.client_host_gone"))}</span>`);
   if (host.includes(":") && !A.v6_listen) out.push(`<span class="warn-text">${esc(t("srv.v6_not_listening", { port: SRV.port }))}</span>`);
   if (!v6.length) out.push(esc(t("srv.no_v6")));
@@ -409,7 +398,7 @@ function srvFieldsDirty() {
   const pdns = $("#s-pdns");
   return (pdns && pdns.checked !== !!SRV.panel_dns) ||
     ($("#s-domf") && $("#s-domf").checked !== !!SRV.dom_filter) ||
-    ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
+    ["#s-in", "#s-extra", "#s-out-main", "#s-out", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
 }
@@ -459,7 +448,7 @@ bind.server = () => {
     b.disabled = false;
   };
   const showBar = () => { $("#s-bar").hidden = !srvDirty(); };
-  ["#s-host", "#s-ch", "#s-extra", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
+  ["#s-in", "#s-extra", "#s-out-main", "#s-out", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar; el.onchange = showBar;
   });
@@ -479,8 +468,10 @@ bind.server = () => {
     CPS_KEYS.forEach((k) => { srvDraft[k] = p.values[k] || ""; const el = $(`[data-p="${k}"]`); if (el) el.value = srvDraft[k]; });
     syncTpl(); showBar();
   };
-  const ch = $("#s-ch");
-  if (ch) ch.onchange = () => { $("#s-ch-hint").innerHTML = clientHostHint(ch.value); showBar(); };
+  const ch = $("#s-in");
+  if (ch) ch.onchange = () => { $("#s-in-hint").innerHTML = clientHostHint(ch.value); showBar(); };
+  const om = $("#s-out-main");
+  if (om) om.onchange = () => { $("#s-out-sees").innerHTML = outMainSees(om.value); showBar(); };
   showBar();
   $("#s-restart").onclick = async () => {
     if (saveFirst() || !confirm(t("srv.restart_confirm"))) return;
@@ -514,15 +505,23 @@ bind.server = () => {
     // клиенты из приложения AmneziaVPN: их ключ только на устройстве, новый конфиг с новым портом панель не выдаст
     const appMade = port !== SRV.port ? S.clients.filter((c) => !c.has_config).length : 0;
     if (appMade && !confirm(t("srv.confirm_port_app", { n: appMade }))) return;
-    const body = { public_host: $("#s-host").value.trim(), client_host: $("#s-ch").value, extra_hosts: $("#s-extra").value, client_dns: $("#s-dns").value,
+    // адреса (1.25.0): входящий — из выбора, исходящие — основной и дополнительные; сначала сервер говорит, что
+    // переедет и где стоят убранные адреса (confirm: false), после «Да» — сохраняет
+    const body = { client_host: $("#s-in").value, extra_hosts: $("#s-extra").value,
+      out_main: $("#s-out-main").value, out_hosts: $("#s-out").value, confirm: false, client_dns: $("#s-dns").value,
       panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
     body.port = port;
     if (!SRV.subnet_locked) body.address = addr;
     $("#s-save").disabled = true;
     try {
-      const r = await api("PUT", "server", body);
+      let r = await api("PUT", "server", body);
+      if (r.confirm) {
+        if (!confirm(addrConfirmText(r.confirm))) { $("#s-save").disabled = false; return; }
+        r = await api("PUT", "server", { ...body, confirm: true });
+      }
       toast(t(r.restarted ? "toast.server_restarted" : "toast.settings_saved"));
+      reconnectToast(r);
       // новый порт или подсеть — тоже новые конфиги у всех клиентов (Endpoint, Address)
       const moved = port !== SRV.port || (!SRV.subnet_locked && addr !== SRV.address);
       if (r.server_side_changed || r.host_changed || r.dns_changed || moved) toast(t("toast.reimport"));

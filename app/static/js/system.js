@@ -19,6 +19,7 @@ function viewSystem() {
   <section class="section">
     <div class="section-head"><h2>${esc(t("sy.access"))}</h2></div>
     <div class="panel panel-pad">
+      ${panelAddrFields()}
       <div class="kv">
         <div><span>${esc(t("sy.url"))}</span><b><bdi>${esc(P.url || "—")}</bdi></b></div>
         <div><span>${esc(t("sy.access_mode"))}</span><b>${esc(t(P.access === "ssh" ? "sy.access_ssh" : "sy.access_public"))}</b></div>
@@ -113,6 +114,7 @@ bind.system = () => {
     try { await api("POST", "tls/web", { action: "remove" }); toast(t("web.removed")); } catch (e) { toast(e.message, true); }
     refresh();
   };
+  bindPanelAddr();
   bindTelegram();
   bindSecurity();
   bindBackup();
@@ -143,9 +145,10 @@ function tlsModal() {
   // как Let's Encrypt проверяет домен (1.24.0): порт 80 (или веб-сервер на нём) либо запись в DNS через API Cloudflare
   let ch = T.challenge === "cloudflare" ? "cloudflare" : "http";
   const certPh = "/etc/letsencrypt/live/example.com/fullchain.pem", keyPh = "/etc/letsencrypt/live/example.com/privkey.pem";
+  // адрес панели — поле «Адрес панели» на вкладке (1.25.0); здесь — только откуда сертификат и как подтвердить домен
+  const dom = T.domain || "";
   const body = `
-    <label class="field"><span>${esc(t("tls.domain"))}</span><input type="text" id="tls-domain" data-field="tls_domain" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(T.domain || "")}" placeholder="panel.example.com">
-      <span class="hint">${esc(t("tls.domain_hint", { ip: ip || "IP" }))}</span></label>
+    <p class="small muted" style="margin-top:0">${th("tls.for_host", { host: `<bdi dir="ltr">${esc(T.host || ip || "—")}</bdi>` })}</p>
     <div class="field"><span>${esc(t("tls.source"))}</span>
       <div class="seg" id="tls-src"><button type="button" data-v="letsencrypt">${esc(t("tls.src_le"))}</button><button type="button" data-v="custom">${esc(t("tls.src_custom"))}</button></div>
       <span class="hint" id="tls-src-hint"></span></div>
@@ -161,11 +164,11 @@ function tlsModal() {
     </div>`;
   openModal(t("tls.title"), body, `<button class="btn ghost" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="tls-apply">${esc(t("tls.apply"))}</button>`);
   const paths = () => {
-    const d = $("#tls-domain").value.trim().toLowerCase() || "example.com";
+    const d = (dom || T.host || "").toLowerCase() || "example.com";
     return { cert: `/etc/letsencrypt/live/${d}/fullchain.pem`, key: `/etc/letsencrypt/live/${d}/privkey.pem` };
   };
   // через Cloudflare подтверждается только домен: IP (с точками или «:») — только порт 80
-  const domainOnly = () => { const d = $("#tls-domain").value.trim(); return !!d && !/^[\d.]+$/.test(d) && !d.includes(":"); };
+  const domainOnly = () => !!dom && !/^[\d.]+$/.test(dom) && !dom.includes(":");
   const viaCf = () => src === "letsencrypt" && domainOnly() && ch === "cloudflare";
   const seg = () => {
     $$("#tls-src button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === src));
@@ -179,13 +182,12 @@ function tlsModal() {
   };
   $$("#tls-src button").forEach((b) => b.onclick = () => { src = b.dataset.v; seg(); });
   $$("#tls-ch button").forEach((b) => b.onclick = () => { ch = b.dataset.v; seg(); });
-  $("#tls-domain").oninput = seg;
   seg();
   const apply = async (force) => {
     const btn = $("#tls-apply"); btn.disabled = true;
     const before = S.panel.url;
     try {
-      const r = await api("PUT", "tls", { domain: $("#tls-domain").value.trim(), source: src,
+      const r = await api("PUT", "tls", { domain: dom, source: src,
         cert: $("#tls-cert").value.trim(), key: $("#tls-key").value.trim(), force: !!force,
         challenge: viaCf() ? "cloudflare" : "http", cf_token: viaCf() ? $("#tls-cf").value.trim() : "" });
       if (r.confirm) {

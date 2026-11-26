@@ -149,9 +149,10 @@ function quotaSwitched(u) { return !!(u.enabled && u.over_quota && u.quota_actio
 // варианты «Когда лимит исчерпан»: уведомить, блокировать, напрямую, другие выходы (не сам)
 function quotaOptions(u) {
   const sel = u ? u.quota_action : "notify";
-  const opts = [["notify", t("ex.qa_notify")], ["block", t("out.block")], ["direct", t("out.direct")]];
+  const opts = [["notify", t("ex.qa_notify")], ["block", t("out.block")], ...directOptions(sel)];   // «Напрямую — адрес»
   for (const x of S.upstreams) if (!u || x.id !== u.id) opts.push(["up:" + x.id, x.name]);
-  return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${esc(l)}</option>`).join("");
+  const cur = opts.some(([v]) => v === sel) ? sel : isDirect(sel) ? "direct" : sel;
+  return opts.map(([v, l, off]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""} ${off ? "disabled" : ""}>${esc(l)}</option>`).join("");
 }
 function exitQuota(u) {
   const x = u.traffic || {}, used = (x.month_rx || 0) + (x.month_tx || 0);
@@ -353,7 +354,7 @@ function editClient(pk, section = null) {
     <div id="c-pane-route" class="c-pane">
       <label class="field"><span>${esc(t("cl.default_exit"))}</span>
         <select id="c-out">${outOptions(draft.outbound, { inherit: t("out.inherit_now", { exit: exitName(S.routing.default) }) })}</select>
-        <span class="hint">${esc(t("cl.default_exit_hint"))}</span>
+        <span class="hint">${esc(t("cl.default_exit_hint"))}</span><span class="hint" id="c-out-bind">${bindHintHtml(draft.outbound)}</span>
       </label>
       <div class="field"><span>${esc(t("cl.rules"))}</span>
         <div class="seg" id="c-mode"><button type="button" data-v="inherit">${esc(t("cl.rules_global"))}</button><button type="button" data-v="custom">${esc(t("cl.rules_own"))}</button></div>
@@ -546,13 +547,15 @@ function editClient(pk, section = null) {
           rate_down: rd || null, rate_up: ru || null });
         if (r.enabled) toast(t("toast.client_enabled"));
       }
-      await api("PUT", "clients/" + encodeURIComponent(pk), {
+      const rr = await api("PUT", "clients/" + encodeURIComponent(pk), {
         outbound: $("#c-out").value, rules_mode: draft.rules_mode,
         rules: draft.rules_mode === "custom" ? draft.rules : [], note: $("#c-note").value.trim() });
       newLists.length = 0;                       // сохранены вместе с правилами клиента
-      closeModal(); toast(t("toast.saved_applying")); refresh();
+      closeModal(); toast(t("toast.saved_applying")); reconnectToast(rr); refresh();
     } catch (e) { toast(e.message, true); markField(e, document.querySelector("dialog[open]")); }
   };
+  const cOut = $("#c-out");
+  if (cOut) cOut.addEventListener("change", () => { $("#c-out-bind").innerHTML = bindHintHtml(cOut.value); });
   const reopen = async () => { await refresh(); editClient(pk, "connect"); };
   bindClientLinks(c, reopen);
   $("#c-toggle").onclick = async () => {

@@ -1158,8 +1158,9 @@ class ErrorFieldTest(unittest.TestCase):
         js = panel_js.source()
         for fld in ("config", "name", "port", "address", "client_dns", "token", "chat_id", "params.${k}"):
             self.assertIn(f'data-field="{fld}"', js)
-        # и свой DNS правила: общие и клиента (1.22.0), окно правила (1.23.0), окно сертификата (1.24.0, токен Cloudflare)
-        self.assertEqual(js.count("markField(e, "), 7)
+        # и свой DNS правила: общие и клиента (1.22.0), окно правила (1.23.0), окно сертификата (1.24.0, токен Cloudflare),
+        # адрес панели и исходящий адрес самого сервера на вкладке «Система» (1.25.0)
+        self.assertEqual(js.count("markField(e, "), 8)
         self.assertIn("pendingS = data", js)
 
 

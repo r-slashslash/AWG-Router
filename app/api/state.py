@@ -35,6 +35,7 @@ def _upstream_view(st: dict, u: dict, bal_members: set | None = None, bal_counts
     return {"id": u["id"], "name": u["name"], "num": u["num"],
             "iface": f"{config.IFACE_PREFIX}{u['num']}", "enabled": u.get("enabled", True),
             "fallback": u.get("fallback", "direct"), "created": u.get("created"),
+            "bind": u.get("bind") or "",                # «Подключаться с адреса» (1.25.0): пусто — основной
             **info, "health": engine.health.get(u["id"], {"state": "down"}), "effective": eff,
             "refs": Store.outbound_refs(st, "up:" + u["id"]),
             "quota": u.get("quota"), "quota_action": engine.quota_target(u) or "notify",

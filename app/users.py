@@ -546,11 +546,6 @@ class ServerManager:
                 settings_patch["out_main"] = m
             elif "out_hosts" in body and srcaddr.main(cur) and srcaddr.main(cur) not in settings_patch["out_hosts"]:
                 raise UserError(Msg("srv.out_main_removed", addr=srcaddr.main(cur)))   # основной — сначала другой
-            # браузер 1.25.0 сначала спрашивает (confirm: false), потом сохраняет (confirm: true); прежний — сохраняет сразу
-            if body.get("confirm") is False and ("out_hosts" in body or "out_main" in body or "extra_hosts" in body):
-                ask = self._addr_changes(cur, settings_patch)
-                if ask:
-                    return {"confirm": ask}
             if "client_host" in body:
                 ch = str(body["client_host"] or "").strip().strip("[]")
                 extra = settings_patch.get("extra_hosts", self.e.store.snapshot()["settings"].get("extra_hosts") or [])
@@ -571,6 +566,12 @@ class ServerManager:
                 settings_patch["client_mtu"] = check_mtu(body["client_mtu"])
             if "client_keepalive" in body:
                 settings_patch["client_keepalive"] = check_keepalive(body["client_keepalive"])
+            # браузер 1.25.0 сначала спрашивает (confirm: false), потом сохраняет (confirm: true); прежний — сохраняет
+            # сразу. Спрашивает после проверки полей: ошибка в DNS — у поля, а не после «Да»
+            if body.get("confirm") is False and ("out_hosts" in body or "out_main" in body or "extra_hosts" in body):
+                ask = self._addr_changes(cur, settings_patch)
+                if ask:
+                    return {"confirm": ask}
             # серверный конфиг
             if "params" in body:
                 if body["params"] is not None and not isinstance(body["params"], dict):

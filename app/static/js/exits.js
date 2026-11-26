@@ -190,6 +190,9 @@ async function editUpstream(id) {
       <select data-field="fallback" id="u-fb">${outOptions(u ? u.fallback : "block", { exclude: out })}</select>
       <span class="hint">${esc(t("ex.fallback_hint"))}</span>
     </label>
+    ${directAddrs().length ? `<label class="field"><span>${esc(t("ex.bind"))}</span>
+      <select data-field="bind" id="u-bind">${bindOptions(u ? u.bind || "" : "")}</select>
+      <span class="hint">${esc(t("ex.bind_hint"))}</span></label>` : ""}
     <div class="row2">
       <label class="field"><span>${esc(t("ex.quota"))}</span>
         <input type="number" data-field="quota_gb" id="u-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${u && u.quota ? +(u.quota / 1024 ** 3).toFixed(3) : ""}"></label>
@@ -263,6 +266,7 @@ async function editUpstream(id) {
     const c = ta.value.trim();
     if (!u || c !== conf.trim()) body.config = c;
     if (kind === "socks5") body.quic = $("#u-quic").checked;
+    if ($("#u-bind")) body.bind = $("#u-bind").value;          // «Подключаться с адреса» (1.25.0)
     if (routeTouched || !u) {
       const picked = $$("#u-route [data-rl]").filter((x) => x.checked).map((x) => x.dataset.rl);
       body.routing = { domains: $("#u-doms").value.trim(), default: $("#u-rdef").checked,
@@ -272,9 +276,9 @@ async function editUpstream(id) {
     }
     const btn = $("#u-save"); btn.disabled = true;
     try {
-      if (u) await api("PUT", "upstreams/" + u.id, body);
-      else await api("POST", "upstreams", body);
+      const r = u ? await api("PUT", "upstreams/" + u.id, body) : await api("POST", "upstreams", body);
       closeModal(); toast(t(u ? "toast.exit_saved" : "toast.exit_added"));
+      reconnectToast(r);
       refresh();
     } catch (e) { toast(e.message, true); markField(e, $("#modal")); }
     btn.disabled = false;

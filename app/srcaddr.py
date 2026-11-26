@@ -203,6 +203,54 @@ def bind_of(st: dict, u: dict) -> str:
     return main(st) or SYSTEM
 
 
+# ------------------------------------------------------------------ окно исходящего адреса (1.25.0)
+def _name(rule: dict):
+    """Подпись правила: его название или первый список (браузер переводит имя списка сам)."""
+    return rule.get("comment") or Msg("ra.list", list=(rule.get("lists") or ["?"])[0])
+
+
+def places(st: dict) -> list[tuple[str, dict, str, Msg]]:
+    """Места, где сейчас «Напрямую» (с любым адресом): (ключ места, объект, поле, подпись). Ключ — для окна
+    исходящего адреса («Маршрутизация» → «Адреса сервера»): default | rule:<id>:<поле> | client:<ключ> |
+    crule:<ключ>:<id>:<поле> | exit:<id>:<поле> | tg."""
+    out = []
+    kinds = {"outbound": "", "balance_fb": "_fb", "quota_action": "_q"}
+
+    def add(key, o, f, label):
+        if is_direct(o.get(f)):
+            out.append((key, o, f, label))
+    r = st.get("routing") or {}
+    # при балансировке «По умолчанию» — это выход, когда все выходы балансировки недоступны
+    add("default", r, "default", Msg("ra.p_default_bal" if (r.get("balance") or {}).get("on") else "ra.p_default"))
+    for i, rule in enumerate(r.get("rules") or []):
+        for f, sfx in kinds.items():
+            if f == "outbound" and rule.get("balance"):
+                continue
+            add(f"rule:{rule.get('id')}:{f}", rule, f, Msg("ra.p_rule" + sfx, n=i + 1, name=_name(rule)))
+    for pk, c in (st.get("clients") or {}).items():
+        name = c.get("name") or str(pk)[:8]
+        add(f"client:{pk}", c, "outbound", Msg("ra.p_client", client=name))
+        if c.get("rules_mode") == "custom":
+            for i, rule in enumerate(c.get("rules") or []):
+                for f, sfx in kinds.items():
+                    if f == "outbound" and rule.get("balance"):
+                        continue
+                    add(f"crule:{pk}:{rule.get('id')}:{f}", rule, f,
+                        Msg("ra.p_crule" + sfx, client=name, n=i + 1, name=_name(rule)))
+    for u in st.get("upstreams") or []:
+        add(f"exit:{u['id']}:fallback", u, "fallback", Msg("ra.p_exit_fb", name=u.get("name") or ""))
+        add(f"exit:{u['id']}:quota_action", u, "quota_action", Msg("ra.p_exit_q", name=u.get("name") or ""))
+    tg = (st.get("settings") or {}).get("telegram")
+    if isinstance(tg, dict):
+        add("tg", tg, "via", Msg("ra.p_tg"))
+    return out
+
+
+def addr_of(st: dict, v: str) -> str:
+    """Адрес места «Напрямую»: system или IPv4 (просто direct — основной)."""
+    return split(v)[1] or main(st) or SYSTEM
+
+
 # ------------------------------------------------------------------ ввод
 _SPLIT = re.compile(r"[,\s]+")
 

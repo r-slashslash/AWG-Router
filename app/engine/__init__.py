@@ -214,7 +214,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 if ip:
                     self.public_v4, self.public_v4_state = ip, "ok"
                     if not self.srv.public_host(self.store.snapshot()):
-                        self.store.mutate(lambda st: st["settings"].setdefault("public_host", ip))
+                        def _first(st, ip=ip):
+                            st["settings"].setdefault("public_host", ip)
+                            Store.split_hosts(st)       # и входящий адрес клиентов — явно (1.25.0)
+                        self.store.mutate(_first)
                     # страна не узналась (ответил только ifconfig.me) — спросить снова через 10 минут, а не через
                     # 6 часов: без неё нет местного DNS пути «напрямую», когда шифрованный не проходит
                     tries, wait = 0, HOST_RECHECK if getattr(self, "public_cc", None) else HOST_SLOW_WAIT

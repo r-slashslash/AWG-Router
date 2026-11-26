@@ -348,7 +348,7 @@ class RuleListsTest(unittest.TestCase):
         from tests import panel_js
         js = panel_js.source()
         # «Сервер»: опрос перерисовывает блок «Движок AmneziaWG», когда он изменился (после смены движка)
-        self.assertIn('if (auto && tab === "server" && !anyModal()) drawEngine();', js)
+        self.assertIn('if (auto && tab === "server" && !anyModal()) { drawEngine(); drawAddrStatus(); }', js)
         self.assertIn("if (!fresh || fresh.outerHTML === el.outerHTML) return;", js)
         # окно клиента → «Управление»: «За месяц по выходам» — колонкой рядом с суммами
         self.assertIn('<div class="c-traffic"><div class="kv">${sums}</div>', js)

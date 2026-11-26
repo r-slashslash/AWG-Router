@@ -153,7 +153,8 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0, pick = null
     <label class="field"><span>${esc(t("rw.name"))}</span><input type="text" id="rw-name" maxlength="80" value="${esc(r.comment || "")}" placeholder="${esc(t("re.comment_ph"))}"></label>
     <div class="field"><span>${esc(t("rw.lists"))}</span><div id="rw-lists"></div></div>
     <div id="rw-dns"></div>
-    <label class="field"><span>${esc(t("rw.exit"))}</span><select id="rw-out"><option value="balance" ${r.balance && r.balance.length ? "selected" : ""}>${esc(t("bal.option"))}</option>${outOptions(r.balance && r.balance.length ? "" : r.outbound)}</select></label>
+    <label class="field"><span>${esc(t("rw.exit"))}</span><select id="rw-out"><option value="balance" ${r.balance && r.balance.length ? "selected" : ""}>${esc(t("bal.option"))}</option>${outOptions(r.balance && r.balance.length ? "" : r.outbound)}</select>
+      <span class="hint" id="rw-out-bind">${bindHintHtml(r.balance && r.balance.length ? "" : r.outbound)}</span></label>
     <div class="panel panel-pad bal-box rw-bal" id="rw-bal" ${r.balance && r.balance.length ? "" : "hidden"}>
       <p class="small muted" style="margin-top:0">${esc(t("rbal.hint"))}</p>
       <div class="field"><span>${esc(t("bal.exits"))}</span>${S.upstreams.length ? `<div class="check-cols">${S.upstreams.map((u) => {
@@ -221,7 +222,10 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0, pick = null
       delete r.balance; delete r.balance_fb;
     }
   };
-  $("#rw-out", m).onchange = (e) => { $("#rw-bal", m).hidden = e.target.value !== "balance"; };
+  $("#rw-out", m).onchange = (e) => {
+    $("#rw-bal", m).hidden = e.target.value !== "balance";
+    $("#rw-out-bind", m).innerHTML = bindHintHtml(e.target.value);     // с какого адреса подключается этот выход
+  };
 
   const drawDns = (dom) => {
     const box = $("#rw-dns", m);
@@ -388,8 +392,9 @@ function routingDirty() {
 }
 /** правила сохранить сейчас: всё остальное — как сохранено (черновик строки сохранения не трогаем) */
 async function saveRules(rules) {
-  await api("PUT", "routing", { ...routingNow(), rules });
+  const r = await api("PUT", "routing", { ...routingNow(), rules });
   toast(t("toast.rules_saved"));
+  reconnectToast(r);
   await refresh();
   return true;
 }
@@ -443,6 +448,7 @@ function viewRouting() {
       <button type="button" class="btn sm primary" id="ls-hours-save" hidden>${esc(t("btn.save"))}</button></div>
   </section>
   ${clientRulesHtml()}
+  ${serverAddrsHtml()}
   <section class="section">
     <div class="section-head"><div><h2>${esc(t("tr.title"))}</h2><p class="muted small">${esc(t("tr.subtitle"))}</p></div></div>
     <div class="panel panel-pad">
@@ -489,6 +495,7 @@ bind.routing = () => {
   drawRoutingRules();
   fillRuleTraffic();
   bindClientRules();
+  bindServerAddrs();
   upd();
   bindListHours();
   if (scrollToLists) { scrollToLists = false; $("#g-rules").scrollIntoView(); }
@@ -513,8 +520,8 @@ bind.routing = () => {
   $("#g-reset").onclick = () => { routingDraft = null; render(); };
   $("#g-save").onclick = async () => {
     try {
-      await api("PUT", "routing", { ...draft, rules: S.routing.rules });
-      routingDraft = null; toast(t("toast.rules_saved")); await refresh();
+      const r = await api("PUT", "routing", { ...draft, rules: S.routing.rules });
+      routingDraft = null; toast(t("toast.rules_saved")); reconnectToast(r); await refresh();
     } catch (e) { toast(e.message, true); markField(e, $("#main")); }
   };
   $("#trace-form").onsubmit = async (e) => {

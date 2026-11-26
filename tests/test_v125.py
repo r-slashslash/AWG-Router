@@ -758,3 +758,94 @@ class OwnConnectionsTest(unittest.TestCase):
         self.assertIn('curl() { command curl ${AWGR_FROM:+--interface "$AWGR_FROM"} "$@"; }', sh)
         pub = sh[sh.index("public_ip() {"):sh.index("\n}\n", sh.index("public_ip() {"))]
         self.assertIn("command curl -4fsS", pub)
+
+
+class InterfaceBackendTest(unittest.TestCase):
+    """Интерфейс 1.25.0: адрес панели на вкладке «Система» (IP — адрес сервера в настройках, не домен сертификата),
+    новый сервер — входящий адрес клиентов записан явно, подписи мест в окне исходящего адреса."""
+
+    def test_panel_ip_is_server_setting(self):
+        from app.api import server
+        st = state(public_host="203.0.113.5", client_host="203.0.113.5")
+        server._set_panel_ip(st, "198.51.100.30")
+        self.assertEqual(st["settings"]["public_host"], "198.51.100.30")
+        self.assertEqual(st["settings"]["client_host"], "203.0.113.5")      # клиентов адрес панели не трогает
+        st2 = state()
+        server._set_panel_ip(st2, "198.51.100.30")
+        self.assertEqual(st2["settings"]["public_host"], "198.51.100.30")
+
+    def test_fresh_store_has_inbound(self):
+        d = tempfile.mkdtemp()
+        import app.config as cfg
+        old = cfg.PUBLIC_HOST
+        cfg.PUBLIC_HOST = "203.0.113.5"
+        try:
+            s = Store(os.path.join(d, "state.json"))
+        finally:
+            cfg.PUBLIC_HOST = old
+        self.assertEqual(s.snapshot()["settings"]["client_host"], "203.0.113.5")
+
+    def test_place_labels(self):
+        st = state()
+        st["routing"]["default"] = "direct"
+        self.assertEqual(srcaddr.places(st)[0][3].key, "ra.p_default")
+        st["routing"]["balance"] = {"on": True, "skip": []}      # при балансировке — выход, когда все недоступны
+        self.assertEqual(srcaddr.places(st)[0][3].key, "ra.p_default_bal")
+
+    def test_ui_keys_in_four_languages(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "static", "i18n.js"), encoding="utf-8") as f:
+            src = f.read()
+        for k in ("ra.p_default", "ra.p_default_bal", "ra.p_rule", "ra.p_rule_fb", "ra.p_rule_q", "ra.p_client",
+                  "ra.p_crule", "ra.p_crule_fb", "ra.p_crule_q", "ra.p_exit_fb", "ra.p_exit_q", "ra.p_tg", "ra.list",
+                  "out.direct_at", "toast.reconnect", "ex.bind", "sy.panel_host", "sy.own_src", "srv.out_extra"):
+            self.assertEqual(src.count(f'"{k}":'), 4, k)
+
+
+class AddrWindowsApiTest(unittest.TestCase):
+    """Окна «Адресов сервера»: галочка у места «Напрямую» — адрес перед выходом, у выхода — «Подключаться с адреса»;
+    снятая — снова основной. Входящий: отмеченные клиенты — к этому адресу, снятые — к основному."""
+
+    def setUp(self):
+        self.st0 = panel.store.snapshot()
+
+    def tearDown(self):
+        panel.store.mutate(lambda s: (s.clear(), s.update(self.st0)))
+
+    def test_out_window(self):
+        from app.api import addrs
+        uid = "u_t1"
+
+        def prep(st):
+            st["settings"]["out_hosts"] = [A]
+            st["routing"]["default"] = "direct"
+            st["upstreams"].append({"id": uid, "name": "T", "num": 99, "config": "socks5://198.51.100.9:1080",
+                                    "enabled": False, "fallback": "block", "quota_action": "notify"})
+        panel.store.mutate(prep)
+        p = addrs.addr_places(Req({}))
+        self.assertIn("default", [x["key"] for x in p["direct"]])
+        self.assertEqual(p["main"], "system")
+        addrs.put_addr_out(Req({"addr": A, "direct": ["default"], "exits": [uid]}))
+        st = panel.store.snapshot()
+        self.assertEqual(st["routing"]["default"], "direct@" + A)
+        self.assertEqual(next(u for u in st["upstreams"] if u["id"] == uid)["bind"], A)
+        addrs.put_addr_out(Req({"addr": A, "direct": [], "exits": []}))      # сняли — снова основной
+        st = panel.store.snapshot()
+        self.assertEqual(st["routing"]["default"], "direct")
+        self.assertNotIn("bind", next(u for u in st["upstreams"] if u["id"] == uid))
+        with self.assertRaises(HTTPError):
+            addrs.put_addr_out(Req({"addr": C, "direct": ["default"], "exits": []}))   # такого адреса нет
+
+    def test_in_window(self):
+        from app.api import addrs
+        panel.store.mutate(lambda st: st["settings"].update(client_host="203.0.113.5", extra_hosts=[A]))
+        pk = "addrInTestKey" + "A" * 30 + "="
+        old = panel.engine.clients
+        panel.engine.clients = [{"public_key": pk, "name": "Dad", "ip": "10.8.1.3"}]
+        self.addCleanup(setattr, panel.engine, "clients", old)
+        r = addrs.put_addr_in(Req({"host": A, "clients": [pk]}))
+        self.assertEqual(len(r["moved"]), 1)
+        self.assertEqual(panel.store.snapshot()["chost"][pk], A)
+        addrs.put_addr_in(Req({"host": A, "clients": []}))
+        self.assertNotIn(pk, panel.store.snapshot().get("chost") or {})
+        with self.assertRaises(HTTPError):
+            addrs.put_addr_in(Req({"host": "198.51.100.99", "clients": [pk]}))

@@ -93,6 +93,7 @@ class Store:
         else:
             self.state = copy.deepcopy(DEFAULT_STATE)
             self.state["upgraded"] = list(UPGRADES)
+            Store.split_hosts(self.state)   # входящий адрес клиентов — явно с первого запуска (PUBLIC_HOST из .env)
             self._write()
 
     def _upgrade(self) -> bool:
