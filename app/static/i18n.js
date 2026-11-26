@@ -3930,6 +3930,20 @@ Object.assign(I18N.fa, {
   "tls.for_host": "گواهی برای آدرس پنل {host} است. برای تغییر آدرس از «آدرس پنل» در زبانه استفاده کنید.",
 });
 
+/* 1.25.0: местный DNS страны с шифрованием */
+Object.assign(I18N.ru, {
+  "srv.pdns_direct_fb_enc": "Общий шифрованный DNS не отвечает напрямую из страны сервера: клиентам, которые идут напрямую, имена ищет местный DNS {dns} — тоже с шифрованием.",
+});
+Object.assign(I18N.en, {
+  "srv.pdns_direct_fb_enc": "The usual encrypted DNS doesn't answer directly from the server's country: for clients that go direct, names are looked up at the local DNS {dns}, also encrypted.",
+});
+Object.assign(I18N.zh, {
+  "srv.pdns_direct_fb_enc": "常用的加密 DNS 在服务器所在国家无法直连：直连的客户端改由本地 DNS {dns} 解析，同样加密。",
+});
+Object.assign(I18N.fa, {
+  "srv.pdns_direct_fb_enc": "DNS رمزگذاری‌شدهٔ معمول از کشور سرور مستقیم پاسخ نمی‌دهد: برای کلاینت‌هایی که مستقیم می‌روند، نام‌ها را DNS محلی {dns} پیدا می‌کند — آن هم رمزگذاری‌شده.",
+});
+
 /* Разделители: перечисление, фразы, ссылки */
 const SEP = {
   list: { zh: "、", fa: "، " }, phrase: { zh: "，", fa: "، " }, refs: { zh: "；", fa: "؛ " },

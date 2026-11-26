@@ -76,7 +76,18 @@ POOL_IDLE = 50.0            # дольше без запросов — соед�
 # (Google по голому IP DoH может не отвечать). Остальные адреса проверяются по IP в сертификате.
 KNOWN_NAMES = {"1.1.1.1": "cloudflare-dns.com", "1.0.0.1": "cloudflare-dns.com",
                "8.8.8.8": "dns.google", "8.8.4.4": "dns.google",
-               "9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net"}
+               "9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net",
+               # местные серверы стран с шифрованием (запасной DNS пути «напрямую», countries.PRESETS dns_enc):
+               # сертификат — на имя сервиса, не на IP; у DNSPod имена для DoH и DoT разные
+               "77.88.8.8": "common.dot.dns.yandex.net",
+               "223.5.5.5": "dns.alidns.com", "223.6.6.6": "dns.alidns.com",
+               "1.12.12.12": {"doh": "doh.pub", "dot": "dot.pub"}, "120.53.53.53": {"doh": "doh.pub", "dot": "dot.pub"}}
+
+
+def tls_name(server: str, mode: str) -> str:
+    """Имя для проверки сертификата сервера DNS (и Host у DoH): известное имя сервиса или сам IP."""
+    n = KNOWN_NAMES.get(server, server)
+    return n.get(mode, server) if isinstance(n, dict) else n
 
 SET_MIN = 1800              # с: адрес сайта из правила держится в наборе не меньше (устройства кэшируют дольше TTL)
 SET_MAX = 86400
@@ -345,12 +356,14 @@ async def doh_query(conn: Conn, msg: bytes, host: str) -> bytes:
 # ---------------------------------------------------------------- сервер
 class DirectPath:
     """Шифрованный DNS на одном пути «напрямую»: когда последний раз ответил и не ответил, down — не отвечает (имена у
-    местного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая проба (asyncio.Task)."""
-    __slots__ = ("ok_at", "fail_at", "down", "retry_at", "probe")
+    местного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая проба (asyncio.Task). loc — то же для
+    местного DNS страны с шифрованием (не отвечает — имена у местного без шифрования); loc_ok_at — когда ответил."""
+    __slots__ = ("ok_at", "fail_at", "down", "retry_at", "probe", "loc_down", "loc_retry_at", "loc_probe", "loc_ok_at")
 
     def __init__(self):
         self.ok_at = self.fail_at = 0.0
         self.down, self.retry_at, self.probe = False, 0.0, None
+        self.loc_down, self.loc_retry_at, self.loc_probe, self.loc_ok_at = False, 0.0, None, 0.0
 
 
 def _dp_attr(name: str) -> property:
@@ -573,8 +586,11 @@ class Proxy:
                 if enc_direct:
                     self._direct_seen(reply is not None, bool(fb), mark)
             if reply is None and fb:
-                # местный DNS, обычный — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого
-                reply = await self.forward(query, q, mark, tcp, fb)
+                # местный DNS страны — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого. Сначала
+                # с шифрованием (тем же DoH/DoT, что в настройках), не ответил — без шифрования
+                reply = await self._local_enc(query, q, tcp, mark)
+                if reply is None:
+                    reply = await self.forward(query, q, mark, tcp, fb)
                 if reply is not None:
                     self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
         finally:
@@ -596,6 +612,40 @@ class Proxy:
             self.cache[key] = (now + ttl, int(now), reply, offs)
             self.cache_bytes += len(reply)
         return struct.pack("!H", q["id"]) + reply[2:]
+
+    async def _local_enc(self, query: bytes, q: dict, tcp: bool, mark: int) -> bytes | None:
+        """Местный DNS страны с шифрованием (cfg direct_fallback_enc). Не ответил — путь до DIRECT_RETRY спрашивает
+        местный без шифрования сразу, а этот пробуется одним запросом в фоне: клиент не ждёт зависший."""
+        cfg = getattr(self, "cfg", None) or {}
+        servers = tuple(cfg.get("direct_fallback_enc") or ())
+        mode = cfg.get("encrypt") or "plain"
+        if not servers or mode == "plain":
+            return None
+        p = self._dp(mark)
+        if p.loc_down:
+            if time.monotonic() >= p.loc_retry_at and not (p.loc_probe and not p.loc_probe.done()):
+                p.loc_retry_at = time.monotonic() + DIRECT_RETRY
+
+                async def run():
+                    try:
+                        r = await self.forward(query, q, mark, tcp, servers, mode=mode)
+                    except Exception:  # noqa: BLE001  — проба не должна ронять цикл
+                        r = None
+                    self._local_seen(p, r is not None)
+                p.loc_probe = asyncio.get_running_loop().create_task(run())
+            return None
+        reply = await self.forward(query, q, mark, tcp, servers, mode=mode)
+        self._local_seen(p, reply is not None)
+        if reply is not None:
+            self.stats["direct_local_enc"] = self.stats.get("direct_local_enc", 0) + 1
+        return reply
+
+    @staticmethod
+    def _local_seen(p: DirectPath, ok: bool) -> None:
+        if ok:
+            p.loc_down, p.loc_ok_at = False, time.time()
+        else:
+            p.loc_down, p.loc_retry_at = True, time.monotonic() + DIRECT_RETRY
 
     def _direct_seen(self, ok: bool, fallback: bool, mark: int = 0) -> None:
         """Ответил ли шифрованный DNS на пути «напрямую» mark (ответ SERVFAIL — тоже ответ: сервер на связи, сломан
@@ -625,12 +675,14 @@ class Proxy:
             self._direct_seen(reply is not None, True, mark)
         p.probe = asyncio.get_running_loop().create_task(run())
 
-    async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = ()) -> bytes | None:
+    async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = (),
+                      mode: str | None = None) -> bytes | None:
         """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. servers — свой DNS правила по
         сайтам: всегда обычный DNS (UDP, при обрезанном ответе — TCP), без шифрования: местные DNS вроде
         Яндекса, Alibaba или иранских по адресу DoH/DoT часто не отвечают. Все, кто ответил, ответили SERVFAIL, —
-        этот ответ (серверы на связи, не разрешилось само имя); None — не ответил никто."""
-        mode = "plain" if servers else (self.cfg.get("encrypt") or "plain")
+        этот ответ (серверы на связи, не разрешилось само имя); None — не ответил никто. mode — шифрование для servers
+        (местный DNS страны с шифрованием, _local_enc); без него servers — обычный DNS."""
+        mode = mode or ("plain" if servers else (self.cfg.get("encrypt") or "plain"))
         servfail = None
         for server in servers or self.cfg.get("upstreams") or []:
             if not servers and mode == "plain" and server == self.self_addr:
@@ -671,7 +723,7 @@ class Proxy:
         key = (mode, mark, server)
         pool = self.pools.get(key)
         if pool is None:
-            name = KNOWN_NAMES.get(server, server)
+            name = tls_name(server, mode)
             port = self.up_port if self.cfg.get("upstream_port") else (DOH_PORT if mode == "doh" else DOT_PORT)
 
             async def open_conn():
@@ -759,6 +811,9 @@ class Proxy:
                                "direct_ok_at": self.direct_ok_at, "direct_fail_at": self.direct_fail_at,
                                # пути «Напрямую — адрес» (1.25.0): метка → [ответил, не ответил]
                                "addr_direct": {str(m): [p.ok_at, p.fail_at] for m, p in self.dpaths.items() if m},
+                               # местный DNS страны с шифрованием: когда последний раз ответил на каком-нибудь пути
+                               "local_enc_ok_at": max((p.loc_ok_at for p in self.dpaths.values()), default=0.0),
+                               "fallback_enc": list(self.cfg.get("direct_fallback_enc") or ()),
                                "fallback": list(self.cfg.get("direct_fallback") or ()),
                                **self.stats}, f)
                 os.replace(p + ".tmp", p)

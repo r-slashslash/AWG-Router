@@ -16,6 +16,9 @@ from .common import APP_DIR, DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, _sha, _trim_l
 DNSPROXY = os.path.join(APP_DIR, "dnsproxy.py")
 DNS_CONF = os.path.join(RUN_DIR, "dns.json")
 DNS_STATS = os.path.join(RUN_DIR, "dns-stats.json")
+# с: местный DNS страны с шифрованием «в ходу», если отвечал не раньше этого до последнего сбоя общего (общий
+# пробуется раз в DIRECT_RETRY = 120 с, местный — на каждое имя)
+DIRECT_ENC_GRACE = 180
 
 
 class DnsMixin:
@@ -146,6 +149,9 @@ class DnsMixin:
                # клиенты, которые идут напрямую, и так идут через провайдера сервера (countries.local_dns). Страна —
                # сервера, и для «Напрямую — адрес» (1.25.0): провайдер тот же, его метки — addr_marks
                "direct_fallback": countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else [],
+               # и местный DNS страны с шифрованием (тем же DoH/DoT) — его спрашивают раньше обычного
+               "direct_fallback_enc": countries.local_dns_enc(getattr(self, "public_cc", None)) if enc != "plain"
+               else [],
                "addr_marks": [nftgen.ADDR_LO, nftgen.ADDR_HI]}
         mt = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in dom["lists"].values()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
@@ -215,6 +221,9 @@ class DnsMixin:
                     if fail_at and time.time() - fail_at < 900 \
                             and s.get("encrypt") != "plain":         # без шифрования совет «выберите его» ни к чему
                         v["direct_down"] = {"fallback": [str(x) for x in s.get("fallback") or []][:2]}
+                        # местный с шифрованием ответил после сбоя общего — имена «напрямую» идут к нему, шифрованные
+                        if float(s.get("local_enc_ok_at") or 0) >= fail_at - DIRECT_ENC_GRACE and s.get("fallback_enc"):
+                            v["direct_down"] = {"fallback": [str(x) for x in s["fallback_enc"]][:2], "encrypted": True}
             except (OSError, ValueError, TypeError):
                 pass
         return v

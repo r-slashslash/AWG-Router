@@ -541,5 +541,6 @@ function panelDnsStatus() {
     + (d.upstream_error ? `<div class="small warn-text">${esc(t("srv.panel_dns_upfail", { error: d.upstream_error }))}</div>` : "")
     // шифрованный DNS не проходит напрямую из страны сервера (1.22.0): с местным DNS — что спрашивается у него
     + (d.direct_down ? `<div class="small warn-text">${esc(d.direct_down.fallback.length
-      ? t("srv.pdns_direct_fb", { dns: d.direct_down.fallback.join(", ") }) : t("srv.pdns_direct_down"))}</div>` : "");
+      ? t(d.direct_down.encrypted ? "srv.pdns_direct_fb_enc" : "srv.pdns_direct_fb", { dns: d.direct_down.fallback.join(", ") })
+      : t("srv.pdns_direct_down"))}</div>` : "");
 }

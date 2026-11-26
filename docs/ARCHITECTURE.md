@@ -146,7 +146,9 @@ Outgoing addresses (`settings.out_hosts`, the main one `out_main`, "" — the sy
   `mark` in hev-socks5-tunnel, `SO_MARK` in the SOCKS5 health check.
 - DNS on the server asks with the address's mark too; its local fallback for Direct (`direct_fallback`, when encrypted
   DNS doesn't answer from the server's country) covers every Direct path — mark 0 and the address marks
-  (`addr_marks`) — each with its own state (`dnsproxy.DirectPath`), always from the same address.
+  (`addr_marks`) — each with its own state (`dnsproxy.DirectPath`), always from the same address. The fallback asks the
+  country's DNS with the same DoH/DoT first (`direct_fallback_enc`, names for TLS in `dnsproxy.KNOWN_NAMES`) and plain
+  DNS only if that doesn't answer either.
 - The panel's own connections (updates, lists, lego through `srcnet.ConnectProxy`, `install.sh` via `AWGR_FROM`) go
   from `settings.own_src` while it works, else from the system address (`Engine.own_src`).
 - A manual change of an exit choice (`api.routing.mutate_paths`) compares every client's path before and after

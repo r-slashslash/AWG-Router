@@ -1588,7 +1588,8 @@ class DirectFallbackTest(unittest.TestCase):
         self.assertEqual(self.run_q(p, ["google.com"])[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
         self.assertEqual(plain, [])
         self.assertIn('v["direct_down"]', read("app", "engine", "dns.py"))
-        self.assertIn('t("srv.pdns_direct_fb"', read("app", "static", "js", "server.js"))
+        # 1.25.0: и «тоже с шифрованием», когда ответил местный DNS страны с шифрованием
+        self.assertIn('"srv.pdns_direct_fb_enc" : "srv.pdns_direct_fb"', read("app", "static", "js", "server.js"))
 
 
 class RecoverRenamedTest(unittest.TestCase):

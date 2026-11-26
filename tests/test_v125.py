@@ -993,3 +993,118 @@ class AddrDirectDnsTest(unittest.TestCase):
                        "addr_direct": {str(self.AM): [now - 1, now - 5]}}, f)     # снова отвечает
         with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
             self.assertNotIn("direct_down", e.dns_view())
+
+
+class LocalEncryptedDnsTest(unittest.TestCase):
+    """Запасной DNS пути «напрямую» (владелец 2026-11-26): общий шифрованный не отвечает из страны сервера — сначала
+    местный DNS страны с шифрованием (Яндекс, Alibaba, DNSPod), и только если и он не отвечает — местный без шифрования."""
+
+    def _proxy(self, mode="doh"):
+        from app import dnsproxy
+        d = tempfile.mkdtemp()
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                       "encrypt": mode, "direct_fallback": ["77.88.8.8", "77.88.8.1"],
+                       "direct_fallback_enc": ["77.88.8.8"], "default": {"mark": 0, "tcp": False},
+                       "routes": {"10.8.1.7": {"mark": 0x2001, "tcp": False}}}, f)
+        return dnsproxy.Proxy(conf)
+
+    def _run(self, p, name, ip="10.8.1.5"):
+        import asyncio
+        from app import dnsproxy
+        from tests.test_v115 import q_msg
+
+        async def go():
+            query = q_msg(name)
+            r = await p.resolve(query, dnsproxy.parse_query(query), ip)
+            dp = p._dp(0)
+            for t in (dp.probe, dp.loc_probe):
+                if t:
+                    await t
+            return r
+        return asyncio.run(go())
+
+    def _wire(self, p, local_enc_ok=True):
+        from tests.test_v115 import a_reply
+        calls = []
+
+        async def enc(msg, server, mark, mode):
+            calls.append(("enc", server, mode, mark))
+            if server == "77.88.8.8" and local_enc_ok:
+                return a_reply(msg, ["203.0.113.8"])
+            raise OSError("reset")
+
+        async def udp(msg, server, mark):
+            calls.append(("plain", server, mark))
+            return a_reply(msg, ["203.0.113.9"])
+        p._enc, p._udp = enc, udp
+        return calls
+
+    def test_local_encrypted_before_plain(self):
+        import socket
+        p = self._proxy()
+        calls = self._wire(p)
+        out = self._run(p, "yandex.ru")
+        self.assertIn(socket.inet_aton("203.0.113.8"), out)
+        self.assertEqual(calls, [("enc", "1.1.1.1", "doh", 0), ("enc", "77.88.8.8", "doh", 0)])   # обычного — нет
+        calls.clear()
+        self._run(p, "vk.com")                       # общий «не отвечает» — сразу местный с шифрованием
+        self.assertEqual(calls, [("enc", "77.88.8.8", "doh", 0)])
+        self.assertEqual(p.stats["direct_local_enc"], 2)
+
+    def test_plain_only_when_local_encrypted_fails_too(self):
+        p = self._proxy("dot")
+        calls = self._wire(p, local_enc_ok=False)
+        self._run(p, "yandex.ru")
+        self.assertEqual(calls, [("enc", "1.1.1.1", "dot", 0), ("enc", "77.88.8.8", "dot", 0), ("plain", "77.88.8.8", 0)])
+        self.assertTrue(p._dp(0).loc_down)
+        calls.clear()
+        self._run(p, "vk.com")                       # оба не отвечают — клиент не ждёт, сразу обычный
+        self.assertEqual(calls, [("plain", "77.88.8.8", 0)])
+        p._dp(0).loc_retry_at = 0                    # прошло DIRECT_RETRY — местный с шифрованием пробуется в фоне
+        calls.clear()
+        self._run(p, "mail.ru")
+        self.assertEqual(calls[0], ("plain", "77.88.8.8", 0))
+        self.assertIn(("enc", "77.88.8.8", "dot", 0), calls)
+
+    def test_exit_path_never_asks_local(self):
+        p = self._proxy()
+        calls = self._wire(p)
+        self._run(p, "example.org", ip="10.8.1.7")
+        self.assertEqual([c for c in calls if c[1] != "1.1.1.1"], [])
+
+    def test_tls_names(self):
+        from app import dnsproxy
+        self.assertEqual(dnsproxy.tls_name("77.88.8.8", "doh"), "common.dot.dns.yandex.net")
+        self.assertEqual(dnsproxy.tls_name("1.12.12.12", "doh"), "doh.pub")
+        self.assertEqual(dnsproxy.tls_name("1.12.12.12", "dot"), "dot.pub")
+        self.assertEqual(dnsproxy.tls_name("192.0.2.53", "dot"), "192.0.2.53")
+
+    def test_presets_and_engine_config(self):
+        from app import countries
+        self.assertEqual(countries.local_dns_enc("RU"), ["77.88.8.8"])
+        self.assertEqual(countries.local_dns_enc("ir"), [])
+        with open(os.path.join(os.path.dirname(__file__), "..", "app", "engine", "dns.py"), encoding="utf-8") as f:
+            self.assertIn('"direct_fallback_enc": countries.local_dns_enc(', f.read())
+
+    def test_server_tab_says_encrypted(self):
+        import time
+        import types
+        from unittest import mock
+        from app import config
+        from app.engine import Engine
+        from app.engine import dns as edns
+        e = Engine.__new__(Engine)
+        e.dns_state = {"state": "on", "listen": "10.8.1.1", "encrypt": "doh"}
+        e.dns = types.SimpleNamespace(proc=types.SimpleNamespace(pid=4242))
+        path = os.path.join(tempfile.mkdtemp(), "dns-stats.json")
+        now = time.time()
+        for loc_ok, want in ((now - 2, {"fallback": ["77.88.8.8"], "encrypted": True}),
+                             (now - 3600, {"fallback": ["77.88.8.8", "77.88.8.1"]})):
+            with open(path, "w") as f:
+                json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 60, "direct_fail_at": now - 5,
+                           "fallback": ["77.88.8.8", "77.88.8.1"], "fallback_enc": ["77.88.8.8"],
+                           "local_enc_ok_at": loc_ok}, f)
+            with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
+                self.assertEqual(e.dns_view().get("direct_down"), want)

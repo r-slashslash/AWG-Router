@@ -52,6 +52,12 @@ it grows, so every user-visible change gets a new version.
   when encrypted DNS doesn't answer there (Russia, China, Iran), from the server country's local DNS — also from that
   address (`addr_marks` in the dnsproxy config; each Direct path keeps its own "encrypted doesn't answer" state, the
   Server tab warns when any of them does). Paths through an exit still never fall back.
+- **The local fallback DNS is encrypted first**: when the usual encrypted DNS doesn't answer from Russia or China, the
+  country's local DNS is asked with the same DoH/DoT (`direct_fallback_enc`: Yandex `77.88.8.8` as
+  `common.dot.dns.yandex.net`; Alibaba `223.5.5.5` as `dns.alidns.com`, DNSPod `1.12.12.12` as `doh.pub`/`dot.pub` —
+  `dnsproxy.tls_name`), and plain local DNS only if that doesn't answer either (with its own background retry). Iran
+  keeps plain Shecan. The Server tab says which one answers. Yandex, Alibaba and DNSPod in the "DNS" field now work with
+  encryption too (their certificates are checked by name).
 - The Telegram bot shows "direct — address".
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.
