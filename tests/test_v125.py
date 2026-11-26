@@ -548,3 +548,146 @@ class ExitBindTest(unittest.TestCase):
         e.rt, e.parsed = {}, None
         route = Engine._dns_route_fn(e, {"upstreams": []})
         self.assertEqual(route(nftgen.Addr(A, 1)), {"mark": 0x2101, "tcp": False})
+
+
+class CtFlushTest(unittest.TestCase):
+    """ctflush.py: записи conntrack из ctnetlink и какие из них удалять при ручной смене пути."""
+
+    @staticmethod
+    def nla(typ, data, nested=False):
+        import struct
+        ln = 4 + len(data)
+        return struct.pack("=HH", ln, typ | (0x8000 if nested else 0)) + data + b"\0" * ((4 - ln % 4) % 4)
+
+    def message(self, src, dst, proto=6, dport=443, mark=0):
+        import socket
+        import struct
+        ip = self.nla(1, self.nla(1, socket.inet_aton(src)) + self.nla(2, socket.inet_aton(dst)), True)
+        pr = self.nla(2, self.nla(1, bytes([proto])) + self.nla(2, struct.pack("!H", 50000))
+                      + self.nla(3, struct.pack("!H", dport)), True)
+        return self.nla(1, ip + pr, True) + self.nla(8, struct.pack("!I", mark)) + self.nla(12, struct.pack("!I", 7))
+
+    def test_entry(self):
+        from app import ctflush
+        e = ctflush.entry(self.message("10.8.1.2", "8.8.8.8", 17, 443, 0x40002001))
+        self.assertEqual((e["src"], e["dst"], e["proto"], e["dport"], e["mark"]), ("10.8.1.2", "8.8.8.8", 17, 443,
+                                                                                    0x40002001))
+        self.assertTrue(e["tuple"].startswith(b"\x00") or e["tuple"])
+        self.assertIn(b"\x07", e["extra"])          # номер записи — в запросе на удаление (не удалить чужую)
+
+    def test_changed(self):
+        from app import ctflush
+        E = lambda src, dst, **kw: ctflush.entry(self.message(src, dst, **kw))  # noqa: E731
+        job = {"clients": {"10.8.1.2": {"old": {"rules": [[["ru"], "direct@system"]], "default": "up:u1"},
+                                        "new": {"rules": [[["ru"], "direct@" + A]], "default": "up:u1"}}},
+               "lists": {"ru": ["77.88.0.0/18"]}, "skip": ["10.0.0.0/8"], "quic": ["10.8.1.3"]}
+        entries = [E("10.8.1.2", "77.88.55.242"), E("10.8.1.2", "8.8.8.8"), E("10.8.1.2", "10.8.1.1"),
+                   E("10.8.1.9", "77.88.55.242"),
+                   E("10.8.1.3", "1.1.1.1", proto=17, dport=443, mark=0x4000E101),
+                   E("10.8.1.3", "1.1.1.1", proto=17, dport=443, mark=0)]
+        got = [(e["src"], e["dst"], e["mark"]) for e in ctflush.changed(job, entries)]
+        # путь RU сменился — его соединение; «По умолчанию» тот же; сам сервер — нет; чужой клиент — нет;
+        # решение QUIC клиента со сменой правил по доменам — да, просто UDP 443 без решения — нет
+        self.assertEqual(got, [("10.8.1.2", "77.88.55.242", 0), ("10.8.1.3", "1.1.1.1", 0x4000E101)])
+
+    def test_nets(self):
+        from app import ctflush
+        import ipaddress
+        n = ctflush.Nets(["10.0.0.0/24", "10.0.1.0/24", "bad", "192.0.2.7/32"])
+        self.assertIn(int(ipaddress.IPv4Address("10.0.1.200")), n)
+        self.assertNotIn(int(ipaddress.IPv4Address("10.0.2.1")), n)
+        self.assertEqual(len(n.lo), 2)              # соседние сети слиты
+
+
+class NoteChangeTest(unittest.TestCase):
+    """Engine.note_change: что поменял человек — обрыв; перенос балансировкой и резерв — нет."""
+
+    def setUp(self):
+        from app.engine import Engine
+        self.e = Engine.__new__(Engine)
+        self.e.clients = [{"ip": "10.8.1.2", "public_key": "k" * 43 + "="}]
+        self.e.bal, self.e.bal_new = {}, None
+        self.e.trigger = lambda: None
+        self.st = state(out_hosts=[A])
+        self.st["routing"]["rules"] = [{"id": "r1", "lists": ["l1"], "outbound": "direct", "enabled": True,
+                                        "comment": ""}]
+
+    def test_outbound_change(self):
+        import copy
+        new = copy.deepcopy(self.st)
+        new["routing"]["rules"][0]["outbound"] = "direct@" + A
+        self.assertTrue(self.e.note_change(self.st, new))
+        self.assertEqual(self.e._drop_sni["clients"]["10.8.1.2"]["new"]["rules"], [[["l1"], "direct@" + A]])
+
+    def test_comment_only_no_change(self):
+        import copy
+        new = copy.deepcopy(self.st)
+        new["routing"]["rules"][0]["comment"] = "RU"
+        self.assertFalse(self.e.note_change(self.st, new))
+
+    def test_main_address_change_is_a_change(self):
+        """Переезд на другой основной: «Напрямую» теперь с другого адреса — открытые соединения оборвутся."""
+        import copy
+        new = copy.deepcopy(self.st)
+        new["settings"]["out_main"] = A
+        self.assertTrue(self.e.note_change(self.st, new))
+
+    def test_balancing_assignment_is_not_a_change(self):
+        st = state()
+        st["routing"].update(default="up:u1", balance={"on": True, "skip": []})
+        before = self.e.paths(st)
+        self.e.bal = {"k" * 43 + "=": "u2"}        # балансировка перенесла клиента — настройки те же
+        self.assertEqual(self.e.paths(st), before)
+
+
+class SniDropTest(unittest.TestCase):
+    """sniproxy.py: ручная смена пути закрывает только соединения, у которых путь стал другим."""
+
+    def test_drop(self):
+        from app import sniproxy
+
+        class Sock:
+            def __init__(self):
+                self.shut = False
+
+            def shutdown(self, how):
+                self.shut = True
+        s = sniproxy.Sniffer.__new__(sniproxy.Sniffer)
+        socks = {k: (Sock(), Sock()) for k in ("ru", "other", "site")}
+        s.live = {1: ("10.8.1.2", None, "77.88.55.242", *socks["ru"]),
+                  2: ("10.8.1.2", None, "8.8.8.8", *socks["other"]),
+                  3: ("10.8.1.2", "youtube.com", "142.250.1.1", *socks["site"])}
+        s.qdone = {("10.8.1.2", 5000, "1.1.1.1", 443): (1, 0)}
+        nets = {"ru": sniproxy.Nets(["77.88.0.0/18"])}
+        doms = {"yt": {"youtube.com"}}
+        s.lists, s.nets = doms, nets
+        s.cfg = {"drop": {"gen": 1, "clients": {"10.8.1.2": {
+            "old": {"rules": [[["ru"], "direct@system"]], "drules": [[["yt"], "up:u1"]], "default": "up:u1"},
+            "new": {"rules": [[["ru"], "direct@" + A]], "drules": [[["yt"], "up:u1"]], "default": "up:u1"}}}}}
+        self.assertEqual(s.drop((doms, nets)), 1)
+        self.assertTrue(socks["ru"][0].shut and socks["ru"][1].shut)
+        self.assertFalse(socks["other"][0].shut or socks["site"][0].shut)
+        self.assertEqual(s.qdone, {})
+        self.assertEqual(s.drop((doms, nets)), 0)         # тот же номер — уже сделано
+
+
+class ReconnectApiTest(unittest.TestCase):
+    """После сохранения, которое сменило путь, браузер получает reconnect и говорит «Открытые соединения
+    переподключатся по новому пути»; правка без смены пути — нет."""
+
+    def setUp(self):
+        self.st0 = panel.store.snapshot()
+        panel.engine.reconcile()
+
+    def tearDown(self):
+        panel.store.mutate(lambda s: (s.clear(), s.update(self.st0)))
+        panel.engine._drops = {}
+
+    def test_put_routing(self):
+        from app.api import routing
+        lid = routing.add_list(Req({"kind": "manual", "name": "n", "source": "203.0.113.0/24"}))["id"]
+        r1 = {"lists": [lid], "outbound": "direct", "enabled": True, "comment": ""}
+        routing.put_routing(Req({"default": "direct", "rules": [r1]}))
+        self.assertNotIn("reconnect", routing.put_routing(Req({"default": "direct", "rules": [{**r1, "comment": "x"}]})))
+        self.assertTrue(routing.put_routing(Req({"default": "direct", "rules": [{**r1, "outbound": "block"}]}))
+                        .get("reconnect"))

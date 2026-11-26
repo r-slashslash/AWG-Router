@@ -584,6 +584,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             self._save_hold(t, st)
             self._sync_rules(t)
             try:
+                self._run_drops(t, st)          # ручная смена пути: обрыв соединений, у которых он сменился (1.25.0)
+            except Exception:  # noqa: BLE001
+                log.exception("connections with a new path")
+            try:
                 self._addr_pass(t, st, add_only=False)      # ip rule адресов, которых больше нет
             except Exception:  # noqa: BLE001
                 log.exception("addresses")

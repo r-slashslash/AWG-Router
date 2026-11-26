@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 
 from .. import balance, config, nftgen, shaping, srcaddr, system
@@ -12,6 +13,7 @@ from ..store import Store
 from .common import RUN_DIR, log
 
 ROUTES_EVERY = 60                                # маршруты таблиц выходов ставятся заново не реже, с
+CTFLUSH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ctflush.py")
 
 
 class RoutesMixin:
@@ -447,6 +449,77 @@ class RoutesMixin:
         if sniff is None or self._quic_nft is False:
             return False
         return config.DRY_RUN or (self.sni_stats().get("quic") == "on")
+
+    # ------------------------------------------------- ручная смена пути: обрыв соединений (1.25.0)
+    def path_sig(self, st: dict, out: str) -> str:
+        """Выход в настройках → строка пути: «Напрямую» — с адресом (основной сейчас), чтобы смена основного тоже была
+        сменой пути; балансировка — её выходы и резерв (кого из них выбрала она сама — не смена)."""
+        if srcaddr.is_direct(out):
+            return srcaddr.PFX + (srcaddr.split(out)[1] or srcaddr.main(st) or srcaddr.SYSTEM)
+        return str(out)
+
+    def paths(self, st: dict) -> dict[str, dict]:
+        """Пути клиентов в терминах настроек: {IP: {"rules": [[списки, путь]] — по адресам, "drules": — по доменам,
+        "default": путь}}. Сравнение «до» и «после» сохранения — что поменял человек (note_change)."""
+        dl = self.domain_lists(st)
+        out = {}
+        for c in getattr(self, "clients", None) or []:
+            if not c.get("ip"):
+                continue
+            pol = self.policy_for(st, c["public_key"])
+            rules, drules = [], []
+            for r in pol["rules"]:
+                if r.get("balance"):
+                    sig = f"bal:{','.join(r['balance'])}|{self.path_sig(st, r.get('balance_fb') or 'block')}"
+                else:
+                    sig = self.path_sig(st, r["outbound"])
+                (drules if any(lid in dl for lid in r["lists"]) else rules).append([list(r["lists"]), sig])
+            if pol.get("balanced"):
+                skip = ",".join(sorted((st["routing"].get("balance") or {}).get("skip") or []))
+                default = f"bal:-{skip}|{self.path_sig(st, pol['default'])}"
+            else:
+                default = self.path_sig(st, pol["default"])
+            out[c["ip"]] = {"rules": rules, "drules": drules, "default": default}
+        return out
+
+    def note_change(self, old: dict, new: dict) -> bool:
+        """Сохранили выход или адрес правила, «По умолчанию», клиента (вручную): соединения, у которых путь стал другим,
+        оборвутся после того, как встанут новые правила (_run_drops), — иначе открытые соединения шли бы новым путём с
+        прежней подменой адреса (зависали) или доживали на старом (посредник, решения QUIC). Перенос балансировкой и
+        переход на резерв сюда не попадают: они не сохраняют настроек. True — такие соединения могут быть."""
+        a, b = self.paths(old), self.paths(new)
+        changed = {ip: {"old": a[ip], "new": b[ip]} for ip in a.keys() & b.keys() if a[ip] != b[ip]}
+        if not changed:
+            return False
+        pend = getattr(self, "_drops", None)
+        if pend is None:
+            pend = self._drops = {}
+        for ip, x in changed.items():
+            pend[ip] = {"old": pend.get(ip, x)["old"], "new": x["new"]}
+        self._drop_gen = getattr(self, "_drop_gen", 0) + 1
+        self._drop_sni = {"gen": self._drop_gen, "clients": dict(pend)}
+        self.trigger()
+        return True
+
+    def _run_drops(self, t: system.Target, st: dict) -> None:
+        """После новых правил nftables: удалить записи conntrack соединений клиентов, чей путь сменился (ctflush.py в
+        сети сервера AWG). Соединения посредника правил по доменам закрывает он сам (_drop_sni в его настройках)."""
+        pend = getattr(self, "_drops", None)
+        if not pend:
+            return
+        self._drops = {}
+        lids = {lid for x in pend.values() for p in (x["old"], x["new"]) for lids, _ in p["rules"] for lid in lids}
+        job = {"clients": {ip: {"old": {"rules": x["old"]["rules"], "default": x["old"]["default"]},
+                                "new": {"rules": x["new"]["rules"], "default": x["new"]["default"]}}
+                           for ip, x in pend.items()},
+               "lists": {lid: self._cidrs(lid) for lid in sorted(lids)},
+               "skip": list(nftgen.LOCAL_NETS),
+               "quic": sorted(ip for ip, x in pend.items() if x["old"]["drules"] != x["new"]["drules"])}
+        if config.DRY_RUN:
+            log.info("connections with a new path: %d clients", len(pend))
+            return
+        p = t.ns([sys.executable, CTFLUSH], input=json.dumps(job), check=False, timeout=60)
+        log.info("connections with a new path: %s", (p.stdout or p.stderr or "").strip()[:200])
 
     # -------------------------------------------------------- ip rule/route
     def _sync_rules(self, t: system.Target, add_only: bool = False) -> None:

@@ -34,6 +34,19 @@ def forget_lists(gone: list[str]) -> None:
         lists.delete_cidrs(lid)
 
 
+def mutate_paths(fn):
+    """store.mutate для ручных правок выхода или адреса (правила, «По умолчанию», клиент): соединения, чей путь от этого
+    стал другим, оборвутся, когда встанут новые правила (Engine.note_change, 1.25.0). → (результат fn, есть ли такие —
+    тогда браузер скажет «Открытые соединения переподключатся по новому пути»)."""
+    old = store.snapshot()
+    res = store.mutate(fn)
+    return res, engine.note_change(old, store.snapshot())
+
+
+def reconnect(changed: bool) -> dict:
+    return {"reconnect": True} if changed else {}
+
+
 @app.put("/api/routing")
 def put_routing(req):
     body = req.json()
@@ -51,9 +64,10 @@ def put_routing(req):
         if strict:
             st["routing"]["strict"] = True
         return drop_unused_lists(st, before - rule_lists(st["routing"]["rules"]))
-    forget_lists(store.mutate(fn))
+    gone, changed = mutate_paths(fn)
+    forget_lists(gone)
     engine.trigger()
-    return {"ok": True}
+    return {"ok": True, **reconnect(changed)}
 
 
 def keep_quota_marks(old_rules, rules: list[dict]) -> None:
@@ -220,7 +234,8 @@ def country_preset(req):
                 {"lists": [cc], "outbound": "direct", "enabled": True, "comment": ""})
                 if (tuple(x["lists"]), x["outbound"]) not in have])
         return {"country": cc, "domains": dom, "made": made}
-    out = store.mutate(fn)
+    out, changed = mutate_paths(fn)
+    out = {**out, **reconnect(changed)}
     for lid in out["made"]:          # новые списки — окно правила удалит их, если правило так и не сохранят
         refresh_now_or_bg(lid)
     engine.trigger()

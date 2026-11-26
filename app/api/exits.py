@@ -130,10 +130,10 @@ def add_upstream(req):
         with field("routing"):
             ch = apply_exit_routing(st, u["id"], body["routing"], name) if body.get("routing") else (None, None)
         return u["id"], ch
-    uid, ch = store.mutate(fn)
+    (uid, ch), changed = routing.mutate_paths(fn)
     _after_exit_routing(ch)
     engine.trigger()
-    return {"id": uid}
+    return {"id": uid, **routing.reconnect(changed)}
 
 
 @app.get("/api/upstreams/{uid}/config")
@@ -219,9 +219,10 @@ def edit_upstream(req, uid):
             with field("routing"):
                 return apply_exit_routing(st, uid, body["routing"], u["name"])
         return None, None
-    _after_exit_routing(store.mutate(fn))
+    ch, changed = routing.mutate_paths(fn)
+    _after_exit_routing(ch)
     engine.trigger()
-    return {"ok": True}
+    return {"ok": True, **routing.reconnect(changed)}
 
 
 @app.delete("/api/upstreams/{uid}")
@@ -268,12 +269,12 @@ def del_upstream(req, uid):
             st["lists"] = [x for x in st["lists"] if x["id"] != own]
             return own
         return None
-    own = store.mutate(fn)
+    own, changed = routing.mutate_paths(fn)
     if own:
         lists.delete_cidrs(own)
     engine.traffic.forget_out(uid)
     engine.trigger()
-    return {"ok": True}
+    return {"ok": True, **routing.reconnect(changed)}
 
 
 @app.post("/api/probe")

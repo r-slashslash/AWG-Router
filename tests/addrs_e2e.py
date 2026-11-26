@@ -41,6 +41,32 @@ try:
 except OSError as e: print("FAIL", type(e).__name__, e.errno)
 """
 INFRA = {1: {"ip": SECOND, "dev": "eth0", "gw": GW, "nat": "snat"}}
+ECHO = r"""
+import socket,threading
+def h(c,a):
+    try:
+        while True:
+            d=c.recv(100)
+            if not d: break
+            c.sendall(d+b" from "+a[0].encode()+b"\n")
+    except OSError: pass
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("0.0.0.0",7000)); s.listen(16)
+while True:
+    c,a=s.accept(); threading.Thread(target=h,args=(c,a),daemon=True).start()
+"""
+HOLD = r"""
+import socket,sys,time
+s=socket.create_connection((sys.argv[1],7000),timeout=3); s.settimeout(3)
+out=open(sys.argv[2],"w",buffering=1)
+while True:
+    try:
+        s.sendall(b"ping"); d=s.recv(100)
+        out.write((d.decode().strip() if d else "CLOSED")+"\n")
+        if not d: break
+    except OSError as e:
+        out.write("ERR "+str(e.errno)+"\n"); break
+    time.sleep(0.3)
+"""
 results = []
 procs = []
 
@@ -165,15 +191,21 @@ def main():
         apply({"rules": [], "default": a, "slots": [], "dslots": []}, labels=True)
         expect("сокет посредника: метка адреса и номер ограничения — со второго адреса", f"SITE from {SECOND}",
                ns="asrv", mark=nftgen.addr_mark(1) | (1 << config.RULE_LIM_SHIFT))
-        # чужая метка на пересылке (Tailscale на сервере «на хосте») — не мешает
-        apply({"rules": [], "default": a})
+        # чужая метка на пересылке (Tailscale на сервере «на хосте»): «Напрямую» без адреса — как было; пакет с меткой
+        # адреса и чужими битами (защита видит метку панели с лишними битами) — не уходит с адреса системы
         nft("asrv", "table ip ts {\n chain f {\n  type filter hook forward priority 10; policy accept;\n"
                     '  iifname "awg0" meta mark set meta mark or 0x40000\n }\n}\n')
-        expect("чужая метка 0x40000 на пересылке — «Напрямую» как было", "SITE from")
+        apply({"rules": [], "default": "direct"})
+        expect("чужая метка 0x40000 на пересылке — «Напрямую» как было", f"SITE from {SYS}")
+        apply({"rules": [], "default": a})
+        got = probe()
+        check("чужие биты на пакете «Напрямую — адрес» — не с адреса системы", got != f"SITE from {SYS}", got)
         sh("asrv", "nft", "delete", "table", "ip", "ts")
-        # адрес пропал (убрали в панели хостинга, перезапустили сеть): блок, а не адрес системы
+        # адрес пропал (перезапустили сеть системы, убрали руками): до реакции панели — не с адреса системы (пересылка
+        # ещё с подменой на него: хостинг доставит ответ, только если адрес по-прежнему его), свои соединения — никуда
         sh("asrv", "ip", "addr", "del", f"{SECOND}/32", "dev", "eth0", check=True)
-        expect("адрес пропал до реакции панели: блок, не адрес системы", "FAIL")
+        got = probe()
+        check("адрес пропал до реакции панели: не с адреса системы", got != f"SITE from {SYS}", got)
         expect("адрес пропал: своё соединение с меткой адреса — тоже никуда", "FAIL", ns="asrv",
                mark=nftgen.addr_mark(1))
         apply({"rules": [], "default": "block"}, infra={})      # панель заметила: адрес не работает → блок
@@ -181,6 +213,7 @@ def main():
         add_second()
         apply({"rules": [], "default": a})
         expect("адрес вернулся (панель добавила снова): снова с него", f"SITE from {SECOND}")
+        manual_change(a)
         exits()
     finally:
         for p in procs:
@@ -190,6 +223,43 @@ def main():
                 netns.remove(n)
     print(f"\n{sum(results)}/{len(results)} проверок пройдено")
     sys.exit(0 if all(results) else 1)
+
+
+def last(path):
+    with open(path) as f:
+        lines = f.read().split()
+    return " ".join(lines[-4:])
+
+
+def manual_change(a):
+    """Ручная смена «По умолчанию» (адрес системы → второй адрес): открытое соединение этого пути обрывается и новое
+    идёт новым путём; соединение правила RU, которое не меняли, — живёт (ctflush.py, как Engine._run_drops)."""
+    bg("ainet", sys.executable, "-c", ECHO)
+    time.sleep(0.5)
+    old = {"rules": [[["ru"], "direct@" + SECOND]], "default": "direct@system"}
+    new = {"rules": [[["ru"], "direct@" + SECOND]], "default": "direct@" + SECOND}
+    apply({"rules": [(["ru"], a)], "default": "direct"})
+    f_site, f_ru = tempfile.mktemp(), tempfile.mktemp()
+    bg("acli", sys.executable, "-c", HOLD, SITE, f_site)
+    bg("acli", sys.executable, "-c", HOLD, RU, f_ru)
+    time.sleep(1.5)
+    check("до смены: соединение «По умолчанию» — с адреса системы", f"from {SYS}" in last(f_site), last(f_site))
+    check("до смены: соединение правила RU — со второго адреса", f"from {SECOND}" in last(f_ru), last(f_ru))
+    apply({"rules": [(["ru"], a)], "default": a})
+    job = {"clients": {"10.8.1.2": {"old": old, "new": new}}, "lists": {"ru": ["77.88.0.0/18"]},
+           "skip": nftgen.LOCAL_NETS, "quic": []}
+    import json
+    r = sh("asrv", sys.executable, os.path.join(HERE, "..", "app", "ctflush.py"), input=json.dumps(job), timeout=30)
+    try:
+        n = json.loads(r.stdout or "{}").get("deleted", 0)
+    except ValueError:
+        n = 0
+    check("ctflush удалил записи изменившегося пути", n >= 1, (r.stdout or r.stderr).strip())
+    time.sleep(1.5)
+    check("после смены: соединение «По умолчанию» оборвано (приложение откроет новое)",
+          last(f_site).split()[-1:] != [SYS] and ("ERR" in last(f_site) or "CLOSED" in last(f_site)), last(f_site))
+    check("после смены: соединение правила RU, которое не меняли, живёт", last(f_ru).endswith(SECOND), last(f_ru))
+    expect("после смены: новое соединение — новым путём", f"SITE from {SECOND}")
 
 
 def exits():
@@ -279,7 +349,7 @@ def exit_socks():
         ip.rule("add", fwmark=nftgen.mark_for(2), table=t, priority=config.RULE_PRIO_BASE + 2)
         ip.route("replace", dst="0.0.0.0/0", oif=ip.link_lookup(ifname="awgr2")[0], table=t)
     apply({"rules": [], "default": 2}, ups=[{"num": 2, "snat": None, "mtu": 8500}])
-    expect("клиент через выход SOCKS5 (сайт видит прокси)", f"SITE from {GW}")
+    expect("клиент через выход SOCKS5 (ответ пришёл через прокси)", f"SITE from {SITE}")    # прокси — у «сайта»
     with open(peers) as f:
         seen = f.read().split()
     check("hev подключается к прокси со второго адреса", seen[-1:] == [SECOND], " ".join(seen[-3:]))

@@ -640,7 +640,12 @@ class ServerManager:
                     st["chost"] = {k: v for k, v in (st.get("chost") or {}).items() if v in keep}
                     # убранный исходящий адрес: где он стоял — основной; новый основной — «просто Напрямую» (переезд)
                     srcaddr.normalize(st)
+                old_st = self.e.store.snapshot()
                 self.e.store.mutate(apply)
+                # переезд на другой основной адрес или убранный адрес — ручная смена пути: обрыв таких соединений
+                reconnect = getattr(self.e, "note_change", lambda a, b: False)(old_st, self.e.store.snapshot())
+            else:
+                reconnect = False
             host_changed = self.client_host(self.e.store.snapshot()) != host_before
             dns_changed = profile_dns(self.e.store.snapshot()["settings"], sc, self._dns_live()) != dns_before
             changed_conf = sc.render() != (t.read_file(t.conf_path) or "")
@@ -652,7 +657,7 @@ class ServerManager:
                              Msg("ev.server_restarted" if restart else "ev.server_updated"))
             return {"restarted": restart and changed_conf,
                     "server_side_changed": awgserver.server_side_changed(old, sc.params()),
-                    "host_changed": host_changed, "dns_changed": dns_changed}
+                    "host_changed": host_changed, "dns_changed": dns_changed, **({"reconnect": True} if reconnect else {})}
 
     def _addr_changes(self, st: dict, patch: dict) -> dict | None:
         """Что изменится от новых адресов, — до сохранения (окно «Да / Нет» в браузере): убранный исходящий адрес — где

@@ -609,6 +609,10 @@ class Sniffer:
         # записывается в conntrack, поэтому повтор получает то же решение отсюда
         self.qdone: dict[tuple, tuple[int, float]] = {}
         self._quic_logged = -1e9            # когда последний раз писали ошибку разбора QUIC в журнал
+        # открытые соединения (1.25.0): id → (клиент, имя сайта, адрес сайта, сокет клиента, сокет к сайту) — их
+        # закрывает ручная смена пути клиента (drop); drop_gen — номер последней такой смены, которую уже сделали
+        self.live: dict[int, tuple] = {}
+        self.drop_gen = None
         self.reload()
 
     def reload(self) -> None:
@@ -625,7 +629,9 @@ class Sniffer:
         """Подменяет настройки. Бак с прежней скоростью остаётся тем же: открытые соединения держат
         ссылку на него, и с новым баком предел выхода делился бы надвое.
         -> настройки tc выходов, которые больше не делятся: их туннелям нужно вернуть весь предел."""
+        old = (getattr(self, "lists", {}), getattr(self, "nets", {}))
         self.cfg, self.lists, self.nets, self.net, self.files = c.cfg, c.lists, c.nets, c.net, c.files
+        self.drop(old)
         old_buckets = self.buckets
         self.buckets = {k: b if (b := old_buckets.get(k)) and b.cap == r else Bucket(r)
                         for k, r in c.rates.items()}
@@ -635,6 +641,51 @@ class Sniffer:
         self.share_state = {k: v for k, v in self.share_state.items()
                             if c.shared.get(k) == old.get(k) and self.buckets.get(k) is old_buckets.get(k)}
         return [d for k, d in old.items() if k not in c.shared or c.shared[k].get("tc") != d.get("tc")]
+
+    def path(self, pol: dict, maps: tuple, name: str | None, ip: str) -> str:
+        """Путь соединения по пути настроек (drop): правила по доменам — по имени (они раньше), по адресам — по адресу
+        сайта, иначе «По умолчанию». maps — (списки доменов, списки сетей) тех настроек, к которым относится pol."""
+        doms, nets = maps
+        if name:
+            for lids, out in pol.get("drules") or []:
+                if any(lid in doms and match(name, doms[lid]) for lid in lids):
+                    return str(out)
+        for lids, out in pol.get("rules") or []:
+            try:
+                if any(lid in nets and ip in nets[lid] for lid in lids):
+                    return str(out)
+            except ValueError:
+                pass
+        return str(pol.get("default"))
+
+    def drop(self, old: tuple) -> int:
+        """Ручная смена выхода или адреса у правил клиентов (настройки "drop" от панели, 1.25.0): открытые соединения,
+        у которых путь стал другим, закрываются — приложение откроет новое, и оно пойдёт новым путём. Соединения
+        других правил остаются. Автоматические переносы (балансировка, резерв) сюда не попадают. → сколько закрыто."""
+        d = self.cfg.get("drop") or {}
+        gen = d.get("gen")
+        if gen is None or gen == getattr(self, "drop_gen", None):
+            return 0
+        self.drop_gen = gen
+        clients, n = d.get("clients") or {}, 0
+        new = (self.lists, self.nets)
+        for key, (peer, name, dip, *socks) in list(self.__dict__.setdefault("live", {}).items()):
+            c = clients.get(peer)
+            if not c or self.path(c["old"], old, name, dip) == self.path(c["new"], new, name, dip):
+                continue
+            for x in socks:
+                try:
+                    x.shutdown(socket.SHUT_RDWR)        # пересылка увидит конец и закроет оба сокета сама
+                except OSError:
+                    pass
+            self.live.pop(key, None)
+            n += 1
+        # решения QUIC, которые ещё не в conntrack (сервер не ответил): у этих клиентов — заново
+        self.qdone = {k: v for k, v in getattr(self, "qdone", {}).items()
+                      if not (isinstance(k, tuple) and k and k[0] in clients)}
+        if n:
+            log(f"closed {n} connections with a new path")
+        return n
 
     def policy(self, client: str) -> dict:
         pname = (self.cfg.get("client_policy") or {}).get(client, "p_global")
@@ -879,6 +930,7 @@ class Sniffer:
                 sock.setsockopt(socket.SOL_SOCKET, SO_MARK, with_lim(0, lim))
             act = [time.monotonic()]
             out = await self.open_upstream(to, name, dip, dport, data, lim)
+            self.__dict__.setdefault("live", {})[id(sock)] = (peer, name, dip, sock, out)   # тесты: __new__
             if cnt is not None:
                 cnt[0] += len(data)
             # через прокси — мимо туннеля выхода: его ограничение скорости — здесь; с меткой
@@ -891,6 +943,7 @@ class Sniffer:
             if self.cfg.get("debug"):
                 log(f"{peer}: {e!r}")
         finally:
+            self.__dict__.setdefault("live", {}).pop(id(sock), None)
             if counted:
                 self.stats["active"] -= 1
             for c in (sock, out):

@@ -282,6 +282,11 @@ class SniMixin:
                                                      for i, (l, o) in enumerate(policies[n]["domain"])],
                                 "acct": acct(policies[n])}
                             for n, m in marks.items()}}
+        # ручная смена выхода или адреса (1.25.0): посредник закрывает свои соединения этих клиентов, у которых путь
+        # стал другим (sniproxy.Sniffer.drop); номер растёт с каждой сменой — повтор того же он пропускает
+        drop = getattr(self, "_drop_sni", None)
+        if drop:
+            cfg["drop"] = drop
         mt = {lid: os.path.getmtime(p) if os.path.exists(p) else 0 for lid, p in {**files, **cidrs}.items()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
         key = f"{t.key}|{listen}|{config.SNI_PROXY_PORT}"

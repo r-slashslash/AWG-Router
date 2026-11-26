@@ -210,9 +210,10 @@ def put_client(req, pk):
             st["clients"][pk] = c
         # свои правила клиента: список, который из них ушёл и больше нигде не стоит, удаляется (как на «Маршрутизации»)
         return routing.drop_unused_lists(st, before - routing.rule_lists(c["rules"] if c["rules_mode"] == "custom" else []))
-    routing.forget_lists(store.mutate(fn))
+    gone, changed = routing.mutate_paths(fn)
+    routing.forget_lists(gone)
     engine.trigger()
-    return {"ok": True}
+    return {"ok": True, **routing.reconnect(changed)}
 
 
 # ------------------------------------------- свои сигнатурные пакеты I1–I5 клиента

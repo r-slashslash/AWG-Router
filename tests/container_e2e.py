@@ -217,11 +217,17 @@ def addr_net(results) -> None:
         results.append(("«Напрямую — адрес» из контейнера: сайт видит второй адрес", got == f"SITE from {SECOND}", got))
         got = get(0)
         results.append(("«Напрямую» из контейнера: адрес хоста, как раньше", got == f"SITE from {HOST_IP}", got))
-        eng._net_drop(t, f"zz-awgr-out-{k}", True)
+        eng._net_drop(t, f"zz-awgr-out-{k}", True)          # сеть пропала (сброс Docker, руками) — до прохода панели
+        got = get(nftgen.addr_mark(k))
+        results.append(("сеть адреса пропала: метка адреса — никуда, не с адреса хоста", got.startswith("FAIL"), got))
         eng._addr_routes = eng._addr_nets = None
         eng._addr_pass(t, st.snapshot())
+        with open(path, "w") as f:          # проход ставит и правила nftables (интерфейс сети мог смениться)
+            f.write(nftgen.generate("awg0", {}, [], {"rules": [], "default": "direct", "domain": []}, {}, None,
+                                    addrs=getattr(eng, "_addr_live", {})))
+        t.ns(["nft", "-f", path], check=False)
         got = get(nftgen.addr_mark(k))
-        results.append(("сеть адреса убрали: метка адреса — никуда, не с адреса хоста", got.startswith("FAIL"), got))
+        results.append(("проход панели подключил сеть снова: опять со второго адреса", got == f"SITE from {SECOND}", got))
         eng.remove_own_addrs()
     finally:
         site.kill()
