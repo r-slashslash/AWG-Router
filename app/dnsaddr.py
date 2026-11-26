@@ -1,5 +1,6 @@
 """Адрес своего DNS правила по доменам и запасного DNS (1.25.0): обычный DNS — IPv4 («77.88.8.8»), DoH —
-«https://имя[:порт]/путь», DoT — «tls://имя[:порт]» (имя или IPv4). Как вписан, так и спрашивается: шифрованный, который
+«https://имя[:порт]/путь» (HTTP/2 или HTTP/1.1 — что выберет сервер), DoH только по HTTP/3 — «h3://имя[:порт]/путь»,
+DoT — «tls://имя[:порт]» (имя или IPv4). Как вписан, так и спрашивается: шифрованный, который
 не ответил, без шифрования не спрашивается, и на другой способ сам не переходит (владелец 2026-11-26). До двух адресов:
 второй спрашивается, когда не ответил первый.
 
@@ -65,7 +66,7 @@ def _host(s: str, raw: str) -> str:
 
 
 def parse(s) -> dict:
-    """Одна запись → {"mode": plain|doh|dot, "host": IPv4 или имя, "port", "path"}. Неверная — DnsAddrError."""
+    """Одна запись → {"mode": plain|doh|doh3|dot, "host": IPv4 или имя, "port", "path"}. Неверная — DnsAddrError."""
     raw = str(s).strip() if isinstance(s, str) else ""
     if not raw or len(raw) > 200:
         raise DnsAddrError("bad", raw[:60])
@@ -81,8 +82,8 @@ def parse(s) -> dict:
         hostport, path = rest.rstrip("/"), ""
         if "/" in hostport:
             raise DnsAddrError("bad", raw[:60])
-    elif scheme == "https":
-        mode, port = "doh", DOH_PORT
+    elif scheme in ("https", "h3"):
+        mode, port = ("doh" if scheme == "https" else "doh3"), DOH_PORT
         hostport, sl, path = rest.partition("/")
         path = sl + path
         path = re.sub(r"\{\?[^}]*\}$", "", path)        # шаблон из документации: …/dns-query{?dns}
@@ -107,7 +108,8 @@ def fmt(p: dict) -> str:
         return p["host"]
     if p["mode"] == "dot":
         return "tls://" + p["host"] + ("" if p["port"] == DOT_PORT else f":{p['port']}")
-    return "https://" + p["host"] + ("" if p["port"] == DOH_PORT else f":{p['port']}") + p["path"]
+    scheme = "h3" if p["mode"] == "doh3" else "https"
+    return scheme + "://" + p["host"] + ("" if p["port"] == DOH_PORT else f":{p['port']}") + p["path"]
 
 
 def entries(v) -> list[str]:
@@ -135,6 +137,11 @@ def host(entry: str) -> str:
         return parse(entry)["host"]
     except DnsAddrError:
         return ""
+
+
+def is_h3(entry) -> bool:
+    """Запись DoH только по HTTP/3 («h3://…»)."""
+    return isinstance(entry, str) and entry.lower().startswith("h3://")
 
 
 def is_plain(entry) -> bool:

@@ -16,7 +16,7 @@ import copy
 import math
 import re
 
-from . import awgconf, config, cps, dnsaddr, domains, limits, lists, notify, shaping, srcaddr
+from . import awgconf, config, cps, dnsaddr, dohttp, domains, limits, lists, notify, shaping, srcaddr
 from .i18n import Msg, MsgError
 from .store import ID_RE, Store, new_id
 from .web import HTTPError
@@ -262,6 +262,8 @@ def dns_names_known(entries, look, out: str = "direct", st: dict | None = None) 
     """Сохранение из панели: имя шифрованного DNS, у которого нет адреса, — ошибка. look(имена, выход) ищет их тем путём,
     которым пойдёт правило (Engine.dns_names_check: через выход — через выход). Имена, которые уже стоят в правилах
     (st), не проверяются: сохранение правил (включить, переставить) не ждёт поиска."""
+    if look and any(map(dnsaddr.is_h3, entries)) and not dohttp.h3_supported():
+        bad(Msg("err.h3_unsupported"))         # OpenSSL панели без QUIC: «h3://» не ответил бы никогда
     have = {n for r in dnsaddr.rules_of(st) for n in dnsaddr.names(r.get("dns"))} if st else set()
     names = [n for n in dnsaddr.names(entries) if n not in have]
     if look and names:

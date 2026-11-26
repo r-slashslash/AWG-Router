@@ -183,7 +183,8 @@ asks the fallback DNS (`direct_fallback`: **Server → Fallback DNS for "Direct"
 `fallback_dns`; **Apply for …** fills in the country's DNS) and skips the shared servers for `DIRECT_RETRY`, then tries
 them again with one query in the background; a fallback that doesn't answer is skipped the same way. Paths through an
 exit and names of a domain rule without a path (its exit down or "Block") never fall back.
-A rule's own DNS and the fallback DNS are entries (`app/dnsaddr.py`): an IPv4 (plain DNS), `https://name/path` (DoH) or
+A rule's own DNS and the fallback DNS are entries (`app/dnsaddr.py`): an IPv4 (plain DNS), `https://name/path` (DoH over
+HTTP/2 or HTTP/1.1, whichever the server picks; `app/dohttp.py`), `h3://name/path` (DoH over HTTP/3 only) or
 `tls://name` (DoT), each asked exactly as written (`dnsproxy.srv`). A service name on the Direct path from the system
 address is resolved by the panel (`Engine.dns_lookup`) and passed as `tls://name#ip`; on a path through an exit or
 **Direct — address** dnsproxy.py looks it up the same way (`_name_addr`): the shared DNS servers through that exit or from
@@ -251,6 +252,7 @@ whose change needs new client configs say so in orange under the field.
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
 | `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (the **Apply for …** buttons on Overview and Routing; the button also sets it as the fallback DNS for Direct) |
 | `dnsaddr.py` | Entries of a rule's own DNS and of the fallback DNS (IPv4, DoH, DoT): parsing, service names, the disk form older panels understand |
+| `dohttp.py` | DoH over HTTP/2 (own frames over `ssl`, chosen by ALPN) and over HTTP/3 (`h3://`: QUIC of the system's OpenSSL 3.2+ through `ctypes`, in its own threads) for `dnsproxy.py` |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |
 | `awgconf.py`, `awgserver.py`, `cps.py` | AmneziaWG configs and the I1–I5 masking templates |
 | `tgreq.py` | A request through an exit (Telegram, list downloads, a name's address), run inside the AWG server's network with the exit's mark |

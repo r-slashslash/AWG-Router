@@ -25,6 +25,7 @@ SERVER_FIELDS = {"srv.bad_host": "public_host", "srv.bad_extra_host": "extra_hos
                  "srv.bad_dns_enc": "panel_dns_enc", "srv.bad_fallback_dns": "fallback_dns",
                  "srv.fallback_dns_many": "fallback_dns", "srv.fallback_dns_self": "fallback_dns",
                  "srv.fallback_dns_empty": "fallback_dns", "err.dns_name": "fallback_dns",
+                 "err.h3_unsupported": "fallback_dns",
                  "srv.bad_port": "port", "srv.port_failed": "port",
                  "srv.port_dns": "port", "srv.bad_subnet": "address",
                  "srv.subnet_locked": "address", "srv.subnet_container": "address"}

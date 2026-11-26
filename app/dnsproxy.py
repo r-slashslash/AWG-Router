@@ -53,6 +53,12 @@ import subprocess
 import sys
 import time
 
+try:                                    # в панели и тестах — пакет app, у запущенного файла — файлы рядом
+    from . import dohttp
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import dohttp  # type: ignore[no-redef]  # noqa: E402
+
 SO_MARK = 36
 PORT = 53
 UDP_TIMEOUT = 2.0           # ждём ответа сервера по UDP, потом следующий сервер
@@ -117,10 +123,10 @@ def srv(entry: str) -> tuple:
     else:
         scheme, rest = entry.split("://", 1)
         rest, _, ip = rest.partition("#")
-        mode = "doh" if scheme.lower() == "https" else "dot"
-        hostport, sl, path = rest.partition("/") if mode == "doh" else (rest, "", "")
+        mode = {"https": "doh", "h3": "doh3"}.get(scheme.lower(), "dot")      # h3:// — DoH только по HTTP/3
+        hostport, sl, path = rest.partition("/") if mode != "dot" else (rest, "", "")
         host, _, port = hostport.partition(":")
-        port = int(port) if port.isdigit() else (DOH_PORT if mode == "doh" else DOT_PORT)
+        port = int(port) if port.isdigit() else (DOT_PORT if mode == "dot" else DOH_PORT)
         try:
             ipaddress.IPv4Address(host)
             ip, name = host, KNOWN_NAMES.get(host, host)
@@ -375,7 +381,10 @@ async def dot_query(conn: Conn, msg: bytes) -> bytes:
 
 
 async def doh_query(conn: Conn, msg: bytes, host: str, path: str = "/dns-query") -> bytes:
-    """POST по HTTP/1.1 с keep-alive (RFC 8484); path — из адреса DoH (обычно /dns-query)."""
+    """POST по HTTP/1.1 с keep-alive (RFC 8484); path — из адреса DoH (обычно /dns-query). Сервер выбрал HTTP/2 (ALPN)
+    — запрос по HTTP/2 (dohttp.h2_query)."""
+    if getattr(conn, "h2", None) is not None:
+        return await dohttp.h2_query(conn, msg, host, path)
     conn.writer.write((f"POST {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: awg-router\r\n"
                        f"Content-Type: application/dns-message\r\nAccept: application/dns-message\r\n"
                        f"Content-Length: {len(msg)}\r\n\r\n").encode() + msg)
@@ -474,8 +483,17 @@ class Proxy:
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
+        for p in self.__dict__.setdefault("h3pools", {}).values():
+            p.close()
+        self.h3pools.clear()
         self.ctx = ssl.create_default_context(cafile=cfg.get("ca_file") or None)   # ca_file — только в тестах
         self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        # DoH: HTTP/2 или HTTP/1.1 — что выберет сервер (ALPN; Quad9 и Яндекс по HTTP/1.1 не отвечают, А1)
+        self.ctx_doh = ssl.create_default_context(cafile=cfg.get("ca_file") or None)
+        self.ctx_doh.minimum_version = ssl.TLSVersion.TLSv1_2
+        self.ctx_doh.set_alpn_protocols(["h2", "http/1.1"])
+        if cfg.get("libssl") and dohttp.LIBSSL != (cfg["libssl"],):      # путь к libssl с QUIC — только в тестах
+            dohttp.LIBSSL, dohttp._lib, dohttp._lib_tried = (cfg["libssl"],), None, False
         self.dom = cfg.get("dom") or {}
         lists, files = {}, {}
         for lid, path in (self.dom.get("lists") or {}).items():
@@ -752,7 +770,7 @@ class Proxy:
             qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
             out = struct.pack("!H", qid) + query[2:]
             try:
-                if mode in ("dot", "doh"):
+                if mode in ("dot", "doh", "doh3"):
                     reply = await asyncio.wait_for(self._enc(out, server, mark, mode), ENC_TIMEOUT * 2)
                 elif tcp:
                     reply = await self._tcp(out, server, mark)       # путь через SOCKS5: UDP там часто не проходит
@@ -766,7 +784,7 @@ class Proxy:
                     if struct.unpack("!H", reply[2:4])[0] & 0x0200:
                         reply = await self._tcp(out, server, mark)   # ответ не поместился в UDP — по TCP, как у всех
             except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError,
-                    ValueError, struct.error) as e:
+                    ValueError, IndexError, struct.error) as e:
                 self._fail(server, e)
                 continue
             if not reply or len(reply) < 12 or struct.unpack("!H", reply[:2])[0] != qid \
@@ -828,8 +846,11 @@ class Proxy:
         self.last_error, self.last_error_at = f"{server}: {e}"[:200], time.time()
 
     async def _enc(self, msg: bytes, server: str, mark: int, mode: str) -> bytes:
-        """Запрос по DoT или DoH через пул соединений этого пути и сервера. server — адрес общего сервера (способ —
-        mode из настроек) или запись своего или запасного DNS (адрес, имя, порт и путь — из неё)."""
+        """Запрос по DoT или DoH (HTTP/2 или HTTP/1.1; doh3 — HTTP/3) через пул соединений этого пути и сервера. server —
+        адрес общего сервера (способ — mode из настроек) или запись своего или запасного DNS (адрес, имя, порт и путь —
+        из неё)."""
+        if mode == "doh3":
+            return await self._h3(msg, server, mark)
         key = (mode, mark, server)
         pool = self.pools.get(key)
         if pool is None:
@@ -847,18 +868,42 @@ class Proxy:
                 s = self._sock(socket.SOCK_STREAM, mark)
                 try:
                     await asyncio.wait_for(loop.sock_connect(s, (server_ip, port)), ENC_TIMEOUT)
-                    r, w = await asyncio.wait_for(
-                        asyncio.open_connection(sock=s, ssl=self.ctx, server_hostname=name), ENC_TIMEOUT)
+                    r, w = await asyncio.wait_for(asyncio.open_connection(
+                        sock=s, ssl=self.ctx_doh if mode == "doh" else self.ctx, server_hostname=name), ENC_TIMEOUT)
                 except BaseException:
                     s.close()
                     raise
-                return Conn(r, w)
+                c = Conn(r, w)
+                if mode == "doh" and w.get_extra_info("ssl_object").selected_alpn_protocol() == "h2":
+                    c.h2 = dohttp.H2()                   # сервер выбрал HTTP/2: начало соединения и свои настройки
+                    w.write(dohttp.H2_PREFACE)
+                    await w.drain()
+                return c
             pool = self.pools[key] = Pool(open_conn)
             dflt = DOH_PORT if mode == "doh" else DOT_PORT
             pool.host, pool.path = (name if port == dflt or self.cfg.get("upstream_port") else f"{name}:{port}"), path
         if mode == "dot":
             return await pool.run(lambda c: asyncio.wait_for(dot_query(c, msg), ENC_TIMEOUT))
         return await pool.run(lambda c: asyncio.wait_for(doh_query(c, msg, pool.host, pool.path), ENC_TIMEOUT))
+
+    async def _h3(self, msg: bytes, server: str, mark: int) -> bytes:
+        """Запрос DoH по HTTP/3 («h3://…»): QUIC из OpenSSL в своих потоках (dohttp.H3Pool), сокет UDP — с меткой
+        пути, как у остальных запросов. OpenSSL без QUIC — запись не отвечает (спрашивается следующая)."""
+        key = (mark, server)
+        pool = self.__dict__.setdefault("h3pools", {}).get(key)
+        if pool is None:
+            _, ip, name, port, path = srv(server)
+            if not ip:
+                raise OSError("no address")
+            if not dohttp.h3_supported():
+                raise OSError("HTTP/3: OpenSSL without QUIC")
+            if self.cfg.get("upstream_port"):                       # только в тестах
+                port = self.up_port
+            pool = self.h3pools[key] = dohttp.H3Pool(lambda: self._sock(socket.SOCK_DGRAM, mark), ip, port, name,
+                                                     POOL_SIZE, POOL_IDLE, self.cfg.get("ca_file") or None)
+            pool.host = name if port == DOH_PORT or self.cfg.get("upstream_port") else f"{name}:{port}"
+            pool.path = path
+        return await dohttp.run_h3(pool, msg, pool.host, pool.path, ENC_TIMEOUT)
 
     @staticmethod
     def _sock(kind: int, mark: int) -> socket.socket:

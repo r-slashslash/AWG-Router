@@ -13,7 +13,7 @@ import re
 import secrets
 import time
 
-from . import awgserver, config, cps, dnsaddr, hostnet, srcaddr, system
+from . import awgserver, config, cps, dnsaddr, dohttp, hostnet, srcaddr, system
 from .awgserver import ServerConf
 from .i18n import Msg, MsgError
 
@@ -583,6 +583,8 @@ class ServerManager:
                 fb = settings_patch.get("fallback_dns", cur["settings"].get("fallback_dns") or [])
                 if settings_patch.get("fallback_dns_on", cur["settings"].get("fallback_dns_on")) and not fb:
                     raise UserError(Msg("srv.fallback_dns_empty"))
+                if any(map(dnsaddr.is_h3, fb)) and not dohttp.h3_supported():
+                    raise UserError(Msg("err.h3_unsupported"))      # OpenSSL панели без QUIC (А1)
                 me = self._dns_live() or panel_dns_addr(sc)
                 if me and any(dnsaddr.host(e) == me for e in fb):
                     raise UserError(Msg("srv.fallback_dns_self", value=me))     # спрашивал бы сам себя

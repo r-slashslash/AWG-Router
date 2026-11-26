@@ -49,6 +49,15 @@ jobs:
       - name: Unit tests (the image's Python)
         run: python -W always::ResourceWarning -m unittest discover tests
 
+      # QUIC клиента и сервера есть в OpenSSL 3.5+ образа панели, а не в системной libssl машины GitHub: DoH по HTTP/3
+      # (tests/test_doh_http.py, H3Test) — в самом базовом образе из Dockerfile; пропуск там — ошибка (AWGR_TEST_H3)
+      - name: DoH over HTTP/2 and HTTP/3 (the panel image's OpenSSL)
+        run: |
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e AWGR_TEST_H3=1 -v "$PWD:/w:ro" -w /w "$img" sh -c \
+            'apk add -q --no-cache openssl >/dev/null && python3 -c "import ssl; print(ssl.OPENSSL_VERSION)" &&
+             python3 -W always::ResourceWarning -m unittest tests.test_doh_http -v'
+
   net:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

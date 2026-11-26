@@ -103,6 +103,25 @@ it grows, so every user-visible change gets a new version.
 - **Route check resolves a name through the client's exit again**: since 1.21.0 (the engine split into a package) the
   lookup helper imported a module that no longer existed there, the error was swallowed, and names were resolved by
   the panel's own resolver — on a server in Russia, China or Iran possibly a spoofed address.
+- **DoH over HTTP/2 and HTTP/3** (`app/dohttp.py`): Quad9 answers HTTP/1.1 with "505 HTTP Version Not Supported" and
+  Yandex closes the connection, so DoH to them — the shared servers with DoH encryption and `https://` entries — never
+  answered. A DoH connection now offers ALPN `h2, http/1.1` and speaks HTTP/2 when the server picks it (own frames over
+  `ssl`; HPACK without Huffman and without a dynamic table; only `:status` is read, the body is checked as a DNS answer).
+  A new entry `h3://name[:port]/path` is DoH over HTTP/3 only: QUIC from the system's OpenSSL 3.2+ through `ctypes` (the
+  panel image has it), in its own threads, the UDP socket with the path's mark; an ISP may cut it apart from HTTPS, so
+  it is written explicitly and the second entry is the spare. Saving refuses `h3://` where OpenSSL has no QUIC.
+- **Fixes from the independent review**: only **Additional incoming addresses** are added to the system (on clouds
+  with the public address outside — AWS, Oracle, Yandex Cloud — the panel put the address in client configs on the
+  interface at every start and called it "not working"), and an extra incoming IP not in the system waits until the
+  server's public address is known; an address keeps its last state over a panel restart (`data/addrs.json`), so
+  Direct — address isn't blocked until two checks pass after every update; Telegram after an exit never goes Direct,
+  also with a fallback "Direct — address"; a service name of a rule's own or the fallback DNS on Direct — address is
+  looked up from that address, not the system's; an outgoing or incoming address inside the clients' network is
+  refused; the kernel module's version via `modinfo` imported a module that isn't there (since 1.21.0) — a test now
+  checks every import inside a function; plain DNS no longer retries the same silent server over TCP (only a
+  truncated answer goes to TCP), so the fallback DNS takes over in about 2 s instead of 7–14; the connection reset
+  after a manual change keeps only clients' conntrack entries in memory; name lookups share one deadline; the
+  in-panel question is cancelled by the tab row too.
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.
 - Going back to 1.24.x: Direct with an address goes from the system address there (not blocked), exits connect from
