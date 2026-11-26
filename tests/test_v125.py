@@ -323,6 +323,30 @@ class AddressesInSystemTest(unittest.TestCase):
         self.tick()
         self.assertTrue(self.eng.addr_ok(C))
 
+    def test_bad_retried_after_15_minutes(self):
+        """Не заработавший адрес — снова в систему и на проверку через ADDR_BAD_RETRY (владелец 2026-11-26): хостинг
+        подключил его позже, чем его вписали в панели. Повтор без успеха — без нового события в журнале."""
+        self.host.probe[C] = {"ok": False, "err": "no_connection", "detail": "timed out"}
+        self.tick(out_hosts=[C])
+        self.tick()
+        self.assertEqual(self.eng.addr_state(C), "bad")
+        self.assertEqual(self.host.added, [C])
+        self.eng.addr_rt()[C]["at"] -= self.addrs_mod.ADDR_BAD_RETRY - 60      # ещё не пора
+        self.tick()
+        self.assertEqual(self.host.added, [C])
+        self.eng.addr_rt()[C]["at"] -= 120                                     # пора: снова добавлен и проверен
+        self.tick()
+        self.assertEqual(self.host.added, [C, C])
+        self.assertEqual(self.eng.addr_state(C), "bad")                        # всё ещё не работает
+        self.assertEqual(self.events.count("ev.addr_bad"), 1)
+        self.tick()
+        self.assertEqual(self.host.removed, [C, C])                             # и снова убран
+        self.host.probe.pop(C)                                                  # хостинг подключил адрес
+        self.eng.addr_rt()[C]["at"] -= self.addrs_mod.ADDR_BAD_RETRY + 1
+        self.tick()
+        self.assertTrue(self.eng.addr_ok(C))
+        self.assertNotIn("retry", self.eng.addr_rt()[C])
+
     def test_down_and_up_after_two_failures(self):
         self.tick(out_hosts=[A])
         self.host.probe[A] = {"ok": False, "err": "no_connection"}

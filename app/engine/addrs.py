@@ -36,6 +36,9 @@ ADDR_TICK = 15          # с: как часто смотреть, на мест�
 ADDR_RECHECK = 300      # с: рабочий адрес проверяется заново
 ADDR_RETRY = 60         # с: переставший работать — чаще, чтобы заметить, что снова работает
 ADDR_SOON = 20          # с: после первой неудачи — ещё раз скоро, а не через ADDR_RECHECK
+# с: адрес, который не заработал ни разу (bad), — снова в систему и на проверку (владелец 2026-11-26): вписали в панели
+# раньше, чем хостинг его подключил, — заработает сам, без повторного сохранения «Сервера»
+ADDR_BAD_RETRY = 900
 ADDR_FAILS = 2          # неудачных проверок подряд — «перестал работать» (не от одного сбоя сети)
 ADDR_LABEL = "awgr"     # метка адреса в системе: <интерфейс>:awgr
 ADDR_NET_PREFIX = "zz-awgr-out-"
@@ -257,7 +260,11 @@ class AddrsMixin:
                 rt[ip] = {"state": "ok", "seen": ip, "at": time.time(), "face": True}
                 continue
             if st_ == "bad":
-                continue                    # не заработал: в систему — только когда его снова впишут (addrs_wake)
+                # не заработал: в систему — когда его снова впишут (addrs_wake) или через ADDR_BAD_RETRY. Ошибку
+                # прежней проверки показываем, пока идёт новая; событие «не работает» второй раз не пишем (retry)
+                if time.time() - float((rt.get(ip) or {}).get("at") or 0) < ADDR_BAD_RETRY:
+                    continue
+                rt[ip] = {**(rt.get(ip) or {}), "state": "checking", "retry": True, "fails": 0}
             want.append(ip)
         for ip in want:
             if ip in host:
@@ -379,6 +386,7 @@ class AddrsMixin:
             was = x.get("state")
             x.update(state="ok", seen=seen or x.get("seen"), cc=res.get("cc") or x.get("cc"), error=None,
                      at=now, fails=0)
+            x.pop("retry", None)
             if not ever:
                 r["ever"].append(ip)
                 r["ever"][:] = r["ever"][-64:]
@@ -397,9 +405,11 @@ class AddrsMixin:
         x["fails"] = int(x.get("fails") or 0) + 1
         x["at"], x["error"] = now, err
         if not ever and x.get("state") in (None, "checking"):
-            # не заработал ни разу: убрать из системы (если добавила панель) и не предлагать в выборе
+            # не заработал ни разу: убрать из системы (если добавила панель) и не предлагать в выборе; повтор через
+            # ADDR_BAD_RETRY не заработал — без нового события в журнале
             x["state"] = "bad"
-            self.event("warn", Msg("ev.addr_bad", addr=ip, error=err))
+            if not x.pop("retry", False):
+                self.event("warn", Msg("ev.addr_bad", addr=ip, error=err))
             self.addrs_wake()
             return
         if x.get("state") == "ok" and x["fails"] < ADDR_FAILS:
