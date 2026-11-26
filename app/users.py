@@ -13,7 +13,7 @@ import re
 import secrets
 import time
 
-from . import awgserver, config, cps, hostnet, srcaddr, system
+from . import awgserver, config, cps, dnsaddr, hostnet, srcaddr, system
 from .awgserver import ServerConf
 from .i18n import Msg, MsgError
 
@@ -131,6 +131,15 @@ def check_dns_enc(v) -> str:
     if v not in DNS_ENC:
         raise UserError(Msg("srv.bad_dns_enc"))
     return v
+
+
+def check_fallback_dns(v) -> list[str]:
+    """Запасной DNS пути «напрямую» (1.25.0): до двух записей, как у своего DNS правила — IPv4, «https://…», «tls://…»."""
+    try:
+        return dnsaddr.entries(v)
+    except dnsaddr.DnsAddrError as e:
+        raise UserError(Msg("srv.fallback_dns_many", n=dnsaddr.MAX) if e.why == "many"
+                        else Msg("srv.bad_fallback_dns", value=e.value)) from None
 
 
 def check_mtu(v) -> int:
@@ -485,6 +494,8 @@ class ServerManager:
             "panel_dns_addr": self._dns_live() or panel_dns_addr(sc),
             "panel_dns_state": self.e.dns_view(),
             "panel_dns_enc": dns_encrypt(s),
+            "fallback_dns_on": bool(s.get("fallback_dns_on")),     # запасной DNS для «Напрямую» (1.25.0)
+            "fallback_dns": s.get("fallback_dns") or [],
             "client_mtu": int(s.get("client_mtu") or DEFAULT_MTU),
             "client_keepalive": s.get("client_keepalive") or "",
             "keepalive_auto": awgserver.default_keepalive(params),
@@ -562,6 +573,22 @@ class ServerManager:
                     settings_patch[k] = check_flag(body[k])
             if "panel_dns_enc" in body:
                 settings_patch["panel_dns_enc"] = check_dns_enc(body["panel_dns_enc"])
+            if "fallback_dns" in body:
+                settings_patch["fallback_dns"] = check_fallback_dns(body["fallback_dns"])
+            if "fallback_dns_on" in body:
+                settings_patch["fallback_dns_on"] = check_flag(body["fallback_dns_on"])
+            if "fallback_dns" in body or "fallback_dns_on" in body:
+                fb = settings_patch.get("fallback_dns", cur["settings"].get("fallback_dns") or [])
+                if settings_patch.get("fallback_dns_on", cur["settings"].get("fallback_dns_on")) and not fb:
+                    raise UserError(Msg("srv.fallback_dns_empty"))
+                me = self._dns_live() or panel_dns_addr(sc)
+                if me and any(dnsaddr.host(e) == me for e in fb):
+                    raise UserError(Msg("srv.fallback_dns_self", value=me))     # спрашивал бы сам себя
+                names = dnsaddr.names(fb)
+                got = self.e.dns_lookup(names) if names else {}
+                for n in names:
+                    if n not in got:
+                        raise UserError(Msg("err.dns_name", name=n))
             if "client_mtu" in body:
                 settings_patch["client_mtu"] = check_mtu(body["client_mtu"])
             if "client_keepalive" in body:
@@ -633,7 +660,7 @@ class ServerManager:
                         st["settings"].pop("public_host", None)
                     if not st["settings"].get("extra_hosts"):
                         st["settings"].pop("extra_hosts", None)
-                    for k in ("out_hosts", "out_main"):
+                    for k in ("out_hosts", "out_main", "fallback_dns", "fallback_dns_on"):
                         if not st["settings"].get(k):
                             st["settings"].pop(k, None)
                     # адрес, которого больше нет среди выбора, у клиента снимается: он снова «как у всех»

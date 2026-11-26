@@ -21,7 +21,10 @@ SERVER_FIELDS = {"srv.bad_host": "public_host", "srv.bad_extra_host": "extra_hos
                  "srv.out_main_removed": "out_main",
                  "srv.bad_client_host": "client_host", "srv.bad_dns": "client_dns", "srv.dns_v6": "client_dns",
                  "srv.bad_mtu": "client_mtu", "srv.bad_keepalive": "client_keepalive",
-                 "srv.bad_dns_enc": "panel_dns_enc", "srv.bad_port": "port", "srv.port_failed": "port",
+                 "srv.bad_dns_enc": "panel_dns_enc", "srv.bad_fallback_dns": "fallback_dns",
+                 "srv.fallback_dns_many": "fallback_dns", "srv.fallback_dns_self": "fallback_dns",
+                 "srv.fallback_dns_empty": "fallback_dns", "err.dns_name": "fallback_dns",
+                 "srv.bad_port": "port", "srv.port_failed": "port",
                  "srv.port_dns": "port", "srv.bad_subnet": "address",
                  "srv.subnet_locked": "address", "srv.subnet_container": "address"}
 PARAM_ERRORS = ("srv.bad_param", "srv.bad_int", "srv.bad_range", "srv.bad_bool", "srv.bad_key", "srv.bad_junk")

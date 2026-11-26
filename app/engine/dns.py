@@ -8,7 +8,7 @@ import signal
 import subprocess
 import time
 
-from .. import config, countries, domains, nftgen, system
+from .. import config, dnsaddr, domains, nftgen, system
 from ..i18n import Msg
 from ..users import client_dns, dns_encrypt
 from .common import APP_DIR, DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, _sha, _trim_log
@@ -16,9 +16,9 @@ from .common import APP_DIR, DNS_PORT, LOG_DIR, RUN_DIR, HelperRT, _sha, _trim_l
 DNSPROXY = os.path.join(APP_DIR, "dnsproxy.py")
 DNS_CONF = os.path.join(RUN_DIR, "dns.json")
 DNS_STATS = os.path.join(RUN_DIR, "dns-stats.json")
-# с: местный DNS страны с шифрованием «в ходу», если отвечал не раньше этого до последнего сбоя общего (общий
-# пробуется раз в DIRECT_RETRY = 120 с, местный — на каждое имя)
-DIRECT_ENC_GRACE = 180
+# адреса имён шифрованного своего и запасного DNS (dns.google): разбирает панель в своей сети, заново — раз в
+# NAME_EVERY, не разобралось — через NAME_RETRY (прежний адрес остаётся)
+NAME_EVERY, NAME_RETRY = 600.0, 60.0
 
 
 class DnsMixin:
@@ -84,13 +84,13 @@ class DnsMixin:
                 for lids, o, servers in p["dns"]:
                     eff = self.resolve(o, st)
                     r = route(eff) if eff != "block" else None
-                    rules.append([list(lids), r, list(servers), with_set and tuple(lids) in in_dom])
+                    rules.append([list(lids), r, self.dns_entries(servers), with_set and tuple(lids) in in_dom])
             else:
                 for lids, o in p.get("domain") or ():
                     eff = self.resolve(o, st)
                     r = route(eff) if eff != "block" else None
                     # и без пути (выход подключается, лежит, «блок»): dnsproxy.py должен знать, что имя — из
-                    # правила, иначе спросил бы его у местного DNS «напрямую» мимо выхода (direct_fallback)
+                    # правила, иначе спросил бы его у запасного DNS «напрямую» мимо выхода (direct_fallback)
                     rules.append([list(lids), r])
             if rules:
                 pols[n] = rules
@@ -100,6 +100,33 @@ class DnsMixin:
         return {"lists": {lid: domains.path_for(lid) for lid in lids}, "policies": pols,
                 "clients": dict(client_map),
                 "set": [config.NFT_TABLE, nftgen.DOM_SET] if with_set and pols else None}
+
+    def dns_entries(self, entries) -> list[str]:
+        """Записи своего или запасного DNS для dnsproxy.py: у имени шифрованного сервиса — его адрес (dnsaddr.for_proxy).
+        Адреса имён — из кэша; устаревшие и новые разбираются здесь, параллельно и не дольше dnsaddr.LOOKUP_TIMEOUT."""
+        entries = [e for e in entries or () if isinstance(e, str)]
+        ips = self.dns_lookup(dnsaddr.names(entries))
+        return [dnsaddr.for_proxy(e, ips) for e in entries]
+
+    def dns_fallback(self, st: dict) -> list[str]:
+        """Запасной DNS пути «напрямую» для dnsproxy.py: записи из настроек, если галочка включена; иначе — нет его."""
+        s = st["settings"]
+        return self.dns_entries(s.get("fallback_dns")) if s.get("fallback_dns_on") else []
+
+    def dns_lookup(self, names, fresh: bool = False) -> dict[str, str]:
+        """Адреса имён шифрованного своего и запасного DNS: {имя: IPv4}, не разобранных нет. Из кэша; устаревшие (и все —
+        с fresh) разбираются заново, прежний адрес остаётся, если не разобралось. Демо — любое имя (DEVELOPMENT.md)."""
+        if config.DRY_RUN:
+            return {n: "192.0.2.53" for n in names}
+        cache = self.__dict__.setdefault("_dns_names", {})      # имя → (адрес | None, когда разбирали); тесты — __new__
+        now = time.monotonic()
+        stale = [n for n in names if fresh or n not in cache
+                 or now - cache[n][1] > (NAME_EVERY if cache[n][0] else NAME_RETRY)]
+        if stale:
+            got = dnsaddr.lookup(stale)
+            for n in stale:
+                cache[n] = (got.get(n) or (cache.get(n) or (None,))[0], now)
+        return {n: cache[n][0] for n in names if n in cache and cache[n][0]}
 
     def _stop_dns(self) -> None:
         d, self.dns = self.dns, None
@@ -145,13 +172,10 @@ class DnsMixin:
         cfg = {"listen": listen, "port": DNS_PORT, "clients": net, "stats": DNS_STATS,
                "upstreams": client_dns(st["settings"]), "encrypt": enc,
                "default": default, "routes": routes, "dom": dom,
-               # запасной DNS для пути «напрямую»: шифрованный DNS из России, Китая и Ирана часто не проходит, а
-               # клиенты, которые идут напрямую, и так идут через провайдера сервера (countries.local_dns). Страна —
-               # сервера, и для «Напрямую — адрес» (1.25.0): провайдер тот же, его метки — addr_marks
-               "direct_fallback": countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else [],
-               # и местный DNS страны с шифрованием (тем же DoH/DoT) — его спрашивают раньше обычного
-               "direct_fallback_enc": countries.local_dns_enc(getattr(self, "public_cc", None)) if enc != "plain"
-               else [],
+               # запасной DNS пути «напрямую» (1.25.0 — галочкой и вручную, при любом шифровании): серверы DNS из
+               # настроек не отвечают — имена клиентов, которые идут напрямую (и «Напрямую — адрес», его метки —
+               # addr_marks), спрашиваются у него тем же путём
+               "direct_fallback": self.dns_fallback(st),
                "addr_marks": [nftgen.ADDR_LO, nftgen.ADDR_HI]}
         mt = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in dom["lists"].values()}
         h = _sha(json.dumps([cfg, mt], sort_keys=True))
@@ -212,18 +236,24 @@ class DnsMixin:
                     err_at = float(s.get("last_error_at") or 0)
                     if err_at > float(s.get("last_ok") or 0) and time.time() - err_at < 300:
                         v["upstream_error"] = s.get("last_error") or "?"
-                    # шифрованный DNS не отвечает на пути «напрямую» — с адреса системы или с любого «Напрямую — адрес»
-                    # (1.25.0; последняя попытка — неудачная, за 15 минут): клиентам, которые идут напрямую, имена ищет
-                    # местный DNS или (без него) никто
+                    # серверы DNS не отвечают на пути «напрямую» — с адреса системы или с любого «Напрямую — адрес»
+                    # (последняя попытка — неудачная, за 15 минут); с запасным DNS — ответил ли он (fallback: "used" —
+                    # сейчас имена ищет он, "down" — и он не отвечает)
                     paths = [(s.get("direct_ok_at"), s.get("direct_fail_at")), *(s.get("addr_direct") or {}).values()]
-                    down = [float(f or 0) for o, f in paths if float(f or 0) > float(o or 0)]
-                    fail_at = max(down, default=0.0)
-                    if fail_at and time.time() - fail_at < 900 \
-                            and s.get("encrypt") != "plain":         # без шифрования совет «выберите его» ни к чему
-                        v["direct_down"] = {"fallback": [str(x) for x in s.get("fallback") or []][:2]}
-                        # местный с шифрованием ответил после сбоя общего — имена «напрямую» идут к нему, шифрованные
-                        if float(s.get("local_enc_ok_at") or 0) >= fail_at - DIRECT_ENC_GRACE and s.get("fallback_enc"):
-                            v["direct_down"] = {"fallback": [str(x) for x in s["fallback_enc"]][:2], "encrypted": True}
+                    if any(_down(o, f) for o, f in paths):
+                        v["direct_down"] = True
+                    fbs = list((s.get("fb_paths") or {}).values())
+                    if s.get("fallback") and any(_down(o, f) for o, f in fbs):
+                        v["fallback"] = "down"
+                    elif s.get("fallback") and v.get("direct_down") and \
+                            any(float(o or 0) > float(f or 0) and time.time() - float(o or 0) < 900 for o, f in fbs):
+                        v["fallback"] = "used"
             except (OSError, ValueError, TypeError):
                 pass
         return v
+
+
+def _down(ok_at, fail_at) -> bool:
+    """Последняя попытка — неудачная, и не раньше 15 минут назад."""
+    f = float(fail_at or 0)
+    return f > float(ok_at or 0) and time.time() - f < 900

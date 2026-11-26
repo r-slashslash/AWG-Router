@@ -1108,8 +1108,8 @@ class RuleDnsTest(unittest.TestCase):
         self.assertEqual(checks.rule_dns("77.88.8.8, 77.88.8.1"), ["77.88.8.8", "77.88.8.1"])
         self.assertEqual(checks.rule_dns(["223.5.5.5", "223.5.5.5"]), ["223.5.5.5"])
         self.assertEqual(checks.rule_dns(""), [])
-        for bad_v, key in (("2a02:6b8::feed:0ff", "err.rule_dns_v4"), ("1.1.1.1 8.8.8.8 9.9.9.9", "err.rule_dns_many"),
-                           ("yandex", "srv.bad_dns"), ("0.0.0.0", "err.rule_dns_v4")):
+        for bad_v, key in (("2a02:6b8::feed:0ff", "err.rule_dns_bad"), ("1.1.1.1 8.8.8.8 9.9.9.9", "err.rule_dns_many"),
+                           ("yandex", "err.rule_dns_bad"), ("0.0.0.0", "err.rule_dns_bad")):
             with self.assertRaises(Exception) as cm:
                 checks.rule_dns(bad_v)
             self.assertIn(key, str(getattr(cm.exception, "msg", cm.exception)) + repr(cm.exception.__dict__), bad_v)
@@ -1225,7 +1225,7 @@ class RuleDnsTest(unittest.TestCase):
                         clients={"10.8.1.6": "p_1"})
         asked = []
 
-        async def forward(query, q, mark, tcp, servers=(), mode=None):     # mode — свой DNS с шифрованием (1.25.0)
+        async def forward(query, q, mark, tcp, servers=()):
             asked.append(servers)
             return a_reply(query, ["198.51.100.2" if servers else "203.0.113.2"])
         p.forward = forward
@@ -1320,10 +1320,10 @@ class ServerCountryTest(unittest.TestCase):
         finally:
             e.stop_ev, e.public_v4, e.public_v4_state, e.public_cc = old
         from app import countries
-        self.assertEqual(countries.local_dns("RU"), ["77.88.8.8", "77.88.8.1"])
-        self.assertEqual(countries.local_dns("de"), [])
-        self.assertIn('countries.local_dns(getattr(self, "public_cc", None)) if enc != "plain" else []',
-                      read("app", "engine", "dns.py"))
+        self.assertEqual(countries.preset("RU")["dns"], ("77.88.8.8", "77.88.8.1"))
+        # запасной DNS по стране сервера сам больше не включается (1.25.0, владелец 2026-11-26): галочка «Запасной DNS
+        # для «Напрямую»» и кнопки «Применить для …»
+        self.assertNotIn("public_cc", read("app", "engine", "dns.py"))
 
 
 class CountryPresetTest(unittest.TestCase):
@@ -1537,8 +1537,8 @@ class DirectFallbackTest(unittest.TestCase):
         e.dns = types.SimpleNamespace(proc=types.SimpleNamespace(pid=4242))
         path = os.path.join(tempfile.mkdtemp(), "dns-stats.json")
         now = time.time()
-        for ok_at, fail_at, fb, want in ((now - 60, now - 5, ["77.88.8.8"], {"fallback": ["77.88.8.8"]}),
-                                         (now - 60, now - 5, [], {"fallback": []}),
+        for ok_at, fail_at, fb, want in ((now - 60, now - 5, ["77.88.8.8"], True),
+                                         (now - 60, now - 5, [], True),
                                          (now - 1, now - 5, ["77.88.8.8"], None),          # снова отвечает
                                          (0, now - 1000, ["77.88.8.8"], None)):            # давно — не тревожим
             with open(path, "w") as f:
@@ -1546,12 +1546,12 @@ class DirectFallbackTest(unittest.TestCase):
                             "fallback": fb}, f)
             with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
                 self.assertEqual(e.dns_view().get("direct_down"), want)
-        # второй круг проверки: переключили на «Без шифрования» — совет «выберите Без шифрования» не показывается
+        # 1.25.0: «Серверы DNS не отвечают напрямую» — и без шифрования (запасной работает при любом)
         with open(path, "w") as f:
             _json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 60, "direct_fail_at": now - 5, "fallback": [],
                         "encrypt": "plain"}, f)
         with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
-            self.assertNotIn("direct_down", e.dns_view())
+            self.assertTrue(e.dns_view().get("direct_down"))
 
     def test_new_servers_forget_the_old_failure(self):
         """Другие серверы DNS или шифрование (SIGHUP): прежнее «шифрованный не отвечает» к ним не относится."""
@@ -1583,13 +1583,13 @@ class DirectFallbackTest(unittest.TestCase):
         out = self.run_q(p, ["google.com"], ip="10.8.1.7")              # клиент идёт через выход
         self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
         self.assertEqual(plain, [])
-        p = self._proxy([])                                             # страна без местного DNS — только ошибка
+        p = self._proxy([])                                             # без запасного DNS — только ошибка
         p._enc, p._udp = blocked, udp
         self.assertEqual(self.run_q(p, ["google.com"])[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
         self.assertEqual(plain, [])
         self.assertIn('v["direct_down"]', read("app", "engine", "dns.py"))
-        # 1.25.0: и «тоже с шифрованием», когда ответил местный DNS страны с шифрованием
-        self.assertIn('"srv.pdns_direct_fb_enc" : "srv.pdns_direct_fb"', read("app", "static", "js", "server.js"))
+        self.assertIn('t("srv.pdns_direct_down"', read("app", "static", "js", "server.js"))
+        self.assertIn('t("srv.pdns_fb_used")', read("app", "static", "js", "server.js"))
 
 
 class RecoverRenamedTest(unittest.TestCase):

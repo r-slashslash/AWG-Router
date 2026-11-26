@@ -12,7 +12,7 @@ import shutil
 import threading
 import time
 
-from . import config, srcaddr
+from . import config, dnsaddr, srcaddr
 from .i18n import Msg, MsgError
 
 log = logging.getLogger("awgr.store")
@@ -265,7 +265,8 @@ class Store:
                 d = json.load(f)
             if not isinstance(d, dict):
                 raise ValueError("state is not an object")
-            return srcaddr.from_disk(d)     # «Напрямую — адрес» (1.25.0): в памяти одной строкой "direct@…"
+            # «Напрямую — адрес» (1.25.0): в памяти одной строкой "direct@…"; свой DNS правила — весь список в "dns"
+            return dnsaddr.from_disk(srcaddr.from_disk(d))
         try:
             return load(self.path)
         except (OSError, ValueError) as e:
@@ -297,8 +298,9 @@ class Store:
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            # «Напрямую — адрес» — как поймёт панель до 1.25.0: "direct" и адрес рядом (srcaddr.to_disk)
-            json.dump(srcaddr.to_disk(state), f, ensure_ascii=False, indent=2)
+            # «Напрямую — адрес» — как поймёт панель до 1.25.0: "direct" и адрес рядом (srcaddr.to_disk); в своём DNS
+            # правила — только обычные адреса, DoH и DoT — рядом (dnsaddr.to_disk)
+            json.dump(dnsaddr.to_disk(srcaddr.to_disk(state)), f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
         # прежняя версия — жёсткой ссылкой рядом (тот же файл, без копирования): её читает _read
@@ -390,7 +392,8 @@ class Store:
                     if isinstance(l, dict) and l.get("kind") in TEXT_KINDS:
                         l["source"] = self._read_text(l)
                         l.pop("text", None)
-                st = srcaddr.to_disk(st)        # «Напрямую — адрес» в копии — как на диске (прежние выпуски поймут)
+                # «Напрямую — адрес» и свой DNS правила в копии — как на диске (прежние выпуски поймут)
+                st = dnsaddr.to_disk(srcaddr.to_disk(st))
             return st
 
     def peek(self, fn):

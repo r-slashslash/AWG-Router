@@ -125,13 +125,14 @@ function viewServer() {
           <span class="hint">${esc(t("srv.panel_dns_hint", { addr: SRV.panel_dns_addr || "—" }))}</span>
           ${panelDnsStatus()}
         </div>
+        <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select data-field="panel_dns_enc" id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
+          `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
+        ${fallbackDnsField()}
         <div class="field">
           <label class="check"><input type="checkbox" id="s-domf" ${SRV.dom_filter ? "checked" : ""}><span>${esc(t("srv.dom_filter"))}</span></label>
           <span class="hint">${esc(t("srv.dom_filter_hint"))}</span>
           ${SRV.dom_filter && !SRV.panel_dns ? `<div class="small warn-text">${esc(t("srv.dom_filter_needs_dns"))}</div>` : ""}
         </div>
-        <label class="field"><span>${esc(t("srv.pdns_enc"))}</span><select data-field="panel_dns_enc" id="s-pdns-enc">${["doh", "dot", "plain"].map((m) =>
-          `<option value="${m}" ${(SRV.panel_dns_enc || "doh") === m ? "selected" : ""}>${esc(t("srv.pdns_enc_" + m))}</option>`).join("")}</select><span class="hint">${esc(t("srv.pdns_enc_hint"))}</span></label>
         <div class="field">
           <details class="small"><summary>${esc(t("srv.panel_dns_more"))}</summary>${["srv.panel_dns_why", "srv.panel_dns_cascade", "srv.panel_dns_best"].map((k) => `<p class="small">${esc(t(k))}</p>`).join("")}</details>
         </div>
@@ -398,7 +399,8 @@ function srvFieldsDirty() {
   const pdns = $("#s-pdns");
   return (pdns && pdns.checked !== !!SRV.panel_dns) ||
     ($("#s-domf") && $("#s-domf").checked !== !!SRV.dom_filter) ||
-    ["#s-in", "#s-extra", "#s-out-main", "#s-out", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
+    ($("#s-fb") && $("#s-fb").checked !== !!SRV.fallback_dns_on) ||
+    ["#s-in", "#s-extra", "#s-out-main", "#s-out", "#s-dns", "#s-pdns-enc", "#s-fb-in", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].some((sel) => {
       const el = $(sel); return el && el.dataset.orig !== undefined && el.value !== el.dataset.orig;
     });
 }
@@ -448,11 +450,13 @@ bind.server = () => {
     b.disabled = false;
   };
   const showBar = () => { $("#s-bar").hidden = !srvDirty(); };
-  ["#s-in", "#s-extra", "#s-out-main", "#s-out", "#s-dns", "#s-pdns-enc", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
+  ["#s-in", "#s-extra", "#s-out-main", "#s-out", "#s-dns", "#s-pdns-enc", "#s-fb-in", "#s-mtu", "#s-ka", "#s-port", "#s-addr"].forEach((sel) => {
     const el = $(sel); if (!el) return;
     el.dataset.orig = el.value; el.oninput = showBar; el.onchange = showBar;
   });
   ["#s-pdns", "#s-domf"].forEach((sel) => { if ($(sel)) $(sel).onchange = showBar; });
+  const fb = $("#s-fb");
+  if (fb) fb.onchange = () => { $("#s-fb-in").disabled = !fb.checked; if (fb.checked) $("#s-fb-in").focus(); showBar(); };
 
   const syncTpl = () => {
     const sel = $("#s-cps"); if (!sel) return;
@@ -509,7 +513,9 @@ bind.server = () => {
     // переедет и где стоят убранные адреса (confirm: false), после «Да» — сохраняет
     const body = { client_host: $("#s-in").value, extra_hosts: $("#s-extra").value,
       out_main: $("#s-out-main").value, out_hosts: $("#s-out").value, confirm: false, client_dns: $("#s-dns").value,
-      panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value, client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
+      panel_dns: $("#s-pdns").checked, dom_filter: $("#s-domf").checked, panel_dns_enc: $("#s-pdns-enc").value,
+      fallback_dns_on: $("#s-fb").checked, fallback_dns: $("#s-fb-in").value,
+      client_mtu: +$("#s-mtu").value, client_keepalive: $("#s-ka").value.trim() };
     if (Object.keys(changed).length) body.params = changed;
     body.port = port;
     if (!SRV.subnet_locked) body.address = addr;
@@ -530,6 +536,18 @@ bind.server = () => {
   };
 };
 
+/** запасной DNS для «Напрямую» (1.25.0): галочка и до двух адресов (IPv4, https://…, tls://…); строка — когда он
+    сейчас отвечает вместо серверов DNS или тоже не отвечает (panel_dns_state.fallback) */
+function fallbackDnsField() {
+  const on = !!SRV.fallback_dns_on, d = SRV.panel_dns ? SRV.panel_dns_state || {} : {};
+  const st = on && d.fallback === "down" ? t("srv.pdns_fb_down") : on && d.fallback === "used" ? t("srv.pdns_fb_used") : "";
+  return `<div class="field">
+          <label class="check"><input type="checkbox" id="s-fb" ${on ? "checked" : ""}><span>${esc(t("srv.pdns_fb"))}</span></label>
+          <input type="text" id="s-fb-in" data-field="fallback_dns" dir="ltr" autocomplete="off" spellcheck="false" value="${esc((SRV.fallback_dns || []).join(", "))}" ${on ? "" : "disabled"}>
+          <span class="hint">${esc(t("srv.pdns_fb_hint"))}</span>
+          ${st ? `<div class="small warn-text">${esc(st)}</div>` : ""}
+        </div>`;
+}
 // состояние DNS панели под переключателем (вкладка «Сервер»)
 function panelDnsStatus() {
   const d = SRV.panel_dns_state;
@@ -539,8 +557,6 @@ function panelDnsStatus() {
   const mode = t("srv.pdns_mode_" + (d.encrypt || "plain"));
   return `<div class="small muted">${esc(t("srv.panel_dns_on", { addr: d.listen }))} · ${esc(mode)}${n ? " · " + esc(n) : ""}</div>`
     + (d.upstream_error ? `<div class="small warn-text">${esc(t("srv.panel_dns_upfail", { error: d.upstream_error }))}</div>` : "")
-    // шифрованный DNS не проходит напрямую из страны сервера (1.22.0): с местным DNS — что спрашивается у него
-    + (d.direct_down ? `<div class="small warn-text">${esc(d.direct_down.fallback.length
-      ? t(d.direct_down.encrypted ? "srv.pdns_direct_fb_enc" : "srv.pdns_direct_fb", { dns: d.direct_down.fallback.join(", ") })
-      : t("srv.pdns_direct_down"))}</div>` : "");
+    // серверы DNS не отвечают на пути «Напрямую» (с адреса системы или «Напрямую — адрес»)
+    + (d.direct_down ? `<div class="small warn-text">${esc(t("srv.pdns_direct_down"))}</div>` : "");
 }

@@ -16,7 +16,7 @@ import copy
 import math
 import re
 
-from . import awgconf, config, cps, domains, limits, lists, notify, shaping, srcaddr
+from . import awgconf, config, cps, dnsaddr, domains, limits, lists, notify, shaping, srcaddr
 from .i18n import Msg, MsgError
 from .store import ID_RE, Store, new_id
 from .web import HTTPError
@@ -177,10 +177,12 @@ def own_src(st: dict, v) -> str:
     return v
 
 
-def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:
+def rules(st: dict, rules, self_dns: str | None = None, look=None) -> list[dict]:
     """Правила «списки → выход» (общие и клиента). self_dns — адрес, на котором слушает DNS на сервере: свой DNS
     правила с ним бесполезен (DNS на сервере не спрашивает сам себя, имена ушли бы к общим серверам), поэтому
-    при сохранении из панели он не принимается; копии и выходы проверяют без него, как до 1.22.0."""
+    при сохранении из панели он не принимается; копии и выходы проверяют без него, как до 1.22.0. look — при
+    сохранении из панели: имена шифрованных серверов своего DNS должны разбираться (dnsaddr.lookup) — иначе ошибка у
+    поля, а не правило, чьи сайты молча не открываются."""
     if not isinstance(rules, list) or len(rules) > config.MAX_RULES:
         bad("err.bad_rules")
     out = []
@@ -236,8 +238,9 @@ def rules(st: dict, rules, self_dns: str | None = None) -> list[dict]:
         if Store.lst(st, ls[0])["kind"] == "domains":
             with field(f"rule_dns_{i}"):
                 dns = rule_dns(r.get("dns"))
-                if self_dns and self_dns in dns:
+                if self_dns and any(dnsaddr.host(e) == self_dns for e in dns):
                     bad(Msg("err.rule_dns_self", value=self_dns))
+                dns_names_known(dns, look)
             if dns:
                 out[-1]["dns"] = dns
     return out
@@ -247,29 +250,22 @@ RULE_DNS_MAX = 2
 
 
 def rule_dns(v) -> list[str]:
-    """Свой DNS правила по сайтам: до двух IPv4 — списком или строкой (через запятую или пробел); пусто — []."""
-    import ipaddress
-    if v in (None, "", []):
-        return []
-    if isinstance(v, list):
-        items = [str(x).strip() for x in v]
-    elif isinstance(v, str):
-        items = re.split(r"[,\s]+", v)
-    else:
-        bad("err.bad_value")
-    out = []
-    for d in filter(None, items):
-        try:
-            a = ipaddress.ip_address(d)
-        except ValueError:
-            bad(Msg("srv.bad_dns", value=d[:60]))
-        if a.version != 4 or a.is_unspecified or a.is_multicast:
-            bad(Msg("err.rule_dns_v4", value=d[:60]))
-        if d not in out:
-            out.append(d)
-    if len(out) > RULE_DNS_MAX:
-        bad(Msg("err.rule_dns_many", n=RULE_DNS_MAX))
-    return out
+    """Свой DNS правила по сайтам: до двух записей — списком или строкой (через запятую или пробел): IPv4 (обычный DNS),
+    «https://…» (DoH) или «tls://…» (DoT, 1.25.0; dnsaddr); пусто — []."""
+    try:
+        return dnsaddr.entries(v)
+    except dnsaddr.DnsAddrError as e:
+        bad(Msg("err.rule_dns_many", n=RULE_DNS_MAX) if e.why == "many" else Msg("err.rule_dns_bad", value=e.value))
+
+
+def dns_names_known(entries, look) -> None:
+    """Сохранение из панели (look — dnsaddr.lookup): имя шифрованного DNS, у которого нет адреса, — ошибка."""
+    names = dnsaddr.names(entries)
+    if look and names:
+        got = look(names)
+        for n in names:
+            if n not in got:
+                bad(Msg("err.dns_name", name=n))
 
 
 def balance(st: dict, b) -> dict:
@@ -443,14 +439,14 @@ def list_id(st: dict, lid, fields: dict) -> str:
 
 
 # ------------------------------------------------------------------ клиент
-def client_policy(st: dict, body: dict, self_dns: str | None = None) -> dict:
+def client_policy(st: dict, body: dict, self_dns: str | None = None, look=None) -> dict:
     """Куда идёт клиент: выход («как у всех» — inherit), свои правила или общие, заметка."""
     mode = body.get("rules_mode", "inherit")
     if mode not in ("inherit", "custom"):
         bad("err.bad_value")
     return {"outbound": outbound(st, body.get("outbound", "inherit"), allow_inherit=True),
             "rules_mode": mode,
-            "rules": rules(st, body.get("rules") or [], self_dns) if mode == "custom" else [],
+            "rules": rules(st, body.get("rules") or [], self_dns, look) if mode == "custom" else [],
             "note": str(body.get("note") or "")[:120]}
 
 

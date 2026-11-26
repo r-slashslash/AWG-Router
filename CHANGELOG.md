@@ -49,22 +49,27 @@ it grows, so every user-visible change gets a new version.
   `install.sh` hands an address change of its own to the panel once (`data/client-host`): configs on the old address
   follow it, as before 1.25.0.
 - **DNS on the server follows the address**: names of a client on Direct — address are asked from that address, and
-  when encrypted DNS doesn't answer there (Russia, China, Iran), from the server country's local DNS — also from that
-  address (`addr_marks` in the dnsproxy config; each Direct path keeps its own "encrypted doesn't answer" state, the
-  Server tab warns when any of them does). Paths through an exit still never fall back.
-- **The local fallback DNS is encrypted first**: when the usual encrypted DNS doesn't answer from Russia or China, the
-  country's local DNS is asked with the same DoH/DoT (`direct_fallback_enc`: Yandex `77.88.8.8` as
-  `common.dot.dns.yandex.net`; Alibaba `223.5.5.5` as `dns.alidns.com`, DNSPod `1.12.12.12` as `doh.pub`/`dot.pub` —
-  `dnsproxy.tls_name`), and plain local DNS only if that doesn't answer either (with its own background retry). Iran
-  keeps plain Shecan. Each local server is tried with the configured method and then the other one, and the one that
-  answers is remembered: checked 2026-11-26 from the test server in Russia and a GitHub machine, Yandex answers only DoT
-  (its DoH doesn't answer HTTP/1.1), DNSPod from Russia only DoH. The Server tab says which one answers. Their
-  certificates are checked by their names, so they also work as encrypted servers in the "DNS" field (Yandex — DoT).
-- **A domain rule's own DNS is encrypted when it can be**: an own DNS server whose TLS name is known (Yandex, Alibaba,
-  DNSPod, Cloudflare, Google, Quad9) is asked with the configured DoH/DoT first (then the other method), on the rule's
-  path, and as plain DNS only if that doesn't answer (`dnsproxy._own_enc`, its own "doesn't answer" state per path and
-  servers with a background retry). So after **Apply for Russia** the `.ru` names go to Yandex over DoT. Other servers
-  and "No encryption" stay plain, as before.
+  when the DNS servers don't answer there, from the fallback DNS (below) — also from that address (`addr_marks` in the
+  dnsproxy config; each Direct path keeps its own "doesn't answer" state, the Server tab warns when any of them does).
+  Paths through an exit still never fall back.
+- **Fallback DNS for Direct is set by hand.** Until now, on a server in Russia, China or Iran the panel itself asked the
+  country's local DNS (plain) when encrypted DNS didn't answer on a Direct path. Now it is **Server → DNS → Fallback DNS
+  for "Direct"**: a checkbox and up to two servers (`settings.fallback_dns_on`, `fallback_dns`), off on a new install
+  and after an update; **Apply for Russia / China / Iran** fills in the country's DNS and turns it on (replacing what
+  was there). It works with any DNS encryption, only on Direct paths, from the same address; a fallback that doesn't
+  answer isn't asked for `DIRECT_RETRY` (clients get SERVFAIL at once) and is retried in the background. The Server tab
+  says "The DNS servers don't answer directly" and, under the fallback, "In use now" or "doesn't answer either".
+- **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
+  `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
+  encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't
+  answer. The panel resolves a service name itself (cached, `Engine.dns_lookup`; saving from the panel refuses a name
+  that doesn't resolve) and gives dnsproxy.py `tls://name#ip`. On disk and in backups a rule's `dns` keeps only plain
+  addresses and the whole list goes to `dns_all`, so 1.24 asks the usual servers for such a rule instead of failing.
+- **Apply for Iran** uses Shecan's current address `94.232.174.194` (it was `178.22.122.100`, `185.51.200.2`; rules
+  made earlier keep theirs).
+- **Server → DNS**: **DNS query encryption** comes right under **DNS on the server** (it is for those servers), then
+  the fallback DNS, then **Domain rules only for addresses from this DNS's answers**; the hints are shorter.
+  **System → Panel address** no longer says it doesn't change client addresses.
 - The Telegram bot shows "direct — address".
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.

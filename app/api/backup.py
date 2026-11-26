@@ -12,7 +12,7 @@ import re
 import threading
 import time
 
-from .. import (awgconf, awgserver, checks, cps, notify, srcaddr,
+from .. import (awgconf, awgserver, checks, cps, dnsaddr, notify, srcaddr,
                 system, users)
 from ..checks import bad
 from ..i18n import Msg, msg_of, to_json
@@ -169,7 +169,9 @@ def clean_backup_state(new: dict) -> dict:
     умолчанию (checks.forgive). Здесь же чинится то, что прежние выпуски сохраняли иначе: круги резервов, «как
     резерв» у квоты, прежние имена шаблонов маскировки, IPv6 DNS, подписи правил с именем выхода."""
     with checks.any_address():          # «Напрямую — адрес»: какие адреса есть у сервера, решает restore_state
-        return _clean_backup_state(srcaddr.from_disk(copy.deepcopy(new)) if srcaddr.pinned(new) else new)
+        if srcaddr.pinned(new) or dnsaddr.on_disk(new):    # и свой DNS правила с DoH/DoT (как на диске)
+            new = dnsaddr.from_disk(srcaddr.from_disk(copy.deepcopy(new)))
+        return _clean_backup_state(new)
 
 
 def _clean_backup_state(new: dict) -> dict:
@@ -330,6 +332,11 @@ def _clean_backup_state(new: dict) -> dict:
         out["panel_dns_enc"] = v
     if out.get("panel_dns") and "panel_dns_enc" not in out:
         out["panel_dns_enc"] = Store.missing_dns_enc(new)     # как при запуске (Store._upgrade): по выпуску копии
+    # запасной DNS для «Напрямую» (1.25.0): неверный — без него (как без галочки), копии всегда прощали DNS
+    if fb := soft(lambda: users.check_fallback_dns(s.get("fallback_dns")), None):
+        out["fallback_dns"] = fb
+        if soft(lambda: users.check_flag(s.get("fallback_dns_on")), None):
+            out["fallback_dns_on"] = True
     if s.get("client_mtu") not in (None, ""):
         out["client_mtu"] = at("settings.client_mtu", lambda: users.check_mtu(s["client_mtu"]))
     if s.get("client_keepalive") not in (None, "") and \

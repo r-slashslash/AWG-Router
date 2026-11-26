@@ -987,7 +987,7 @@ class AddrDirectDnsTest(unittest.TestCase):
             json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 1, "direct_fail_at": 0, "fallback": ["77.88.8.8"],
                        "addr_direct": {str(self.AM): [now - 60, now - 5]}}, f)
         with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
-            self.assertEqual(e.dns_view().get("direct_down"), {"fallback": ["77.88.8.8"]})
+            self.assertTrue(e.dns_view().get("direct_down"))
         with open(path, "w") as f:
             json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 1, "fallback": ["77.88.8.8"],
                        "addr_direct": {str(self.AM): [now - 1, now - 5]}}, f)     # снова отвечает
@@ -995,223 +995,293 @@ class AddrDirectDnsTest(unittest.TestCase):
             self.assertNotIn("direct_down", e.dns_view())
 
 
-class LocalEncryptedDnsTest(unittest.TestCase):
-    """Запасной DNS пути «напрямую» (владелец 2026-11-26): общий шифрованный не отвечает из страны сервера — сначала
-    местный DNS страны с шифрованием (Яндекс, Alibaba, DNSPod), и только если и он не отвечает — местный без шифрования."""
+class OwnDnsEntriesTest(unittest.TestCase):
+    """Свой DNS правила и запасной DNS (владелец 2026-11-26): IPv4 — обычный, «https://…» — DoH, «tls://…» — DoT; как
+    вписан, так и спрашивается. На диске и в копии в «dns» — только обычные адреса (их понимает 1.24.0), весь список —
+    в «dns_all»."""
 
-    def _proxy(self, mode="doh"):
+    def test_entries(self):
+        from app import dnsaddr
+        self.assertEqual(dnsaddr.entries("77.88.8.8, tls://Common.DoT.dns.yandex.net "),
+                         ["77.88.8.8", "tls://common.dot.dns.yandex.net"])
+        self.assertEqual(dnsaddr.entries(["https://dns.google/dns-query{?dns}", "https://1.1.1.1"]),
+                         ["https://dns.google/dns-query", "https://1.1.1.1/dns-query"])
+        self.assertEqual(dnsaddr.entries("tls://9.9.9.9:853 https://dns.example:8443/q"),
+                         ["tls://9.9.9.9", "https://dns.example:8443/q"])
+        self.assertEqual(dnsaddr.entries("tls://9.9.9.9, tls://9.9.9.9:853"), ["tls://9.9.9.9"])    # повтор
+        self.assertEqual(dnsaddr.entries(""), [])
+        for bad in ("dns.google", "tls://[2a02:6b8::feed:0ff]", "tls://::1", "quic://dns.adguard.com", "https://a b/x",
+                    "tls://", "2a02:6b8::feed:0ff", "0.0.0.0", "tls://dns.google/x", "https://dns.google/?dns=1",
+                    "tls://dns.google:0", "tls://224.0.0.1", "ftp://1.1.1.1", "tls://1.2.3"):
+            with self.assertRaises(dnsaddr.DnsAddrError, msg=bad) as cm:
+                dnsaddr.entries(bad)
+            self.assertEqual(cm.exception.why, "bad", bad)
+        with self.assertRaises(dnsaddr.DnsAddrError) as cm:
+            dnsaddr.entries("1.1.1.1 tls://dns.google https://dns.google/dns-query")
+        self.assertEqual(cm.exception.why, "many")
+        self.assertEqual(dnsaddr.names(["77.88.8.8", "tls://1.1.1.1", "tls://dns.google", "https://dns.google/q"]),
+                         ["dns.google"])
+        self.assertEqual(dnsaddr.for_proxy("tls://dns.google", {"dns.google": "8.8.8.8"}), "tls://dns.google#8.8.8.8")
+        self.assertEqual(dnsaddr.for_proxy("tls://dns.google", {}), "tls://dns.google")
+        self.assertEqual(dnsaddr.for_proxy("tls://1.1.1.1", {}), "tls://1.1.1.1")
+
+    def test_rule_checks(self):
+        st = {**json.loads(json.dumps(DEFAULT_STATE)),
+              "lists": [{"id": "l_dom", "kind": "domains", "name": "ru"}]}
+        out = checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "tls://dns.google, 77.88.8.8"}])
+        self.assertEqual(out[0]["dns"], ["tls://dns.google", "77.88.8.8"])
+        for rule, look, key in (({"dns": "tls://10.8.1.1"}, None, "err.rule_dns_self"),     # сам DNS на сервере
+                                ({"dns": "tls://dns.google"}, lambda n: {}, "err.dns_name"),
+                                ({"dns": "yandex"}, None, "err.rule_dns_bad")):
+            with self.assertRaises(HTTPError) as cm:
+                checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", **rule}], "10.8.1.1", look)
+            self.assertEqual((cm.exception.detail.key, cm.exception.field), (key, "rule_dns_0"))
+        checks.rules(st, [{"lists": ["l_dom"], "outbound": "direct", "dns": "tls://dns.google"}], "10.8.1.1",
+                     lambda n: {"dns.google": "8.8.8.8"})                                    # имя есть — сохраняется
+
+    def test_disk_form(self):
+        from app import dnsaddr
+        st = json.loads(json.dumps(DEFAULT_STATE))
+        st["routing"]["rules"] = [{"id": "r1", "lists": ["l"], "outbound": "direct", "dns": ["tls://dns.google", "77.88.8.8"]},
+                                  {"id": "r2", "lists": ["l"], "outbound": "direct", "dns": ["https://dns.google/dns-query"]},
+                                  {"id": "r3", "lists": ["l"], "outbound": "direct", "dns": ["77.88.8.1"]}]
+        disk = dnsaddr.to_disk(st)
+        r1, r2, r3 = disk["routing"]["rules"]
+        self.assertEqual((r1["dns"], r1["dns_all"]), (["77.88.8.8"], ["tls://dns.google", "77.88.8.8"]))
+        self.assertNotIn("dns", r2)                       # 1.24.0: правило без своего DNS — общие серверы, а не ошибка
+        self.assertEqual(r3, st["routing"]["rules"][2])
+        self.assertEqual(st["routing"]["rules"][0]["dns"], ["tls://dns.google", "77.88.8.8"])   # в памяти не тронуто
+        back = dnsaddr.from_disk(json.loads(json.dumps(disk)))
+        self.assertEqual(back["routing"]["rules"], st["routing"]["rules"])
+        # правило правили в 1.24.0 (откат): его обычные адреса другие — остаётся то, что вписали там
+        edited = json.loads(json.dumps(disk))
+        edited["routing"]["rules"][0]["dns"] = ["8.8.4.4"]
+        want = {k: v for k, v in r1.items() if k != "dns_all"}
+        self.assertEqual(dnsaddr.from_disk(edited)["routing"]["rules"][0], {**want, "dns": ["8.8.4.4"]})
+        plain = json.loads(json.dumps(DEFAULT_STATE))
+        self.assertIs(dnsaddr.to_disk(plain), plain)      # без шифрованных — без копии
+
+    def test_store_file_and_backup(self):
+        from app import dnsaddr
+        path = os.path.join(tempfile.mkdtemp(), "state.json")
+        s = Store(path)
+        rule = {"id": "r1", "lists": ["l"], "outbound": "direct", "dns": ["tls://dns.google", "77.88.8.8"]}
+        s.mutate(lambda st: st["routing"]["rules"].append(rule))
+        with open(path) as f:
+            raw = json.load(f)
+        self.assertEqual(raw["routing"]["rules"][0]["dns"], ["77.88.8.8"])
+        self.assertEqual(Store(path).snapshot()["routing"]["rules"][0]["dns"], rule["dns"])
+        copy_ = s.snapshot(texts=True)
+        self.assertEqual(copy_["routing"]["rules"][0]["dns_all"], rule["dns"])
+        self.assertTrue(dnsaddr.on_disk(copy_))
+
+
+class DnsProxyEntriesTest(unittest.TestCase):
+    """dnsproxy.py: свой DNS правила и запасной — каждая запись своим способом; шифрованный, который не ответил, без
+    шифрования не спрашивается; запасной работает и без шифрования серверов DNS, а не ответивший не держит клиентов."""
+
+    def _proxy(self, **cfg):
         from app import dnsproxy
         d = tempfile.mkdtemp()
+        lst = os.path.join(d, "l1.txt")
+        with open(lst, "w") as f:
+            f.write("yandex.ru\n")
         conf = os.path.join(d, "dns.json")
+        base = {"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"], "encrypt": "doh",
+                "default": {"mark": 0, "tcp": False}, "routes": {},
+                "dom": {"lists": {"l1": lst}, "policies": {"p_global": [
+                    [["l1"], {"mark": 0, "tcp": False}, ["tls://common.dot.dns.yandex.net#77.88.8.8", "77.88.8.1"],
+                     False]]}, "clients": {}, "set": None}}
         with open(conf, "w") as f:
-            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
-                       "encrypt": mode, "direct_fallback": ["77.88.8.8", "77.88.8.1"],
-                       "direct_fallback_enc": ["77.88.8.8"], "default": {"mark": 0, "tcp": False},
-                       "routes": {"10.8.1.7": {"mark": 0x2001, "tcp": False}}}, f)
+            json.dump({**base, **cfg}, f)
         return dnsproxy.Proxy(conf)
 
-    def _run(self, p, name, ip="10.8.1.5"):
+    def _run(self, p, names, wait=False):
         import asyncio
         from app import dnsproxy
         from tests.test_v115 import q_msg
 
         async def go():
-            query = q_msg(name)
-            r = await p.resolve(query, dnsproxy.parse_query(query), ip)
-            dp = p._dp(0)
-            for t in (dp.probe, dp.loc_probe):
-                if t:
+            out = []
+            for n in names:
+                query = q_msg(n)
+                out.append(await p.resolve(query, dnsproxy.parse_query(query), "10.8.1.5"))
+            for t in (p._dp(0).probe, p._dp(0).fb_probe):
+                if wait and t:
                     await t
-            return r
+            return out
         return asyncio.run(go())
 
-    def _wire(self, p, local_enc_ok=True):
-        from tests.test_v115 import a_reply
-        calls = []
+    def test_srv(self):
+        from app import dnsproxy
+        self.assertEqual(dnsproxy.srv("tls://dns.google#8.8.8.8"), ("dot", "8.8.8.8", "dns.google", 853, "/dns-query"))
+        self.assertEqual(dnsproxy.srv("https://dns.example:8443/q#192.0.2.1"),
+                         ("doh", "192.0.2.1", "dns.example", 8443, "/q"))
+        self.assertEqual(dnsproxy.srv("tls://1.1.1.1"), ("dot", "1.1.1.1", "cloudflare-dns.com", 853, "/dns-query"))
+        self.assertEqual(dnsproxy.srv("tls://dns.google")[1], None)                    # имя не разобралось
+        self.assertEqual(dnsproxy.srv("77.88.8.8")[0], "plain")
 
-        async def enc(msg, server, mark, mode):
-            calls.append(("enc", server, mode, mark))
-            if server == "77.88.8.8" and local_enc_ok:
-                return a_reply(msg, ["203.0.113.8"])
+    def test_rule_entries_each_their_way(self):
+        from app import dnsproxy
+        from tests.test_v115 import a_reply
+        p = self._proxy()
+        enc, plain = [], []
+
+        async def enc_fn(msg, server, mark, mode):
+            enc.append((server, mode))
             raise OSError("reset")
 
         async def udp(msg, server, mark):
-            calls.append(("plain", server, mark))
-            return a_reply(msg, ["203.0.113.9"])
-        p._enc, p._udp = enc, udp
-        return calls
+            plain.append(server)
+            return a_reply(msg, ["203.0.113.7"])
+        p._enc, p._udp = enc_fn, udp
+        self._run(p, ["yandex.ru"])
+        self.assertEqual(enc, [("tls://common.dot.dns.yandex.net#77.88.8.8", "dot")])
+        self.assertEqual(plain, ["77.88.8.1"])        # DoT не ответил — не обычным к тому же, а следующая запись
+        # одна шифрованная запись не ответила — SERVFAIL, без обычного DNS
+        p2 = self._proxy(dom={**p.cfg["dom"], "policies": {"p_global": [
+            [["l1"], {"mark": 0, "tcp": False}, ["tls://common.dot.dns.yandex.net#77.88.8.8"], False]]}})
+        plain.clear()
+        p2._enc, p2._udp = enc_fn, udp
+        out = self._run(p2, ["yandex.ru"])
+        self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
+        self.assertEqual(plain, [])
 
-    def test_local_encrypted_before_plain(self):
-        import socket
+    def test_unresolved_name_is_not_asked(self):
+        import asyncio
         p = self._proxy()
-        calls = self._wire(p)
-        out = self._run(p, "yandex.ru")
-        self.assertIn(socket.inet_aton("203.0.113.8"), out)
-        self.assertEqual(calls, [("enc", "1.1.1.1", "doh", 0), ("enc", "77.88.8.8", "doh", 0)])   # обычного — нет
-        calls.clear()
-        self._run(p, "vk.com")                       # общий «не отвечает» — сразу местный с шифрованием
-        self.assertEqual(calls, [("enc", "77.88.8.8", "doh", 0)])
-        self.assertEqual(p.stats["direct_local_enc"], 2)
+        with self.assertRaises(OSError):
+            asyncio.run(p._enc(b"x" * 20, "tls://dns.google", 0, "dot"))
 
-    def test_plain_only_when_local_encrypted_fails_too(self):
-        p = self._proxy("dot")
-        calls = self._wire(p, local_enc_ok=False)
-        self._run(p, "yandex.ru")
-        self.assertEqual(calls, [("enc", "1.1.1.1", "dot", 0), ("enc", "77.88.8.8", "dot", 0),
-                                 ("enc", "77.88.8.8", "doh", 0), ("plain", "77.88.8.8", 0)])
-        self.assertTrue(p._dp(0).loc_down)
-        calls.clear()
-        self._run(p, "vk.com")                       # оба не отвечают — клиент не ждёт, сразу обычный
-        self.assertEqual(calls, [("plain", "77.88.8.8", 0)])
-        p._dp(0).loc_retry_at = 0                    # прошло DIRECT_RETRY — местный с шифрованием пробуется в фоне
-        calls.clear()
-        self._run(p, "mail.ru")
-        self.assertEqual(calls[0], ("plain", "77.88.8.8", 0))
-        self.assertIn(("enc", "77.88.8.8", "dot", 0), calls)
-
-    def test_other_method_when_the_first_fails(self):
-        """Яндекс по DoH (HTTP/1.1) не отвечает, по DoT — да (проверка 2026-11-26): местный сервер пробуется и другим
-        способом, и сработавший запоминается — следующие имена сразу им."""
+    def test_fallback_without_encryption_and_down(self):
+        from app import dnsproxy
         from tests.test_v115 import a_reply
-        p = self._proxy("doh")
-        calls = []
-
-        async def enc(msg, server, mark, mode):
-            calls.append((server, mode))
-            if server == "77.88.8.8" and mode == "dot":
-                return a_reply(msg, ["203.0.113.8"])
-            raise OSError("DoH: no answer")
+        p = self._proxy(encrypt="plain", direct_fallback=["tls://common.dot.dns.yandex.net#77.88.8.8"])
+        asked = []
 
         async def udp(msg, server, mark):
-            calls.append((server, "plain"))
-            return a_reply(msg, ["203.0.113.9"])
-        p._enc, p._udp = enc, udp
-        self._run(p, "yandex.ru")
-        self.assertEqual(calls, [("1.1.1.1", "doh"), ("77.88.8.8", "doh"), ("77.88.8.8", "dot")])
-        calls.clear()
-        self._run(p, "vk.com")
-        self.assertEqual(calls, [("77.88.8.8", "dot")])          # запомнил DoT
-        self.assertFalse(p._dp(0).loc_down)
+            asked.append(("udp", server))
+            return None
 
-    def test_exit_path_never_asks_local(self):
-        p = self._proxy()
-        calls = self._wire(p)
-        self._run(p, "example.org", ip="10.8.1.7")
-        self.assertEqual([c for c in calls if c[1] != "1.1.1.1"], [])
+        async def tcp(msg, server, mark):
+            asked.append(("tcp", server))
+            raise OSError("reset")
 
-    def test_tls_names(self):
-        from app import dnsproxy
-        self.assertEqual(dnsproxy.tls_name("77.88.8.8", "doh"), "common.dot.dns.yandex.net")
-        self.assertEqual(dnsproxy.tls_name("1.12.12.12", "doh"), "doh.pub")
-        self.assertEqual(dnsproxy.tls_name("1.12.12.12", "dot"), "dot.pub")
-        self.assertEqual(dnsproxy.tls_name("192.0.2.53", "dot"), "192.0.2.53")
+        state = {"fb": True}
 
-    def test_presets_and_engine_config(self):
-        from app import countries
-        self.assertEqual(countries.local_dns_enc("RU"), ["77.88.8.8"])
-        self.assertEqual(countries.local_dns_enc("ir"), [])
-        with open(os.path.join(os.path.dirname(__file__), "..", "app", "engine", "dns.py"), encoding="utf-8") as f:
-            self.assertIn('"direct_fallback_enc": countries.local_dns_enc(', f.read())
+        async def enc_fn(msg, server, mark, mode):
+            asked.append((mode, server))
+            if state["fb"]:
+                return a_reply(msg, ["203.0.113.9"])
+            raise OSError("reset")
+        p._udp, p._tcp, p._enc = udp, tcp, enc_fn
+        out = self._run(p, ["example.org"])
+        self.assertEqual(out[0][3] & 0xF, 0)
+        self.assertEqual(asked, [("udp", "1.1.1.1"), ("tcp", "1.1.1.1"), ("dot", "tls://common.dot.dns.yandex.net#77.88.8.8")])
+        self.assertTrue(p.direct_down)
+        self.assertGreater(p._dp(0).fb_ok_at, 0)
+        # запасной перестал отвечать: один раз ждали, дальше — сразу SERVFAIL, а он пробуется в фоне
+        state["fb"] = False
+        asked.clear()
+        self._run(p, ["a.example"])
+        self.assertTrue(p._dp(0).fb_down)
+        asked.clear()
+        out = self._run(p, ["b.example"])
+        self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL)
+        self.assertEqual(asked, [])
+        p._dp(0).fb_retry_at, state["fb"] = 0, True
+        self._run(p, ["c.example"], wait=True)
+        self.assertFalse(p._dp(0).fb_down)                       # проба в фоне: снова отвечает
 
-    def test_server_tab_says_encrypted(self):
-        import time
-        import types
-        from unittest import mock
-        from app import config
-        from app.engine import Engine
-        from app.engine import dns as edns
-        e = Engine.__new__(Engine)
-        e.dns_state = {"state": "on", "listen": "10.8.1.1", "encrypt": "doh"}
-        e.dns = types.SimpleNamespace(proc=types.SimpleNamespace(pid=4242))
-        path = os.path.join(tempfile.mkdtemp(), "dns-stats.json")
-        now = time.time()
-        for loc_ok, want in ((now - 2, {"fallback": ["77.88.8.8"], "encrypted": True}),
-                             (now - 3600, {"fallback": ["77.88.8.8", "77.88.8.1"]})):
-            with open(path, "w") as f:
-                json.dump({"pid": 4242, "at": now, "direct_ok_at": now - 60, "direct_fail_at": now - 5,
-                           "fallback": ["77.88.8.8", "77.88.8.1"], "fallback_enc": ["77.88.8.8"],
-                           "local_enc_ok_at": loc_ok}, f)
-            with mock.patch.object(edns, "DNS_STATS", path), mock.patch.object(config, "DRY_RUN", False):
-                self.assertEqual(e.dns_view().get("direct_down"), want)
-
-
-class OwnDnsEncryptedTest(unittest.TestCase):
-    """Свой DNS правила (владелец 2026-11-26): известный сервер с шифрованием (Яндекс, Alibaba, DNSPod, Cloudflare,
-    Google, Quad9) — сначала шифрованным тем же путём, другим способом, если первый не отвечает; не ответил — обычным,
-    как раньше. Остальные серверы и «Без шифрования» в настройках — обычным DNS."""
-
-    def _proxy(self, own, mode="doh"):
-        from app import dnsproxy
-        d = tempfile.mkdtemp()
-        lst = os.path.join(d, "ru.txt")
-        with open(lst, "w") as f:
-            f.write("ru\n")
-        conf = os.path.join(d, "dns.json")
-        with open(conf, "w") as f:
-            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
-                       "encrypt": mode, "default": {"mark": 0x2001, "tcp": False}, "routes": {},
-                       "dom": {"lists": {"l1": lst}, "policies": {"p_global": [[["l1"], {"mark": 0, "tcp": False},
-                                                                                  own, False]]},
-                               "clients": {}, "set": None}}, f)
-        return dnsproxy.Proxy(conf)
-
-    def _run(self, p, name):
+    def test_doh_path_and_host(self):
         import asyncio
         from app import dnsproxy
-        from tests.test_v115 import q_msg
 
+        class W:
+            def __init__(self):
+                self.data = b""
+
+            def write(self, b):
+                self.data += b
+
+            async def drain(self):
+                pass
         async def go():
-            query = q_msg(name)
-            r = await p.resolve(query, dnsproxy.parse_query(query), "10.8.1.5")
-            for st in p.own_paths.values():
-                if st.loc_probe:
-                    await st.loc_probe
-            return r
-        return asyncio.run(go())
+            r = asyncio.StreamReader()
+            r.feed_data(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc")
+            conn = dnsproxy.Conn(r, W())
+            return await dnsproxy.doh_query(conn, b"q", "dns.example:8443", "/q"), conn.writer.data
+        body, sent = asyncio.run(go())
+        self.assertEqual(body, b"abc")
+        self.assertTrue(sent.startswith(b"POST /q HTTP/1.1\r\nHost: dns.example:8443\r\n"))
 
-    def _wire(self, p, enc_ok=lambda server, mode: server == "77.88.8.8" and mode == "dot"):
-        from tests.test_v115 import a_reply
-        calls = []
 
-        async def enc(msg, server, mark, mode):
-            calls.append((server, mode, mark))
-            if enc_ok(server, mode):
-                return a_reply(msg, ["203.0.113.8"])
-            raise OSError("no answer")
+class FallbackDnsSettingTest(unittest.TestCase):
+    """Запасной DNS для «Напрямую»: галочка и до двух записей на «Сервере»; «Применить для …» вписывает DNS страны и
+    включает его (заменяет вписанный); сам по стране сервера он больше не включается."""
 
-        async def udp(msg, server, mark):
-            calls.append((server, "plain", mark))
-            return a_reply(msg, ["203.0.113.9"])
-        p._enc, p._udp = enc, udp
-        return calls
+    def tearDown(self):
+        panel.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("fallback_dns", "fallback_dns_on")])
 
-    def test_yandex_encrypted_first(self):
-        import socket
-        p = self._proxy(["77.88.8.8", "77.88.8.1"])
-        calls = self._wire(p)
-        out = self._run(p, "yandex.ru")
-        self.assertIn(socket.inet_aton("203.0.113.8"), out)
-        self.assertEqual(calls, [("77.88.8.8", "doh", 0), ("77.88.8.8", "dot", 0)])     # 77.88.8.1 — не известен
-        calls.clear()
-        self._run(p, "mail.ru")
-        self.assertEqual(calls, [("77.88.8.8", "dot", 0)])
-        self.assertEqual(p.stats["own_enc"], 2)
+    def test_save_and_errors(self):
+        from unittest import mock
+        from app.users import UserError
+        panel.engine.reconcile()                                          # демо-сервер (DRY_RUN)
+        srv = panel.engine.srv
+        srv.update_server({"fallback_dns_on": True, "fallback_dns": "77.88.8.8, tls://dns.google"})
+        s = panel.store.snapshot()["settings"]
+        self.assertEqual((s["fallback_dns_on"], s["fallback_dns"]), (True, ["77.88.8.8", "tls://dns.google"]))
+        v = srv.server_view()
+        self.assertEqual((v["fallback_dns_on"], v["fallback_dns"]), (True, ["77.88.8.8", "tls://dns.google"]))
+        for body, key in (({"fallback_dns_on": True, "fallback_dns": ""}, "srv.fallback_dns_empty"),
+                          ({"fallback_dns": "dns.google"}, "srv.bad_fallback_dns"),
+                          ({"fallback_dns": "1.1.1.1 8.8.8.8 9.9.9.9"}, "srv.fallback_dns_many")):
+            with self.assertRaises(UserError) as cm:
+                srv.update_server(body)
+            self.assertEqual(cm.exception.msg.key, key)
+        with mock.patch.object(panel.engine, "dns_lookup", return_value={}):
+            with self.assertRaises(UserError) as cm:
+                srv.update_server({"fallback_dns": "https://no-such.example/dns-query"})
+        self.assertEqual(cm.exception.msg.key, "err.dns_name")
+        from app.api import server as api_server
+        self.assertEqual(api_server.server_field(cm.exception.msg), "fallback_dns")
+        srv.update_server({"fallback_dns_on": False, "fallback_dns": ""})
+        s = panel.store.snapshot()["settings"]
+        self.assertNotIn("fallback_dns", s)
+        self.assertNotIn("fallback_dns_on", s)
 
-    def test_plain_when_encrypted_fails(self):
-        p = self._proxy(["77.88.8.8", "77.88.8.1"])
-        calls = self._wire(p, enc_ok=lambda server, mode: False)
-        self._run(p, "yandex.ru")
-        self.assertEqual(calls[-1], ("77.88.8.8", "plain", 0))
-        calls.clear()
-        self._run(p, "mail.ru")                      # шифрованный «не отвечает» — сразу обычный, не ждём
-        self.assertEqual(calls, [("77.88.8.8", "plain", 0)])
+    def test_engine_config(self):
+        from app.engine import Engine
+        from unittest import mock
+        from app import config, dnsaddr
+        e = Engine.__new__(Engine)
+        st = {"settings": {"fallback_dns": ["77.88.8.8", "tls://dns.google"]}}
+        self.assertEqual(e.dns_fallback(st), [])                                     # галочка снята — нет его
+        st["settings"]["fallback_dns_on"] = True
+        with mock.patch.object(config, "DRY_RUN", False), \
+                mock.patch.object(dnsaddr, "lookup", return_value={"dns.google": "8.8.8.8"}) as look:
+            self.assertEqual(e.dns_fallback(st), ["77.88.8.8", "tls://dns.google#8.8.8.8"])
+            e.dns_fallback(st)
+        self.assertEqual(look.call_count, 1)                                          # адрес имени — из кэша
+        with mock.patch.object(config, "DRY_RUN", False), mock.patch.object(dnsaddr, "lookup", return_value={}):
+            self.assertEqual(e.dns_lookup(["dns.google"], fresh=True), {"dns.google": "8.8.8.8"})  # прежний остаётся
 
-    def test_unknown_servers_and_plain_setting_stay_plain(self):
-        p = self._proxy(["178.22.122.100"])
-        calls = self._wire(p)
-        self._run(p, "a.ru")
-        self.assertEqual(calls, [("178.22.122.100", "plain", 0)])
-        p = self._proxy(["77.88.8.8"], mode="plain")
-        calls = self._wire(p)
-        self._run(p, "b.ru")
-        self.assertEqual(calls, [("77.88.8.8", "plain", 0)])
+    def test_country_button_fills_it(self):
+        from app.api import routing
+        panel.store.mutate(lambda st: st["routing"].update(rules=[]))
+        panel.store.mutate(lambda st: st["settings"].update(fallback_dns=["9.9.9.9"], fallback_dns_on=False))
+        try:
+            routing.country_preset(Req({"cc": "ir", "apply": True}))
+            s = panel.store.snapshot()["settings"]
+            self.assertEqual((s["fallback_dns"], s["fallback_dns_on"]), (["94.232.174.194"], True))
+            self.assertEqual(panel.store.snapshot()["routing"]["rules"][0]["dns"], ["94.232.174.194"])
+        finally:
+            panel.store.mutate(lambda st: st["routing"].update(rules=[]))
+
+    def test_backup_keeps_it(self):
+        st = json.loads(json.dumps(DEFAULT_STATE))
+        st["settings"].update(fallback_dns=["tls://dns.google", "bad"], fallback_dns_on=True)
+        self.assertNotIn("fallback_dns", backup.clean_backup_state(st)["settings"])    # неверный — без него
+        st["settings"]["fallback_dns"] = ["tls://dns.google"]
+        s = backup.clean_backup_state(st)["settings"]
+        self.assertEqual((s["fallback_dns"], s["fallback_dns_on"]), (["tls://dns.google"], True))

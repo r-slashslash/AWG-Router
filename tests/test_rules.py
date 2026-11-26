@@ -16,7 +16,7 @@ os.environ.setdefault("PANEL_PASSWORD", "test-password")
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 
-from app import lists, srcaddr, traffic  # noqa: E402
+from app import dnsaddr, lists, srcaddr, traffic  # noqa: E402
 from app.store import Store  # noqa: E402
 from app import panel  # noqa: E402
 from app.api import backup, clients, exits, routing  # noqa: E402
@@ -232,13 +232,21 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
                 panel.store.mutate(lambda s: s["routing"]["rules"].append(
                     {"id": "r_baltest", "lists": ["ru"], "outbound": "up:" + x, "enabled": True, "comment": "",
                      "balance": [x], "balance_fb": "direct"}))
+                # свой DNS правила с DoT и запасной DNS для «Напрямую» (1.25.0)
+                dl = next(l["id"] for l in panel.store.snapshot()["lists"] if l["kind"] == "domains")
+                panel.store.mutate(lambda s: s["routing"]["rules"].append(
+                    {"id": "r_dnstest", "lists": [dl], "outbound": "direct", "enabled": True, "comment": "",
+                     "dns": ["tls://dns.google", "77.88.8.8"]}))
+                panel.store.mutate(lambda s: s["settings"].update(fallback_dns=["https://dns.google/dns-query"],
+                                                                 fallback_dns_on=True))
                 st = panel.store.snapshot(texts=True)          # так состояние выглядит в резервной копии
                 new = backup.clean_backup_state(st)
             finally:
                 panel.store.mutate(lambda s: s.update(clients=st0["clients"], limits=st0["limits"], routing=st0["routing"],
                                                      shares=st0["shares"], cps=st0["cps"], chost=st0.get("chost", {})))
                 panel.store.mutate(lambda s: [s["settings"].pop(k, None) for k in ("panel_dns", "panel_dns_enc", "shaping",
-                                                                                   "extra_hosts", "out_hosts", "own_src")])
+                                                                                   "extra_hosts", "out_hosts", "own_src",
+                                                                                   "fallback_dns", "fallback_dns_on")])
                 panel.store.mutate(lambda s: [s["routing"].pop(k, None) for k in ("balance", "strict")])
                 exits.del_upstream(R({"replace": "direct"}), x)
 
@@ -256,7 +264,8 @@ class RestoreKeepsFieldsTest(unittest.TestCase):
         norm = lambda p: re.sub(r"\[\d+\]", "[]", re.sub(r"\.[A-Za-z0-9+/]{43}=", ".<pk>", re.sub(
             r"shares\.[\w-]{20,}", "shares.<tok>", p)))
         self.assertIn("outbound_src", json.dumps(st))       # в копии адрес — рядом с "direct", как поймёт 1.24.0
-        lost = {norm(p) for p in walk(st, srcaddr.to_disk(new))} - self.DROPPED
+        self.assertIn('"dns_all"', json.dumps(st))          # и DoT своего DNS — рядом с обычными адресами
+        lost = {norm(p) for p in walk(st, dnsaddr.to_disk(srcaddr.to_disk(new)))} - self.DROPPED
         self.assertEqual(sorted(lost), [], "add these fields to clean_backup_state (or to DROPPED with a reason)")
 
 

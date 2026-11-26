@@ -20,6 +20,11 @@ TLS-соединения держатся открытыми (пул на пар
 каждый запрос. Без шифрования через выходы SOCKS5 запросы идут по TCP (UDP через прокси часто не
 работает), иначе — UDP, а при обрезанном ответе — TCP.
 
+Свой DNS правила по доменам и запасной DNS пути «напрямую» (1.25.0) — записи: «77.88.8.8» — обычный DNS,
+«tls://имя[:порт]» — DoT, «https://имя[:порт]/путь» — DoH; у имени панель дописывает адрес: «tls://dns.google#8.8.8.8»
+(имён в сети сервера AWG не разобрать). Как вписан, так и спрашивается (srv): шифрованный, который не ответил, без
+шифрования не спрашивается; не ответила первая запись — спрашивается вторая.
+
 Правила по доменам (с 1.21.0, настройка dom). Имя из правила по доменам политики клиента
 разбирается через выход этого правила, а не через основной: соединение с сайтом уйдёт в этот
 выход (sniproxy.py), и адрес нужен оттуда — не подменённый по дороге и рядом с выходом (CDN).
@@ -58,14 +63,16 @@ NEG_TTL_MAX = 300           # «нет такого имени» / «нет за
 NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
 STATS_EVERY = 15
 MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
-# Путь «напрямую» и шифрованный DNS: из России, Китая и Ирана общие серверы по DoH/DoT часто не отвечают. Тогда
-# имена спрашиваются у местного DNS страны сервера (cfg direct_fallback, обычный DNS), а шифрованный пробуется снова
-# не раньше чем через DIRECT_RETRY и одним запросом в фоне: DoH из России «зависает» до ENC_TIMEOUT на каждом
-# сервере, и проба с запросом клиента раз в две минуты на 10 с останавливала бы имена всем, кто идёт напрямую.
+# Путь «напрямую» и запасной DNS (cfg direct_fallback — записи, как у своего DNS; 1.25.0: включается галочкой и
+# вписывается вручную или кнопкой «Применить для …»). Серверы DNS из настроек не ответили (из России, Китая и Ирана по
+# DoH/DoT это бывает) — имена пути спрашиваются у запасного, а серверы DNS пробуются снова не раньше чем через
+# DIRECT_RETRY и одним запросом в фоне: DoH из России «зависает» до ENC_TIMEOUT на каждом сервере, и проба с запросом
+# клиента раз в две минуты на 10 с останавливала бы имена всем, кто идёт напрямую. Запасной, который не ответил, —
+# так же: до DIRECT_RETRY не спрашивается (клиент сразу получает SERVFAIL, а не ждёт его), пробуется в фоне.
 # Только «напрямую»: имена клиентов, которые идут через выход, и имена из правил по доменам, у которых сейчас нет
 # пути (выход подключается, лежит или «блок»), мимо выхода не уходят никогда. «Напрямую» — и с адреса системы (метка 0),
-# и «Напрямую — адрес» (1.25.0, метки адресов из cfg addr_marks): у каждого пути своё «шифрованный не отвечает», и
-# местный DNS спрашивается тем же путём — с того же адреса, не с другого.
+# и «Напрямую — адрес» (1.25.0, метки адресов из cfg addr_marks): у каждого пути своё «не отвечает», и запасной
+# спрашивается тем же путём — с того же адреса, не с другого.
 DIRECT_RETRY = 120.0
 
 DOT_PORT, DOH_PORT = 853, 443
@@ -76,18 +83,7 @@ POOL_IDLE = 50.0            # дольше без запросов — соед�
 # (Google по голому IP DoH может не отвечать). Остальные адреса проверяются по IP в сертификате.
 KNOWN_NAMES = {"1.1.1.1": "cloudflare-dns.com", "1.0.0.1": "cloudflare-dns.com",
                "8.8.8.8": "dns.google", "8.8.4.4": "dns.google",
-               "9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net",
-               # местные серверы стран с шифрованием (запасной DNS пути «напрямую», countries.PRESETS dns_enc):
-               # сертификат — на имя сервиса, не на IP; у DNSPod имена для DoH и DoT разные
-               "77.88.8.8": "common.dot.dns.yandex.net",
-               "223.5.5.5": "dns.alidns.com", "223.6.6.6": "dns.alidns.com",
-               "1.12.12.12": {"doh": "doh.pub", "dot": "dot.pub"}, "120.53.53.53": {"doh": "doh.pub", "dot": "dot.pub"}}
-
-
-def tls_name(server: str, mode: str) -> str:
-    """Имя для проверки сертификата сервера DNS (и Host у DoH): известное имя сервиса или сам IP."""
-    n = KNOWN_NAMES.get(server, server)
-    return n.get(mode, server) if isinstance(n, dict) else n
+               "9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net"}
 
 SET_MIN = 1800              # с: адрес сайта из правила держится в наборе не меньше (устройства кэшируют дольше TTL)
 SET_MAX = 86400
@@ -100,6 +96,38 @@ RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
 
 
 # ---------------------------------------------------------------- разбор DNS
+_SRV: dict[str, tuple] = {}
+
+
+def srv(entry: str) -> tuple:
+    """Запись своего или запасного DNS → (способ, адрес, имя для TLS, порт, путь DoH). «77.88.8.8» — обычный DNS;
+    «tls://имя[:порт][#адрес]» — DoT, «https://имя[:порт]/путь[#адрес]» — DoH. Адрес — IPv4 из записи или после «#»
+    (имя разобрала панель); нет его — None: такой сервер не спрашивается. Имя для TLS у адреса без имени — известное
+    имя сервиса (KNOWN_NAMES) или сам адрес. Запись общего сервера из настроек — просто адрес (способ — cfg encrypt)."""
+    hit = _SRV.get(entry)
+    if hit:
+        return hit
+    if "://" not in entry:
+        out = ("plain", entry, None, PORT, "")
+    else:
+        scheme, rest = entry.split("://", 1)
+        rest, _, ip = rest.partition("#")
+        mode = "doh" if scheme.lower() == "https" else "dot"
+        hostport, sl, path = rest.partition("/") if mode == "doh" else (rest, "", "")
+        host, _, port = hostport.partition(":")
+        port = int(port) if port.isdigit() else (DOH_PORT if mode == "doh" else DOT_PORT)
+        try:
+            ipaddress.IPv4Address(host)
+            ip, name = host, KNOWN_NAMES.get(host, host)
+        except ValueError:
+            name = host
+        out = (mode, ip or None, name, port, (sl + path) or "/dns-query")
+    if len(_SRV) > 256:
+        _SRV.clear()
+    _SRV[entry] = out
+    return out
+
+
 def skip_name(msg: bytes, off: int) -> int:
     """Смещение сразу после имени (с учётом сжатия: указатель занимает 2 байта)."""
     while True:
@@ -316,9 +344,9 @@ async def dot_query(conn: Conn, msg: bytes) -> bytes:
     return await conn.reader.readexactly(n)
 
 
-async def doh_query(conn: Conn, msg: bytes, host: str) -> bytes:
-    """POST /dns-query по HTTP/1.1 с keep-alive (RFC 8484)."""
-    conn.writer.write((f"POST /dns-query HTTP/1.1\r\nHost: {host}\r\nUser-Agent: awg-router\r\n"
+async def doh_query(conn: Conn, msg: bytes, host: str, path: str = "/dns-query") -> bytes:
+    """POST по HTTP/1.1 с keep-alive (RFC 8484); path — из адреса DoH (обычно /dns-query)."""
+    conn.writer.write((f"POST {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: awg-router\r\n"
                        f"Content-Type: application/dns-message\r\nAccept: application/dns-message\r\n"
                        f"Content-Length: {len(msg)}\r\n\r\n").encode() + msg)
     await conn.writer.drain()
@@ -355,15 +383,17 @@ async def doh_query(conn: Conn, msg: bytes, host: str) -> bytes:
 
 # ---------------------------------------------------------------- сервер
 class DirectPath:
-    """Шифрованный DNS на одном пути «напрямую»: когда последний раз ответил и не ответил, down — не отвечает (имена у
-    местного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая проба (asyncio.Task). loc — то же для
-    местного DNS страны с шифрованием (не отвечает — имена у местного без шифрования); loc_ok_at — когда ответил."""
-    __slots__ = ("ok_at", "fail_at", "down", "retry_at", "probe", "loc_down", "loc_retry_at", "loc_probe", "loc_ok_at")
+    """Серверы DNS на одном пути «напрямую»: когда последний раз ответили и не ответили, down — не отвечают (имена у
+    запасного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая проба (asyncio.Task). fb_* — то же у
+    запасного DNS этого пути."""
+    __slots__ = ("ok_at", "fail_at", "down", "retry_at", "probe",
+                 "fb_ok_at", "fb_fail_at", "fb_down", "fb_retry_at", "fb_probe")
 
     def __init__(self):
         self.ok_at = self.fail_at = 0.0
         self.down, self.retry_at, self.probe = False, 0.0, None
-        self.loc_down, self.loc_retry_at, self.loc_probe, self.loc_ok_at = False, 0.0, None, 0.0
+        self.fb_ok_at = self.fb_fail_at = 0.0
+        self.fb_down, self.fb_retry_at, self.fb_probe = False, 0.0, None
 
 
 def _dp_attr(name: str) -> property:
@@ -385,8 +415,6 @@ class Proxy:
         self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
         # шифрованный DNS на путях «напрямую»: метка пути (0 — адрес системы) → DirectPath
         self.dpaths: dict[int, DirectPath] = {}
-        self.loc_modes: dict[tuple, str] = {}             # (путь, сервер) → способ шифрования, который отвечает
-        self.own_paths: dict[tuple, DirectPath] = {}      # свой DNS правила с шифрованием: (путь, серверы) → состояние
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
         self.pools: dict[tuple, Pool] = {}
@@ -406,11 +434,12 @@ class Proxy:
         self.self_addr = cfg.get("listen") if self.up_port == int(cfg.get("port") or PORT) else None
         old = self.cfg
         self.cfg = cfg
-        if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")):
+        if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")
+                    or old.get("direct_fallback") != cfg.get("direct_fallback")):
             self.cache.clear()                       # другие серверы — старые ответы не нужны
             self.cache_bytes = 0
-            # и «шифрованный не отвечает напрямую» был о прежних серверах или прежнем шифровании
-            self.dpaths, self.loc_modes, self.own_paths = {}, {}, {}
+            # и «не отвечают напрямую» было о прежних серверах, прежнем шифровании или прежнем запасном
+            self.dpaths = {}
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -553,7 +582,7 @@ class Proxy:
             return error_reply(query, q, 0)
         if servers:
             self.stats["own_dns"] = self.stats.get("own_dns", 0) + 1
-        # имя из правила, у которого сейчас нет пути (выход подключается, лежит или «блок»): местного DNS ему нельзя —
+        # имя из правила, у которого сейчас нет пути (выход подключается, лежит или «блок»): запасного DNS ему нельзя —
         # сайт должен идти через выход, и имя ушло бы мимо него открытым текстом
         reply = await self._resolve(query, q, route, servers, fallback=not (dom and dom[0] is None))
         if dom and dom[2] and q["qtype"] == T_A:
@@ -578,27 +607,18 @@ class Proxy:
         self.inflight += 1
         try:
             cfg = getattr(self, "cfg", None) or {}       # тесты собирают Proxy без load()
-            enc_direct = not servers and self.is_direct(mark) and (cfg.get("encrypt") or "plain") != "plain"
-            fb = tuple(cfg.get("direct_fallback") or ()) if enc_direct and fallback else ()
+            direct = not servers and self.is_direct(mark)
+            fb = tuple(cfg.get("direct_fallback") or ()) if direct and fallback else ()
             reply = None
             if fb and self._dp(mark).down:
-                self._probe_direct(query, q, tcp, mark)    # клиент не ждёт: шифрованный пробуется в фоне
+                self._probe_direct(query, q, tcp, mark)    # клиент не ждёт: серверы DNS пробуются в фоне
             else:
-                # свой DNS правила: известный сервер с шифрованием (Яндекс, Alibaba, DNSPod…) — сначала шифрованным, тем
-                # же путём; не ответил — обычным, как до 1.25.0 (владелец 2026-11-26)
-                reply = await self._own_enc(query, q, tcp, mark, servers) if servers else None
-                if reply is None:
-                    reply = await self.forward(query, q, mark, tcp, servers)
-                if enc_direct:
+                reply = await self.forward(query, q, mark, tcp, servers)
+                if direct:
                     self._direct_seen(reply is not None, bool(fb), mark)
             if reply is None and fb:
-                # местный DNS страны — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого. Сначала
-                # с шифрованием (тем же DoH/DoT, что в настройках), не ответил — без шифрования
-                reply = await self._local_enc(query, q, tcp, mark)
-                if reply is None:
-                    reply = await self.forward(query, q, mark, tcp, fb)
-                if reply is not None:
-                    self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
+                # запасной — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого
+                reply = await self._fallback(query, q, tcp, mark, fb)
         finally:
             self.inflight -= 1
         if reply is None or reply[3] & 0xF == RC_SERVFAIL:
@@ -619,76 +639,38 @@ class Proxy:
             self.cache_bytes += len(reply)
         return struct.pack("!H", q["id"]) + reply[2:]
 
-    async def _local_enc(self, query: bytes, q: dict, tcp: bool, mark: int) -> bytes | None:
-        """Местный DNS страны с шифрованием (cfg direct_fallback_enc). Не ответил — путь до DIRECT_RETRY спрашивает
-        местный без шифрования сразу, а этот пробуется одним запросом в фоне: клиент не ждёт зависший."""
-        cfg = getattr(self, "cfg", None) or {}
-        return await self._enc_first(query, q, tcp, mark, tuple(cfg.get("direct_fallback_enc") or ()), self._dp(mark),
-                                     "direct_local_enc")
-
-    async def _own_enc(self, query: bytes, q: dict, tcp: bool, mark: int, servers: tuple) -> bytes | None:
-        """Свой DNS правила с шифрованием: из его серверов — те, чьё имя для TLS известно (KNOWN_NAMES); у каждой пары
-        «путь, свои серверы» своё «не отвечает» (тот же DirectPath, поля loc)."""
-        known = tuple(s for s in servers if s in KNOWN_NAMES)
-        if not known:
-            return None
-        d = self.__dict__.setdefault("own_paths", {})
-        p = d.get((mark, servers))
-        if p is None:
-            p = d[(mark, servers)] = DirectPath()
-        return await self._enc_first(query, q, tcp, mark, known, p, "own_enc")
-
-    async def _enc_first(self, query: bytes, q: dict, tcp: bool, mark: int, servers: tuple, p: DirectPath,
-                         stat: str) -> bytes | None:
-        """servers с шифрованием (DoH/DoT из настроек, потом другим — _local_ask); не ответили — None и до DIRECT_RETRY
-        сразу None, а сами они пробуются одним запросом в фоне. Без шифрования в настройках — всегда None."""
-        cfg = getattr(self, "cfg", None) or {}
-        mode = cfg.get("encrypt") or "plain"
-        if not servers or mode == "plain":
-            return None
-        if p.loc_down:
-            if time.monotonic() >= p.loc_retry_at and not (p.loc_probe and not p.loc_probe.done()):
-                p.loc_retry_at = time.monotonic() + DIRECT_RETRY
+    async def _fallback(self, query: bytes, q: dict, tcp: bool, mark: int, fb: tuple) -> bytes | None:
+        """Запасной DNS пути mark. Не ответил — до DIRECT_RETRY не спрашивается (клиент сразу получает SERVFAIL, а не
+        ждёт зависший сервер), а пробуется одним запросом в фоне."""
+        p = self._dp(mark)
+        if p.fb_down:
+            if time.monotonic() >= p.fb_retry_at and not (p.fb_probe and not p.fb_probe.done()):
+                p.fb_retry_at = time.monotonic() + DIRECT_RETRY
 
                 async def run():
                     try:
-                        r = await self._local_ask(query, q, mark, tcp, servers, mode)
-                    except Exception:  # noqa: BLE001  — проба не должна ронять цикл
+                        r = await self.forward(query, q, mark, tcp, fb)
+                    except Exception:  # noqa: BLE001  — проба не должна ронять цикл; считаем, что не ответил
                         r = None
-                    self._local_seen(p, r is not None)
-                p.loc_probe = asyncio.get_running_loop().create_task(run())
+                    self._fb_seen(p, r is not None)
+                p.fb_probe = asyncio.get_running_loop().create_task(run())
             return None
-        reply = await self._local_ask(query, q, mark, tcp, servers, mode)
-        self._local_seen(p, reply is not None)
+        reply = await self.forward(query, q, mark, tcp, fb)
+        self._fb_seen(p, reply is not None)
         if reply is not None:
-            self.stats[stat] = self.stats.get(stat, 0) + 1
+            self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
         return reply
 
-    async def _local_ask(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, mode: str) -> bytes | None:
-        """Местные серверы по очереди, каждый — сначала способом из настроек, потом другим (DoH ↔ DoT): проверка 2026-11-26
-        из России и с машины GitHub — Яндекс по DoH на HTTP/1.1 не отвечает (только DoT), DNSPod из России — наоборот,
-        только DoH. Способ, который сработал, запоминается для пары «путь, сервер» — из России и через выход ответ может
-        быть разным (loc_modes; новые настройки — заново)."""
-        modes = self.__dict__.setdefault("loc_modes", {})
-        for server in servers:
-            first = modes.get((mark, server), mode)
-            for m in (first, "dot" if first == "doh" else "doh"):
-                reply = await self.forward(query, q, mark, tcp, (server,), mode=m)
-                if reply is not None:
-                    modes[(mark, server)] = m
-                    return reply
-        return None
-
     @staticmethod
-    def _local_seen(p: DirectPath, ok: bool) -> None:
+    def _fb_seen(p: DirectPath, ok: bool) -> None:
         if ok:
-            p.loc_down, p.loc_ok_at = False, time.time()
+            p.fb_ok_at, p.fb_down = time.time(), False
         else:
-            p.loc_down, p.loc_retry_at = True, time.monotonic() + DIRECT_RETRY
+            p.fb_fail_at, p.fb_down, p.fb_retry_at = time.time(), True, time.monotonic() + DIRECT_RETRY
 
     def _direct_seen(self, ok: bool, fallback: bool, mark: int = 0) -> None:
-        """Ответил ли шифрованный DNS на пути «напрямую» mark (ответ SERVFAIL — тоже ответ: сервер на связи, сломан
-        сайт). Не ответил и есть местный DNS — имена этого пути идут к нему, шифрованный пробуется снова через
+        """Ответили ли серверы DNS на пути «напрямую» mark (ответ SERVFAIL — тоже ответ: сервер на связи, сломан
+        сайт). Не ответили и есть запасной — имена этого пути идут к нему, серверы DNS пробуются снова через
         DIRECT_RETRY. У каждого пути своё: адрес системы и второй адрес могут выходить через разных провайдеров."""
         p = self._dp(mark)
         if ok:
@@ -699,8 +681,8 @@ class Proxy:
             p.down, p.retry_at = True, time.monotonic() + DIRECT_RETRY
 
     def _probe_direct(self, query: bytes, q: dict, tcp: bool, mark: int = 0) -> None:
-        """Шифрованный DNS не отвечает напрямую: раз в DIRECT_RETRY один запрос клиента спрашивается у него ещё раз — в
-        фоне, тем же путём, а клиент сразу получает ответ местного DNS. Ответил — имена пути снова идут к шифрованному."""
+        """Серверы DNS не отвечают напрямую: раз в DIRECT_RETRY один запрос клиента спрашивается у них ещё раз — в
+        фоне, тем же путём, а клиент сразу получает ответ запасного DNS. Ответили — имена пути снова идут к ним."""
         p = self._dp(mark)
         if time.monotonic() < p.retry_at or (p.probe and not p.probe.done()):
             return
@@ -714,17 +696,16 @@ class Proxy:
             self._direct_seen(reply is not None, True, mark)
         p.probe = asyncio.get_running_loop().create_task(run())
 
-    async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = (),
-                      mode: str | None = None) -> bytes | None:
-        """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. servers — свой DNS правила по
-        сайтам: всегда обычный DNS (UDP, при обрезанном ответе — TCP), без шифрования: местные DNS вроде
-        Яндекса, Alibaba или иранских по адресу DoH/DoT часто не отвечают. Все, кто ответил, ответили SERVFAIL, —
-        этот ответ (серверы на связи, не разрешилось само имя); None — не ответил никто. mode — шифрование для servers
-        (местный DNS страны с шифрованием, _local_enc); без него servers — обычный DNS."""
-        mode = mode or ("plain" if servers else (self.cfg.get("encrypt") or "plain"))
+    async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = ()) -> bytes | None:
+        """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. Без servers — общие серверы с
+        шифрованием из настроек (cfg encrypt); servers — свой DNS правила или запасной: каждый своим способом, как
+        вписан (srv). Все, кто ответил, ответили SERVFAIL, — этот ответ (серверы на связи, не разрешилось само имя);
+        None — не ответил никто."""
+        main = self.cfg.get("encrypt") or "plain"
         servfail = None
         for server in servers or self.cfg.get("upstreams") or []:
-            if not servers and mode == "plain" and server == self.self_addr:
+            mode = srv(server)[0] if servers else main
+            if mode == "plain" and server == self.self_addr:
                 continue        # общий сервер = адрес этого DNS: спрашивал бы сам себя по кругу (Г20 проверки 1.23.0)
             qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
             out = struct.pack("!H", qid) + query[2:]
@@ -758,18 +739,25 @@ class Proxy:
         self.last_error, self.last_error_at = f"{server}: {e}"[:200], time.time()
 
     async def _enc(self, msg: bytes, server: str, mark: int, mode: str) -> bytes:
-        """Запрос по DoT или DoH через пул соединений этого пути и сервера."""
+        """Запрос по DoT или DoH через пул соединений этого пути и сервера. server — адрес общего сервера (способ —
+        mode из настроек) или запись своего или запасного DNS (адрес, имя, порт и путь — из неё)."""
         key = (mode, mark, server)
         pool = self.pools.get(key)
         if pool is None:
-            name = tls_name(server, mode)
-            port = self.up_port if self.cfg.get("upstream_port") else (DOH_PORT if mode == "doh" else DOT_PORT)
+            kind, ip, name, port, path = srv(server)
+            if kind == "plain":                     # общий сервер: просто адрес
+                ip, name, port, path = server, KNOWN_NAMES.get(server, server), None, "/dns-query"
+            if not ip:
+                raise OSError("no address")         # имя не разобралось в панели
+            if self.cfg.get("upstream_port") or port is None:      # upstream_port — только в тестах
+                port = self.up_port if self.cfg.get("upstream_port") else (DOH_PORT if mode == "doh" else DOT_PORT)
+            server_ip = ip
 
             async def open_conn():
                 loop = asyncio.get_running_loop()
                 s = self._sock(socket.SOCK_STREAM, mark)
                 try:
-                    await asyncio.wait_for(loop.sock_connect(s, (server, port)), ENC_TIMEOUT)
+                    await asyncio.wait_for(loop.sock_connect(s, (server_ip, port)), ENC_TIMEOUT)
                     r, w = await asyncio.wait_for(
                         asyncio.open_connection(sock=s, ssl=self.ctx, server_hostname=name), ENC_TIMEOUT)
                 except BaseException:
@@ -777,10 +765,11 @@ class Proxy:
                     raise
                 return Conn(r, w)
             pool = self.pools[key] = Pool(open_conn)
-            pool.host = name
+            dflt = DOH_PORT if mode == "doh" else DOT_PORT
+            pool.host, pool.path = (name if port == dflt or self.cfg.get("upstream_port") else f"{name}:{port}"), path
         if mode == "dot":
             return await pool.run(lambda c: asyncio.wait_for(dot_query(c, msg), ENC_TIMEOUT))
-        return await pool.run(lambda c: asyncio.wait_for(doh_query(c, msg, pool.host), ENC_TIMEOUT))
+        return await pool.run(lambda c: asyncio.wait_for(doh_query(c, msg, pool.host, pool.path), ENC_TIMEOUT))
 
     @staticmethod
     def _sock(kind: int, mark: int) -> socket.socket:
@@ -850,10 +839,9 @@ class Proxy:
                                "direct_ok_at": self.direct_ok_at, "direct_fail_at": self.direct_fail_at,
                                # пути «Напрямую — адрес» (1.25.0): метка → [ответил, не ответил]
                                "addr_direct": {str(m): [p.ok_at, p.fail_at] for m, p in self.dpaths.items() if m},
-                               # местный DNS страны с шифрованием: когда последний раз ответил на каком-нибудь пути
-                               "local_enc_ok_at": max((p.loc_ok_at for p in self.dpaths.values()), default=0.0),
-                               "fallback_enc": list(self.cfg.get("direct_fallback_enc") or ()),
                                "fallback": list(self.cfg.get("direct_fallback") or ()),
+                               # запасной DNS по путям: метка → [ответил, не ответил]
+                               "fb_paths": {str(m): [p.fb_ok_at, p.fb_fail_at] for m, p in self.dpaths.items()},
                                **self.stats}, f)
                 os.replace(p + ".tmp", p)
             except OSError:

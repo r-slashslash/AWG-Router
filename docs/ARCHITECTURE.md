@@ -144,12 +144,9 @@ Outgoing addresses (`settings.out_hosts`, the main one `out_main`, "" — the sy
   public address or what an outgoing address is seen as counts as present (1:1 NAT, AWS).
 - An exit connecting from an address carries its mark: `FwMark` in the AmneziaWG config (`awgconf.with_fwmark`),
   `mark` in hev-socks5-tunnel, `SO_MARK` in the SOCKS5 health check.
-- DNS on the server asks with the address's mark too; its local fallback for Direct (`direct_fallback`, when encrypted
-  DNS doesn't answer from the server's country) covers every Direct path — mark 0 and the address marks
-  (`addr_marks`) — each with its own state (`dnsproxy.DirectPath`), always from the same address. The fallback asks the
-  country's DNS with the same DoH/DoT first (`direct_fallback_enc`, names for TLS in `dnsproxy.KNOWN_NAMES`) and plain
-  DNS only if that doesn't answer either. A domain rule's own DNS is asked the same way when its server's TLS name is known
-  (`dnsproxy._own_enc`), on the rule's path.
+- DNS on the server asks with the address's mark too; its fallback DNS for Direct (`direct_fallback`, when the DNS
+  servers don't answer) covers every Direct path — mark 0 and the address marks (`addr_marks`) — each with its own
+  state (`dnsproxy.DirectPath`), always from the same address.
 - The panel's own connections (updates, lists, lego through `srcnet.ConnectProxy`, `install.sh` via `AWGR_FROM`) go
   from `settings.own_src` while it works, else from the system address (`Engine.own_src`).
 - A manual change of an exit choice (`api.routing.mutate_paths`) compares every client's path before and after
@@ -181,10 +178,15 @@ blocked for these clients, as before.
 DNS on the server (`dnsproxy.py`) resolves names from domain rules through the rule's exit. With the DNS
 filter setting, only addresses that it returned for those names (the `dom4` set with timeouts, refilled after
 every rebuild of the table) are redirected to the handler.
-On the direct path only, when the encrypted shared servers don't answer (DoH/DoT cut from the server's country),
-it asks the country's local DNS by plain DNS (`direct_fallback`, from `countries.py` by the server's country) and
-skips the encrypted servers for `DIRECT_RETRY`, then tries them again with one query in the background; paths
-through an exit and names of a domain rule without a path (its exit down or "Block") never fall back.
+On the direct path only, when the shared servers don't answer (DoH/DoT is often cut in Russia, China and Iran), it
+asks the fallback DNS (`direct_fallback`: **Server → Fallback DNS for "Direct"**, `settings.fallback_dns_on` and
+`fallback_dns`; **Apply for …** fills in the country's DNS) and skips the shared servers for `DIRECT_RETRY`, then tries
+them again with one query in the background; a fallback that doesn't answer is skipped the same way. Paths through an
+exit and names of a domain rule without a path (its exit down or "Block") never fall back.
+A rule's own DNS and the fallback DNS are entries (`app/dnsaddr.py`): an IPv4 (plain DNS), `https://name/path` (DoH) or
+`tls://name` (DoT), each asked exactly as written (`dnsproxy.srv`); the panel resolves service names itself
+(`Engine.dns_lookup`) and passes `tls://name#ip`. On disk and in backups a rule's `dns` keeps the plain addresses only,
+the whole list goes to `dns_all` (`dnsaddr.to_disk` / `from_disk`), so an older panel asks the usual servers instead.
 
 The panel looks at the handler every second: it touches a heartbeat file every second, and a handler that
 exited or stopped touching it for `SNI_HANG` seconds is restarted. While it is down, redirected connections are
@@ -238,7 +240,8 @@ has to show a panel message (an error), `app/uitext.py` reads the same dictionar
 | `tlsmgr.py`, `tlsconf.py`, `webfront.py` | HTTPS: Let's Encrypt (lego; HTTP-01 on port 80 or through a web server, DNS-01 through Cloudflare), own certificate |
 | `notify.py`, `tgbot.py` | Telegram notifications and control (every Bot API request goes through `notify.Paths`: the chosen path, then other working exits — never Direct after an exit; "Turn on the bot" is the main switch); clients who opened their invitation see their own access in a private chat (bindings in `data/tgbot.json`, checked against the personal link's key on every message) and, if on, get reminders about the end date and the limit (`Notifier.client_fn` → `Bot.remind`, sent by the `tgbot-remind` thread) |
 | `socks.py`, `health.py`, `probe.py` | SOCKS5 exit health checks and external IP probe |
-| `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (the **Apply for …** buttons on Overview and Routing, the local DNS of the direct path in `dnsproxy.py`) |
+| `countries.py` | Ready rules for Russia, China and Iran: the country's domain zones and DNS (the **Apply for …** buttons on Overview and Routing; the button also sets it as the fallback DNS for Direct) |
+| `dnsaddr.py` | Entries of a rule's own DNS and of the fallback DNS (IPv4, DoH, DoT): parsing, service names, the disk form older panels understand |
 | `selfupdate.py`, `updates.py` | Update check and self-update from GitHub releases |
 | `awgconf.py`, `awgserver.py`, `cps.py` | AmneziaWG configs and the I1–I5 masking templates |
 | `tgreq.py` | A request through an exit (Telegram, list downloads, a name's address), run inside the AWG server's network with the exit's mark |

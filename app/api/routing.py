@@ -57,7 +57,7 @@ def put_routing(req):
         bal = checks.balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
         strict = checks.strict(body["strict"] if "strict" in body else st["routing"].get("strict"))
         st["routing"] = {"default": checks.outbound(st, body.get("default")),
-                         "rules": checks.rules(st, body.get("rules", []), engine.dns_listen())}
+                         "rules": checks.rules(st, body.get("rules", []), engine.dns_listen(), engine.dns_lookup)}
         keep_quota_marks(old_rules, st["routing"]["rules"])
         if bal:
             st["routing"]["balance"] = bal
@@ -202,7 +202,7 @@ def add_list(req):
 def country_preset(req):
     """Готовое правило страны (countries.PRESETS): список страны по адресам и список её доменов — готовые или новые;
     с apply — ещё и два правила «Напрямую» в конце общих: по доменам со своим DNS страны и по адресам («Применить
-    для …» в «Обзоре»). Без apply — только списки: выбор страны в правиле добавляет правила в черновик сам."""
+    для …»), и запасной DNS для «Напрямую» — DNS страны. Без apply — только списки."""
     body = req.json()
     p = countries.preset(body.get("cc"))
     if not p:
@@ -233,6 +233,8 @@ def country_preset(req):
                 {"lists": [dom], "outbound": "direct", "enabled": True, "comment": "", "dns": list(p["dns"])},
                 {"lists": [cc], "outbound": "direct", "enabled": True, "comment": ""})
                 if (tuple(x["lists"]), x["outbound"]) not in have])
+            # и запасной DNS для «Напрямую» — DNS этой страны, включён (1.25.0, владелец 2026-11-26: заменяет вписанный)
+            st["settings"].update(fallback_dns=list(p["dns"]), fallback_dns_on=True)
         return {"country": cc, "domains": dom, "made": made}
     out, changed = mutate_paths(fn)
     out = {**out, **reconnect(changed)}

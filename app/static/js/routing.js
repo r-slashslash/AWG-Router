@@ -231,7 +231,7 @@ function ruleWindow(rule0, { title, okLabel, ok, del = null, at = 0, pick = null
     const box = $("#rw-dns", m);
     if (!dom) { delete r.dns; box.innerHTML = ""; return; }
     if (box.firstElementChild) return;               // уже есть — не стирать ввод
-    box.innerHTML = `<label class="field"><span>${esc(t("re.dns"))}</span><input type="text" id="rw-dns-in" data-field="rule_dns_${at}" dir="ltr" value="${esc((r.dns || []).join(", "))}" placeholder="${esc(t("re.dns_ph"))}" inputmode="decimal" autocomplete="off" spellcheck="false">
+    box.innerHTML = `<label class="field"><span>${esc(t("re.dns"))}</span><input type="text" id="rw-dns-in" data-field="rule_dns_${at}" dir="ltr" value="${esc((r.dns || []).join(", "))}" placeholder="${esc(t("re.dns_ph"))}" autocomplete="off" spellcheck="false">
       <span class="hint">${esc(t(S.settings.panel_dns ? "re.dns_hint" : "re.dns_off"))}</span></label>`;
     // свой DNS — списком, как его вернёт сервер
     $("#rw-dns-in", m).oninput = (e) => {
