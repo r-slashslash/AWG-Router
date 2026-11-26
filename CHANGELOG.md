@@ -3,6 +3,11 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
+## 1.25.0 — unreleased
+
+- lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
+  the flags the panel passes are the same.
+
 ## 1.24.0 — 2026-11-25
 
 - **No traffic past the exits while default load balancing starts**: with no balanced exit up yet, `default_out` took
