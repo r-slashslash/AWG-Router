@@ -617,6 +617,7 @@ $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]");
   if (!b) return;
   if (!leaveOk()) return;
+  if (askDone) askDone(false);                  // вопрос в полосе сверху — о кнопке прежней вкладки (А6)
   if (tab === "routing") routingDraft = null;
   tab = b.dataset.tab;
   if (tab === "server") { SRV = null; srvDraft = null; }

@@ -18,6 +18,7 @@ from .. import checks, srcaddr
 # Ошибки настроек сервера (users.update_server) → поле формы «Сервер»; ошибки параметров AWG — по ключу
 SERVER_FIELDS = {"srv.bad_host": "public_host", "srv.bad_extra_host": "extra_hosts",
                  "srv.bad_out_host": "out_hosts", "srv.out_hosts_max": "out_hosts", "srv.bad_out_main": "out_main",
+                 "srv.out_in_clients": "out_hosts", "srv.in_in_clients": "extra_hosts",
                  "srv.out_main_removed": "out_main",
                  "srv.bad_client_host": "client_host", "srv.bad_dns": "client_dns", "srv.dns_v6": "client_dns",
                  "srv.bad_mtu": "client_mtu", "srv.bad_keepalive": "client_keepalive",

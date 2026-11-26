@@ -754,10 +754,17 @@ class Proxy:
             try:
                 if mode in ("dot", "doh"):
                     reply = await asyncio.wait_for(self._enc(out, server, mark, mode), ENC_TIMEOUT * 2)
+                elif tcp:
+                    reply = await self._tcp(out, server, mark)       # путь через SOCKS5: UDP там часто не проходит
                 else:
-                    reply = None if tcp else await self._udp(out, server, mark)
-                    if reply is None or struct.unpack("!H", reply[2:4])[0] & 0x0200:
-                        reply = await self._tcp(out, server, mark)   # нет ответа по UDP или он обрезан
+                    reply = await self._udp(out, server, mark)
+                    if reply is None:
+                        # не ответил по UDP — следующий сервер, а не тот же по TCP (UDP 2 с + TCP 5 с на каждый
+                        # молчащий сервер держали имена клиентов до 14 с перед запасным DNS; проверка 1.25.0, А13)
+                        self._fail(server, "timeout")
+                        continue
+                    if struct.unpack("!H", reply[2:4])[0] & 0x0200:
+                        reply = await self._tcp(out, server, mark)   # ответ не поместился в UDP — по TCP, как у всех
             except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError,
                     ValueError, struct.error) as e:
                 self._fail(server, e)

@@ -34,7 +34,10 @@ class DiagMixin:
         eff = self.resolve(out, st)
         if isinstance(eff, nftgen.Addr):
             # «Напрямую — адрес» (1.25.0): из сети сервера AWG с меткой адреса — тем же путём, что клиенты; не работает —
-            # блок выше, а не адрес системы
+            # блок выше, а не адрес системы. Резерв выхода «Напрямую — адрес» (или «Напрямую», когда основной — другой
+            # адрес) для Telegram — тоже «напрямую»: после выхода никогда (direct=False; проверка 1.25.0, А3)
+            if not direct and not srcaddr.is_direct(out):
+                raise system.SysError(Msg("tg.via_down", name=name))
             t = self.target
             if not t:
                 raise system.SysError(Msg("tg.via_down", name=name))

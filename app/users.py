@@ -557,6 +557,8 @@ class ServerManager:
                 settings_patch["out_main"] = m
             elif "out_hosts" in body and srcaddr.main(cur) and srcaddr.main(cur) not in settings_patch["out_hosts"]:
                 raise UserError(Msg("srv.out_main_removed", addr=srcaddr.main(cur)))   # основной — сначала другой
+            if "out_hosts" in body or "extra_hosts" in body or body.get("address"):
+                self._not_clients_net(sc, body, settings_patch, cur)
             if "client_host" in body:
                 ch = str(body["client_host"] or "").strip().strip("[]")
                 extra = settings_patch.get("extra_hosts", self.e.store.snapshot()["settings"].get("extra_hosts") or [])
@@ -688,6 +690,25 @@ class ServerManager:
             return {"restarted": restart and changed_conf,
                     "server_side_changed": awgserver.server_side_changed(old, sc.params()),
                     "host_changed": host_changed, "dns_changed": dns_changed, **({"reconnect": True} if reconnect else {})}
+
+    @staticmethod
+    def _not_clients_net(sc, body: dict, patch: dict, cur: dict) -> None:
+        """Дополнительный исходящий или входящий IP из сети клиентов (или адрес самого сервера в ней) — ошибка у поля:
+        панель добавила бы его в систему, и клиент с этим адресом остался бы без интернета (проверка 1.25.0, А5)."""
+        nets = [sc.network.network] if getattr(sc, "network", None) else []
+        if body.get("address"):
+            try:
+                nets.append(ipaddress.ip_interface(str(body["address"])).network)
+            except ValueError:
+                pass                              # неверную подсеть разберёт её собственная проверка ниже
+        s = cur.get("settings") or {}
+        for key, ips in (("srv.out_in_clients", patch.get("out_hosts", srcaddr.out_hosts(cur))),
+                         ("srv.in_in_clients", patch.get("extra_hosts", s.get("extra_hosts") or []))):
+            for a in ips:
+                ip = srcaddr.ipv4(a) if isinstance(a, str) else None
+                n = next((n for n in nets if ip and n.version == 4 and ipaddress.IPv4Address(ip) in n), None)
+                if n is not None:
+                    raise UserError(Msg(key, value=a, net=str(n)))
 
     def _addr_changes(self, st: dict, patch: dict) -> dict | None:
         """Что изменится от новых адресов, — до сохранения (окно «Да / Нет» в браузере): убранный исходящий адрес — где

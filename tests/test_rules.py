@@ -287,6 +287,82 @@ class FormatsTest(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(ROOT, "app", "static", f)), f)
 
 
+class FunctionImportsTest(unittest.TestCase):
+    """Импорт внутри функции (`from .notify import TGREQ`, `from . import webfront`) проверяется, только когда функция
+    выполняется, а широкий `except` вызывающего прячет ошибку: после деления engine.py на пакет (1.21.0) так молча
+    сломались «Проверка маршрута» (до 1.25.0) и версия модуля ядра без файла версии (проверка 1.25.0, А4). Здесь каждый
+    такой импорт в app/ сверяется с файлами без выполнения кода: модуль есть, имя в нём определено."""
+
+    APP = os.path.join(ROOT, "app")
+
+    @staticmethod
+    def defined(path: str) -> set:
+        import ast
+        with open(path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        names = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                for t in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                    names |= {n.id for n in ast.walk(t) if isinstance(n, ast.Name)}
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                names |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        return names
+
+    def module(self, parts: list) -> str | None:
+        base = os.path.join(ROOT, *parts)
+        for p in (base + ".py", os.path.join(base, "__init__.py")):
+            if os.path.exists(p):
+                return p
+        return None
+
+    def test_imports_inside_functions(self):
+        import ast
+        import importlib.util
+        bad, seen = [], 0
+        for d, dirs, names in os.walk(self.APP):
+            dirs[:] = [x for x in dirs if x != "__pycache__"]
+            for n in names:
+                if not n.endswith(".py"):
+                    continue
+                path = os.path.join(d, n)
+                rel = os.path.relpath(path, ROOT)[:-3].split(os.sep)
+                pkg = rel[:-1]                          # пакет модуля (у __init__.py — сам пакет)
+                with open(path, encoding="utf-8") as f:
+                    tree = ast.parse(f.read())
+                for fn in ast.walk(tree):
+                    if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    for node in ast.walk(fn):
+                        if isinstance(node, ast.Import):
+                            seen += 1
+                            for a in node.names:
+                                if a.name.split(".")[0] != "app" and importlib.util.find_spec(a.name.split(".")[0]) is None:
+                                    bad.append(f"{path}: import {a.name}")
+                        elif isinstance(node, ast.ImportFrom):
+                            seen += 1
+                            if not node.level:
+                                if node.module.split(".")[0] != "app":
+                                    continue            # стандартная библиотека: её имена здесь не сверяем
+                                target = node.module.split(".")
+                            else:
+                                target = (pkg[:len(pkg) - node.level + 1] if node.level > 1 else pkg) + \
+                                    (node.module.split(".") if node.module else [])
+                            mod = self.module(target)
+                            if mod is None:
+                                bad.append(f"{path}: {'.' * node.level}{node.module or ''} — нет модуля {'.'.join(target)}")
+                                continue
+                            have = self.defined(mod)
+                            for a in node.names:
+                                if a.name not in have and self.module(target + [a.name]) is None:
+                                    bad.append(f"{path}: {'.' * node.level}{node.module or ''} import {a.name} — "
+                                               f"нет в {'.'.join(target)}")
+        self.assertGreater(seen, 10)
+        self.assertEqual(bad, [])
+
+
 class ProjectRulesTest(unittest.TestCase):
     """Правила из заметок для разработки, которые раньше держались только на памяти."""
 

@@ -1201,7 +1201,8 @@ class DnsProxyEntriesTest(unittest.TestCase):
         p._udp, p._tcp, p._enc = udp, tcp, enc_fn
         out = self._run(p, ["example.org"])
         self.assertEqual(out[0][3] & 0xF, 0)
-        self.assertEqual(asked, [("udp", "1.1.1.1"), ("tcp", "1.1.1.1"), ("dot", "tls://common.dot.dns.yandex.net#77.88.8.8")])
+        # общий сервер молчит по UDP — сразу запасной, тот же сервер по TCP не ждём (А13)
+        self.assertEqual(asked, [("udp", "1.1.1.1"), ("dot", "tls://common.dot.dns.yandex.net#77.88.8.8")])
         self.assertTrue(p.direct_down)
         self.assertGreater(p._dp(0).fb_ok_at, 0)
         # запасной перестал отвечать: один раз ждали, дальше — сразу SERVFAIL, а он пробуется в фоне
@@ -1297,25 +1298,25 @@ class FallbackDnsSettingTest(unittest.TestCase):
         try:
             routing.country_preset(Req({"cc": "ir", "apply": True}))
             s = panel.store.snapshot()["settings"]
-            self.assertEqual((s["fallback_dns"], s["fallback_dns_on"]), (["94.232.174.194"], True))
-            self.assertEqual(panel.store.snapshot()["routing"]["rules"][0]["dns"], ["94.232.174.194"])
-            # повторное нажатие (владелец 2026-11-27): правила страны — снова как при первом. Правило `.ir` прежней
-            # кнопки (адреса Shecan до 2026), выключенное, с другим выходом и ограничением скорости; перед ним — ещё
-            # одно правило с тем же списком; после — чужое правило
+            self.assertEqual((s["fallback_dns"], s["fallback_dns_on"]), (["178.22.122.100", "185.51.200.2"], True))
+            self.assertEqual(panel.store.snapshot()["routing"]["rules"][0]["dns"], ["178.22.122.100", "185.51.200.2"])
+            # повторное нажатие (владелец 2026-11-27): правила страны — снова как при первом. Правило `.ir` с DNS,
+            # вписанным руками, выключенное, с другим выходом и ограничением скорости; перед ним — ещё одно правило с тем
+            # же списком; после — чужое правило
             dom, cc = panel.store.snapshot()["routing"]["rules"][0]["lists"][0], "ir"
             panel.store.mutate(lambda st: st["lists"].append({"id": "de", **checks.list_fields(
                 {"kind": "country", "source": "de"})}))
             panel.store.mutate(lambda st: st["routing"].update(rules=[
                 {"id": "r_dup", "lists": [cc], "outbound": "block", "enabled": True, "comment": ""},
                 {"id": "r_dom", "lists": [dom], "outbound": "block", "enabled": False, "comment": "Иран",
-                 "dns": ["178.22.122.100", "185.51.200.2"], "rate_down": 10},
+                 "dns": ["10.10.34.34"], "rate_down": 10},
                 {"id": "r_cc", "lists": [cc], "outbound": "direct", "enabled": False, "comment": ""},
                 {"id": "r_other", "lists": ["de"], "outbound": "block", "enabled": True, "comment": ""}]))
             routing.country_preset(Req({"cc": "ir", "apply": True}))
             rules = panel.store.snapshot()["routing"]["rules"]
             self.assertEqual([x["id"] for x in rules], ["r_other", "r_dom", "r_dup"])    # в конце, без повтора
             self.assertEqual({k: rules[1][k] for k in ("outbound", "enabled", "dns", "rate_down", "comment")},
-                             {"outbound": "direct", "enabled": True, "dns": ["94.232.174.194"], "rate_down": 10,
+                             {"outbound": "direct", "enabled": True, "dns": ["178.22.122.100", "185.51.200.2"], "rate_down": 10,
                               "comment": "Иран"})
             self.assertEqual((rules[2]["outbound"], rules[2]["enabled"]), ("direct", True))
         finally:
@@ -1671,3 +1672,156 @@ class InPanelQuestionsTest(unittest.TestCase):
         bar = self.js.split("function srvBarWarn", 1)[1][:700]
         self.assertIn("srv.confirm_restart", bar)
         self.assertIn("srv.confirm_port_app", bar)
+
+
+class AuditFixesTest(unittest.TestCase):
+    """Исправления по независимой проверке 1.25.0 (владелец 2026-11-27: «да»): А2, А3, А5, А8, А10, А13."""
+
+    def setUp(self):
+        from app import config
+        self._data = config.DATA_DIR
+        config.DATA_DIR = tempfile.mkdtemp()
+
+    def tearDown(self):
+        from app import config
+        config.DATA_DIR = self._data
+
+    def _engine(self):
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e.events = []
+        e.event = lambda kind, msg: e.events.append((kind, getattr(msg, "key", str(msg))))
+        e.trigger = lambda: None
+        return e
+
+    def test_a2_cloud_public_address_never_added(self):
+        """Облако с внешним адресом снаружи (AWS, Oracle): адрес в конфигах клиентов не ставится на интерфейс и не
+        «не работает»; дополнительный входящий IP — только когда внешний адрес сервера уже известен."""
+        from unittest import mock
+        from app import config
+        e = self._engine()
+        e.public_v4, e.public_v4_state = None, None
+        added, probed = [], []
+        e._wan = lambda: {"dev": "ens5", "gw": "172.31.0.1", "src": "172.31.5.10"}
+        e._host_v4 = lambda: {"172.31.5.10": {"dev": "ens5", "label": "ens5"}}
+        e._addr_add = lambda ip, dev: added.append(ip) or True
+        e._addr_probe = lambda ip, k=None: probed.append(ip) or {"ok": False, "err": "no_connection"}
+        st = {"settings": {"client_host": "3.120.45.67", "extra_hosts": ["3.120.45.68"]}, "upstreams": []}
+        with mock.patch.object(config, "DRY_RUN", False):
+            e._addr_tick(st)
+            self.assertEqual((added, probed, e.events), ([], [], []))     # внешний адрес ещё не узнан — ждём
+            self.assertNotIn("3.120.45.67", e.inbound_ips(st))
+            e.public_v4 = "3.120.45.67"
+            e._addr_tick(st)
+        self.assertEqual(added, ["3.120.45.68"])                        # дополнительный — как раньше
+        self.assertNotIn("3.120.45.67", added + probed)
+
+    def test_a3_bot_never_direct_after_an_exit(self):
+        from unittest import mock
+        from app import config, nftgen
+        from app.store import Store
+        e = self._engine()
+        e.store = Store(os.path.join(config.DATA_DIR, "state.json"))
+        e.store.mutate(lambda st: (st["settings"].update(out_hosts=["198.51.100.7"]), st.update(upstreams=[
+            {"id": "e1", "num": 1, "name": "DE", "config": "", "fallback": "direct@198.51.100.7", "enabled": True}])))
+        e.health = {"e1": {"healthy": False, "state": "down"}}
+        e._addr_live = {1: {"ip": "198.51.100.7", "dev": "eth0"}}
+        e._addr_rt = {"198.51.100.7": {"state": "ok"}}
+        e.target, e.rt = mock.Mock(pid=4242), {}
+        with mock.patch.object(config, "DRY_RUN", False):
+            with self.assertRaises(Exception) as cm:
+                e.own_route("up:e1", direct=False)                  # Telegram: резерв «Напрямую — адрес» — нет
+            self.assertEqual(cm.exception.msg.key, "tg.via_down")
+            self.assertEqual(e.own_route("up:e1"), (4242, nftgen.addr_mark(1)))         # списки — как раньше
+            self.assertEqual(e.own_route("direct@198.51.100.7", direct=False), (4242, nftgen.addr_mark(1)))
+
+    def test_a5_address_in_clients_network(self):
+        import ipaddress
+        from app.users import ServerManager, UserError
+        sc = mock_sc = type("SC", (), {"network": ipaddress.ip_interface("10.8.1.1/24")})()
+        cur = {"settings": {"out_hosts": [], "extra_hosts": []}}
+        for body, key in (({"out_hosts": "198.51.100.7, 10.8.1.5"}, "srv.out_in_clients"),
+                          ({"extra_hosts": "10.8.1.1"}, "srv.in_in_clients")):
+            patch = {k: [x.strip() for x in v.split(",")] for k, v in body.items()}
+            with self.assertRaises(UserError) as cm:
+                ServerManager._not_clients_net(sc, body, patch, cur)
+            self.assertEqual(cm.exception.msg.key, key)
+        ServerManager._not_clients_net(mock_sc, {"out_hosts": "198.51.100.7"}, {"out_hosts": ["198.51.100.7"]}, cur)
+        with self.assertRaises(UserError):              # новая подсеть накрывает уже вписанный адрес
+            ServerManager._not_clients_net(sc, {"address": "198.51.100.0/24"}, {},
+                                           {"settings": {"out_hosts": ["198.51.100.7"]}})
+
+    def test_a8_state_survives_a_panel_restart(self):
+        from unittest import mock
+        from app import config
+        e = self._engine()
+        e.public_v4 = "203.0.113.5"
+        host = {"203.0.113.5": {"dev": "eth0", "label": "eth0"}, "198.51.100.7": {"dev": "eth0", "label": "eth0:awgr"}}
+        e._wan = lambda: {"dev": "eth0", "gw": "203.0.113.1", "src": "203.0.113.5"}
+        e._host_v4 = lambda: host
+        res = {"ok": True, "ip": "198.51.100.7", "cc": "DE"}
+        e._addr_probe = lambda ip, k=None: dict(res)
+        st = {"settings": {"out_hosts": ["198.51.100.7"]}, "upstreams": []}
+        with mock.patch.object(config, "DRY_RUN", False):
+            e._addr_tick(st)                                       # проверка сокетом — «проверяется»
+            e._addr_live = {1: {"ip": "198.51.100.7"}}
+            e._addr_rt["198.51.100.7"]["at"] = 0
+            e._addr_tick(st)                                       # своим путём — «работает»
+            self.assertEqual(e.addr_state("198.51.100.7"), "ok")
+            e2 = self._engine()                                    # перезапуск панели
+            e2.public_v4, e2._wan, e2._host_v4 = e.public_v4, e._wan, e._host_v4
+            res.update(ok=False, err="no_connection")
+            e2._addr_probe = lambda ip, k=None: dict(res)
+            e2._addr_tick(st)
+        self.assertEqual(e2.addr_state("198.51.100.7"), "ok")      # сразу «работает», не блок до двух проверок
+        self.assertEqual(e2.events, [])                            # одна неудача после запуска — не «перестал»
+        with mock.patch.object(config, "DRY_RUN", False):
+            e3 = self._engine()                                    # перезагрузка: адреса в системе ещё нет
+            e3.public_v4, e3._wan = e.public_v4, e._wan
+            e3._host_v4 = lambda: {"203.0.113.5": {"dev": "eth0", "label": "eth0"}}
+            e3._addr_add = lambda ip, dev: False
+            e3._addr_restore(["198.51.100.7"], e3._host_v4())
+        self.assertIsNone(e3.addr_state("198.51.100.7"))           # без адреса в системе прежнему «работает» не верим
+
+    def test_a10_one_deadline_for_all_names(self):
+        import time
+        from unittest import mock
+        from app import dnsaddr
+
+        def slow(*a, **kw):
+            time.sleep(0.5)
+            raise OSError("timeout")
+        t0 = time.monotonic()
+        with mock.patch("socket.getaddrinfo", side_effect=slow):
+            self.assertEqual(dnsaddr.lookup(["a.example", "b.example", "c.example", "d.example"], 0.3), {})
+        self.assertLess(time.monotonic() - t0, 0.45)               # не 4 × 0,3 с
+
+    def test_a13_tcp_only_for_truncated(self):
+        import asyncio
+        import struct
+        from app import dnsproxy
+        from tests.test_v115 import a_reply, q_msg
+        d = tempfile.mkdtemp()
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["192.0.2.1", "1.1.1.1"],
+                       "encrypt": "plain", "default": {"mark": 0, "tcp": False}, "routes": {}}, f)
+        p = dnsproxy.Proxy(conf)
+        asked = []
+
+        async def udp(msg, server, mark):
+            asked.append(("udp", server))
+            if server == "192.0.2.1":
+                return None                                        # молчит
+            r = bytearray(a_reply(msg, ["203.0.113.9"]))
+            r[2] |= 0x02                                           # обрезан
+            return bytes(r)
+
+        async def tcp(msg, server, mark):
+            asked.append(("tcp", server))
+            return a_reply(msg, ["203.0.113.9"])
+        p._udp, p._tcp = udp, tcp
+        q = q_msg("example.org")
+        out = asyncio.run(p.forward(q, dnsproxy.parse_query(q), 0, False))
+        self.assertEqual(struct.unpack("!H", out[6:8])[0], 1)
+        self.assertEqual(asked, [("udp", "192.0.2.1"), ("udp", "1.1.1.1"), ("tcp", "1.1.1.1")])

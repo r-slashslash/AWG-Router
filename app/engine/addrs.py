@@ -88,7 +88,7 @@ class AddrsMixin:
                 r = {}
             if not isinstance(r, dict):
                 r = {}
-            for k, d in (("slots", {}), ("ours", {}), ("ever", [])):
+            for k, d in (("slots", {}), ("ours", {}), ("ever", []), ("last", {})):
                 if not isinstance(r.get(k), type(d)):
                     r[k] = d
             self._addr_rec_cache = r
@@ -184,10 +184,13 @@ class AddrsMixin:
     # ------------------------------------------------------------------ что нужно
     @staticmethod
     def inbound_ips(st: dict) -> list[str]:
-        """Входящие IPv4: дополнительные и сам входящий адрес, если это IP (домены и IPv6 в систему не добавляются)."""
+        """Входящие IPv4 из «Дополнительных входящих адресов» (домены и IPv6 в систему не добавляются). Сам адрес в
+        конфигах — только если он оттуда же: иначе это адрес сервера (адрес системы, внешний адрес облака) или прежний
+        IP, и добавлять его в систему нельзя — в облаках с внешним адресом снаружи (AWS, Oracle, Yandex Cloud) панель
+        ставила его на интерфейс при каждом запуске и писала «не работает» (проверка 1.25.0, А2)."""
         s = st.get("settings") or {}
         out = []
-        for h in [s.get("client_host"), *(s.get("extra_hosts") or [])]:
+        for h in s.get("extra_hosts") or []:
             a = srcaddr.ipv4(h) if isinstance(h, str) else None
             if a and a == h and srcaddr.usable(a) and a not in out:
                 out.append(a)
@@ -250,14 +253,26 @@ class AddrsMixin:
         for ip in list(rt):
             if ip not in out_ips and ip not in in_ips:
                 rt.pop(ip, None)
+        for ip in [ip for ip in r["last"] if ip not in out_ips and ip not in in_ips]:
+            r["last"].pop(ip)                   # адрес убрали из списка: его прежнее состояние больше не нужно
+            changed = True
         # входящий IP, который виден снаружи как адрес системы или рабочего исходящего (облако с 1:1 NAT, AWS), — уже
         # «на сервере»: добавлять его в систему не нужно (и нельзя: в системе у такого сервера внутренний адрес)
         faces = {getattr(self, "public_v4", None)} | {(rt.get(a) or {}).get("seen") for a in out_ips if self.addr_ok(a)}
-        want = []
+        # …а пока внешний адрес сервера и адреса, которые видят сайты, ещё не известны (первые секунды после запуска
+        # панели), входящий IP, которого нет в системе, не трогаем: иначе в облаке его внешний адрес ставился бы на
+        # интерфейс и «не работал» (А2)
+        faces_pending = (getattr(self, "public_v4", None) is None and getattr(self, "public_v4_state", None) != "failed") \
+            or any((rt.get(a) or {}).get("state") in (None, "checking") for a in out_ips)
+        self._addr_restore(out_ips + in_ips, host)
+        want, held = [], set()
         for ip in out_ips + in_ips:
             st_ = (rt.get(ip) or {}).get("state")
             if ip in in_ips and ip not in host and ip in faces:
                 rt[ip] = {"state": "ok", "seen": ip, "at": time.time(), "face": True}
+                continue
+            if ip in in_ips and ip not in host and faces_pending:
+                held.add(ip)
                 continue
             if st_ == "bad":
                 # не заработал: в систему — когда его снова впишут (addrs_wake) или через ADDR_BAD_RETRY. Ошибку
@@ -285,7 +300,7 @@ class AddrsMixin:
                     self.event("info", Msg("ev.addr_readded", addr=ip))
             else:
                 rt[ip] = {**(rt.get(ip) or {}), "state": "bad", "error": Msg("addr.add_failed"), "at": time.time()}
-        keep = set(want) | {ip for ip in out_ips if (rt.get(ip) or {}).get("state") != "bad"}
+        keep = set(want) | held | {ip for ip in out_ips if (rt.get(ip) or {}).get("state") != "bad"}
         for ip, dev in list(r["ours"].items()):
             if ip not in keep:
                 self._addr_del(ip, dev)
@@ -313,6 +328,36 @@ class AddrsMixin:
             return
         system.run(["ip", "addr", "del", f"{ip}/32", "dev", dev], check=False, timeout=10)
         log.info("address %s removed from %s", ip, dev)
+
+    def _addr_restore(self, ips: list[str], host: dict) -> None:
+        """После перезапуска панели (в памяти состояний нет): адрес, который на месте в системе, берёт последнее
+        состояние из data/addrs.json — «работает» (сразу проверяется заново) или «не работает». Иначе после каждого
+        обновления панели всё «Напрямую — адрес» стояло в блоке до двух проверок подряд, а первая случайная неудача
+        сразу давала «перестал работать» в Telegram (проверка 1.25.0, А8). Защита в nftables от этого не меняется:
+        с другого адреса пакет не уйдёт и так."""
+        rt, last = self.addr_rt(), self._addr_rec()["last"]
+        back = False
+        for ip in ips:
+            x = last.get(ip)
+            if ip in rt or ip not in host or not isinstance(x, dict) or x.get("state") not in ("ok", "failed"):
+                continue
+            rt[ip] = {"state": x["state"], "seen": x.get("seen"), "cc": x.get("cc"), "error": None, "at": 0.0,
+                      "fails": 0}
+            back = back or x["state"] == "ok"
+        if back:
+            self.trigger()                      # проход: «Напрямую — адрес» снова через него, не дожидаясь проверки
+
+    def _addr_last(self, ip: str, x: dict | None) -> None:
+        """Последнее состояние адреса — в data/addrs.json (только когда оно сменилось): его берёт _addr_restore."""
+        last = self._addr_rec()["last"]
+        want = {"state": x["state"], "seen": x.get("seen"), "cc": x.get("cc")} \
+            if x and x.get("state") in ("ok", "failed") else None
+        if last.get(ip) != want:
+            if want:
+                last[ip] = want
+            else:
+                last.pop(ip, None)
+            self._addr_save()
 
     # ------------------------------------------------------------------ проверки
     def _addr_probe_due(self, st: dict, out_ips: list[str], in_ips: list[str], host: dict) -> None:
@@ -393,6 +438,7 @@ class AddrsMixin:
                 self._addr_save()
             if outbound and was == "failed":
                 self.event("info", Msg("ev.addr_up", addr=ip))
+            self._addr_last(ip, x)
             if was != "ok":
                 self.trigger()          # правила: «Напрямую — адрес» снова через него
             return
@@ -408,6 +454,7 @@ class AddrsMixin:
             # не заработал ни разу: убрать из системы (если добавила панель) и не предлагать в выборе; повтор через
             # ADDR_BAD_RETRY не заработал — без нового события в журнале
             x["state"] = "bad"
+            self._addr_last(ip, None)
             if not x.pop("retry", False):
                 self.event("warn", Msg("ev.addr_bad", addr=ip, error=err))
             self.addrs_wake()
@@ -416,6 +463,7 @@ class AddrsMixin:
             return                      # одна неудача — ещё раз через ADDR_SOON
         if x.get("state") != "failed":
             x["state"] = "failed"
+            self._addr_last(ip, x)
             if outbound:
                 self.event("error", Msg("ev.addr_down", addr=ip, error=err))
             self.trigger()              # всё через этот адрес — в блок

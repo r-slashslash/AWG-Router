@@ -39,7 +39,7 @@ class ServerMixin:
                 # у сборки без /sys/module/amneziawg/version версию знает modinfo хоста (не чаще раза в минуту)
                 at, v = self._modinfo
                 if time.time() - at > 60:
-                    from . import webfront
+                    from .. import webfront
                     p = webfront.host_run(["modinfo", "-F", "version", "amneziawg"], timeout=10)
                     v = (p.stdout or "").strip() if p.returncode == 0 else ""
                     self._modinfo = (time.time(), v)

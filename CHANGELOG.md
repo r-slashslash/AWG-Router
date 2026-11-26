@@ -71,8 +71,7 @@ it grows, so every user-visible change gets a new version.
   DNS. Saving from the panel refuses a new name that doesn't resolve the way the rule goes (`Engine.dns_names_check`;
   through an exit or from an address — from the AWG network with that mark). On disk and in backups a rule's `dns` keeps only plain
   addresses and the whole list goes to `dns_all`, so 1.24 asks the usual servers for such a rule instead of failing.
-- **Apply for Iran** uses Shecan's current address `94.232.174.194` (it was `178.22.122.100`, `185.51.200.2`).
-  Pressing **Apply for …** again makes the country's rules what the first press made: Direct, on, the domain rule with
+- Pressing **Apply for …** again makes the country's rules what the first press made: Direct, on, the domain rule with
   the country's current DNS, at the end of the shared rules; other rules with only that list go (they would catch the
   country's sites first); a name, speed limits and a monthly limit someone added stay, balancing goes (Direct has none).
   Before, a second press only added a missing rule.

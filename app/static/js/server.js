@@ -396,6 +396,7 @@ function needConfigs(id) {
   return `<span class="hint warn-text" id="${id}" hidden>${esc(t("srv.need_configs"))}</span>`;
 }
 let srvAddrAsk = null;   // что сервер сказал о переносе адресов (confirm: false): строки в полосе, «Сохранить» ещё раз — да
+let srvEdits = 0;        // правки полей «Сервера»: ответ сервера на вопрос, пока поля правили, не принимается (А7)
 /** что меняется в несохранённом: серверные параметры маскировки, порт, подсеть */
 function srvChanges() {
   const changed = Object.keys(SRV.params).filter((k) => (srvDraft[k] || "") !== (SRV.params[k] || ""));
@@ -490,6 +491,7 @@ bind.server = () => {
   };
   const showBar = () => {
     srvAddrAsk = null;                            // поля изменились — сервер спросит о переносах заново
+    srvEdits++;
     $("#s-bar").hidden = !srvDirty();
     const txt = $("#s-bar-text");
     txt.textContent = t("srv.save_hint"); txt.classList.remove("ask-warn");
@@ -560,9 +562,13 @@ bind.server = () => {
     body.port = port;
     if (!SRV.subnet_locked) body.address = addr;
     $("#s-save").disabled = true;
+    const edits = srvEdits;
     try {
       const r = await api("PUT", "server", body);
       if (r.confirm) {
+        // поля правили, пока ждали ответа: он о прежних полях — не принимать (иначе второе «Сохранить» сохранило бы
+        // новые адреса без вопроса о них); сохранено ничего не было, «Сохранить» спросит заново
+        if (edits !== srvEdits) { $("#s-save").disabled = false; return; }
         srvAddrAsk = addrConfirmText(r.confirm).split("\n\n");
         $("#s-bar-warn").innerHTML = srvBarWarn().map((x) => `<div>${esc(x)}</div>`).join("");
         flashBar($("#s-bar"));

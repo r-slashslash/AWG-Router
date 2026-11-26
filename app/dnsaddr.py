@@ -18,6 +18,7 @@ import ipaddress
 import re
 import socket
 import threading
+import time
 
 MAX = 2
 DOT_PORT, DOH_PORT = 853, 443
@@ -172,8 +173,9 @@ def lookup(hosts, timeout: float = LOOKUP_TIMEOUT) -> dict[str, str]:
     ths = [threading.Thread(target=one, args=(h,), daemon=True) for h in hosts]
     for th in ths:
         th.start()
+    end = time.monotonic() + timeout          # общий срок на все имена, а не timeout на каждое по очереди (А10)
     for th in ths:
-        th.join(timeout)
+        th.join(max(0.0, end - time.monotonic()))
     return dict(res)
 
 
