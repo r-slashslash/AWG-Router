@@ -392,10 +392,17 @@ class RuleBalanceTest(unittest.TestCase):
         self.e.reconcile()
         for uid in self.ids:
             self.e.health[uid] = {"state": "up", "healthy": True}
+        # скорости выходов общего балансировщика — от прошлых проходов (в демо трафик случайный): с ними все клиенты
+        # без своей скорости уходили на один выход, и тест иногда падал в общем прогоне (проверка 1.25.0, П69)
+        self.e.balancer.exit_rate.clear()
+        self.e.balancer.client_rate.clear()
         self.st0 = panel.store.snapshot()
 
     def tearDown(self):
-        panel.store.mutate(lambda s: s.update(routing=self.st0["routing"], clients=self.st0["clients"]))
+        # и списки: список доменов «ytb» без текста оставался в общем состоянии, и тесты копий после этого файла
+        # падали на err.no_domains (проверка 1.25.0, П69)
+        panel.store.mutate(lambda s: s.update(routing=self.st0["routing"], clients=self.st0["clients"],
+                                              lists=self.st0["lists"]))
         for uid in self.ids:
             api_exits.del_upstream(Req({"replace": "direct"}), uid)
         self.e.rbal, self.e.rbal_plan, self.e.rbal_new, self.e.rbal_nums = {}, {}, {}, set()

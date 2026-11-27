@@ -317,6 +317,34 @@ class RecoverCreatedTest(unittest.TestCase):
         self.assertEqual(self.run_recover("created", created_ago=5), (None, []))      # его запускают прямо сейчас
 
 
+class ServerNatTest(unittest.TestCase):
+    """П34: свой контейнер сервера подменяет адрес клиентов и на основной сети, когда после перезапуска с сетями
+    исходящих адресов она уже не eth0 и не eth1 (машина GitHub: основная — eth2)."""
+
+    def _run(self, default):
+        with open(os.path.join(ROOT, "awg-server", "start.sh")) as f:
+            text = f.read()
+        part = text[text.index("\nWAN="):text.index("\ntail -f /dev/null")]
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "ip"), "w") as f:
+            f.write(f"#!/bin/sh\necho '{default}'\n")
+        with open(os.path.join(d, "iptables"), "w") as f:
+            f.write(f'#!/bin/sh\necho "$*" >>"{d}/calls"\n')
+        for n in ("ip", "iptables"):
+            os.chmod(os.path.join(d, n), 0o755)
+        subprocess.run(["bash", "-c", 'SUBNET=10.8.1.0/24\n' + part],
+                       env={**os.environ, "PATH": d + ":" + os.environ["PATH"]}, check=True)
+        with open(os.path.join(d, "calls")) as f:
+            nat = [ln.split("-o ")[1].split()[0] for ln in f if "MASQUERADE" in ln]
+        shutil.rmtree(d)
+        return nat
+
+    def test_default_route_interface(self):
+        self.assertEqual(self._run("default via 172.17.0.1 dev eth2"), ["eth0", "eth1", "eth2"])
+        self.assertEqual(self._run("default via 172.17.0.1 dev eth1 metric 5"), ["eth0", "eth1"])
+        self.assertEqual(self._run(""), ["eth0", "eth1"])
+
+
 class InstallerHupTest(unittest.TestCase):
     """П9: SIGHUP (обрыв SSH) после вопросов установщика не останавливает его посреди замены контейнера сервера."""
 
@@ -1201,3 +1229,557 @@ def _call(app_, method, path, body, length=None):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ---------------------------------------------------------------- интерфейс (П38–П40, П50, П59–П65)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # tests/panel_js.py
+import panel_js  # noqa: E402
+
+
+def _read(*path) -> str:
+    with open(os.path.join(ROOT, *path), encoding="utf-8") as f:
+        return f.read()
+
+
+def _fn(src: str, head: str) -> str:
+    """Тело функции/обработчика от строки head до парной закрывающей скобки."""
+    i = src.index(head)
+    j = src.index("{", i)
+    depth = 0
+    for k in range(j, len(src)):
+        depth += {"{": 1, "}": -1}.get(src[k], 0)
+        if depth == 0:
+            return src[i:k + 1]
+    raise AssertionError(head)
+
+
+def _node(code: str) -> str:
+    node = shutil.which("node")
+    if not node:
+        raise unittest.SkipTest("нет node")
+    return subprocess.run([node, "-e", code], capture_output=True, text=True, check=True, timeout=30).stdout
+
+
+class FaBidiTest(unittest.TestCase):
+    """П38: в персидском латинские «vpn://», «.conf», «socks5://» в фразе — в изоляции U+2066…U+2069, иначе
+    человек видит «//:vpn» и «conf.»."""
+
+    def test_isolated(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_rules import i18n
+        fa = i18n()["fa"]
+        bad = []
+        for k, v in fa.items():
+            if not v or k in ("ex.config_ph", "ls.domains_ph"):      # заполнители полей dir="ltr"
+                continue
+            v = json.loads('"' + v + '"')
+            for piece in ("vpn://", ".conf", "socks5://"):
+                for i in [n for n in range(len(v)) if v.startswith(piece, n)]:
+                    before = v[:i]
+                    if before.count("\u2066") <= before.count("\u2069"):
+                        bad.append((k, piece))
+        self.assertEqual(bad, [])
+
+
+class UiCssTest(unittest.TestCase):
+    """П39, П40, П63: сообщения не закрывают кнопки окна; окно правила не шире телефона; контраст текста ≥ 4,5."""
+
+    css = _read("app", "static", "app.css")
+
+    def test_toasts_on_top_in_dialog_and_close_on_click(self):
+        self.assertRegex(self.css, r"dialog #toasts \{[^}]*top: 12px;[^}]*bottom: auto")
+        self.assertIn("el.onclick = () => el.remove();", _fn(panel_js.source(), "function toast("))
+
+    def test_rule_window_lists_can_shrink(self):
+        self.assertRegex(self.css, r"#rw-lists \{ min-width: 0; \}")
+
+    @staticmethod
+    def _ratio(a: str, b: str) -> float:
+        def lum(h):
+            c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+            return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+        la, lb = sorted((lum(a), lum(b)), reverse=True)
+        return (la + 0.05) / (lb + 0.05)
+
+    def _vars(self, block: str) -> dict:
+        import re
+        return dict(re.findall(r"--([\w-]+): (#[0-9a-fA-F]{6});", block))
+
+    def test_contrast(self):
+        light = self._vars(self.css[self.css.index(":root {"):self.css.index("color-scheme: light")])
+        dark = {**light, **self._vars(self.css[self.css.index(':root[data-theme="dark"]'):])}
+        pairs = [("light warn on surface", light["warn"], light["surface"]),
+                 ("light muted on bg", light["muted"], light["bg"]),
+                 ("light primary-ink on primary", light["primary-ink"], light["primary"]),
+                 ("dark primary-ink on primary", dark["primary-ink"], dark["primary"])]
+        low = [(n, round(self._ratio(a, b), 2)) for n, a, b in pairs if self._ratio(a, b) < 4.5]
+        self.assertEqual(low, [])
+
+
+class UiHandlersTest(unittest.TestCase):
+    """П59–П62, П64, П65: обработчики кнопок интерфейса."""
+
+    js = panel_js.source()
+
+    def test_buttons_report_errors(self):
+        for head in ('$("#reapply").onclick', '$("#logout").onclick', '$("#s-gen").onclick'):
+            self.assertRegex(_fn(self.js, head), r"catch \(e\) \{ if \(!\(e instanceof AuthError\)\) toast\(e\.message, true\)",
+                             head)
+
+    def test_login_closes_the_window_over_the_window(self):
+        body = _fn(self.js, "function showLogin()")
+        self.assertLess(body.index('$("#modal2").close()'), body.index("closeModal()"))
+
+    def test_window_close_keeps_typed_fields(self):
+        for head in ('$("#modal2").addEventListener("close"', '$("#modal").addEventListener("close"'):
+            body = _fn(self.js, head)
+            self.assertIn("renderKeep()", body, head)
+            self.assertNotRegex(body, r"(?<!Keep)\brender\(\)", head)
+        keep = _fn(self.js, "function renderKeep()")
+        self.assertLess(keep.index("typedFields()"), keep.index("render()"))
+
+    def test_empty_client_name_says_so(self):
+        body = _fn(self.js, "  const go = async () => {\n    const name = $(\"#n-name\")")
+        self.assertIn('toast(t("cl.name_required"), true)', body)
+        self.assertIn('classList.add("invalid")', body)
+
+    def test_client_save_not_twice(self):
+        body = _fn(self.js, '$("#c-save").onclick')
+        self.assertIn("if (btn.disabled) return;", body)
+        self.assertIn("finally { btn.disabled = false; }", body)
+
+    def test_overview_goes_through_gotab_and_opens_add(self):
+        body = _fn(self.js, "bind.overview = () =>")
+        self.assertIn("goTab(b.dataset.goto)", body)
+        self.assertIn("editUpstream(null)", body)
+        self.assertNotIn("tab = b.dataset.goto", body)
+        self.assertIn('data-goto="exits" data-add', self.js)
+
+    def test_non_json_answer_is_a_phrase(self):
+        self.assertNotIn("`HTTP ${r.status}`", self.js)
+        self.assertIn('t("err.http", { code: r.status })', self.js)
+
+    def test_quota_field_marked(self):
+        self.assertIn('data-field="quota_gb" id="c-quota"', self.js)
+        from app.api import clients as api_clients
+        from app.web import HTTPError
+
+        class R:
+            def json(self):
+                return {"quota_gb": -5, "period": "month"}
+        with self.assertRaises(HTTPError) as ctx:
+            api_clients.put_limits(R(), "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=")
+        self.assertEqual(ctx.exception.field, "quota_gb")
+
+    def test_socks_errors_are_about_socks_fields(self):
+        from app import checks
+        from app.web import HTTPError
+        with self.assertRaises(HTTPError) as ctx:
+            checks.exit_config("socks5://proxy.example.com:99999")
+        self.assertEqual((ctx.exception.detail.key, ctx.exception.field), ("cfg.socks_port", "socks"))
+        with self.assertRaises(HTTPError) as ctx:
+            checks.exit_config("[Interface]\nmusor")
+        self.assertEqual(ctx.exception.field, "config")
+        for i in ("u-sh", "u-sp", "u-su", "u-sw"):
+            self.assertIn(f'data-field="socks" id="{i}"', self.js)
+
+    def test_one_letter_does_not_switch_to_socks(self):
+        src = _read("app", "static", "js", "exits.js")
+        code = _fn(src, "function socksParse(text)") + "\n" + _fn(src, "const looksSocks = (s) =>") + ";\n"
+        out = _node(code + 'for (const s of ["P", "PrivateKey", "AmneziaWG", "proxy.example.com", "1.2.3.4:1080",'
+                    ' "socks5://h", "u:p@h:1080", "h:1080:u:p", "vpn://abc"]) console.log(s + "=" + looksSocks(s));')
+        got = dict(x.split("=", 1) for x in out.split())
+        self.assertEqual(got, {"P": "false", "PrivateKey": "false", "AmneziaWG": "false", "proxy.example.com": "false",
+                               "1.2.3.4:1080": "true", "socks5://h": "true", "u:p@h:1080": "true",
+                               "h:1080:u:p": "true", "vpn://abc": "false"})
+        self.assertIn('if (kind === "socks5" && c && !/^socks(5h?)?:', src)
+
+
+class TraceFixTest(unittest.TestCase):
+    """П50: проверка маршрута — служебный адрес облака закрыт (а не «напрямую»); шаг балансировки с запасным
+    «Напрямую — адрес» — фраза, а не сырой ключ «out.direct@…»."""
+
+    def setUp(self):
+        self.e = _panel().engine
+
+    def test_cloud_addresses_block(self):
+        for ip in ("169.254.169.254", "100.100.100.200"):
+            r = self.e.trace(None, ip)
+            self.assertEqual((r["result"], r["steps"][0].key), ("block", "tr.cloud_meta"), ip)
+        self.assertEqual(self.e.trace(None, "192.168.1.1")["result"], "direct")
+
+    def test_balance_step_direct_at(self):
+        from app.engine import diag
+        rule = {"id": "r_x", "lists": ["ru"], "outbound": "direct", "enabled": True, "balance": ["a", "b"],
+                "balance_fb": "direct@198.51.100.7"}
+        pol = {"rules": [rule], "own": False}
+        with mock.patch.object(type(self.e), "policy_for", return_value=pol), \
+                mock.patch.object(type(self.e), "rule_out", return_value=("direct@198.51.100.7", False)), \
+                mock.patch.object(type(self.e), "domain_lists", return_value=set()), \
+                mock.patch.object(self.e.matcher, "contains", return_value="5.0.0.0/8"):
+            r = self.e.trace(None, "5.6.7.8")
+        step = next(s for s in r["steps"] if s.key == "tr.rule_balance_new")
+        self.assertEqual((step.p["exit"].key, step.p["exit"].p), ("out.direct_at", {"addr": "198.51.100.7"}))
+        self.assertTrue(diag)
+
+    def test_bot_says_closed(self):
+        from app import uitext
+        from app.i18n import Msg
+        self.assertNotEqual(uitext.text("ru", Msg("tr.cloud_meta", ip="169.254.169.254")), "tr.cloud_meta")
+        src = _read("app", "tgbot.py")
+        self.assertIn('s.key == "tr.cloud_meta"', src)
+
+
+class UninstallDisabledTest(unittest.TestCase):
+    """П67: удаление панели «оставить сервер» называет клиентов, которых выключила панель: без неё они так и
+    останутся выключенными, а включить их можно только правкой конфига."""
+
+    def test_note(self):
+        import contextlib
+        import io
+        from app import awgserver, uninstall
+        sc = awgserver.parse("[Interface]\nPrivateKey = x\nListenPort = 1\nAddress = 10.8.1.1/24\n")
+        sc.peers += [awgserver.Peer("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=", allowed_ips="10.8.1.2/32", enabled=False),
+                     awgserver.Peer("AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=", allowed_ips="10.8.1.3/32")]
+        text = sc.render()
+
+        class T:
+            conf_path, name = "/opt/amnezia/awg/awg0.conf", "amnezia-awg2"
+
+            def read_file(self, p):
+                return text
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            uninstall.disabled_note(T())
+        self.assertIn("1 client(s) turned off by the panel", out.getvalue())
+        self.assertIn(awgserver.DISABLED_MARK, out.getvalue())
+        self.assertIn("disabled_note(eng.target)", _read("app", "uninstall.py"))
+
+
+class WorkflowInputsTest(unittest.TestCase):
+    """П68: ввод ручного запуска workflow — только через окружение, не текстом в команду (под sudo)."""
+
+    def test_no_inputs_in_commands(self):
+        import re
+        d = os.path.join(ROOT, ".github", "workflows")
+        bad = []
+        for name in sorted(os.listdir(d)):
+            in_run = False
+            for n, line in enumerate(_read(".github", "workflows", name).splitlines(), 1):
+                s = line.strip()
+                if re.match(r"(- )?run:", s):
+                    in_run = True
+                elif re.match(r"(- )?[\w-]+:", s) and not s.startswith(("run:", "- run:")) and in_run \
+                        and len(line) - len(line.lstrip()) <= 8:
+                    in_run = False
+                if in_run and re.search(r"\$\{\{\s*(github\.event\.)?inputs\.", line):
+                    bad.append(f"{name}:{n}")
+        self.assertEqual(bad, [])
+
+
+class UpgradeImagesCheckTest(unittest.TestCase):
+    """П69: проверка «работает образ из IMAGES» в tests/e2e/upgrade.sh — только когда IMAGES есть (пустой ref совпадал
+    с любым образом, и проверка проходила всегда)."""
+
+    def test_guarded(self):
+        text = _read("tests", "e2e", "upgrade.sh")
+        i = text.index('grep -qF "${ref#*@}"')
+        guard = text.rindex('if [ -f "$DIR/IMAGES" ]; then', 0, i)
+        self.assertNotIn("\nfi\n", text[guard:i])
+        self.assertIn('[ -n "$ref" ] || fail', text[guard:i])
+
+
+# ---------------------------------------------------------------- оптимизация (Е) и дубли (Ж)
+class PerfFixTest(unittest.TestCase):
+    """Е: адреса разбираются один раз, ответы кодируются без копии на Python (те же байты), за проход — одна полная
+    копия состояния, политики клиентов — один раз; скорость клиентов — только для вкладки «Клиенты»."""
+
+    def setUp(self):
+        self.p = _panel()
+        self.e = self.p.engine
+
+    def test_addresses_parsed_once(self):
+        import ipaddress
+        from app import srcaddr
+        from app.api import state as api_state
+        hosts = [f"198.51.100.{i}" for i in range(1, 17)]
+        st0 = self.p.store.snapshot()["settings"].get("out_hosts")
+        self.p.store.mutate(lambda s: s["settings"].update(out_hosts=hosts))
+        self.addCleanup(lambda: self.p.store.mutate(lambda s: s["settings"].update(out_hosts=st0 or [])))
+        srcaddr._ipv4.cache_clear()
+        real = ipaddress.IPv4Address
+        with mock.patch.object(srcaddr.ipaddress, "IPv4Address", side_effect=real) as spy:
+            api_state._state_view()
+            api_state._state_view()
+        self.assertLessEqual(spy.call_count, 40)
+
+    def test_json_same_bytes(self):
+        from app import web
+        from app.api import state as api_state
+        from app.i18n import Msg, to_json
+        obj = {"a": Msg("x.y", n=1, inner=Msg("z", s=[Msg("w"), (1, "т")])), "l": [Msg("q"), {"k": (Msg("r"),)}],
+               1: "int key", "s": api_state._state_view()}
+        self.assertEqual(json.dumps(obj, ensure_ascii=False, default=web._msg_json),
+                         json.dumps(to_json(obj), ensure_ascii=False))
+        with self.assertRaises(TypeError):
+            json.dumps({"x": {1, 2}}, default=web._msg_json)
+        self.assertNotIn("to_json(obj)", _read("app", "web.py"))
+
+    def test_one_snapshot_per_pass(self):
+        from app import store as store_mod
+        self.e.reconcile()
+        with mock.patch.object(store_mod.Store, "snapshot", autospec=True,
+                               side_effect=store_mod.Store.snapshot) as spy:
+            self.e.reconcile()
+        self.assertEqual(spy.call_count, 1)
+
+    def test_policies_once_per_pass(self):
+        from app.engine import Engine
+        got = []
+        real = Engine._policies
+
+        def spy(self_, st, labels=None):
+            r = real(self_, st, labels)
+            got.append((id(st), id(r[0])))
+            return r
+        self.p.store.mutate(lambda s: s["settings"].update(panel_dns=True))
+        self.addCleanup(lambda: self.p.store.mutate(lambda s: s["settings"].pop("panel_dns", None)))
+        with mock.patch.object(Engine, "_policies", spy):
+            self.e.reconcile()
+        pass_st = {s for s, _ in got}
+        self.assertGreaterEqual(len(got), 2)
+        self.assertEqual(len({r for s, r in got if s in pass_st}), 1)       # один и тот же результат: посчитан раз
+
+    def test_hold_rules_not_from_the_pass(self):
+        """Правила «до панели» (выход → блок) не берутся из запомненных политик прохода."""
+        import threading
+        st = self.p.store.snapshot()
+        self.e._pol_memo = {"st": st, "tid": threading.get_ident(), "v": {}}
+        self.addCleanup(setattr, self.e, "_pol_memo", None)
+        normal = self.e._policies(st)
+        self.e._holding = threading.get_ident()
+        try:
+            held = self.e._policies(st)
+        finally:
+            self.e._holding = None
+        self.assertIsNot(held, normal)
+
+    def test_speeds_only_for_clients_tab(self):
+        from app.api import state as api_state
+
+        class R:
+            def __init__(self, h):
+                self.headers = h
+        with mock.patch.object(self.e, "client_speeds", return_value={"k": [1, 2]}) as cs:
+            self.assertEqual(api_state.get_state(R({}))["speeds"], {})
+            cs.assert_not_called()
+            self.assertEqual(api_state.get_state(R({"X-Speeds": "1"}))["speeds"], {"k": [1, 2]})
+        body = _fn(panel_js.source(), "async function refresh(")
+        self.assertIn('if (tab === "clients") hdr["X-Speeds"] = "1";', body)
+
+
+class DedupeTest(unittest.TestCase):
+    """Ж: одна проверка галочки, один «пройти скорее», MSS clamp — одной функцией."""
+
+    def test_one_flag_check(self):
+        from app import checks
+        from app.web import HTTPError
+        self.assertIn("users.check_flag(v)", _fn(_read("app", "checks.py"), "def flag("))
+        with self.assertRaises(HTTPError):
+            checks.flag("false")
+        self.assertIs(checks.flag(None, True), True)
+
+    def test_one_trigger(self):
+        from app.engine import Engine
+        self.assertFalse(hasattr(Engine, "reconcile_soon"))
+
+    def test_mss_once(self):
+        from app import nftgen
+        src = _read("app", "nftgen.py")
+        self.assertEqual(src.count("tcp option maxseg size set"), 1)
+        r = nftgen.generate("awg0", {}, [{"num": 1, "snat": "10.9.0.2", "mtu": 1280}],
+                            {"rules": [], "default": 1, "domain": []}, {}, 1234, frozenset(), quic=True)
+        self.assertEqual(r.count("tcp option maxseg size > 1240 tcp option maxseg size set 1240"), 2)
+
+
+# ---------------------------------------------------------------- тесты, которые проходили со сломанной защитой (Ж)
+from test_v121g import Isolated as _Isolated, Req as _GReq  # noqa: E402
+
+
+class SignInGuardsTest(_Isolated):
+    """Вход (web.md M13, M28, N3, N15): вторая смена пароля гасит сессии; текущая вкладка после смены входит;
+    2FA с неверным кодом не включается; cookie с не-ASCII — просто отказ."""
+
+    def test_second_password_change_logs_out(self):
+        from app.api import auth
+        auth.set_password("first-password-1")
+        s = auth.make_session()
+        auth.set_password("second-password-2")
+        self.assertFalse(auth.check_session(s))
+
+    def test_this_tab_stays_signed_in(self):
+        from app.api import auth
+        r = _GReq({"current": os.environ["PANEL_PASSWORD"], "new": "a-brand-new-pass"})
+        auth.change_password(r)
+        cookie = [v for n, v, _ in r.set_cookies if n == auth.COOKIE]
+        self.assertTrue(cookie and auth.check_session(cookie[-1]))
+
+    def test_2fa_wrong_code_not_enabled(self):
+        from app import totp
+        from app.api import auth
+        from app.web import HTTPError
+        sec = auth.totp_setup(_GReq())["secret"]
+        good = totp.match(sec, "000000")
+        code = "000000" if good is None else "111111"
+        with self.assertRaises(HTTPError) as cm:
+            auth.totp_enable(_GReq({"password": os.environ["PANEL_PASSWORD"], "code": code}))
+        self.assertEqual(cm.exception.code, 403)
+        self.assertIsNone(totp.load())
+
+    def test_non_ascii_cookie(self):
+        from app.api import auth
+        self.assertFalse(auth.check_session("1.ab.\xe9"))
+
+
+class DnsGuardsTest(unittest.TestCase):
+    """DNS на сервере (dns.md M15/M16, M18): чужой адрес — без ответа; HTTPS/SVCB имени правила — «записей нет»."""
+
+    def _proxy(self):
+        from app import dnsproxy
+        d = tempfile.mkdtemp()
+        lst = os.path.join(d, "l1.txt")
+        with open(lst, "w") as f:
+            f.write("youtube.com\n")
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                       "default": {"mark": 0, "tcp": False}, "routes": {},
+                       "dom": {"lists": {"l1": lst}, "policies": {"p_global": [[["l1"], {"mark": 0x2001, "tcp": False}]]},
+                               "clients": {}, "set": None}}, f)
+        p = dnsproxy.Proxy(conf)
+        p.asked = []
+
+        async def fwd(query, q, mark, tcp, servers=()):
+            p.asked.append((q["name"].rstrip("."), q["qtype"]))
+            from tests.test_v115 import a_reply
+            return a_reply(query, ["203.0.113.9"])
+        p.forward = fwd
+        return p
+
+    def test_https_records_of_rule_names(self):
+        from app import dnsproxy
+        from tests.test_v115 import q_msg
+        p = self._proxy()
+
+        async def go():
+            out = []
+            for name, qt in (("www.youtube.com", 65), ("youtube.com", 64), ("example.org", 65)):
+                m = q_msg(name, qtype=qt)
+                out.append(await p.resolve(m, dnsproxy.parse_query(m), "10.8.1.5"))
+            return out
+        r = asyncio.run(go())
+        for reply in r[:2]:
+            self.assertEqual((reply[3] & 0xF, struct_unpack_ancount(reply)), (0, 0))
+        self.assertEqual(p.asked, [("example.org", 65)])
+
+    def test_foreign_client_address(self):
+        from app import dnsproxy
+        from tests.test_v115 import q_msg
+        p = self._proxy()
+        srv = dnsproxy.UDPServer(p)
+        sent = []
+
+        class T:
+            def sendto(self, data, addr):
+                sent.append(addr)
+        srv.connection_made(T())
+
+        async def go():
+            srv.datagram_received(q_msg("example.org"), ("192.0.2.9", 5353))
+            srv.datagram_received(q_msg("example.org"), ("10.8.1.5", 5353))
+            await asyncio.sleep(0.05)
+
+            class W:
+                def get_extra_info(self, k):
+                    return ("192.0.2.9", 4000)
+
+                def write(self, data):
+                    sent.append("tcp")
+
+                async def drain(self):
+                    pass
+
+                def close(self):
+                    pass
+            import struct
+            reader = asyncio.StreamReader()
+            m = q_msg("example.org")
+            reader.feed_data(struct.pack("!H", len(m)) + m)
+            reader.feed_eof()
+            await p.handle_tcp(reader, W())
+        asyncio.run(go())
+        self.assertEqual(sent, [("10.8.1.5", 5353)])
+        self.assertEqual(p.asked, [("example.org", 1)])          # TCP с чужого адреса — не спрошен
+
+
+def struct_unpack_ancount(reply: bytes) -> int:
+    import struct
+    return struct.unpack("!H", reply[6:8])[0]
+
+
+class StrictInEngineTest(unittest.TestCase):
+    """invariants.md Q_strict: «Правила по доменам не работают — блокировать»: посредник лежит, галочка стоит —
+    политика с правилами по доменам в движке уходит в блок (раньше это проверял только nftgen)."""
+
+    def test_strict(self):
+        p = _panel()
+        e = p.engine
+        st0 = p.store.snapshot()
+        self.addCleanup(lambda: p.store.mutate(lambda s: s.update(routing=st0["routing"], lists=st0["lists"])))
+        p.store.mutate(lambda s: s["lists"].append({"id": "dstrict", "kind": "domains", "name": "d", "source": ""}))
+        p.store.mutate(lambda s: s["routing"].update(rules=[
+            {"id": "rs", "lists": ["dstrict"], "outbound": "block", "enabled": True, "comment": ""}], default="direct",
+            strict=True))
+        st = p.store.snapshot()
+        e.reconcile()
+        block = "\tchain p_global {\n\t\tgoto o_block\n\t}"
+        self.assertIn(block, e.build_ruleset(e.target, st, None))
+        self.assertNotIn(block, e.build_ruleset(e.target, st, 1234))
+        st["routing"]["strict"] = False
+        self.assertNotIn(block, e.build_ruleset(e.target, st, None))
+
+
+class StateBakFirstWriteTest(unittest.TestCase):
+    """invariants.md F4: state.json повреждён, а первая запись после запуска не удалась (нет места) — следующий
+    запуск всё равно берёт прежнюю версию, а не пустые настройки (все клиенты мимо выходов)."""
+
+    def test_first_write_fails(self):
+        from app import store
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "state.json")
+        s = store.Store(path)
+        s.mutate(lambda st: st["settings"].update(mark=1))
+        s.mutate(lambda st: st["settings"].update(mark=2))
+        with open(path, "w") as f:
+            f.write('{"version": 1, "routing": {"default": "dir')
+        with mock.patch.object(store.Store, "_write", side_effect=OSError(28, "No space left on device")), \
+                self.assertLogs("awgr.store", "WARNING"):
+            try:
+                store.Store(path)
+            except OSError:
+                pass
+        self.assertEqual(store.Store(path).state["settings"].get("mark"), 1)
+
+
+class UiEscapeTest(unittest.TestCase):
+    """ui.md: имена (выходов, клиентов, списков) в разметке интерфейса — через esc(): имя «<b>» или «<a href>» не
+    становится разметкой. Подстановка свойства .name без esc() — только в известных местах (названия языков; подписи
+    выбора клиента, которые экранирует ruleWindow)."""
+
+    def test_names_escaped(self):
+        import re
+        ok = {"v.name", "c.name || c.ip"}
+        bad = [m.group(1) for m in re.finditer(r"\$\{([^{}]*\.name\b[^{}]*)\}", panel_js.source())
+               if "esc(" not in m.group(1) and m.group(1) not in ok]
+        self.assertEqual(bad, [])

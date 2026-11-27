@@ -229,6 +229,9 @@ class EarlyWarningTest(unittest.TestCase):
             def snapshot(s):
                 return json.loads(json.dumps(s.st))
 
+            def peek(s, fn):                 # enforce читает только лимиты (без копии всего состояния)
+                return fn(s.st)
+
             def mutate(s, fn):
                 fn(s.st)
 

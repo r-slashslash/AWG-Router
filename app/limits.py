@@ -9,6 +9,7 @@ exp_warned / quota_warned — предупреждение заранее (за 
 """
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import time
@@ -70,8 +71,7 @@ def _current(engine, pk: str) -> dict:
 
 def enforce(engine, now: float | None = None) -> None:
     """Вызывается движком после каждого опроса клиентов."""
-    st = engine.store.snapshot()
-    lim = st.get("limits") or {}
+    lim = engine.store.peek(lambda s: copy.deepcopy(s.get("limits") or {}))    # только лимиты: без копии всего
     if not lim:
         return
     now = time.time() if now is None else now
@@ -166,8 +166,7 @@ FIRST_WAIT = 90 * 86400    # столько ждём первого подклю
 def first_seen(engine, now: float | None = None) -> None:
     """Клиент, созданный в панели или боте, впервые подключился (state["await_first"][pk] —
     когда создан): событие ev.client_first, по нему — уведомление «конфиг работает»."""
-    st = engine.store.snapshot()
-    wait = st.get("await_first") or {}
+    wait = engine.store.peek(lambda s: dict(s.get("await_first") or {}))
     if not wait or not engine.clients:
         return
     now = time.time() if now is None else now

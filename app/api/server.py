@@ -90,7 +90,7 @@ def put_server(req):
     if "out_hosts" in body or "extra_hosts" in body or "client_host" in body:
         st = store.snapshot()
         engine.addrs_wake(retry=[*srcaddr.out_hosts(st), *engine.inbound_ips(st)])
-    engine.reconcile_soon()
+    engine.trigger()
     if tls.names() != names:
         tls.reconfigure()              # адрес панели или второй адрес сертификата сменился
     return res
@@ -191,7 +191,7 @@ def init_server(req):
     except (TypeError, ValueError):
         bad("srv.bad_port")
     user_errors(lambda: engine.srv.init_host(port, str(body.get("subnet") or "10.8.1.0/24")))
-    engine.reconcile_soon()
+    engine.trigger()
     return {"ok": True}
 
 

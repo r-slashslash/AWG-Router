@@ -245,7 +245,14 @@ function addClient() {
   `<button class="btn" data-close>${esc(t("btn.cancel"))}</button><button class="btn primary" id="n-save">${esc(t("cl.create"))}</button>`);
   const go = async () => {
     const name = $("#n-name").value.trim();
-    if (!name) { $("#n-name").focus(); return; }
+    if (!name) {                                // поле и так в фокусе: без сообщения нажатие ничего не меняло (П62)
+      const el = $("#n-name");
+      el.classList.add("invalid");
+      el.addEventListener("input", () => el.classList.remove("invalid"), { once: true });
+      el.focus();
+      toast(t("cl.name_required"), true);
+      return;
+    }
     if ($("#n-save").disabled) return;          // второй Enter, пока первый запрос идёт, — не второй клиент
     $("#n-save").disabled = true;
     try {
@@ -373,7 +380,7 @@ function editClient(pk, section = null) {
           <input type="date" id="c-exp" value="${esc(L.expires ? isoDay(L.expires) : "")}">
           <span class="hint">${esc(t("cl.expires_hint"))}</span></label>
         <div class="field"><span>${esc(t("cl.quota"))}</span>
-          <div class="input-btn"><input type="number" id="c-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${L.quota ? +(L.quota / 1024 ** 3).toFixed(3) : ""}">
+          <div class="input-btn"><input type="number" data-field="quota_gb" id="c-quota" min="0" step="any" inputmode="decimal" placeholder="${esc(t("cl.no_limit"))}" value="${L.quota ? +(L.quota / 1024 ** 3).toFixed(3) : ""}">
             <select id="c-period" style="width:auto"><option value="month" ${L.period !== "total" ? "selected" : ""}>${esc(t("cl.per_month"))}</option><option value="total" ${L.period === "total" ? "selected" : ""}>${esc(t("cl.in_total"))}</option></select></div>
           <span class="hint">${esc(t("cl.quota_hint", { time: monthResetLocal() }))}</span></div>
       </div>
@@ -538,6 +545,9 @@ function editClient(pk, section = null) {
 
   $("#c-save").onclick = async () => {
     if (badNumber(["c-quota", "c-rd", "c-ru"])) return;
+    const btn = $("#c-save");
+    if (btn.disabled) return;                    // до трёх запросов подряд: второе нажатие — второй набор (П62)
+    btn.disabled = true;
     try {
       const name = $("#c-name").value.trim();
       if (name && name !== c.name) await api("PUT", "users/" + encodeURIComponent(pk), { name });
@@ -558,6 +568,7 @@ function editClient(pk, section = null) {
       newLists.length = 0;                       // сохранены вместе с правилами клиента
       closeModal(); toast(t("toast.saved_applying")); reconnectToast(rr); refresh();
     } catch (e) { toast(e.message, true); markField(e, document.querySelector("dialog[open]")); }
+    finally { btn.disabled = false; }
   };
   const cOut = $("#c-out");
   if (cOut) cOut.addEventListener("change", () => { $("#c-out-bind").innerHTML = bindHintHtml(cOut.value); });

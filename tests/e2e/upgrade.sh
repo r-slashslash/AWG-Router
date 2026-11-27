@@ -151,10 +151,16 @@ cur=$(jq_py 'd["version"]["current"]' <<<"$s")
 ok "version $cur"
 [ "$(jq_py "any(c['public_key'] == '$pk' for c in d['clients'])" <<<"$s")" = True ] || fail "the client disappeared"
 ok "the client is still there"
-img=$(docker inspect -f '{{.Image}}' awg-router)
-ref=$(grep -E '^PANEL_IMAGE=' "$DIR/IMAGES" | cut -d= -f2-)
-docker image inspect -f '{{join .RepoDigests " "}}' "$img" | grep -qF "${ref#*@}" || fail "the running panel is not the image from IMAGES ($ref)"
-ok "the running panel is $ref"
+# код без IMAGES (образы собраны здесь): сверять не с чем — пустой ref совпал бы с любым образом
+if [ -f "$DIR/IMAGES" ]; then
+  img=$(docker inspect -f '{{.Image}}' awg-router)
+  ref=$(grep -E '^PANEL_IMAGE=' "$DIR/IMAGES" | cut -d= -f2-)
+  [ -n "$ref" ] || fail "IMAGES has no PANEL_IMAGE"
+  docker image inspect -f '{{join .RepoDigests " "}}' "$img" | grep -qF "${ref#*@}" || fail "the running panel is not the image from IMAGES ($ref)"
+  ok "the running panel is $ref"
+else
+  ok "the panel image was built here (the code has no IMAGES)"
+fi
 if [ -n "$box_before" ] && grep -q "refresh_own_server()" "$DIR/install.sh"; then
   for _ in $(seq 1 20); do docker exec amnezia-awg2 ip link show awg0 >/dev/null 2>&1 && break; sleep 1; done
   box_after=$(srv_box) || fail "the own AWG container is gone after the update"

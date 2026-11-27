@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import ipaddress
 import re
 
@@ -33,6 +34,13 @@ def ipv4(v) -> str | None:
     """Строка IPv4 в обычном виде или None."""
     if not isinstance(v, str):
         return None
+    return _ipv4(v)
+
+
+@functools.lru_cache(maxsize=1024)
+def _ipv4(v: str) -> str | None:
+    """Разбор запоминается: resolve и bind_of разбирают все исходящие адреса на каждый «Напрямую» каждого клиента и
+    правила — на 1000 клиентах и 16 адресах это было 83 % времени ответа /api/state (проверка 1.25.0)."""
     try:
         return str(ipaddress.IPv4Address(v.strip()))
     except ValueError:

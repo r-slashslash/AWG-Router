@@ -145,7 +145,7 @@ class ServerMixin:
                 self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
                 self.server_engine = None                  # перечитать после запуска
                 self.event("info", Msg("ev.engine_go_reboot" if err else "ev.engine_go"))
-            self.reconcile_soon()
+            self.trigger()
             return {"action": "restarted", "reboot": bool(err)}
         if choice != "kernel":
             raise ValueError(choice)
@@ -314,4 +314,4 @@ class ServerMixin:
             self._settle = (why, time.time())
             self._srv_down, self._srv_tries, self._srv_next = None, 0, 0.0
             self.kernel_fallback = None     # на хосте Target.key не меняется: модуль пробуем снова здесь
-        self.reconcile_soon()
+        self.trigger()

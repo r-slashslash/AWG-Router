@@ -31,17 +31,22 @@ while True:
     c,a=s.accept(); c.sendall((sys.argv[1]+" from "+a[0]).encode()); c.close()
 """
 # DNS (UDP и TCP 53): отвечает своим именем и адресом спросившего — видно, кто ответил (П5 полной проверки 1.25.0)
+# UDP — на самом адресе сайта: сокет на 0.0.0.0 ответил бы с адреса интерфейса (172.20.0.1), и ответ не нашёл бы
+# своего соединения в conntrack сервера
 DNS_SERVER = r"""
 import socket,sys,threading
-def udp():
-    s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind((sys.argv[2],53))
+def udp(addr):
+    s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind((addr,53))
     while True:
         d,a=s.recvfrom(512); s.sendto((sys.argv[1]+" from "+a[0]).encode(),a)
-def tcp():
-    s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind((sys.argv[2],53)); s.listen(16)
+def tcp(addr):
+    s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind((addr,53)); s.listen(16)
     while True:
         c,a=s.accept(); c.sendall((sys.argv[1]+" from "+a[0]).encode()); c.close()
-threading.Thread(target=udp,daemon=True).start(); tcp()
+for addr in sys.argv[2].split(","):
+    threading.Thread(target=udp,args=(addr,),daemon=True).start()
+    threading.Thread(target=tcp,args=(addr,),daemon=True).start()
+threading.Event().wait()
 """
 DNS_CLIENT = r"""
 import socket,sys
@@ -132,7 +137,7 @@ def setup():
     for ns, name in (("inet", "DIRECT"), ("up1", "UP1")):
         procs.append(subprocess.Popen(["nsenter", f"--net=/var/run/netns/{ns}", "--",
                                        sys.executable, "-c", SERVER, name]))
-    for ns, name, addr in (("inet", "DNS-INET", "0.0.0.0"), ("up1", "DNS-UP1", "0.0.0.0"), ("amz", "DNS-PANEL", "10.8.1.1")):
+    for ns, name, addr in (("inet", "DNS-INET", "8.8.8.8"), ("up1", "DNS-UP1", "8.8.8.8"), ("amz", "DNS-PANEL", "10.8.1.1")):
         procs.append(subprocess.Popen(["nsenter", f"--net=/var/run/netns/{ns}", "--",
                                        sys.executable, "-c", DNS_SERVER, name, addr]))
     time.sleep(0.5)

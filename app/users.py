@@ -268,7 +268,7 @@ class ServerManager:
         except Exception as e:  # noqa: BLE001
             log.warning("%s", e)
             live = {}
-        keys = self.e.store.snapshot().get("keys", {})
+        keys = self.e.store.peek(lambda s: set(s.get("keys") or {}))     # только у кого есть конфиг: без копии всего
         out = []
         for p in sc.peers:
             ud = names.get(p.public_key, {})

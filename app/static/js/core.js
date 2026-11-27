@@ -80,6 +80,7 @@ function toast(msg, bad = false) {
   const el = document.createElement("div");
   el.className = "toast" + (bad ? " bad" : "");
   el.textContent = msg;
+  el.onclick = () => el.remove();          // закрыть нажатием, не ждать 6 с
   // открытое окно (dialog) лежит в верхнем слое поверх всей страницы: сообщения — в нём, иначе их не видно
   // окно над окном (окно правила в окне клиента) — в верхнем
   const box = $("#toasts"), host = [...document.querySelectorAll("dialog[open]")].pop() || document.body;
@@ -167,7 +168,8 @@ async function api(method, path, body, timeoutMs = 0, headers = null) {
   let data = null;
   try { data = await r.json(); } catch { /* пусто */ }
   if (!r.ok) {
-    const err = new Error(data && data.detail ? tm(data.detail) : `HTTP ${r.status}`);
+    // ответ не JSON (502/504 обратного прокси перед панелью) — фраза, а не «HTTP 502» (П65)
+    const err = new Error(data && data.detail ? tm(data.detail) : t("err.http", { code: r.status }));
     err.field = data && typeof data.field === "string" ? data.field : null;
     err.key = data && data.detail && typeof data.detail.$t === "string" ? data.detail.$t : null;   // какая ошибка
     throw err;
@@ -460,6 +462,8 @@ function showLogin() {
   document.title = "AWG Router";       // адрес и название сервера — только после входа
   pollOn = false;
   clearTimeout(pollTimer);
+  // окно над окном (окно правила) закрыло бы экран входа, и пароль печатался бы в его поле (П60)
+  if ($("#modal2").open) $("#modal2").close();
   closeModal();
   $("#app").hidden = true;
   $("#login").hidden = false;
@@ -530,7 +534,12 @@ async function refresh(auto = false) {
     // фоновый опрос шлёт отпечаток прошлого ответа: ничего не изменилось — сервер отвечает коротко, и
     // вкладка не перерисовывается (обновляются только время, процессор и память в шапке)
     const tagged = auto && S && S.tag;
-    const data = await api("GET", "state", undefined, STATE_TIMEOUT_MS, tagged ? { "X-State-Tag": S.tag } : null);
+    const hdr = {};
+    if (tagged) hdr["X-State-Tag"] = S.tag;
+    // скорость клиентов — только для вкладки «Клиенты» (решение владельца 2026-11-27): на других её никто не видит,
+    // а сервер ради неё опрашивает awg show; после перехода на «Клиенты» она приходит со следующим опросом
+    if (tab === "clients") hdr["X-Speeds"] = "1";
+    const data = await api("GET", "state", undefined, STATE_TIMEOUT_MS, Object.keys(hdr).length ? hdr : null);
     if (seq < stateShown) return;
     stateShown = seq;
     pollFails = 0;
@@ -835,10 +844,20 @@ $("#modal2").addEventListener("close", () => {
   document.body.append($("#toasts"));
   if ($("#modal").open) { $("#modal").append($("#toasts")); return; }   // под ним окно клиента — оно на своём состоянии
   if (pendingS) { S = pendingS; pendingS = null; }
-  render();
+  renderKeep();
 });
 $("#modal").addEventListener("close", () => {
   document.body.append($("#toasts"));          // сообщения, начатые в окне, досматриваются после него
   if (pendingS) { S = pendingS; pendingS = null; }
-  if (tab !== "routing") render();
+  if (tab !== "routing") renderKeep();
 });
+/** перерисовать вкладку после окна, вернув набранное и не сохранённое в её полях: токен бота, название сервера,
+    «Обновлять списки каждые» стирались после «Сменить пароль», окна правила и т. п. (проверка 1.25.0, П61) */
+function renderKeep() {
+  const keep = typedFields();
+  render();
+  for (const [id, v] of keep) {
+    const el = $("#" + id);
+    if (el) { if (typeof v === "boolean") el.checked = v; else el.value = v; }
+  }
+}

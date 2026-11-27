@@ -117,7 +117,7 @@ RULE_LIM_SHIFT = 16
 # политика, эта): на сервере «на хосте» те же биты 0x00FF0000 занимают чужие программы — Tailscale (0x40000, 0x80000)
 RULE_LIM_TAG = 0xE1F0
 # Младшие 16 бит меток панели, у которых могут быть биты номера ограничения (метки сокетов посредника): выходы
-# MARK_BASE + N, политики sniproxy.py, RULE_LIM_TAG. Другие метки с этими битами — чужие, их не трогаем
-# MARK_BASE + N, исходящие адреса ADDR_MARK_BASE + K (1.25.0), политики sniproxy.py, RULE_LIM_TAG
+# MARK_BASE + N, исходящие адреса ADDR_MARK_BASE + K (1.25.0), политики sniproxy.py, RULE_LIM_TAG. Другие метки с
+# этими битами — чужие, их не трогаем
 RULE_LIM_OWN = (f"{MARK_BASE:#x}-{MARK_BASE + 0xFF:#x}, {ADDR_MARK_BASE + 1:#x}-{ADDR_MARK_BASE + ADDR_MAX:#x}, "
                 f"{SNIFF_OUT_BASE:#x}-{QUIC_PASS_MARK - 1:#x}, {RULE_LIM_TAG:#x}")

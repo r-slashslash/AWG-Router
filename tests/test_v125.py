@@ -1298,6 +1298,7 @@ class FallbackDnsSettingTest(unittest.TestCase):
 
     def test_country_button_fills_it(self):
         from app.api import routing
+        lists0 = panel.store.snapshot()["lists"]
         panel.store.mutate(lambda st: st["routing"].update(rules=[]))
         panel.store.mutate(lambda st: st["settings"].update(fallback_dns=["9.9.9.9"], fallback_dns_on=False))
         try:
@@ -1325,8 +1326,10 @@ class FallbackDnsSettingTest(unittest.TestCase):
                               "comment": "Иран"})
             self.assertEqual((rules[2]["outbound"], rules[2]["enabled"]), ("direct", True))
         finally:
+            # и список доменов страны, который сделала кнопка: в состоянии его текст — отдельным файлом, и тесты копий
+            # после этого файла видели «список доменов без текста» (проверка 1.25.0, П69)
             panel.store.mutate(lambda st: st["routing"].update(rules=[]))
-            panel.store.mutate(lambda st: st.update(lists=[x for x in st["lists"] if x["id"] != "de"]))
+            panel.store.mutate(lambda st: st.update(lists=lists0))
 
     def test_backup_keeps_it(self):
         st = json.loads(json.dumps(DEFAULT_STATE))

@@ -63,6 +63,10 @@ def _state_tag(out: dict) -> str:
     return hashlib.sha256(json.dumps(out, default=plain).encode()).hexdigest()[:20]
 
 
+def _header(req, name: str) -> str | None:
+    return req.headers.get(name) if req is not None and getattr(req, "headers", None) else None
+
+
 @app.get("/api/state")
 def get_state(req):
     """Состояние для браузера. Заголовок X-State-Tag с отпечатком прошлого ответа: ничего не изменилось —
@@ -76,9 +80,10 @@ def get_state(req):
            # демо: постоянные числа — снимки README не меняются от загрузки машины, где их снимали
            "system": {"cpu": 7.0, "cores": 2, "load": [0.14, 0.11, 0.09], "mem": [770 * 2**20, 2 * 2**30]}
            if config.DRY_RUN else hostnet.system_view(),
-           # скорость клиентов сейчас (список клиентов, 1.23.0): меняется на каждом замере — вне отпечатка
-           "speeds": engine.client_speeds()}
-    seen = req.headers.get("X-State-Tag") if req is not None and getattr(req, "headers", None) else None
+           # скорость клиентов сейчас (список клиентов, 1.23.0): меняется на каждом замере — вне отпечатка. Только когда
+           # браузер на вкладке «Клиенты» (X-Speeds: 1, решение владельца 2026-11-27): на других её не показывают
+           "speeds": engine.client_speeds() if _header(req, "X-Speeds") == "1" else {}}
+    seen = _header(req, "X-State-Tag")
     if seen and seen == out["tag"]:
         return {"same": True, "tag": out["tag"], "last_reconcile": last, **vol}
     return {**out, **vol}

@@ -8,7 +8,7 @@
   --surface-2: #f6f8fa;
   --ink: #1c2430;
   --ink-2: #3a4655;
-  --muted: #687482;
+  --muted: #5f6b78;
   --rule: #dbe1e7;
   --rule-strong: #c4ccd5;
   --focus: #2f6feb;
@@ -17,7 +17,7 @@
   --direct: #8a94a3;
   --block: #d93636;
   --ok: #12925f;
-  --warn: #b7791f;
+  --warn: #975a16;
   --bad: #d93636;
   --l1: #2f6feb; --l2: #0e9f6e; --l3: #d9480f; --l4: #7c3aed;
   --l5: #c99700; --l6: #0891b2; --l7: #db2777; --l8: #4d7c0f;
@@ -32,7 +32,7 @@
 /* тёмная тема: data-theme ставит theme.js (выбор кнопкой в шапке или тема системы) */
 :root[data-theme="dark"] {
   --bg: #12171d; --surface: #1a2129; --surface-2: #212a34; --ink: #e4e9ef; --ink-2: #c3ccd6;
-  --muted: #8d99a6; --rule: #2a3440; --rule-strong: #3a4654; --primary: #4f8cff;
+  --muted: #8d99a6; --rule: #2a3440; --rule-strong: #3a4654; --primary: #4f8cff; --primary-ink: #0b1220;
   --direct: #7d8896; --block: #f05252; --ok: #34c38f; --warn: #e3a33b; --bad: #f05252;
   --l1: #5b8fff; --l2: #2fbf8a; --l3: #f0743e; --l4: #a07bff; --l5: #e7bb2a; --l6: #2ab3d1;
   --l7: #f0629e; --l8: #86b83a;
@@ -345,6 +345,8 @@ select.rule-pos { appearance: none; -webkit-appearance: none; width: 100%; min-h
   font-weight: 600; font-size: .9rem; color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }
 select.rule-pos:hover, select.rule-pos:focus { color: var(--ink); border-color: var(--muted) !important; }
 .rule-ctl { display: flex; align-items: center; gap: 2px; padding-top: 4px; }
+/* элемент сетки растёт по самому длинному пункту «+ Добавить список» и выталкивал окно правила за край телефона (П40) */
+#rw-lists { min-width: 0; }
 .add-list { width: auto !important; max-width: 100%; min-height: 30px !important; padding-block: 3px !important; padding-inline: 8px 28px !important; font-size: .86rem; border-style: dashed !important; }
 .default-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(170px, 230px) auto; gap: 10px; align-items: center; padding: 12px; border-radius: 9px; border: 1px dashed var(--rule-strong); }
 /* строка правила (1.23.0): номер, что ловит правило и выход (нажатие — окно правила), включение и место */
@@ -465,6 +467,8 @@ dialog::backdrop { background: rgba(18, 23, 29, .45); }
 
 /* ---------- toasts ---------- */
 #toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: 100; width: min(440px, calc(100vw - 32px)); }
+/* в окне кнопки «Сохранить»/«Отмена» внизу — сообщения сверху, чтобы их не закрывать (П39) */
+dialog #toasts { top: 12px; bottom: auto; }
 .toast { background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 9px; font-size: .9rem; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
 .toast.bad { background: var(--bad); color: #fff; }
 

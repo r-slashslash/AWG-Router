@@ -55,7 +55,9 @@ jobs:
       - name: Upgrade ${{ inputs.from || 'previous' }} → latest (AmneziaWG ${{ matrix.mode }})
         env:
           E2E_GH_TOKEN: ${{ github.token }}
-        run: sudo E2E_MODE=${{ matrix.mode }} E2E_FROM="${{ inputs.from || 'previous' }}" E2E_LOGS="$RUNNER_TEMP/e2e" E2E_GH_TOKEN="$E2E_GH_TOKEN" bash tests/e2e/upgrade.sh
+          # ввод ручного запуска — через окружение, а не текстом в команду под sudo
+          E2E_FROM: ${{ inputs.from || 'previous' }}
+        run: sudo E2E_MODE=${{ matrix.mode }} E2E_FROM="$E2E_FROM" E2E_LOGS="$RUNNER_TEMP/e2e" E2E_GH_TOKEN="$E2E_GH_TOKEN" bash tests/e2e/upgrade.sh
 
       - name: Logs
         if: failure()

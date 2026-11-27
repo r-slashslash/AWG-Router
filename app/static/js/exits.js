@@ -136,7 +136,15 @@ function socksBuild(f) {
   const q = encodeURIComponent, h = f.host.includes(":") ? `[${f.host}]` : f.host;
   return "socks5://" + (f.user || f.pass ? q(f.user) + (f.pass ? ":" + q(f.pass) : "") + "@" : "") + h + (f.port ? ":" + f.port : "");
 }
-const looksSocks = (s) => /^socks(5h?)?:\/\//i.test(s.trim()) || (!!s.trim() && !/[\[\]=\n]/.test(s.trim()) && !/^vpn:\/\//i.test(s.trim()) && !!socksParse(s));
+// прокси — строка со схемой socks5:// или целиком «адрес:порт» (с логином и паролем): одна набранная буква
+// («P» от PrivateKey) переключала окно на SOCKS5 (П65)
+const looksSocks = (s) => {
+  const v = s.trim();
+  if (/^socks(5h?)?:\/\//i.test(v)) return true;
+  if (!v || /[\[\]=\s]/.test(v) || /^vpn:\/\//i.test(v)) return false;
+  const p = socksParse(v);
+  return !!(p && p.host && p.port);
+};
 
 async function editUpstream(id) {
   const u = id ? upstreamById(id) : null;
@@ -161,18 +169,18 @@ async function editUpstream(id) {
     <label class="field"><span>${esc(t("ex.name"))}</span><input type="text" data-field="name" id="u-name" maxlength="40" value="${esc(u ? u.name : "")}" placeholder="${esc(t("ex.name_ph"))}"></label>
     <div id="u-sf">
       <div class="row2 row2-port">
-        <label class="field"><span>${esc(t("ex.socks_host"))}</span><input type="text" data-field="config" id="u-sh" dir="ltr" spellcheck="false" autocomplete="off" placeholder="203.0.113.20"></label>
-        <label class="field"><span>${esc(t("ex.socks_port"))}</span><input type="text" data-field="config" id="u-sp" dir="ltr" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="1080"></label>
+        <label class="field"><span>${esc(t("ex.socks_host"))}</span><input type="text" data-field="socks" id="u-sh" dir="ltr" spellcheck="false" autocomplete="off" placeholder="203.0.113.20"></label>
+        <label class="field"><span>${esc(t("ex.socks_port"))}</span><input type="text" data-field="socks" id="u-sp" dir="ltr" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="1080"></label>
       </div>
       <div class="row2">
-        <label class="field"><span>${esc(t("ex.socks_user"))}</span><input type="text" data-field="config" id="u-su" dir="ltr" spellcheck="false" autocomplete="off" placeholder="${esc(t("ex.socks_opt"))}"></label>
-        <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input type="password" data-field="config" id="u-sw" dir="ltr" autocomplete="new-password" placeholder="${esc(t("ex.socks_opt"))}"></label>
+        <label class="field"><span>${esc(t("ex.socks_user"))}</span><input type="text" data-field="socks" id="u-su" dir="ltr" spellcheck="false" autocomplete="off" placeholder="${esc(t("ex.socks_opt"))}"></label>
+        <label class="field"><span>${esc(t("ex.socks_pass"))}</span><input type="password" data-field="socks" id="u-sw" dir="ltr" autocomplete="new-password" placeholder="${esc(t("ex.socks_opt"))}"></label>
       </div>
       <div class="field"><label class="check"><input type="checkbox" data-field="quic" id="u-quic" ${u && u.quic === true && u.kind === "socks5" ? "checked" : ""}><span>${esc(t("ex.socks_quic"))}</span></label>
         <span class="hint">${esc(t("ex.socks_quic_hint"))}</span></div>
     </div>
     <label class="field"><span id="u-conf-l"></span>
-      <textarea data-field="config" id="u-conf" dir="ltr" spellcheck="false"></textarea>
+      <textarea data-field="config socks" id="u-conf" dir="ltr" spellcheck="false"></textarea>
       <span class="hint" id="u-conf-h"></span>
     </label>
     <div class="field" id="u-filef"><input type="file" id="u-file" accept=".conf,.txt,.vpn" aria-label="${esc(t("ex.file"))}"></div>
@@ -263,7 +271,9 @@ async function editUpstream(id) {
     const body = { name: $("#u-name").value.trim(), fallback: $("#u-fb").value,
       quota_gb: $("#u-quota").value.trim(), quota_action: $("#u-qa").value,
       rate_down: $("#u-rd").value.trim() || null, rate_up: $("#u-ru").value.trim() || null };
-    const c = ta.value.trim();
+    let c = ta.value.trim();
+    // окно в режиме SOCKS5: строка без схемы («proxy.example.com») — тоже прокси, а не ссылка vpn:// (П65)
+    if (kind === "socks5" && c && !/^socks(5h?)?:\/\//i.test(c) && !/^[^\s:@\/\[\]]+:\d{1,5}:/.test(c)) c = "socks5://" + c;
     if (!u || c !== conf.trim()) body.config = c;
     if (kind === "socks5") body.quic = $("#u-quic").checked;
     if ($("#u-bind")) body.bind = $("#u-bind").value;          // «Подключаться с адреса» (1.25.0)

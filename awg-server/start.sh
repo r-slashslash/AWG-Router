@@ -27,10 +27,17 @@ SUBNET=${SUBNET:-10.8.1.0/24}
 iptables -A INPUT -i awg0 -j ACCEPT
 iptables -A FORWARD -i awg0 -j ACCEPT
 iptables -A OUTPUT -o awg0 -j ACCEPT
-iptables -A FORWARD -i awg0 -o eth0 -s "$SUBNET" -j ACCEPT
-iptables -A FORWARD -i awg0 -o eth1 -s "$SUBNET" -j ACCEPT
+# основная сеть контейнера — та, где маршрут по умолчанию. С сетями исходящих адресов (zz-awgr-out-K) Docker после
+# перезапуска может дать ей другое имя (eth2…), а не eth0 или eth1 — тогда «Напрямую» шло бы без подмены адреса
+WAN=$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+OUTS="eth0 eth1"
+if [ -n "$WAN" ]; then case " $OUTS " in *" $WAN "*) ;; *) OUTS="$OUTS $WAN" ;; esac; fi
+for o in $OUTS; do
+  iptables -A FORWARD -i awg0 -o "$o" -s "$SUBNET" -j ACCEPT
+done
 iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -t nat -A POSTROUTING -s "$SUBNET" -o eth0 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s "$SUBNET" -o eth1 -j MASQUERADE
+for o in $OUTS; do
+  iptables -t nat -A POSTROUTING -s "$SUBNET" -o "$o" -j MASQUERADE
+done
 
 tail -f /dev/null

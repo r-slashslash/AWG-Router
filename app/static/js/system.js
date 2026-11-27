@@ -110,8 +110,15 @@ bind.system = () => {
   bindTelegram();
   bindSecurity();
   bindBackup();
-  $("#reapply").onclick = async () => { await api("POST", "reapply", {}); toast(t("toast.applying")); setTimeout(refresh, 1500); };
-  $("#logout").onclick = async () => { await api("POST", "logout", {}); showLogin(); };
+  // нет связи или ошибка сервера — сообщение, а не тишина (проверка 1.25.0, П59)
+  $("#reapply").onclick = async () => {
+    try { await api("POST", "reapply", {}); toast(t("toast.applying")); setTimeout(refresh, 1500); }
+    catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+  };
+  $("#logout").onclick = async () => {
+    try { await api("POST", "logout", {}); showLogin(); }
+    catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); }
+  };
   $("#load-debug").onclick = async () => {
     try {
       const d = await api("GET", "debug");

@@ -144,6 +144,11 @@ class DiagMixin:
         dl = self.domain_lists(st)
         sni_on = bool(self.sni_state and self.sni_state.get("state") == "on")
         steps = []
+        # служебные адреса облака клиентам закрыты всегда (c_forward), а не «напрямую» (П50)
+        addr = ipaddress.IPv4Address(ip)
+        if addr in ipaddress.IPv4Network(nftgen.LINK_LOCAL) or ip == nftgen.CLOUD_META:
+            return {"result": "block", "effective": "block",
+                    "steps": [Msg("tr.cloud_meta", ip=ip)]}
         for net in nftgen.LOCAL_NETS:
             if ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(net):
                 return {"result": "direct", "effective": "direct",
@@ -157,6 +162,7 @@ class DiagMixin:
             if r.get("balance"):
                 steps.append(Msg("tr.rule_balance" if pk else "tr.rule_balance_new",
                                  exit=(Store.upstream(st, out[3:]) or {}).get("name", out) if out.startswith("up:")
+                                 else Msg("out.direct_at", addr=out[7:]) if out.startswith("direct@")
                                  else Msg("out." + out)))
             return out
         for r in pol["rules"] if name and sni_on else []:

@@ -343,10 +343,18 @@ class RoutesMixin:
         """Общая и личные политики для nftables и sniproxy.py: правила по адресам — с выходом
         после резолва; правила со списками доменов — отдельно (их выход резолвит sniproxy-конфиг).
         labels (по умолчанию — labels_on): у политики номера её правил (slots — у правил по адресам, dslots — по
-        доменам; номер — место правила среди включённых правил клиента) для учёта трафика по правилам."""
-        dl = self.domain_lists(st)
+        доменам; номер — место правила среди включённых правил клиента) для учёта трафика по правилам.
+        В проходе (reconcile, после балансировки) — один раз на набор входов: посредник, DNS и правила спрашивали их
+        3–4 раза (проверка 1.25.0); правила «до панели» (_holding) — всегда заново."""
         if labels is None:
             labels = self.labels_on()
+        memo, key = getattr(self, "_pol_memo", None), None
+        if memo and memo["st"] is st and memo["tid"] == threading.get_ident() \
+                and getattr(self, "_holding", None) is None:
+            key = (labels, self.limits_on())
+            if key in memo["v"]:
+                return memo["v"][key]
+        dl = self.domain_lists(st)
         rl = self.rule_limits(st) if labels else {}
 
         def conv(pol: dict, pk: str | None) -> dict:
@@ -398,6 +406,8 @@ class RoutesMixin:
             pol = self.policy_for(st, c["public_key"])
             if pol["custom"] or pol["balanced"] or pol.get("rbal"):
                 cps[c["ip"]] = conv(pol, c["public_key"])
+        if key is not None:
+            memo["v"][key] = (gp, cps)
         return gp, cps
 
     def _up_list(self, st: dict) -> list[dict]:

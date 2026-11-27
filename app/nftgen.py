@@ -200,6 +200,12 @@ def out_chain(out) -> str:
     return f"o_u{int(out)}"
 
 
+def _mss(match: str, u: dict) -> str:
+    """MSS clamp под MTU туннеля выхода: пересылка в обе стороны (c_forward) и свои соединения sniproxy.py (c_mss_out)."""
+    mss = int(u.get("mtu", 1280)) - 40
+    return f"\t\t{match} tcp flags & (syn | rst) == syn tcp option maxseg size > {mss} tcp option maxseg size set {mss}"
+
+
 def _okey(o):
     """Выход в ключе политики: Sticky(N) и N — разные цепочки; адрес — по номеру."""
     if isinstance(o, Addr):
@@ -558,11 +564,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     ]
     for u in sorted(upstreams, key=lambda x: x["num"]):
         ifn = f"{config.IFACE_PREFIX}{u['num']}"
-        mss = int(u.get("mtu", 1280)) - 40
-        fwd.append(f'\t\toifname "{ifn}" tcp flags & (syn | rst) == syn '
-                   f'tcp option maxseg size > {mss} tcp option maxseg size set {mss}')
-        fwd.append(f'\t\tiifname "{ifn}" tcp flags & (syn | rst) == syn '
-                   f'tcp option maxseg size > {mss} tcp option maxseg size set {mss}')
+        fwd += [_mss(f'oifname "{ifn}"', u), _mss(f'iifname "{ifn}"', u)]
     fwd.append("\t}")
     out.append("\n".join(fwd))
     out.extend(_limit_chains(wg_iface, limits, labels))
@@ -605,8 +607,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 \t}}""")
         # соединения sniproxy.py без совпадения по домену: обычные правила политики клиента
         # (метка политики → цепочка q_*; смена метки в type route — новый выбор маршрута)
-        oq = lambda o: f"oq_a{o.k}" if isinstance(o, Addr) else "oq_direct" if o == "direct" else \
-            "oq_block" if o == "block" else f"oqb_u{int(o)}" if isinstance(o, Sticky) else f"oq_u{int(o)}"
+        oq = lambda o: "oq" + out_chain(o)[1:]          # o_u1 → oq_u1, ob_u1 → oqb_u1, o_direct → oq_direct
         vm = ", ".join(f"{m:#x} : goto q_{n}" for n, m in marks.items())
         out.append(f"""\tchain c_output {{
 \t\ttype route hook output priority mangle; policy accept;
@@ -626,10 +627,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
             out.append(_sticky_chain(f"oqb_u{n}", n, alive))
         # MSS clamp для соединений sniproxy.py: они локальные (output), а не транзитные, поэтому
         # правило из c_forward их не видит — без него SYN объявит MSS 1460 под MTU туннеля ~1280
-        mss = [f'\t\toifname "{config.IFACE_PREFIX}{u["num"]}" tcp flags & (syn | rst) == syn '
-               f'tcp option maxseg size > {int(u.get("mtu", 1280)) - 40} '
-               f'tcp option maxseg size set {int(u.get("mtu", 1280)) - 40}'
-               for u in sorted(upstreams, key=lambda x: x["num"])]
+        mss = [_mss(f'oifname "{config.IFACE_PREFIX}{u["num"]}"', u) for u in sorted(upstreams, key=lambda x: x["num"])]
         if mss:
             out.append("\tchain c_mss_out {\n\t\ttype filter hook postrouting priority mangle; policy accept;\n"
                        + "\n".join(mss) + "\n\t}")

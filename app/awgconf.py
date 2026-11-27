@@ -105,9 +105,13 @@ def parse_socks(text: str) -> UpstreamConf:
             t = "socks5://" + t
         try:
             u = urllib.parse.urlsplit(t)
-            host, port = u.hostname or "", u.port
+            host = u.hostname or ""
         except ValueError:
             raise ConfigError(Msg("cfg.socks_bad")) from None
+        try:
+            port = u.port
+        except ValueError:                     # порт вне 0–65535 или не число — о порте, а не «не похоже» (П65)
+            raise ConfigError(Msg("cfg.socks_port")) from None
         if u.path not in ("", "/") or u.query or u.fragment:
             raise ConfigError(Msg("cfg.socks_bad")) from None
         user = urllib.parse.unquote(u.username or "")

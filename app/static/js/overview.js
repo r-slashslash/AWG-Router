@@ -59,7 +59,7 @@ function viewOverview() {
   return `
   <div class="ov-grid">
     <div class="section-head ov-head ov-h1"><div><h2>${esc(t("ov.title"))}</h2><p class="muted small">${esc(t("ov.subtitle"))}</p></div>
-      <button class="btn" data-goto="exits">${esc(t("ov.add_exit"))}</button></div>
+      <button class="btn" data-goto="exits" data-add>${esc(t("ov.add_exit"))}</button></div>
     <div class="section-head ov-head ov-h2"><div><h2>${esc(t("ov.policy"))}</h2><p class="muted small">${esc(t("ov.policy_sub"))}</p></div>
       <button class="btn" data-goto="routing">${esc(t("btn.edit"))}</button></div>
     <div class="map-lines ov-c1">${lines}</div>
@@ -103,7 +103,11 @@ async function applyCountry(cc, b) {
 }
 
 bind.overview = () => {
-  $$("[data-goto]").forEach((b) => b.onclick = () => { tab = b.dataset.goto; history.replaceState(null, "", "#" + tab); render(); });
+  // общий переход: закрывает вопрос в полосе сверху и прокручивает наверх; «Добавить выход» сразу открывает окно (П64)
+  $$("[data-goto]").forEach((b) => b.onclick = () => {
+    goTab(b.dataset.goto);
+    if (b.hasAttribute("data-add") && tab === "exits") editUpstream(null);
+  });
   $$("[data-probe]").forEach((b) => b.onclick = () => runProbe(b.dataset.probe, render));
   $$("[data-cp]").forEach((b) => b.onclick = () => applyCountry(b.dataset.cp, b));
 };

@@ -155,9 +155,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             self.notifier.engine_event(msg)
 
     def trigger(self) -> None:
-        self.wake.set()
-
-    def reconcile_soon(self) -> None:
+        """Пройти как можно скорее (не ждать RECONCILE_INTERVAL)."""
         self.wake.set()
 
     def start(self) -> None:
@@ -399,6 +397,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             log.exception("resources")
         with self.lock:
             st = self.store.snapshot()
+            self._pol_memo = None
             try:
                 t = self._fake if config.DRY_RUN else system.discover()
                 while system.recovered:     # прерванная смена порта или обновление: контейнер вернули (system.py)
@@ -521,6 +520,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
             except Exception:  # noqa: BLE001
                 log.exception("balance")
                 self.bal, self.bal_new, self.bal_nums = {}, None, set()
+            # политики клиентов дальше в проходе одни и те же (посредник, DNS, правила): считаются один раз (_policies)
+            self._pol_memo = {"st": st, "tid": threading.get_ident(), "v": {}}
             try:
                 sniff = self._sync_sni(t, st)
             except Exception as e:  # noqa: BLE001
@@ -593,6 +594,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                         self.dns.proc.send_signal(signal.SIGUSR1)
                     except OSError:
                         pass
+            self._pol_memo = None
             self._save_hold(t, st)
             self._sync_rules(t)
             try:

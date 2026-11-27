@@ -19,7 +19,15 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
-from .i18n import Msg, to_json
+from .i18n import Msg
+
+
+def _msg_json(v):
+    """Msg в ответе — {"$t": …}: кодировщик на C зовёт Python только для них (раньше весь ответ сначала копировался
+    на Python, to_json: на 1000 клиентах 16 мс на ответ вместо 6). Байты ответа те же."""
+    if isinstance(v, Msg):
+        return v.to_json()
+    raise TypeError(f"{type(v).__name__} is not JSON serializable")
 
 mimetypes.add_type("application/manifest+json", ".webmanifest")   # иконка на главный экран
 
@@ -323,7 +331,7 @@ class App:
                     self.wfile.write(body)
 
             def _json(self, code: int, obj, extra=()):
-                self._send(code, json.dumps(to_json(obj), ensure_ascii=False).encode(),
+                self._send(code, json.dumps(obj, ensure_ascii=False, default=_msg_json).encode(),
                            "application/json; charset=utf-8", [("Cache-Control", "no-store"), *extra])
 
             def _dispatch(self):

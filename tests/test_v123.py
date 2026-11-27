@@ -2,12 +2,17 @@
 запасные пути бота."""
 import os
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# как в остальных файлах тестов: без них этот файл, запущенный первым, загружал панель со случайным паролем в
+# data/ по умолчанию, и вход в тестах после него не проходил (проверка 1.25.0, П69)
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("DRY_RUN", "1")
+os.environ.setdefault("PANEL_PASSWORD", "test-password")
 
 from app import engine as engine_mod  # noqa: E402
 
@@ -46,7 +51,7 @@ class EngineSettleTest(unittest.TestCase):
         e.kernel_fallback, e._srv_tries, e._srv_next = None, 0, 0.0
         with mock.patch.object(e, "module_info", create=True, return_value={"loaded": True}), \
                 mock.patch.object(e, "_stop_all", create=True), mock.patch.object(e, "event", create=True), \
-                mock.patch.object(e, "reconcile_soon", create=True), \
+                mock.patch.object(e, "trigger", create=True), \
                 mock.patch.object(engine_mod.server.kernelmod, "update"):
             self.assertEqual(e.switch_engine("go")["action"], "restarted")
         t.stop.assert_called_once()
@@ -58,7 +63,7 @@ class EngineSettleTest(unittest.TestCase):
         e = self.e
         t = mock.Mock(exists=True, kind="container")
         e.target, e.lock = t, mock.MagicMock()
-        with mock.patch.object(e, "reconcile_soon", create=True):
+        with mock.patch.object(e, "trigger", create=True):
             e.restart_server()
         e.server_restart_at = None               # интерфейс уже на месте, а проход ещё не удался
         e.last_error = "boom"

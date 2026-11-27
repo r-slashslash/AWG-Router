@@ -18,7 +18,8 @@ def put_limits(req, pk):
     _pk(pk)
     body = req.json()
     exp = checks.expires(body.get("expires"))
-    quota = checks.quota_gb(body.get("quota_gb"))
+    with checks.field("quota_gb"):            # поле «Лимит трафика» подсвечивается (П65)
+        quota = checks.quota_gb(body.get("quota_gb"))
     period = checks.period(body.get("period"))
     return {"ok": True, "enabled": apply_limits(pk, exp, quota, period, checks.rates(body))}
 
@@ -59,7 +60,7 @@ def apply_limits(pk: str, exp: int | None, quota: int | None, period: str, rates
     store.mutate(fn)
     if enable:
         user_errors(lambda: engine.srv.update_client(pk, enabled=True))
-    engine.reconcile_soon()
+    engine.trigger()
     return enable
 
 
@@ -277,7 +278,7 @@ def add_user(req):
     pk = user_errors(lambda: engine.srv.add_client(_client_name(body.get("name"))))
     if host:
         store.mutate(lambda st: st.setdefault("chost", {}).__setitem__(pk, host))
-    engine.reconcile_soon()
+    engine.trigger()
     return {"public_key": pk}
 
 
@@ -315,7 +316,7 @@ def edit_user(req, pk):
         user_errors(lambda: engine.srv.update_client(pk, name=name))
     if body.get("enabled") is not None:
         set_client_enabled(pk, checks.flag(body["enabled"]))
-    engine.reconcile_soon()
+    engine.trigger()
     return {"ok": True}
 
 
@@ -329,7 +330,7 @@ def set_client_enabled(pk: str, on: bool) -> None:
         if L and L.get("auto_off"):
             L["auto_off"] = None
     store.mutate(fn)
-    engine.reconcile_soon()
+    engine.trigger()
 
 
 @app.delete("/api/users/{pk:path}")
@@ -348,7 +349,7 @@ def delete_user(pk: str) -> None:
     if own:
         routing.forget_lists(store.mutate(lambda st: routing.drop_unused_lists(st, own)))
     engine.traffic.forget(pk)
-    engine.reconcile_soon()
+    engine.trigger()
 
 
 @app.get("/api/rule-traffic/{pk:path}")

@@ -536,7 +536,9 @@ bind.server = () => {
   $("#s-gen").onclick = async () => {
     if (srvKeepTyped(false)) return;              // параметры маскировки в черновике сохранятся, поля — нет
     if (!await ask(t("srv.generate_confirm"), { from: $("#s-gen") })) return;
-    const r = await api("POST", "server/generate", {});
+    let r;
+    try { r = await api("POST", "server/generate", {}); }
+    catch (e) { if (!(e instanceof AuthError)) toast(e.message, true); return; }
     srvDraft = { ...srvDraft, ...r.params };
     render();
     toast(t("toast.generated"));

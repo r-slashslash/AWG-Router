@@ -2087,7 +2087,10 @@ class Bot:
                  else tr(L, "rt_res", target=target, ip=ip, out=out)]
         steps = r.get("steps") or []
         match = next((s for s in steps if isinstance(s, Msg) and s.key == "tr.match"), None)
-        if any(isinstance(s, Msg) and s.key == "tr.local" for s in steps):
+        cloud = next((s for s in steps if isinstance(s, Msg) and s.key == "tr.cloud_meta"), None)
+        if cloud:                              # служебный адрес облака: закрыт всегда, не «по умолчанию» (П50)
+            lines.append(uitext.text(L, cloud))
+        elif any(isinstance(s, Msg) and s.key == "tr.local" for s in steps):
             lines = [tr(L, "rt_res_ip", ip=ip, out=tr(L, "o_direct")), tr(L, "rt_local")]
         elif match:
             lines.append(tr(L, "rt_rule", list=self.ops.list_name(match.p.get("list")),

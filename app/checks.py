@@ -16,7 +16,7 @@ import copy
 import math
 import re
 
-from . import awgconf, config, cps, dnsaddr, dohttp, domains, limits, lists, notify, shaping, srcaddr
+from . import awgconf, config, cps, dnsaddr, dohttp, domains, limits, lists, notify, shaping, srcaddr, users
 from .i18n import Msg, MsgError
 from .store import ID_RE, Store, new_id
 from .web import HTTPError
@@ -66,9 +66,10 @@ def flag(v, default=None) -> bool:
     bool, так ломался только запрос, собранный вручную). default — значение, когда поле не прислано (None)."""
     if v is None and default is not None:
         return default
-    if not isinstance(v, bool):
-        bad("err.bad_value")
-    return v
+    try:
+        return users.check_flag(v)          # одна проверка галочки на панель (и на форму «Сервер», и на копию)
+    except users.UserError as e:
+        bad(e.msg)
 
 
 def name(v, maxlen: int = 40) -> str:
@@ -334,7 +335,8 @@ def exit_config(text) -> awgconf.UpstreamConf:
     try:
         return awgconf.parse_upstream(str(text or ""))
     except awgconf.ConfigError as e:
-        bad(e.msg, field="config")
+        # ошибка прокси — о полях SOCKS5, а не обо всех полях окна сразу (П65)
+        bad(e.msg, field="socks" if getattr(e.msg, "key", "").startswith("cfg.socks") else "config")
 
 
 def fallback_loops(st: dict, uid: str, fb: str) -> bool:
