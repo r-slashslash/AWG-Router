@@ -790,3 +790,50 @@ class HoldFileBlocksTest(unittest.TestCase):
         self.assertTrue(texts)
         self.assertIn("goto o_block", _chain(texts[-1], "p_global"))
         self.assertNotIn("goto o_direct", _chain(texts[-1], "p_global"))
+
+
+class DnsRedirectTest(unittest.TestCase):
+    """П5: при включённом «DNS на сервере» все запросы DNS клиентов (UDP и TCP 53, к любому адресу) идут к DNS на
+    сервере — и в правилах «до панели»; выключен — как раньше."""
+
+    def test_ruleset(self):
+        txt = _ruleset(dns_to="10.8.1.1")
+        c = _chain(txt, "c_dns")
+        self.assertIn("type nat hook prerouting priority dstnat;", c)
+        for p in ("udp", "tcp"):
+            self.assertIn(f'iifname "awg0" ip daddr != 10.8.1.1 {p} dport 53 dnat to 10.8.1.1:53', c)
+        self.assertNotIn("c_dns", _ruleset())
+
+    def engine(self, panel_dns):
+        from app.engine import Engine
+        from tests.test_v125 import state
+        e = Engine.__new__(Engine)
+        e.tunnel_addr = lambda t: ("10.8.1.1", "10.8.1.0/24")
+        return e, state(panel_dns=panel_dns)
+
+    def test_engine_follows_the_setting(self):
+        e, st = self.engine(True)
+        self.assertEqual(e.dns_redirect(None, st), "10.8.1.1")
+        e, st = self.engine(False)
+        self.assertIsNone(e.dns_redirect(None, st))
+        e, st = self.engine(True)
+        e.tunnel_addr = lambda t: None                      # интерфейса ещё нет
+        self.assertIsNone(e.dns_redirect(None, st))
+
+    def test_before_the_panel_too(self):
+        """Правила «до панели» (и при остановке панели) — с перенаправлением: dnsproxy.py тогда не работает, имена не
+        разрешаются, но и мимо выхода не уходят (решение владельца 2026-11-27)."""
+        from tests import test_v121f
+        t = test_v121f.ReconcileOrderTest("test_pass_sets_ip_rules")
+        t.setUp()
+        self.addCleanup(t.doCleanups)
+        t.e.store.mutate(lambda st: st["settings"].update(panel_dns=True))
+        t.e.tunnel_addr = lambda tg: ("10.8.1.1", "10.8.1.0/24")
+        st = t.e.store.snapshot()
+        self.assertIn("dnat to 10.8.1.1:53", t.e.build_ruleset(t.t, st, None, hold=True))
+
+    @unittest.skipUnless(shutil.which("nft") and os.geteuid() == 0, "nft -c — только от root")
+    def test_kernel_accepts(self):
+        p = subprocess.run(["unshare", "-n", "nft", "-c", "-f", "-"], input=_ruleset(dns_to="10.8.1.1"),
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)

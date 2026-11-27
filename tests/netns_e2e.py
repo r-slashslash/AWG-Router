@@ -30,6 +30,30 @@ s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind
 while True:
     c,a=s.accept(); c.sendall((sys.argv[1]+" from "+a[0]).encode()); c.close()
 """
+# DNS (UDP и TCP 53): отвечает своим именем и адресом спросившего — видно, кто ответил (П5 полной проверки 1.25.0)
+DNS_SERVER = r"""
+import socket,sys,threading
+def udp():
+    s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind((sys.argv[2],53))
+    while True:
+        d,a=s.recvfrom(512); s.sendto((sys.argv[1]+" from "+a[0]).encode(),a)
+def tcp():
+    s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind((sys.argv[2],53)); s.listen(16)
+    while True:
+        c,a=s.accept(); c.sendall((sys.argv[1]+" from "+a[0]).encode()); c.close()
+threading.Thread(target=udp,daemon=True).start(); tcp()
+"""
+DNS_CLIENT = r"""
+import socket,sys
+kind, dst = sys.argv[1], sys.argv[2]
+try:
+    if kind == "udp":
+        s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(2); s.bind(("10.8.1.2",0))
+        s.sendto(b"q",(dst,53)); print(s.recv(100).decode())
+    else:
+        s=socket.socket(); s.settimeout(2); s.bind(("10.8.1.2",0)); s.connect((dst,53)); print(s.recv(100).decode())
+except OSError as e: print("FAIL", type(e).__name__)
+"""
 CLIENT = r"""
 import socket,sys
 s=socket.socket(); s.settimeout(2)
@@ -108,6 +132,9 @@ def setup():
     for ns, name in (("inet", "DIRECT"), ("up1", "UP1")):
         procs.append(subprocess.Popen(["nsenter", f"--net=/var/run/netns/{ns}", "--",
                                        sys.executable, "-c", SERVER, name]))
+    for ns, name, addr in (("inet", "DNS-INET", "0.0.0.0"), ("up1", "DNS-UP1", "0.0.0.0"), ("amz", "DNS-PANEL", "10.8.1.1")):
+        procs.append(subprocess.Popen(["nsenter", f"--net=/var/run/netns/{ns}", "--",
+                                       sys.executable, "-c", DNS_SERVER, name, addr]))
     time.sleep(0.5)
     return procs
 
@@ -119,13 +146,13 @@ def nft(ns, text):
     assert p.returncode == 0, p.stderr
 
 
-def panel_apply(global_policy, clients, upstream_alive=True, labels=False, balance=frozenset()):
+def panel_apply(global_policy, clients, upstream_alive=True, labels=False, balance=frozenset(), dns_to=None):
     """То, что делает engine.reconcile() внутри контейнера Amnezia. labels — учёт трафика по правилам (1.24.0)."""
     for k in ("all", "default", "awgr1"):
         sysctl("amz", f"net.ipv4.conf.{k}.rp_filter", 2)
     ups = [{"num": 1, "snat": "10.8.1.3", "mtu": 1280}] if upstream_alive else []
     nft("amz", nftgen.generate("awg0", {"ru": ["77.88.0.0/18", "5.3.0.0/16"]}, ups,
-                               global_policy, clients, balance, labels=labels))
+                               global_policy, clients, balance, labels=labels, dns_to=dns_to))
     with NetNS("amz") as ip:
         table = config.TABLE_BASE + 1
         if not ip.get_rules(priority=config.RULE_PRIO_BASE + 1):
@@ -161,6 +188,13 @@ def check(label, ok):
 
 def probe(target, src="10.8.1.2"):
     return sh("cli", sys.executable, "-c", CLIENT, TARGETS[target], src, timeout=10).stdout.strip()
+
+
+def expect_dns(label, kind, dst, want):
+    got = sh("cli", sys.executable, "-c", DNS_CLIENT, kind, dst, timeout=10).stdout.strip()
+    ok = got.startswith(want)
+    print(f"{'OK ' if ok else 'BAD'} {label:58} {kind} {dst} → {got}")
+    return ok
 
 
 def expect(label, target, want, src="10.8.1.2"):
@@ -262,6 +296,21 @@ def main():
         assert sh("amz", "nft", "delete", "table", "ip", "ts").returncode == 0
         panel_apply({"rules": [], "default": 1}, {})
         results += [expect("без правил: RU тоже через выход", "russian", "UP1")]
+        # «DNS на сервере» (П5): любой запрос DNS клиента — к DNS на сервере, и через выход, и напрямую, UDP и TCP
+        results += [expect_dns("без DNS на сервере: DNS клиента — как его трафик (через выход)", "udp", "8.8.8.8",
+                               "DNS-UP1")]
+        for default, how in ((1, "через выход"), ("direct", "напрямую")):
+            panel_apply({"rules": [(["ru"], "direct")], "default": default}, {}, dns_to="10.8.1.1")
+            for kind in ("udp", "tcp"):
+                results += [expect_dns(f"DNS на сервере, {how}: второй DNS 8.8.8.8 отвечает панель ({kind})", kind,
+                                       "8.8.8.8", "DNS-PANEL from 10.8.1.2"),
+                            expect_dns(f"DNS на сервере, {how}: адрес самого DNS — без перенаправления ({kind})",
+                                       kind, "10.8.1.1", "DNS-PANEL from 10.8.1.2")]
+            results += [expect_dns(f"DNS на сервере, {how}: частная сеть — тоже панель", "udp", "192.168.77.1",
+                                   "DNS-PANEL from 10.8.1.2")]
+        panel_apply({"rules": [(["ru"], "direct")], "default": "direct"}, {})
+        results += [expect_dns("DNS на сервере выключен: напрямую, как раньше", "udp", "8.8.8.8",
+                               "DNS-INET from 172.20.0.2")]
         # туннель исчез (упал amneziawg-go): маршрут по таблице → unreachable, утечки нет
         panel_apply(g, {})
         with NetNS("amz") as ip:

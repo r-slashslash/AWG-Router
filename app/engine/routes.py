@@ -430,7 +430,19 @@ class RoutesMixin:
                                strict=sniff_port is None and self.strict(st), slots=self._sniff_slots, labels=labels,
                                limits=self.limit_rates(st) if labels else None,
                                # правила «до панели» — без путей адресов: после перезагрузки их ip rule ещё нет
-                               addrs=None if hold else (getattr(self, "_addr_live", None) or {}))
+                               addrs=None if hold else (getattr(self, "_addr_live", None) or {}),
+                               dns_to=self.dns_redirect(t, st))
+
+    def dns_redirect(self, t: system.Target, st: dict) -> str | None:
+        """Куда перенаправлять DNS клиентов (П5): адрес сервера в туннеле, пока включён «DNS на сервере», — и когда
+        dnsproxy.py сейчас не работает (панель перезапускается): имена тогда не разрешаются, но и мимо не уходят."""
+        if not st["settings"].get("panel_dns"):
+            return None
+        try:
+            la = self.tunnel_addr(t)
+        except Exception:  # noqa: BLE001 — интерфейса ещё нет (сервер поднимается)
+            return None
+        return la[0] if la else None
 
     def limit_rates(self, st: dict) -> dict[int, tuple[int, int]]:
         """Ограничения скорости правил для nftgen: {номер j: (к клиентам, от клиентов) байт/с; 0 — без ограничения}."""

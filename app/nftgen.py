@@ -434,7 +434,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
              global_policy: dict, client_policies: dict[str, dict], sniff_port: int | None = None,
              balance: set[int] | frozenset = frozenset(), dom_filter: bool = False,
              quic: bool = False, strict: bool = False, slots: dict | None = None, labels: bool = False,
-             limits: dict[int, tuple[int, int]] | None = None, addrs: dict[int, dict] | None = None) -> str:
+             limits: dict[int, tuple[int, int]] | None = None, addrs: dict[int, dict] | None = None,
+             dns_to: str | None = None) -> str:
     """sniff_port — где слушает sniproxy.py (правила по доменам);
     None — посредника нет, правила по доменам не действуют, работают только правила по адресам.
     balance — номера рабочих выходов балансировки: соединение, записанное в conntrack на один из них,
@@ -450,7 +451,10 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     уходит «Напрямую — адрес» (на хосте — интерфейс маршрута по умолчанию, в контейнере — сеть Docker адреса), nat:
     "snat" (на хосте: подменить адрес отправителя на этот) | "masq" (в контейнере: адрес этой сети, дальше — Docker).
     Адрес без пути — блок (o_a<K> ставит метку блока): метка адреса без своего ip rule ушла бы по основной таблице —
-    «Напрямую» с адреса системы."""
+    «Напрямую» с адреса системы.
+    dns_to — адрес DNS на сервере (включён «DNS на сервере», 1.25.0, П5): все запросы DNS клиентов (UDP и TCP 53, к
+    любому адресу) идут к нему — и второй DNS из конфига, и DNS, вписанный на устройстве: иначе имена сайтов правил
+    «через выход» уходили бы мимо выхода открытым текстом. Свои запросы сервера (dnsproxy.py — output) не задеты."""
     T = config.NFT_TABLE
     up_nums = {u["num"] for u in upstreams}
     alive = sorted(n for n in balance if n in up_nums)
@@ -657,6 +661,11 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
     # в никуда, а не с адреса системы. Номер адреса без пути — тоже (его метку ставит только панель)
     out.append("\tchain c_addr_post {\n\t\ttype filter hook postrouting priority srcnat + 1; policy accept;\n"
                + "\n".join(_addr_guard(addrs, "drop", post=True)) + "\n\t}")
+
+    if dns_to:
+        dns = "\n".join(f'\t\tiifname "{wg_iface}" ip daddr != {dns_to} {p} dport 53 dnat to {dns_to}:53'
+                        for p in ("udp", "tcp"))
+        out.append(f"\tchain c_dns {{\n\t\ttype nat hook prerouting priority dstnat; policy accept;\n{dns}\n\t}}")
 
     post = ["\tchain c_postrouting {",
             "\t\ttype nat hook postrouting priority srcnat - 1; policy accept;"]

@@ -689,7 +689,9 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
         else:
             with self.lock:
                 self._stop_all()
-                self._stop_dns()        # клиенты переходят на второй DNS из конфига (сервер из настроек)
+                # DNS клиентов перенаправлен на DNS на сервере (П5): пока панели нет, имена не разрешаются, но и мимо
+                # выходов не уходят; с «Вернуть всё напрямую» (teardown выше) перенаправления нет
+                self._stop_dns()
                 if self.sni:
                     self._stop_sni()
                     t = self.target
