@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -15,7 +16,7 @@ from .. import (config, totp)
 from ..checks import bad
 from ..panel import (BASE, app, engine, notifier, store, tls)
 from ..store import fsync_dir
-from ..web import HTTPError, content_length
+from ..web import MAX_BODY, HTTPError, content_length
 
 log = logging.getLogger("awgr")
 COOKIE = "awgr_session"
@@ -23,15 +24,33 @@ SESSION_TTL = 4 * 3600  # вход в панель действует 4 часа
 
 
 # ------------------------------------------------------------------ секреты
+def _secret_value(name: str) -> str:
+    """Содержимое файла секрета; нет файла — пусто."""
+    try:
+        with open(os.path.join(config.DATA_DIR, name)) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
 def _secret_file(name: str, gen) -> str:
+    """Ключ сессий или пароль из файла; нет или пустой (сбой питания посреди первого запуска) — новый. Пишется через
+    временный файл с fsync: пустой ключ подписывал бы сессии, пустой пароль пускал бы без пароля (П15)."""
+    v = _secret_value(name)
+    if v:
+        return v
     p = os.path.join(config.DATA_DIR, name)
     if os.path.exists(p):
-        with open(p) as f:
-            return f.read().strip()
+        log.warning("data/%s is empty (a first start cut off?): a new one is made", name)
     v = gen()
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT, 0o600)
+    tmp = p + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(v)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+    fsync_dir(config.DATA_DIR)
     return v
 
 
@@ -42,7 +61,7 @@ if config.PANEL_PASSWORD:
 else:
     # сам пароль — в журнал только при первом запуске, когда файл создаётся: журнал контейнера живёт
     # долго и попадает в отчёты, а пароль и так лежит в data/panel_password
-    _first = not os.path.exists(os.path.join(config.DATA_DIR, "panel_password"))
+    _first = not _secret_value("panel_password")
     PASSWORD = _secret_file("panel_password", lambda: secrets.token_urlsafe(12))
     if _first:
         log.warning("PANEL_PASSWORD is not set. Panel password: %s (file data/panel_password)", PASSWORD)
@@ -89,10 +108,12 @@ def _pw_hash(pw: str, salt: str, it: int = PW_ITER) -> str:
 
 
 def check_password(pw: str) -> bool:
+    if not pw:
+        return False                # пустой пароль не пускает никогда, что бы ни лежало в файлах
     c = custom_password()
     if c:
         return hmac.compare_digest(_pw_hash(pw, c["salt"], int(c.get("iter") or PW_ITER)), c["hash"])
-    return hmac.compare_digest(pw.encode(), PASSWORD.encode())
+    return bool(PASSWORD) and hmac.compare_digest(pw.encode(), PASSWORD.encode())
 
 
 def set_password(pw: str) -> None:
@@ -161,6 +182,13 @@ def same_origin(req) -> bool:
     return origin.split("://", 1)[-1].rstrip("/").lower() == host
 
 
+def _body_limit(path: str) -> int:
+    """Предел тела запроса здесь — тот же, что у обработчика: копия больше 4 МБ (тысяча клиентов с историей) иначе
+    получала 413 раньше, чем до него доходило (П26 полной проверки 1.25.0)."""
+    from . import backup
+    return backup.BACKUP_BODY if path in (BASE + "/api/restore", BASE + "/api/backup/decrypt") else MAX_BODY
+
+
 def auth_mw(req) -> None:
     if not same_origin(req):
         raise HTTPError(403, "err.cross_site")
@@ -171,7 +199,7 @@ def auth_mw(req) -> None:
     req.authed = True
     # тело запроса — только JSON (простые формы с чужих сайтов так не отправить)
     ctype = req.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-    if content_length(req.headers) > 0 and ctype != "application/json":
+    if content_length(req.headers, _body_limit(req.path)) > 0 and ctype != "application/json":
         raise HTTPError(415, "err.json_required")
 
 
@@ -180,9 +208,28 @@ app.middleware = auth_mw
 
 # --------------------------------------------------------------------- auth
 FAIL_WINDOW, FAIL_MAX = 600, 8      # не больше FAIL_MAX неудачных попыток за FAIL_WINDOW секунд с адреса
+# и не больше FAIL_NET_MAX — со всей сети IPv6 /48: иначе её владелец перебирал бы по 8 паролей с каждой из 65 536
+# сетей /64, занимая процессор и засыпая Telegram сообщениями «вход заблокирован» (П16 полной проверки 1.25.0)
+FAIL_NET_MAX = 32
 LOGIN_BODY = 64 * 1024              # тело запроса входа: пароль и код, а не мегабайты от кого угодно
 _fails_lock = threading.Lock()
 _inflight: dict[str, int] = {}     # проверки пароля, которые идут сейчас (ещё не засчитаны)
+
+
+def _net48(ip: str) -> str | None:
+    """Сеть /48 ключа адреса (client_key: IPv6 — сеть /64); IPv4 — None."""
+    if "/" not in ip:
+        return None
+    try:
+        return str(ipaddress.ip_network(ip, strict=False).supernet(new_prefix=48))
+    except ValueError:
+        return None
+
+
+def _keys(ip: str) -> list[tuple[str, int]]:
+    """Счётчики попытки входа: адрес (IPv6 — /64) и для IPv6 ещё его /48 — с пределами."""
+    net = _net48(ip)
+    return [(ip, FAIL_MAX)] + ([("net:" + net, FAIL_NET_MAX)] if net else [])
 
 
 def _check_blocked(ip: str) -> None:
@@ -192,30 +239,37 @@ def _check_blocked(ip: str) -> None:
     with _fails_lock:
         for k in [k for k, v in _fails.items() if not v or now - v[-1] >= FAIL_WINDOW]:
             _fails.pop(k, None)
-        recent = [t for t in _fails.get(ip, []) if now - t < FAIL_WINDOW]
-        if recent:
-            _fails[ip] = recent
-        if len(recent) + _inflight.get(ip, 0) >= FAIL_MAX:
-            bad("err.too_many_attempts", 429)
-        _inflight[ip] = _inflight.get(ip, 0) + 1
+        for key, limit in _keys(ip):
+            recent = [t for t in _fails.get(key, []) if now - t < FAIL_WINDOW]
+            if recent:
+                _fails[key] = recent
+            if len(recent) + _inflight.get(key, 0) >= limit:
+                bad("err.too_many_attempts", 429)
+        for key, _ in _keys(ip):
+            _inflight[key] = _inflight.get(key, 0) + 1
 
 
 def _done(ip: str) -> None:
     """Проверка с адреса закончилась (успехом или отказом) — она больше не «идёт»."""
     with _fails_lock:
-        n = _inflight.get(ip, 0) - 1
-        if n > 0:
-            _inflight[ip] = n
-        else:
-            _inflight.pop(ip, None)
+        for key, _ in _keys(ip):
+            n = _inflight.get(key, 0) - 1
+            if n > 0:
+                _inflight[key] = n
+            else:
+                _inflight.pop(key, None)
 
 
 def _failed(ip: str, msg: str) -> None:
+    net = _net48(ip)
     with _fails_lock:
-        _fails.setdefault(ip, []).append(time.time())
+        for key, _ in _keys(ip):
+            _fails.setdefault(key, []).append(time.time())
         n = len(_fails[ip])
-    if n == FAIL_MAX:
-        notifier.event("login", "login_blocked", cooldown=600, ip=ip)
+        nn = len(_fails["net:" + net]) if net else 0
+    if n == FAIL_MAX or nn == FAIL_NET_MAX:
+        # одно сообщение на сеть /48 за 10 минут (cooldown по её имени), а не на каждую /64
+        notifier.event("login", "login_blocked", cooldown=600, ip=net or ip)
     time.sleep(1)
     bad(msg, 403)
 

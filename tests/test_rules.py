@@ -458,5 +458,32 @@ class ProjectRulesTest(unittest.TestCase):
         self.assertEqual(found, [])
 
 
+    def test_regex_anchors(self):
+        """Проверка ввода регулярным выражением — до конца строки \\Z (или fullmatch), а не $: с match знак $ пропускает
+        перевод строки в конце, и «ab\\n» из копии попадал в имена наборов nftables (П14 полной проверки 1.25.0)."""
+        found = []
+        call = re.compile(r"re\.(?:compile|match|search|fullmatch)\(\s*r?(?:\"([^\"]*)\"|'([^']*)')\s*[,)]")
+        for d, _, names in os.walk(os.path.join(ROOT, "app")):
+            for n in names:
+                if not n.endswith(".py"):
+                    continue
+                with open(os.path.join(d, n), encoding="utf-8") as f:
+                    for i, line in enumerate(f, 1):
+                        for m in call.finditer(line):
+                            rx = m.group(1) or m.group(2) or ""
+                            if re.search(r"(?<!\\)\$", rx):
+                                found.append(f"{n}:{i}: {rx[:60]}")
+        self.assertEqual(found, [])
+
+    def test_list_id_from_backup_without_newline(self):
+        from app import checks
+        from app.web import HTTPError
+        st = {"lists": []}
+        for bad in ("ab\n", "ab\r\n", "AB"):
+            with self.assertRaises(HTTPError, msg=repr(bad)):
+                checks.list_id(st, bad, {"kind": "domains", "source": ""})
+        self.assertEqual(checks.list_id(st, "ab", {"kind": "domains", "source": ""}), "ab")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,11 @@ HOLD=/opt/amnezia/awg/awgr-hold-awg0.nft
 if [ -f "$HOLD" ] && command -v nft >/dev/null 2>&1; then
   nft -f "$HOLD" || echo "AWG Router rules were not applied"
 fi
+# IPv6 клиентов — отдельной командой: без IPv6 в ядре эта таблица не встанет, а правила выше — должны
+HOLD6=/opt/amnezia/awg/awgr-hold6-awg0.nft
+if [ -f "$HOLD6" ] && command -v nft >/dev/null 2>&1; then
+  nft -f "$HOLD6" 2>/dev/null || echo "AWG Router IPv6 rules were not applied"
+fi
 
 [ -f "$CONF" ] && awg-quick up "$CONF"
 

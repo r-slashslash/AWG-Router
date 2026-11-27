@@ -15,10 +15,10 @@ from . import config
 LISTS_DIR = os.path.join(config.DATA_DIR, "lists")
 MAX_DOMAINS = 300_000
 
-_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$")
+_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)\Z")
 # dnsmasq: server=/a.com/b.com/1.1.1.1, nftset=/a.com/…, ipset=/a.com/…, address=/a.com/…
-_DNSMASQ = re.compile(r"^(?:server|nftset|ipset|address|local)=/([^#]*?)/[^/]*$")
-_HOSTS_IP = re.compile(r"^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f:]+:[0-9a-f:]*)$", re.I)
+_DNSMASQ = re.compile(r"^(?:server|nftset|ipset|address|local)=/([^#]*?)/[^/]*\Z")
+_HOSTS_IP = re.compile(r"^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f:]+:[0-9a-f:]*)\Z", re.I)
 
 
 def normalize(name: str) -> str | None:
@@ -94,7 +94,7 @@ def compact(names: list[str]) -> list[str]:
 
 
 def is_url(line: str) -> bool:
-    return bool(re.match(r"^https?://\S+$", line.strip()))
+    return bool(re.match(r"^https?://\S+\Z", line.strip()))
 
 
 def split_source(text: str) -> tuple[list[str], str]:

@@ -50,7 +50,7 @@ _CANON = {k.lower(): k for k in list(AWG_PARAMS) + [
     "Table", "SaveConfig", "FwMark", "PublicKey", "PresharedKey", "AllowedIPs", "Endpoint",
     "PersistentKeepalive"]}
 
-KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")
+KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=\Z")
 DISABLED_MARK = "#awgr:disabled"
 
 DEFAULT_I1 = cps.ICLOUD_I1         # DNS-ответ icloud.com со случайными ID и TTL
@@ -255,7 +255,7 @@ def parse(text: str) -> ServerConf:
                 peer = Peer(public_key="")
             continue
         if line.startswith("#") or line.startswith(";"):
-            m = re.match(r"^#\s*(I[1-5])\s*=\s*(.*)$", line)
+            m = re.match(r"^#\s*(I[1-5])\s*=\s*(.*)\Z", line)
             if m and section == "interface" and m.group(2).strip():
                 sc.commented[m.group(1)] = m.group(2).strip()
             continue
@@ -529,7 +529,7 @@ def new_server(priv: str, port: int, subnet: str, params: dict[str, str], wan_ma
 
 
 HOOK_KEYS = ("PreUp", "PostUp", "PreDown", "PostDown")
-NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*\Z")
 PEER_EXTRA = {"Endpoint", "PersistentKeepalive"}     # что ещё бывает у клиента в конфиге сервера
 
 

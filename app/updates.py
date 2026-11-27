@@ -31,7 +31,7 @@ def release_version() -> str:
     req = urllib.request.Request(RELEASE_URL, method="HEAD")
     with srcnet.urlopen(req, 20) as r:
         final = r.geturl()
-    m = re.search(r"/releases/tag/v?(\d+(?:\.\d+)+)/?$", final)
+    m = re.search(r"/releases/tag/v?(\d+(?:\.\d+)+)/?\Z", final)
     if not m:
         raise ValueError("no release")
     return m.group(1)

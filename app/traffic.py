@@ -45,13 +45,13 @@ from . import config
 log = logging.getLogger("awgr.traffic")
 
 PATH = os.path.join(config.DATA_DIR, "traffic.json")
-MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
-OUT_RE = re.compile(r"^(direct|[a-z0-9_]{1,24})$")
-ACCT_KEY_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\|[A-Za-z0-9_.@-]{1,15}$")
+MONTH_RE = re.compile(r"^\d{4}-\d{2}\Z")
+OUT_RE = re.compile(r"^(direct|[a-z0-9_]{1,24})\Z")
+ACCT_KEY_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\|[A-Za-z0-9_.@-]{1,15}\Z")
 # «клиент|выход» и (1.24.0) «клиент|выход|номер правила»
-SNI_KEY_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})\|(direct|[a-z0-9_]{1,24})(?:\|(\d{1,2}))?$")
-RACCT_KEY_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\|\d{1,2}$")
-RULE_RE = re.compile(r"^[a-z0-9_]{1,24}$")       # id правила (store.ID_RE), "_d", "_default"
+SNI_KEY_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})\|(direct|[a-z0-9_]{1,24})(?:\|(\d{1,2}))?\Z")
+RACCT_KEY_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\|\d{1,2}\Z")
+RULE_RE = re.compile(r"^[a-z0-9_]{1,24}\Z")       # id правила (store.ID_RE), "_d", "_default"
 RULE_KEEP = 2            # трафик клиента по правилам — за этот и прошлый месяц (иначе файл растёт на клиентах × правилах)
 CLIENT_DEFAULT = "_d"    # «По умолчанию» самого клиента в by_rule
 GENERAL_DEFAULT = "_default"    # «По умолчанию» общих правил в итогах правил

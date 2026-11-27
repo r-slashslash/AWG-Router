@@ -48,7 +48,7 @@ DEFAULT_STATE = {
     "settings": {"list_update_hours": 24},
 }
 
-ID_RE = re.compile(r"^[a-z0-9_]{1,24}$")
+ID_RE = re.compile(r"^[a-z0-9_]{1,24}\Z")
 
 # Списки, чей текст вводят руками (сети и домены, до LIST_TEXT_MAX): текст лежит в своём файле texts/<id>-<метка>.txt
 # рядом с state.json, а в состоянии — только метка файла "text" и пустой "source". Так state.json маленький: он
@@ -56,7 +56,7 @@ ID_RE = re.compile(r"^[a-z0-9_]{1,24}$")
 # (snapshot(texts=True)). Прежний выпуск, запущенный на этих файлах, увидит такие списки пустыми — текст вернёт
 # загрузка резервной копии.
 TEXT_KINDS = ("manual", "domains")
-TEXT_RE = re.compile(r"^[0-9a-f]{16}$")
+TEXT_RE = re.compile(r"^[0-9a-f]{16}\Z")
 
 
 def new_id(prefix: str) -> str:

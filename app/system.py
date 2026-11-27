@@ -36,6 +36,9 @@ HOST_UNIT = "/etc/systemd/system/awg-quick@.service"
 # только если таблицы ещё нет (при перезапуске службы действуют настоящие правила панели). Ошибка не
 # мешает запуску сервера: «-» и exit 0.
 HOLD_NAME = "awgr-hold-{iface}.nft"
+# IPv6 клиентов «до панели» (1.25.0, П11) — отдельным файлом и отдельной командой: на ядре с ipv6.disable=1 таблица ip6
+# не встанет, а в одном файле с правилами IPv4 её отказ уронил бы и их
+HOLD6_NAME = "awgr-hold6-{iface}.nft"
 UNIT_TEXT = f"""[Unit]
 Description=AmneziaWG via awg-quick for %I (AWG Router)
 After=network-online.target nss-lookup.target
@@ -45,6 +48,7 @@ Wants=network-online.target nss-lookup.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=-/bin/sh -c 'f={config.HOST_AWG_DIR}/{HOLD_NAME.format(iface="%i")}; [ -f "$$f" ] && command -v nft >/dev/null && ! nft list table ip {config.NFT_TABLE} >/dev/null 2>&1 && nft -f "$$f"; exit 0'
+ExecStartPre=-/bin/sh -c 'f={config.HOST_AWG_DIR}/{HOLD6_NAME.format(iface="%i")}; [ -f "$$f" ] && command -v nft >/dev/null && nft -f "$$f"; exit 0'
 ExecStart=/usr/local/bin/awg-quick up %i
 ExecStop=/usr/local/bin/awg-quick down %i
 ExecReload=/bin/bash -c 'exec /usr/local/bin/awg syncconf %i <(exec /usr/local/bin/awg-quick strip %i)'

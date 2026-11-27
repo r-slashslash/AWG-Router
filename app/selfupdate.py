@@ -28,7 +28,7 @@ STALE = 45 * 60                 # дольше этого обновление �
 # install.sh пишет этот файл, пока работает (и из консоли: `awg-router update`, повторная установка): открытая
 # страница панели показывает «Обновление…», а не «Нет связи», когда панель заменяют
 INSTALLING = os.path.join(config.DATA_DIR, "installing")
-DIR_RE = re.compile(r"^/[A-Za-z0-9._/-]{1,200}$")
+DIR_RE = re.compile(r"^/[A-Za-z0-9._/-]{1,200}\Z")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 CMD = "awg-router update"
 
@@ -87,7 +87,7 @@ def log_lines(n: int = 30, path: str | None = None) -> list[str]:
     out = []
     for ln in text.replace("\r", "\n").split("\n"):
         ln = ANSI.sub("", ln).rstrip()
-        if not ln.strip() or re.match(r"^\s*[|/\\-]\s*$", ln) or "Password:" in ln:
+        if not ln.strip() or re.match(r"^\s*[|/\\-]\s*\Z", ln) or "Password:" in ln:
             continue
         out.append(ln[:300])
     return out[-n:]
@@ -117,7 +117,7 @@ def _status() -> dict:
         return {"state": "idle"}
     code = None
     for ln in reversed(log_lines(5)):
-        m = re.match(r"^exit=(\d+)$", ln.strip())
+        m = re.match(r"^exit=(\d+)\Z", ln.strip())
         if m:
             code = int(m.group(1))
             break

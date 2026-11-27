@@ -84,7 +84,7 @@ def conf_filename(pk: str) -> str:
 
 
 EXTRA_HOSTS_MAX = 16
-_HOSTNAME = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
+_HOSTNAME = re.compile(r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
 
 
 # ---- клиентские настройки сервера: одна проверка для формы «Сервер» (update_server) и для резервной копии

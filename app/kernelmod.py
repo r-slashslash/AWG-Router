@@ -121,7 +121,7 @@ def status() -> dict:
         return {"state": "idle"}
     code = None
     for ln in reversed(selfupdate.log_lines(5, LOG)):
-        m = re.match(r"^exit=(\d+)$", ln.strip())
+        m = re.match(r"^exit=(\d+)\Z", ln.strip())
         if m:
             code = int(m.group(1))
             break
@@ -134,7 +134,7 @@ def status() -> dict:
 
 def log_lines(n: int = 40) -> list[str]:
     """Журнал установки для браузера — без служебной строки `exit=<код>`."""
-    return [ln for ln in selfupdate.log_lines(n + 1, LOG) if not re.match(r"^exit=\d+$", ln.strip())][-n:]
+    return [ln for ln in selfupdate.log_lines(n + 1, LOG) if not re.match(r"^exit=\d+\Z", ln.strip())][-n:]
 
 
 def start() -> dict:

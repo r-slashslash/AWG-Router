@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 
 from .. import balance, config, nftgen, shaping, srcaddr, system
@@ -33,7 +34,15 @@ class RoutesMixin:
             u = Store.upstream(st, out[3:])
             if not u:
                 return "block"
+            if u.get("enabled", True) and getattr(self, "_holding", None) == threading.get_ident():
+                # правила до запуска туннелей (_hold_rules): туннелей в новой сети ещё нет, проверка выхода — о
+                # прежней сети (контейнер умер посреди прохода, П17) — блок, а не резерв
+                return "block"
             if u.get("enabled", True) and srcaddr.bind_of(st, u) != srcaddr.SYSTEM and not self.bind_ok(st, u):
+                if self.bind_pending(st, u):
+                    # адрес ещё не проверен или его путь ещё не встал (перезапуск сервера, перезагрузка, первый проход):
+                    # выход «подключается» — блок, а не резерв (П12 полной проверки 1.25.0, как решения Н1 и Г1)
+                    return "block"
                 # адрес, с которого выход подключается к своему серверу, не работает: выход — неработающий, его резерв
                 return self.resolve(u.get("fallback") or "direct", st, depth + 1)
             known = u["id"] in self.health     # нет записи: проверки ещё не было (первый проход после запуска панели)
@@ -72,6 +81,12 @@ class RoutesMixin:
         if b == srcaddr.SYSTEM:
             return True
         return isinstance(self.direct_out(srcaddr.PFX + b, st), nftgen.Addr)
+
+    def bind_pending(self, st: dict, u: dict) -> bool:
+        """Адрес «Подключаться с адреса» выхода ещё не сказал, работает ли: не проверялся, проверяется, или работает,
+        а его путь ещё не встал. Не работает (failed, bad) — нет: тогда выход лежит, и действует его резерв."""
+        b = srcaddr.bind_of(st, u)
+        return b != srcaddr.SYSTEM and not self.bind_ok(st, u) and self.addr_state(b) not in ("failed", "bad")
 
     def exit_mark(self, st: dict, u: dict) -> int:
         """Метка внешних пакетов туннеля выхода («Подключаться с адреса»): 0 — адрес системы, иначе метка адреса."""
@@ -131,7 +146,8 @@ class RoutesMixin:
         """Среди выходов есть включённый, который ещё не ответил (только что запущен, проверки ещё не было): пока
         рабочих нет — блок, а не резерв (решение Н1 и Г1: с резервом «Напрямую» клиенты шли бы мимо выхода)."""
         return any(u["id"] in ids and u.get("enabled", True) and
-                   (u["id"] not in self.health or self.health[u["id"]].get("state") == "connecting")
+                   (u["id"] not in self.health or self.health[u["id"]].get("state") == "connecting"
+                    or self.bind_pending(st, u))
                    for u in st["upstreams"])
 
     @staticmethod

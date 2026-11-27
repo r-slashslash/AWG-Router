@@ -470,6 +470,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 # (их личные правила), — до учёта трафика, лимитов и запуска туннелей. Сервер в контейнере
                 # приложения AmneziaVPN сам их не ставит, и всё это время клиенты шли бы мимо выходов
                 self._hold_rules(t, st)
+                try:
+                    self._sync_v6(t)        # IPv6 клиентов — сразу, а не в конце прохода (П11 полной проверки 1.25.0)
+                except Exception:  # noqa: BLE001
+                    log.exception("ipv6 table")
             if self._labels_key != t.key:            # другое ядро (новая цель) — проверить заново
                 self._labels_key, self._qlab_key, self._rlim_key, self._rlim_ok = t.key, None, None, None
                 self._labels = True if config.DRY_RUN else None
@@ -544,6 +548,8 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 try:
                     t.ns(["nft", "-f", path], timeout=60)
                 except system.SysError as e:
+                    if not present:
+                        self._close_forward(t)  # новая сеть без таблицы панели: не «без правил» (П14)
                     if self.limits_on() and self.rule_limits(st) and "limit" in str(e) and \
                             self._kernel_blames(t, st, sniff, quic, "_rlim_ok"):
                         # ядро без «limit» в nftables (урезанные сборки): правила — без ограничения скорости, остальное

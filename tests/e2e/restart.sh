@@ -3,8 +3,9 @@
 # пока панель не поставила свои правила.
 #
 #   1. ставит панель из этой копии кода (install.sh, образы собираются здесь), сервер AWG — E2E_MODE;
-#   2. добавляет выход AWG по умолчанию, у которого нет связи, с резервом «Блокировать»: пока его туннеля нет,
-#      клиенты должны быть в блоке;
+#   2. добавляет выход AWG без связи с резервом «Блокировать» и второй, по умолчанию, с резервом «Напрямую»
+#      (полная проверка 1.25.0, П13): пока туннелей нет, клиенты в блоке, а не напрямую — «Напрямую» только у
+#      выхода, который лежит дольше CONNECTING_SECS при работающей панели;
 #   3. панель работает, сервер AWG перезапускается: правила есть сразу (контейнер ставит их сам), правила
 #      панели — через секунды (события Docker), а не через проход;
 #   4. «перезагрузка»: панель остановлена, правил нет, сервер AWG запускается — правила «до панели» ставит
@@ -99,6 +100,16 @@ rules() {
 has_rules() { rules >/dev/null; }
 full_rules() { rules | grep -q "chain o_u1 "; }          # правила панели: туннель выхода 1 есть
 hold_rules() { local r; r=$(rules) && ! grep -q "chain o_u1 " <<<"$r" && grep -q "chain o_block" <<<"$r"; }
+# политика «По умолчанию» в правилах сети сервера; direct_now — клиенты идут напрямую (резерв выхода 2)
+p_global() { rules | awk '/chain p_global \{/ {f = 1} f {print} f && /^[[:space:]]*\}[[:space:]]*$/ {exit}'; }
+direct_now() { p_global | grep -q "goto o_direct"; }
+no_direct_for() { # $1 с: ни разу не «напрямую» (правил нет совсем — тоже не годится)
+  local end=$(( $(date +%s) + $1 ))
+  while [ "$(date +%s)" -lt "$end" ]; do
+    { has_rules && ! direct_now; } || { p_global >"$LOGS/p_global-direct.txt" 2>&1; return 1; }
+    sleep 0.2
+  done
+}
 wait_for() { # $1 — сколько секунд ждать, дальше команда; печатает, через сколько секунд вышло
   local limit=$1; shift
   local t0; t0=$(date +%s.%N)
@@ -118,12 +129,24 @@ body=$(python3 -c 'import json,sys; print(json.dumps({"name": "e2e-exit", "confi
 api POST upstreams "$body" >/dev/null || die "could not add the exit"
 api POST users '{"name":"e2e-client"}' >/dev/null || die "could not add a client"
 t=$(wait_for 90 full_rules) && ok "the panel's rules with the exit tunnel are up (${t}s)" || die "no panel rules with the exit"
+step "A second exit without a connection, by default, fallback: direct"
+conf2=$(printf '[Interface]\nPrivateKey = %s\nAddress = 10.99.0.3/32\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = 192.0.2.11:51820\n' "$k1" "$k2")
+body=$(python3 -c 'import json,sys; print(json.dumps({"name": "e2e-direct", "config": sys.argv[1], "fallback": "direct", "make_default": True}))' "$conf2")
+api POST upstreams "$body" >/dev/null || die "could not add the second exit"
+# лежит дольше CONNECTING_SECS — его клиенты на резерве «Напрямую», так задумано (при работающей панели)
+t=$(wait_for 120 direct_now) && ok "the second exit is down: its clients are on the fallback Direct (${t}s)" \
+  || bad "the fallback Direct of the second exit did not come"
 if [ "$MODE" = container ]; then hold="$DIR/awg-server/data/awgr-hold-awg0.nft"; else hold=/etc/amnezia/amneziawg/awgr-hold-awg0.nft; fi
 t=$(wait_for 30 test -f "$hold") && ok "rules «before the panel» are saved next to the server's config" || bad "no $hold"
 if [ -f "$hold" ] && ! grep -q "chain o_u1 " "$hold" && grep -q "goto o_block" "$hold"; then
   ok "in them the exit without a tunnel is a block"
 else
   bad "the saved rules don't block the exit without a tunnel"; cp -f "$hold" "$LOGS/" 2>/dev/null
+fi
+if [ -f "$hold" ] && ! awk '/chain p_global \{/ {f = 1} f {print} f && /^[[:space:]]*\}/ {exit}' "$hold" | grep -q "goto o_direct"; then
+  ok "and the exit with the fallback Direct is a block too: before the panel nobody knows if it works"
+else
+  bad "the saved rules send the clients of the second exit direct"; cp -f "$hold" "$LOGS/" 2>/dev/null
 fi
 
 # ---------------------------------------------------------------- перезапуск при работающей панели
@@ -132,6 +155,8 @@ if [ "$MODE" = container ]; then
   docker restart -t 3 amnezia-awg2 >/dev/null
   t=$(wait_for 10 has_rules) && ok "rules are there right after the start (${t}s): the container put them in itself" \
     || bad "no rules in the new container network"
+  no_direct_for 8 && ok "8 s after the restart — nothing direct, though the exit's fallback is Direct" \
+    || bad "clients of the exit with the fallback Direct went direct after the restart"
   t=$(wait_for 30 full_rules) && ok "the panel's own rules followed in ${t}s (Docker events, not the next pass)" \
     || bad "the panel did not put its rules in within 30 s"
 else
@@ -153,7 +178,10 @@ t=$(wait_for 15 hold_rules) && ok "without the panel the server put the «before
   || { bad "no rules while the panel is down"; rules >"$LOGS/rules-down.txt"; }
 sleep 10
 hold_rules && ok "10 s later — still the same: exit traffic is blocked, nothing goes past the exit" || bad "the rules changed without the panel"
+! direct_now && ok "and nothing direct for the exit with the fallback Direct" || bad "without the panel the clients of the second exit go direct"
 panel start
+no_direct_for 8 && ok "the panel starts: 8 s — still nothing direct" \
+  || bad "the panel's first pass sent the clients of the exit with the fallback Direct direct"
 t=$(wait_for 90 full_rules) && ok "the panel started and put its rules in (${t}s)" || bad "the panel did not put its rules in"
 
 # ---------------------------------------------------------------- хост: rp_filter

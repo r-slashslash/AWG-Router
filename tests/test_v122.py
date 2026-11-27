@@ -1534,12 +1534,14 @@ class DirectFallbackTest(unittest.TestCase):
                 raise OSError("reset")
 
             async def udp(msg, server, mark):
-                plain.append(server)
+                plain.append((server, dnsproxy.read_name(msg, 12).rstrip(".")))     # и какое имя: не только куда
                 return None
             p._enc, p._udp = blocked, udp
             out = self.run_q(p, ["www.youtube.com", "example.org"])
             self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL, rule)
-            self.assertEqual(plain, ["77.88.8.8"], rule)             # только второе имя — оно не из правила
+            # к запасному — только второе имя, оно не из правила (П25 полной проверки 1.25.0: сверялся только список
+            # серверов, и тест проходил, когда к запасному уходило имя правила)
+            self.assertEqual(plain, [("77.88.8.8", "example.org")], rule)
 
     def test_direct_down_shown_on_the_server_tab(self):
         import json as _json

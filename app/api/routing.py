@@ -98,7 +98,7 @@ def trace_target(client: str | None, ip: str) -> dict:
         except ValueError:
             bad("err.ip_or_domain")
         bad("tr.ipv6")           # в туннеле только IPv4: такой трафик отбрасывается
-    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}\Z", ip):
         via = None
         try:
             # как разберёт имя DNS клиента — через его выход (resolve_name), а не DNS провайдера хоста

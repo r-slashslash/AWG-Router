@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 
 from .. import config, hostnet, kernelmod, system
@@ -17,6 +18,13 @@ def v6_ruleset(iface: str) -> str:
     return (f"table ip6 {V6_TABLE}\nflush table ip6 {V6_TABLE}\ntable ip6 {V6_TABLE} {{\n"
             "\tchain forward {\n\t\ttype filter hook forward priority filter - 1; policy accept;\n"
             f'\t\tiifname "{iface}" reject with icmpv6 type admin-prohibited\n\t}}\n}}\n')
+
+def closed_ruleset(iface: str) -> str:
+    """Запасная таблица панели (Engine._close_forward): пересылка из интерфейса клиентов — отказ."""
+    return (f"table ip {config.NFT_TABLE}\ndelete table ip {config.NFT_TABLE}\ntable ip {config.NFT_TABLE} {{\n"
+            "\tchain c_forward {\n\t\ttype filter hook forward priority filter; policy accept;\n"
+            f'\t\tiifname "{iface}" reject with icmp type admin-prohibited\n\t}}\n}}\n')
+
 
 SERVER_GRACE = 30        # с: столько интерфейса сервера в контейнере может не быть, прежде чем панель его поднимет
 SERVER_PAUSES = (60, 120, 300, 600, 1800)   # паузы между попытками поднять сервер, если не помогает, с
@@ -182,6 +190,7 @@ class ServerMixin:
         блок. `applied_hash` не меняется: обычное применение в конце прохода заменит эти правила настоящими."""
         if config.DRY_RUN:
             return
+        self._holding = threading.get_ident()     # resolve: туннелей ещё нет — включённый выход блок, не резерв (П17)
         try:
             path = os.path.join(RUN_DIR, "ruleset.nft")
             with open(path, "w") as f:
@@ -189,6 +198,27 @@ class ServerMixin:
             t.ns(["nft", "-f", path], timeout=60)
         except Exception as e:  # noqa: BLE001  — обычное применение в конце прохода скажет об ошибке само
             log.warning("rules before tunnels: %s", e)
+            self._close_forward(t)
+        finally:
+            self._holding = None
+
+    def _close_forward(self, t: system.Target) -> None:
+        """Набор правил не встал, а таблицы панели в сети сервера нет (новая сеть: перезапуск контейнера, перезагрузка):
+        без неё клиенты шли бы совсем без правил, мимо выходов и блоков. Ставится запасная таблица из одной строки —
+        пересылка от клиентов закрыта (DNS и панель на самом сервере работают); следующий удачный набор её заменит
+        (П14 полной проверки 1.25.0)."""
+        if config.DRY_RUN:
+            return
+        try:
+            if t.ns(["nft", "list", "chain", "ip", config.NFT_TABLE, "c_prerouting"], check=False).returncode == 0:
+                return                  # прежний набор панели стоит — он и действует
+            path = os.path.join(RUN_DIR, "ruleset-closed.nft")
+            with open(path, "w") as f:
+                f.write(closed_ruleset(t.iface))
+            t.ns(["nft", "-f", path], timeout=30)
+            log.warning("rules did not apply in a new network: forwarding of clients is closed until they do")
+        except Exception as e:  # noqa: BLE001
+            log.warning("closing forwarding: %s", e)
 
     def _sync_v6(self, t: system.Target) -> None:
         """IPv6 клиентов закрыт (пересмотр Б8 глубокой проверки 1.23.0, Г3; владелец 2026-11-21). Правила панели — только
@@ -241,24 +271,33 @@ class ServerMixin:
         try:
             path = self._hold_path(t)
             if path:
+                path6 = os.path.join(os.path.dirname(path), system.HOLD6_NAME.format(iface=t.iface))
                 if restore:
-                    try:
-                        os.unlink(t.host_path(path))
-                    except FileNotFoundError:
-                        pass
+                    for p in (path, path6):
+                        try:
+                            os.unlink(t.host_path(p))
+                        except FileNotFoundError:
+                            pass
                 else:
-                    t.write_file(path, self.build_ruleset(t, st, None, hold=True), 0o600)
+                    # после перезагрузки, до панели, не известно, работает ли выход: блок, а не его резерв (как П17)
+                    self._holding = threading.get_ident()
+                    try:
+                        text = self.build_ruleset(t, st, None, hold=True)
+                    finally:
+                        self._holding = None
+                    t.write_file(path, text, 0o600)
+                    t.write_file(path6, v6_ruleset(t.iface), 0o600)     # IPv6 клиентов до панели (П11)
             self._hold_key = key
         except Exception as e:  # noqa: BLE001  — не мешает работе: сработает при следующем применении
             log.warning("rules before the panel starts: %s", e)
 
     def _drop_hold(self, t: system.Target) -> None:
         """Убрать файл правил «до панели» (удаление панели): иначе сервер ставил бы их и без неё."""
-        try:
-            os.unlink(t.host_path(os.path.join(os.path.dirname(t.conf_path),
-                                               system.HOLD_NAME.format(iface=t.iface))))
-        except OSError:
-            pass
+        for name in (system.HOLD_NAME, system.HOLD6_NAME):
+            try:
+                os.unlink(t.host_path(os.path.join(os.path.dirname(t.conf_path), name.format(iface=t.iface))))
+            except OSError:
+                pass
         self._hold_key = None
 
     def restart_server(self, why: str = "server_restart") -> None:

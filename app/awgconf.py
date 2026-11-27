@@ -22,7 +22,7 @@ QUICK_ONLY_KEYS = {"address", "dns", "mtu", "table", "preup", "postup",
 # ListenPort — занять порт сервера. Отбрасываем: порт туннеля выбирается случайно.
 LOCAL_ONLY_KEYS = {"fwmark", "listenport"}
 
-KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")
+KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=\Z")
 
 
 class ConfigError(MsgError, ValueError):
@@ -80,8 +80,8 @@ class UpstreamConf:
 
 SOCKS_MTU = 8500                   # как советует hev-socks5-tunnel: TCP он завершает сам
 _SOCKS_URL = re.compile(r"^socks(?:5h?|5)?://", re.I)
-_HOST_PORT_USER_PASS = re.compile(r"^([A-Za-z0-9.-]+):(\d{1,5}):([^:\s]+):(\S+)$")
-_HOSTNAME = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")
+_HOST_PORT_USER_PASS = re.compile(r"^([A-Za-z0-9.-]+):(\d{1,5}):([^:\s]+):(\S+)\Z")
+_HOSTNAME = re.compile(r"^(?=.{1,253}\Z)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\Z")
 
 
 def is_socks(text: str) -> bool:
@@ -89,8 +89,8 @@ def is_socks(text: str) -> bool:
     # «хост:порт» без логина — тоже прокси (форма выхода так его и понимает): раньше он уходил в разбор
     # конфига AWG и получал ошибку про ссылку vpn://
     return bool(_SOCKS_URL.match(t) or (("\n" not in t) and "[Interface]" not in t and
-                                        (_HOST_PORT_USER_PASS.match(t) or re.match(r"^[^\s/@]+@[^\s/@]+:\d+$", t)
-                                         or re.match(r"^[A-Za-z0-9.-]+:\d{1,5}$", t))))
+                                        (_HOST_PORT_USER_PASS.match(t) or re.match(r"^[^\s/@]+@[^\s/@]+:\d+\Z", t)
+                                         or re.match(r"^[A-Za-z0-9.-]+:\d{1,5}\Z", t))))
 
 
 def parse_socks(text: str) -> UpstreamConf:

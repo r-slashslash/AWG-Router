@@ -36,6 +36,8 @@ alt_routes = None
 # Задаёт app/panel.py; нет — только выбранный путь
 fallback_on = None
 PATH_RETRY = 600         # с: бот идёт запасным путём — выбранный пробуется снова раз в столько секунд
+SENT_MAX = 2000          # отметок «уже отправлено» больше — давние (старше SENT_KEEP) забываются
+SENT_KEEP = 86400
 LANGS = ("ru", "en", "zh", "fa")
 # категории событий, которые можно включать по отдельности
 KINDS = ("exit", "server", "system", "clients", "login", "tls", "update", "monthly")
@@ -779,6 +781,9 @@ class Notifier:
         changed = subj is not None and last.get(subj, key) != key
         if now - self._sent.get(sig, 0) < (self.COOLDOWN if cooldown is None else cooldown) and not changed:
             return
+        if len(self._sent) > SENT_MAX:
+            # отметки повторов давних событий (каждая — свой адрес, свой клиент) не копятся без конца
+            self._sent = {k: v for k, v in self._sent.items() if now - v < SENT_KEEP}
         self._sent[sig] = now
         if subj is not None:
             last[subj] = key

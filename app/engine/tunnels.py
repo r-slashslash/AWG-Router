@@ -153,6 +153,10 @@ class TunnelsMixin:
                     t.ns(["ip", "link", "add", ifn, "type", "amneziawg"])
             except Exception as e:  # noqa: BLE001
                 t.ns(["ip", "link", "del", ifn], check=False)
+                if not config.DRY_RUN and not t.is_up():
+                    # сеть сервера пропала посреди прохода (контейнер перезапустили): это не отказ модуля, и выходы
+                    # не переводятся на amneziawg-go — следующий проход запустит их в новой сети (П17)
+                    raise system.SysError(msg_of(e)) from None
                 self._kernel_failed(ifn, msg_of(e))
                 r.engine = "go"
             else:

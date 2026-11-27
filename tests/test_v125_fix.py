@@ -473,3 +473,320 @@ class ReleaseArmTest(unittest.TestCase):
             text = f.read()
         a = text.index("id: server\n")
         self.assertIn("platforms: linux/amd64,linux/arm64", text[a:text.index("tags:", a)])
+
+
+def _bind_state():
+    from tests.test_v125 import state
+    st = state(out_hosts=[A, "198.51.100.8"])
+    u = st["upstreams"][0]
+    u.update(bind=A, fallback="direct")
+    return st
+
+
+class BindPendingTest(unittest.TestCase):
+    """П12: выход «Подключаться с адреса» с резервом «Напрямую», пока адрес не проверен или его путь не встал, — блок,
+    а не резерв (клиенты шли напрямую при каждом перезапуске сервера и перезагрузке). Не работает — резерв."""
+
+    def eng(self, state, live=True):
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e.health, e.rt = {"u1": {"healthy": True}}, {}
+        e._addr_rt = {A: {"state": state}} if state else {}
+        e._addr_live = {1: {"ip": A, "dev": "eth0"}} if live else {}
+        e.over_quota = lambda u: False
+        return e
+
+    def test_unchecked_address_blocks(self):
+        st = _bind_state()
+        for state, live in ((None, True), ("checking", True), ("ok", False), (None, False)):
+            with self.subTest(state=state, live=live):
+                self.assertEqual(self.eng(state, live).resolve("up:u1", st), "block")
+        self.assertEqual(self.eng("failed").resolve("up:u1", st), "direct")       # не работает — резерв
+        self.assertEqual(self.eng("bad", False).resolve("up:u1", st), "direct")
+        self.assertEqual(self.eng("ok").resolve("up:u1", st), 1)
+
+    def test_rule_balancing_waits_too(self):
+        st = _bind_state()
+        self.assertTrue(self.eng("checking").rule_pending(st, {"u1"}))
+        self.assertFalse(self.eng("failed").rule_pending(st, {"u1"}))
+
+
+class HoldPassTest(unittest.TestCase):
+    """Новая сеть сервера (перезапуск контейнера): П17 — правила до туннелей блокируют выход с резервом «Напрямую», даже
+    если его проверка в прошлой сети — ошибка; П11 — IPv6 клиентов закрыт сразу, до запуска туннелей; П14 — набор не
+    встал, а таблицы панели нет — запасная таблица закрывает пересылку клиентов."""
+
+    def setUp(self):
+        from tests import test_v121f
+        self.t = test_v121f.ReconcileOrderTest("test_pass_sets_ip_rules")
+        self.t.setUp()
+        self.addCleanup(self.t.doCleanups)
+        self.t.e.store.mutate(lambda st: st["upstreams"][0].update(fallback="direct"))
+
+    def test_hold_blocks_exit_with_old_error(self):
+        t = self.t
+        t.reconcile(t.t)
+        t.e.health["u1"] = {"state": "error", "error": "nsenter failed"}       # контейнер умер посреди прохода
+        seen = []
+        orig = t.e.build_ruleset
+
+        def build(tg, st, sniff, *a, **kw):
+            text = orig(tg, st, sniff, *a, **kw)
+            seen.append(text)
+            return text
+        t.e.build_ruleset = build
+        t.reconcile(t.target("container:amnezia-awg2:5151:b"))
+        p_global = seen[0][seen[0].index("\tchain p_global {"):]
+        self.assertIn("goto o_block", p_global[:p_global.index("\n\t}")])
+        self.assertNotIn("goto o_direct", p_global[:p_global.index("\n\t}")])
+
+    def test_ipv6_closed_before_tunnels(self):
+        t = self.t
+        t.reconcile(t.t)
+        t.log.clear()
+        t.reconcile(t.target("container:amnezia-awg2:5151:b"))
+        self.assertLess(t.log.index(("nft6",)), t.log.index(("tunnel", 1)), t.log)
+
+    def test_failed_rules_close_forwarding(self):
+        t = self.t
+        applied = []
+        ns = t.ns
+
+        def failing(cmd, **kw):
+            if cmd[:2] == ["nft", "-f"] and cmd[2].endswith("ruleset.nft"):
+                from app import system
+                raise system.SysError("syntax error, unexpected newline")
+            if cmd[:2] == ["nft", "-f"] and cmd[2].endswith("ruleset-closed.nft"):
+                with open(cmd[2]) as f:
+                    applied.append(f.read())
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return ns(cmd, **kw)
+        t.table["present"] = False
+        tg = t.target("container:amnezia-awg2:7171:d")
+        tg.ns.side_effect = failing
+        from app import system
+        with self.assertRaises(system.SysError):
+            t.reconcile(tg)
+        self.assertTrue(applied, "запасная таблица не поставлена")
+        self.assertIn('iifname "awg0" reject', applied[0])
+        self.assertIn("hook forward", applied[0])
+
+    def test_present_table_is_left(self):
+        """Прежний набор панели стоит (не новая сеть): запасная таблица не ставится — действуют прежние правила."""
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        calls = []
+
+        class T:
+            iface = "awg0"
+
+            def ns(self, cmd, **kw):
+                calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+        from app import config
+        with mock.patch.object(config, "DRY_RUN", False):
+            e._close_forward(T())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:3], ["nft", "list", "chain"])
+
+
+class HoldFilesTest(unittest.TestCase):
+    """П11: правила «до панели» закрывают и IPv6 клиентов — отдельным файлом и отдельной командой (служба на хосте и
+    свой контейнер), чтобы без IPv6 в ядре не падали и правила IPv4."""
+
+    def test_unit_has_separate_ipv6_command(self):
+        from app import system
+        pre = [ln for ln in system.UNIT_TEXT.splitlines() if ln.startswith("ExecStartPre=-")]
+        self.assertEqual(len(pre), 2)
+        self.assertIn("awgr-hold-%i.nft", pre[0])
+        self.assertIn("awgr-hold6-%i.nft", pre[1])
+        self.assertNotIn("awgr-hold6", pre[0])
+
+    def test_start_sh_applies_both(self):
+        with open(os.path.join(ROOT, "awg-server", "start.sh")) as f:
+            sh = f.read()
+        up = sh.index('awg-quick up "$CONF"')
+        self.assertLess(sh.index("awgr-hold6-awg0.nft"), up)
+        self.assertLess(sh.index('nft -f "$HOLD"'), sh.index('nft -f "$HOLD6"'))
+
+    def test_hold6_rejects_clients(self):
+        from app.engine import server
+        txt = server.v6_ruleset("awg0")
+        self.assertIn("table ip6 awgr6", txt)
+        self.assertIn('iifname "awg0" reject', txt)
+
+
+class KernelOrDeadTargetTest(unittest.TestCase):
+    """П17: контейнер сервера умер посреди прохода — отказ `ip link add` не объявляется отказом модуля ядра (ложное
+    сообщение в Telegram и все выходы на amneziawg-go до перезапуска сервера)."""
+
+    def test_dead_target_is_not_a_kernel_failure(self):
+        from app import config, system
+        from app.engine import Engine, tunnels
+        e = Engine.__new__(Engine)
+        e.events, e.kernel_fallback, e.rt = [], None, {}
+        e.event = lambda kind, msg: e.events.append(msg.key)
+        e._pre = {"198.51.100.1": "198.51.100.1"}
+        e._v6_route = lambda t, ip: None
+        e.exit_engine = lambda: "kernel"
+
+        def ns(cmd, **kw):
+            if cmd[:3] == ["ip", "link", "add"]:
+                raise system.SysError("nsenter: reassociate to namespace 'ns/net' failed: No such process")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        t = mock.Mock(iface="awg0", key="k")
+        t.ns.side_effect = ns
+        pc = mock.Mock(kind="awg", endpoint="198.51.100.1:51820", setconf="[Interface]\n")
+        u = {"num": 1, "name": "NL"}
+        with mock.patch.object(config, "DRY_RUN", False), \
+                mock.patch.object(tunnels.awgconf, "setconf_for", lambda pc, ip: "[Interface]\n"):
+            t.is_up.return_value = False                      # сеть сервера пропала
+            with self.assertRaises(system.SysError):
+                e._start_up(t, "u1", u, pc, "h")
+            self.assertIsNone(e.kernel_fallback)
+            self.assertNotIn("ev.kernel_fallback", e.events)
+            t.is_up.return_value = True                       # сервер жив — это и правда отказ модуля
+            try:
+                e._start_up(t, "u1", u, pc, "h")
+            except Exception:  # noqa: BLE001 — дальше amneziawg-go, которого здесь нет
+                pass
+            self.assertIn("ev.kernel_fallback", e.events)
+
+
+def _panel():
+    from app import panel
+    return panel
+
+
+class AuthFixTest(unittest.TestCase):
+    """Вход в панель (П15, П16, П26)."""
+
+    def setUp(self):
+        _panel()
+        from app.api import auth
+        self.auth = auth
+        auth._fails.clear()
+        auth._inflight.clear()
+        self.addCleanup(auth._fails.clear)
+
+    def test_empty_secret_files_made_again(self):
+        """П15: пустой ключ сессий или пароль после сбоя первого запуска — создаются заново, через временный файл."""
+        from app import config
+        auth = self.auth
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with mock.patch.object(config, "DATA_DIR", d):
+            for name in ("session.key", "panel_password"):
+                open(os.path.join(d, name), "w").close()             # пустой файл
+                with mock.patch.object(auth, "log"):
+                    v = auth._secret_file(name, lambda: "fresh-secret")
+                self.assertEqual(v, "fresh-secret")
+                with open(os.path.join(d, name)) as f:
+                    self.assertEqual(f.read(), "fresh-secret")
+                self.assertEqual(os.stat(os.path.join(d, name)).st_mode & 0o777, 0o600)
+                self.assertFalse(os.path.exists(os.path.join(d, name + ".tmp")))
+                self.assertEqual(auth._secret_file(name, lambda: "other"), "fresh-secret")
+
+    def test_empty_password_never_lets_in(self):
+        auth = self.auth
+        with mock.patch.object(auth, "PASSWORD", ""), mock.patch.object(auth, "custom_password", lambda: None):
+            self.assertFalse(auth.check_password(""))
+            self.assertFalse(auth.check_password("anything"))
+        self.assertFalse(auth.check_password(""))
+
+    def test_one_48_is_limited(self):
+        """П16: 20 разных /64 одной /48 по 8 неверных паролей — дальше 429; другая /48 и IPv4 — как раньше."""
+        from app import web
+        auth = self.auth
+        codes = []
+        with mock.patch.object(auth.time, "sleep"), mock.patch.object(auth, "notifier") as nt:
+            for i in range(20):
+                ip = web.client_key(f"2001:db8:1:{i:x}::1")
+                for _ in range(8):
+                    try:
+                        auth._check_blocked(ip)
+                        try:
+                            auth._failed(ip, "err.wrong_password")
+                        finally:
+                            auth._done(ip)
+                    except web.HTTPError as e:
+                        codes.append(e.code)
+            self.assertIn(429, codes)
+            self.assertLessEqual(codes.count(403), auth.FAIL_NET_MAX)
+            # одно сообщение «вход заблокирован» на /48, а не на каждую /64
+            ips = {c.kwargs.get("ip") for c in nt.event.call_args_list if c.args[1] == "login_blocked"}
+            self.assertEqual(ips, {"2001:db8:1::/48"})
+            other = web.client_key("2001:db8:2::1")
+            auth._check_blocked(other)                       # соседняя /48 не задета
+            auth._done(other)
+            auth._check_blocked("203.0.113.7")
+            auth._done("203.0.113.7")
+
+    def test_big_backup_passes_the_middleware(self):
+        """П26: копия 5 МБ доходит до обработчика (раньше проверка входа отвечала 413 на всё больше 4 МБ)."""
+        from app import web
+        auth = self.auth
+
+        class Req:
+            path = auth.BASE + "/api/restore"
+            headers = {"Content-Length": str(5 * 1024 * 1024), "Content-Type": "application/json",
+                       "Origin": "", "Host": ""}
+            cookies = {auth.COOKIE: auth.make_session()}
+            authed = False
+        r = Req()
+        with mock.patch.object(auth, "same_origin", lambda req: True):
+            auth.auth_mw(r)
+            self.assertTrue(r.authed)
+            r.path = auth.BASE + "/api/routing"
+            with self.assertRaises(web.HTTPError) as c:
+                auth.auth_mw(r)
+            self.assertEqual(c.exception.code, 413)
+
+
+class NotifySentPrunedTest(unittest.TestCase):
+    """П16: отметки «уже отправлено» не растут без конца (3000 разных /64 — 3000 записей навсегда)."""
+
+    def test_pruned(self):
+        from app import notify
+        n = notify.Notifier.__new__(notify.Notifier)
+        old = time.time() - notify.SENT_KEEP - 10
+        n._sent = {f"k{i}": old for i in range(notify.SENT_MAX + 5)}
+        st = {"settings": {}}
+        n.store = mock.Mock(snapshot=lambda: st)
+        with mock.patch.object(notify, "cfg_of", lambda st: {"enabled": True, "token": "t", "chat_id": "1",
+                                                              "events": {"login": True}, "control": False,
+                                                              "lang": "en"}):
+            n.host_fn = lambda st: ""
+            n.buttons_fn = None
+            n.queue_fn = None
+            with mock.patch.object(n, "_send", create=True):
+                try:
+                    n.event("login", "login_blocked", cooldown=600, ip="x")
+                except Exception:  # noqa: BLE001 — сама отправка здесь не нужна
+                    pass
+        self.assertLess(len(n._sent), 10)
+
+
+class HoldFileBlocksTest(unittest.TestCase):
+    """П13, П17: файл правил «до панели» — выход с резервом «Напрямую», который сейчас лежит, тоже блок: после
+    перезагрузки, до панели, никто не знает, работает ли он (раньше файл вёл его клиентов напрямую)."""
+
+    def test_hold_file(self):
+        from tests import test_v121f
+        t = test_v121f.ReconcileOrderTest("test_pass_sets_ip_rules")
+        t.setUp()
+        self.addCleanup(t.doCleanups)
+        t.e.store.mutate(lambda st: st["upstreams"][0].update(fallback="direct"))
+        t.reconcile(t.t)
+        t.e.health["u1"] = {"state": "down", "healthy": False}
+        st = t.e.store.snapshot()
+        normal = t.e.build_ruleset(t.t, st, None, hold=True)
+        self.assertIn("goto o_direct", _chain(normal, "p_global"))      # без защиты — напрямую
+        t.e._hold_key = None
+        from app import config
+        with mock.patch.object(config, "DRY_RUN", False):
+            t.e._save_hold(t.t, st)
+        texts = [c.args[1] for c in t.t.write_file.call_args_list if c.args[0].endswith("awgr-hold-awg0.nft")]
+        self.assertTrue(texts)
+        self.assertIn("goto o_block", _chain(texts[-1], "p_global"))
+        self.assertNotIn("goto o_direct", _chain(texts[-1], "p_global"))

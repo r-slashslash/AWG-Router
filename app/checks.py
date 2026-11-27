@@ -225,7 +225,7 @@ def rules(st: dict, rules, self_dns: str | None = None, look=None) -> list[dict]
                 qa = quota_action(st, r.get("quota_action"), None)
             out[-1].update(quota=q, quota_action=qa)
             for k in ("quota_hit", "quota_warned"):
-                if isinstance(r.get(k), str) and re.match(r"^\d{4}-\d{2}$", r[k]):
+                if isinstance(r.get(k), str) and re.match(r"^\d{4}-\d{2}\Z", r[k]):
                     out[-1][k] = r[k]
         # ограничение скорости правила (1.24.0): на всех его клиентов вместе, Мбит/с; поле — только если задано
         for k in ("rate_down", "rate_up"):
@@ -377,7 +377,7 @@ def quic(v) -> bool:
     return v
 
 
-MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+MONTH_RE = re.compile(r"^\d{4}-\d{2}\Z")
 
 
 def month(v) -> str | None:
@@ -401,7 +401,7 @@ def list_fields(body: dict, existing: dict | None = None) -> dict:
     src = str(body.get("source", existing["source"] if existing else "")).strip()
     if kind == "country":
         src = src.lower()
-        if not re.match(r"^[a-z]{2}$", src):
+        if not re.match(r"^[a-z]{2}\Z", src):
             bad("err.country_code")
         return {"kind": kind, "source": src, "name": str(body.get("name") or "")[:40]}
     elif kind == "asn":
@@ -421,7 +421,7 @@ def list_fields(body: dict, existing: dict | None = None) -> dict:
         nm = body.get("name") or (found[0] if found else urls[0].split("/")[2])[:40]
     elif kind == "url":
         urls = src.split()
-        if not urls or not all(re.match(r"^https?://\S+$", u) for u in urls):
+        if not urls or not all(re.match(r"^https?://\S+\Z", u) for u in urls):
             bad("err.urls")
         nm = body.get("name")
     else:
@@ -481,7 +481,7 @@ def period(v) -> str:
     return v
 
 
-QUOTA_KEY_RE = re.compile(r"^(\d{4}-\d{2}|total)$")
+QUOTA_KEY_RE = re.compile(r"^(\d{4}-\d{2}|total)\Z")
 
 
 def quota_key(v) -> str | None:
@@ -507,8 +507,8 @@ def cps_entry(preset, values=None) -> dict | None:
 
 # ----------------------------------------------- свой адрес клиента, ссылка
 HOST_RE = re.compile(r"[A-Za-z0-9.\-:]{1,253}")     # адрес сервера в копии: IPv4, IPv6 или домен
-TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,40}$")    # личная ссылка клиента /s/<токен>
-HOSTNAME_RE = re.compile(r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]")    # домен (адрес панели, «Проверка маршрута»)
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,40}\Z")    # личная ссылка клиента /s/<токен>
+HOSTNAME_RE = re.compile(r"(?=.{1,253}\Z)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]")    # домен (адрес панели, «Проверка маршрута»)
 
 
 def host_text(v) -> str:
@@ -554,8 +554,8 @@ def shaping_limits(sh) -> dict:
 
 
 # ------------------------------------------------------------------ Telegram
-TG_TOKEN_RE = re.compile(r"^[0-9]{5,15}:[A-Za-z0-9_-]{30,60}$")
-TG_CHAT_RE = re.compile(r"^(-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
+TG_TOKEN_RE = re.compile(r"^[0-9]{5,15}:[A-Za-z0-9_-]{30,60}\Z")
+TG_CHAT_RE = re.compile(r"^(-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})\Z")
 
 
 def telegram(st: dict, base: dict, body: dict, backup: bool = False) -> dict:

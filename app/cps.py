@@ -24,7 +24,7 @@ MAX_PACKET = 1400       # больше — пакет фрагментирует
 MAX_TAG = 1400
 
 TOKEN_RE = re.compile(r"<[^<>]*>|[^<>\s]+|[<>]")
-HEX_RE = re.compile(r"^0x((?:[0-9a-fA-F]{2})+)$")
+HEX_RE = re.compile(r"^0x((?:[0-9a-fA-F]{2})+)\Z")
 
 
 class CPSError(MsgError, ValueError):
@@ -34,7 +34,7 @@ class CPSError(MsgError, ValueError):
 KERNEL_TAGS = ("b", "c", "t", "r", "rc", "rd")
 KERNEL_MAX = 65535
 _KTAG_RE = re.compile(r"<([^<>]*)>")
-_KHEX_RE = re.compile(r"^0x((?:[0-9a-fA-F]{2})+)$")      # «0X» модуль не принимает
+_KHEX_RE = re.compile(r"^0x((?:[0-9a-fA-F]{2})+)\Z")      # «0X» модуль не принимает
 
 
 def kernel_problem(params: dict) -> Msg | None:

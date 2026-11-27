@@ -886,7 +886,11 @@ class HoldRulesTest(unittest.TestCase):
         with mock.patch.object(engine.config, "DRY_RUN", False):
             e._save_hold(t, {"settings": {}})
             e._save_hold(t, {"settings": {}})                 # то же — второй раз не пишется
-        t.write_file.assert_called_once_with("/etc/amnezia/amneziawg/awgr-hold-awg0.nft", "table ip awgr\n", 0o600)
+        t.write_file.assert_any_call("/etc/amnezia/amneziawg/awgr-hold-awg0.nft", "table ip awgr\n", 0o600)
+        # IPv6 клиентов — отдельным файлом (П11 полной проверки 1.25.0)
+        t.write_file.assert_any_call("/etc/amnezia/amneziawg/awgr-hold6-awg0.nft",
+                                     engine.server.v6_ruleset("awg0"), 0o600)
+        self.assertEqual(t.write_file.call_count, 2)
         self.assertEqual(e.build_ruleset.call_args.kwargs, {"hold": True})
 
     def test_restore_mode_removes(self):
@@ -894,7 +898,9 @@ class HoldRulesTest(unittest.TestCase):
         with mock.patch.object(engine.config, "DRY_RUN", False), mock.patch("os.unlink") as ul:
             e._save_hold(t, {"settings": {"on_stop": "restore"}})
         t.write_file.assert_not_called()
-        ul.assert_called_once_with("/nonexistent/etc/amnezia/amneziawg/awgr-hold-awg0.nft")
+        self.assertEqual([c.args[0] for c in ul.call_args_list],
+                         ["/nonexistent/etc/amnezia/amneziawg/awgr-hold-awg0.nft",
+                          "/nonexistent/etc/amnezia/amneziawg/awgr-hold6-awg0.nft"])
 
     def test_container_only_ours(self):
         e, t = self._eng("container", "#!/bin/bash\n# AmneziaVPN\n")
@@ -904,7 +910,7 @@ class HoldRulesTest(unittest.TestCase):
         e, t = self._eng("container", "HOLD=/opt/amnezia/awg/awgr-hold-awg0.nft\n")
         with mock.patch.object(engine.config, "DRY_RUN", False):
             e._save_hold(t, {"settings": {}})
-        t.write_file.assert_called_once()
+        self.assertEqual(t.write_file.call_count, 2)            # IPv4 и IPv6
 
     def test_hold_ruleset_blocks_exits(self):
         gp = {"rules": [], "default": 1, "domain": []}

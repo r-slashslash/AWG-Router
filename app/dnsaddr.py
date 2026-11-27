@@ -27,8 +27,8 @@ DOH_PATH = "/dns-query"
 LOOKUP_TIMEOUT = 3.0
 ALL = "dns_all"                 # поле правила на диске: весь список, когда в нём есть шифрованные
 
-_NAME = re.compile(r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")
-_PATH = re.compile(r"^/[A-Za-z0-9/._~%+-]*$")
+_NAME = re.compile(r"^(?=.{1,253}\Z)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*\Z")
+_PATH = re.compile(r"^/[A-Za-z0-9/._~%+-]*\Z")
 
 
 class DnsAddrError(ValueError):

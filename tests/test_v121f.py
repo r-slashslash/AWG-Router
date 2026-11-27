@@ -64,7 +64,9 @@ class ReconcileOrderTest(unittest.TestCase):
 
     def ns(self, cmd, **kw):
         ok = lambda out="", rc=0: subprocess.CompletedProcess(cmd, rc, out, "")  # noqa: E731
-        if cmd[:2] == ["nft", "-f"]:
+        if cmd[:2] == ["nft", "-f"] and cmd[2].endswith("ruleset6.nft"):
+            self.log.append(("nft6",))
+        elif cmd[:2] == ["nft", "-f"]:
             with open(cmd[2]) as f:
                 self.log.append(("nft", "chain o_u1 {" in f.read()))
             self.table["present"] = True
@@ -115,7 +117,7 @@ class ReconcileOrderTest(unittest.TestCase):
         self.reconcile(self.t)
         self.log.clear()
         self.reconcile(self.target("container:amnezia-awg2:5151:b"))
-        self.assertEqual(self.log[:2], [("nft", False), ("tunnel", 1)])
+        self.assertEqual(self.log[:3], [("nft", False), ("nft6",), ("tunnel", 1)])
 
     def test_table_gone_is_put_back(self):
         """Вход: кто-то сделал nft flush ruleset. Ожидание: следующий проход ставит правила заново."""
@@ -297,7 +299,7 @@ class HoldFileTest(unittest.TestCase):
         with mock.patch.object(engine.config, "DRY_RUN", False):
             e._save_hold(t, {"settings": {}, "routing": {}})
             e._save_hold(t, {"settings": {}, "routing": {"strict": True}})
-        self.assertEqual(t.write_file.call_count, 2)
+        self.assertEqual(t.write_file.call_count, 4)          # каждый раз — файлы IPv4 и IPv6
 
 
 class MoveHostHoldTest(unittest.TestCase):
