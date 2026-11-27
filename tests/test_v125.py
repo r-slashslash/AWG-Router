@@ -970,12 +970,13 @@ class AddrDirectDnsTest(unittest.TestCase):
 
     def test_address_path_falls_back_from_the_same_address(self):
         import socket
+        from app import dnsproxy
         from tests.test_v115 import a_reply
         p = self._proxy()
         enc, plain = [], []
 
         async def blocked(msg, server, mark, mode):
-            enc.append((server, mark))
+            enc.append((server, mark, dnsproxy.read_name(msg, 12)))     # «.» — контрольный запрос проверки (П31)
             raise OSError("reset")
 
         async def udp(msg, server, mark):
@@ -984,12 +985,13 @@ class AddrDirectDnsTest(unittest.TestCase):
         p._enc, p._udp = blocked, udp
         out = self._run(p, "10.8.1.5", "google.com")
         self.assertIn(socket.inet_aton("203.0.113.7"), out)
-        self.assertEqual(enc, [("1.1.1.1", self.AM)])
+        # имя и проверка пути — с того же адреса
+        self.assertEqual(enc, [("1.1.1.1", self.AM, "google.com."), ("1.1.1.1", self.AM, ".")])
         self.assertEqual(plain, [("77.88.8.8", self.AM)])          # местный — с того же адреса, не с адреса системы
         self.assertTrue(p._dp(self.AM).down)
         self.assertFalse(p.direct_down)                            # путь адреса системы о сбое не знает
         self._run(p, "10.8.1.5", "example.org")
-        self.assertEqual(len(enc), 1)                              # второе имя — сразу у местного
+        self.assertEqual(len(enc), 2)                              # второе имя — сразу у местного
         self.assertEqual(plain[-1], ("77.88.8.8", self.AM))
         # путь через выход (метка выхода) — никогда к местному
         plain.clear()
@@ -998,7 +1000,7 @@ class AddrDirectDnsTest(unittest.TestCase):
         # проба шифрованного в фоне — тем же путём
         p._dp(self.AM).retry_at = 0
         self._run(p, "10.8.1.5", "example.com")
-        self.assertEqual(enc[-1], ("1.1.1.1", self.AM))
+        self.assertEqual(enc[-1], ("1.1.1.1", self.AM, "."))
 
     def test_server_tab_warns_for_an_address_path(self):
         import time
@@ -1188,32 +1190,37 @@ class DnsProxyEntriesTest(unittest.TestCase):
         p = self._proxy(encrypt="plain", direct_fallback=["tls://common.dot.dns.yandex.net#77.88.8.8"])
         asked = []
 
+        def name(msg):                                  # контрольный запрос проверки пути (П31) — «.»
+            return "" if dnsproxy.read_name(msg, 12) != "." else " check"
+
         async def udp(msg, server, mark):
-            asked.append(("udp", server))
+            asked.append(("udp" + name(msg), server))
             return None
 
         async def tcp(msg, server, mark):
-            asked.append(("tcp", server))
+            asked.append(("tcp" + name(msg), server))
             raise OSError("reset")
 
         state = {"fb": True}
 
         async def enc_fn(msg, server, mark, mode):
-            asked.append((mode, server))
+            asked.append((mode + name(msg), server))
             if state["fb"]:
                 return a_reply(msg, ["203.0.113.9"])
             raise OSError("reset")
         p._udp, p._tcp, p._enc = udp, tcp, enc_fn
-        out = self._run(p, ["example.org"])
+        out = self._run(p, ["example.org"], wait=True)
         self.assertEqual(out[0][3] & 0xF, 0)
-        # общий сервер молчит по UDP — сразу запасной, тот же сервер по TCP не ждём (А13)
-        self.assertEqual(asked, [("udp", "1.1.1.1"), ("dot", "tls://common.dot.dns.yandex.net#77.88.8.8")])
+        # общий сервер молчит по UDP — сразу запасной, тот же сервер по TCP не ждём (А13); проверка пути — две попытки
+        # по UDP, не по TCP
+        self.assertEqual(asked, [("udp", "1.1.1.1"), ("dot", "tls://common.dot.dns.yandex.net#77.88.8.8"),
+                                 ("udp check", "1.1.1.1"), ("udp check", "1.1.1.1")])
         self.assertTrue(p.direct_down)
         self.assertGreater(p._dp(0).fb_ok_at, 0)
         # запасной перестал отвечать: один раз ждали, дальше — сразу SERVFAIL, а он пробуется в фоне
         state["fb"] = False
         asked.clear()
-        self._run(p, ["a.example"])
+        self._run(p, ["a.example"], wait=True)
         self.assertTrue(p._dp(0).fb_down)
         asked.clear()
         out = self._run(p, ["b.example"])

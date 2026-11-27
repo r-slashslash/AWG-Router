@@ -1439,28 +1439,30 @@ class DirectFallbackTest(unittest.TestCase):
 
     def test_direct_asks_local_dns(self):
         import socket
+        from app import dnsproxy
         from tests.test_v115 import a_reply
         p = self._proxy(["77.88.8.8"])
         enc, plain = [], []
 
         async def blocked(msg, server, mark, mode):
-            enc.append((server, mark))
+            enc.append((server, mark, dnsproxy.read_name(msg, 12)))  # «.» — контрольный запрос проверки пути (П31)
             raise OSError("reset")
 
         async def udp(msg, server, mark):
             plain.append((server, mark))
             return a_reply(msg, ["203.0.113.7"])
         p._enc, p._udp = blocked, udp
-        out = self.run_q(p, ["google.com", "example.org"])
+        out = self.run_q(p, ["google.com", "example.org"], wait_probe=True)
         self.assertIn(socket.inet_aton("203.0.113.7"), out[0])
-        self.assertEqual(enc, [("1.1.1.1", 0)])                       # второе имя — сразу у местного
+        self.assertEqual(enc, [("1.1.1.1", 0, "google.com."),         # второе имя — сразу у местного
+                               ("1.1.1.1", 0, ".")])                  # а серверы DNS проверены в фоне — тоже молчат
         self.assertEqual(plain, [("77.88.8.8", 0), ("77.88.8.8", 0)])
         self.assertEqual(p.stats["direct_fallback"], 2)
         self.assertGreater(p.direct_fail_at, p.direct_ok_at)
         self.assertTrue(p.direct_down)
         p.direct_retry_at = 0                                         # прошло DIRECT_RETRY — снова шифрованный (в фоне)
         self.run_q(p, ["example.net"], wait_probe=True)
-        self.assertEqual(len(enc), 2)
+        self.assertEqual(len(enc), 3)
         self.assertEqual(plain[-1], ("77.88.8.8", 0))                 # клиенту ответил местный, не дожидаясь пробы
 
     def test_client_never_waits_for_the_retry(self):
@@ -1480,8 +1482,8 @@ class DirectFallbackTest(unittest.TestCase):
         async def udp(msg, server, mark):
             return a_reply(msg, ["203.0.113.7"])
         p._enc, p._udp = enc, udp
-        self.run_q(p, ["a.example"])                                  # первый раз — ждёт и уходит к местному
-        self.assertTrue(p.direct_down)
+        self.run_q(p, ["a.example"], wait_probe=True)                 # первый раз — ждёт и уходит к местному
+        self.assertTrue(p.direct_down)                                # проверка в фоне: серверы правда молчат
         p.direct_retry_at, state["enc_ok"] = 0, True
         t0 = time.monotonic()
         self.run_q(p, ["b.example"], wait_probe=True)

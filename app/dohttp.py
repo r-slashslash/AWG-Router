@@ -555,6 +555,16 @@ class H3Pool:
         finally:
             self.sem.release()
 
+    def once(self, msg: bytes, host: str, path: str, timeout: float) -> bytes:
+        """Запрос на своём новом соединении — мимо очереди (size) и свободных соединений пула; соединение потом
+        закрывается. Так dnsproxy.py проверяет путь (П31): соединения пула могут быть заняты медленными именами."""
+        deadline = time.monotonic() + timeout
+        conn = H3Conn(self.make_sock(), self.ip, self.port, self.name, self.cafile, deadline)
+        try:
+            return conn.query(msg, host, path, deadline)
+        finally:
+            conn.close()
+
     def close(self) -> None:
         with self.lock:
             self.closed = True
@@ -564,12 +574,19 @@ class H3Pool:
 
 
 _EXEC = None
+_CHECK_EXEC = None
 
 
-def run_h3(pool: H3Pool, msg: bytes, host: str, path: str, timeout: float):
-    """Запрос HTTP/3 из цикла событий: в своём наборе потоков (не в общем — там nft добавляет адреса в набор)."""
-    global _EXEC
+def run_h3(pool: H3Pool, msg: bytes, host: str, path: str, timeout: float, own: bool = False):
+    """Запрос HTTP/3 из цикла событий: в своём наборе потоков (не в общем — там nft добавляет адреса в набор). own —
+    проверка пути (П31): на своём соединении (H3Pool.once) и в своих потоках — все 8 общих могут ждать медленные имена."""
+    global _EXEC, _CHECK_EXEC
+    from concurrent.futures import ThreadPoolExecutor
+    if own:
+        if _CHECK_EXEC is None:
+            # проверка — одна на путь (адрес системы и адреса «Напрямую — адрес»), у общих серверов и у запасного
+            _CHECK_EXEC = ThreadPoolExecutor(max_workers=4, thread_name_prefix="doh3-check")
+        return asyncio.get_running_loop().run_in_executor(_CHECK_EXEC, pool.once, msg, host, path, timeout)
     if _EXEC is None:
-        from concurrent.futures import ThreadPoolExecutor
         _EXEC = ThreadPoolExecutor(max_workers=8, thread_name_prefix="doh3")
     return asyncio.get_running_loop().run_in_executor(_EXEC, pool.query, msg, host, path, timeout)

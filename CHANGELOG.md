@@ -60,6 +60,19 @@ it grows, so every user-visible change gets a new version.
   was there). It works with any DNS encryption, only on Direct paths, from the same address; a fallback that doesn't
   answer isn't asked for `DIRECT_RETRY` (clients get SERVFAIL at once) and is retried in the background. The Server tab
   says "The DNS servers don't answer directly" and, under the fallback, "In use now" or "doesn't answer either".
+- **One slow name no longer switches Direct to the fallback DNS** (full audit of 1.25.0, П31). A name the resolver
+  took longer than the timeout to answer (its own name servers don't respond) or one lost UDP packet marked the DNS
+  servers of the path as not answering for `DIRECT_RETRY`: for two minutes every Direct client went to the fallback
+  (in 1.22.0–1.24.0 the automatic country DNS, plain); in this release before the fix, as such a name is slow at the
+  fallback too, the fallback was marked down as well and they all got SERVFAIL. Now a name without an answer starts one
+  background check of the same servers by the same path — `. NS` (any resolver answers it from its cache) to every
+  server at once, each on its own new connection outside the pool's queue, plain DNS with a second try, at most
+  `CHECK_TIMEOUT` (5 s); while it runs new names of that path go to the fallback, so real blocking (dropped SYN, RST,
+  dropped ClientHello, a connection frozen after the handshake, cut UDP 53 or 443) switches as fast as before. Only a
+  failed check marks the path down; the fallback gets the same check, and the probe every `DIRECT_RETRY` asks `. NS`
+  instead of a client's name. Names through an exit and names of rules without a path never go to the fallback, during
+  the check too; the Server tab warns only after a failed check. `dnsproxy.py` exits at once on SIGTERM (an HTTP/3
+  query thread held the exit up to 5 s).
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't

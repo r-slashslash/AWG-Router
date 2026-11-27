@@ -59,6 +59,53 @@ try:
         s=socket.socket(); s.settimeout(2); s.bind(("10.8.1.2",0)); s.connect((dst,53)); print(s.recv(100).decode())
 except OSError as e: print("FAIL", type(e).__name__)
 """
+# П31 полной проверки 1.25.0: DoH и запасной DNS «в интернете» (inet). DoH — 8.8.8.8 (имя dns.google, свой сертификат),
+# на имена из argv[3] отвечает через 7 с; запасной — обычный DNS 77.88.55.242 на том же порту. Печатает порт, в файл
+# argv[4] пишет, сколько рукопожатий TLS прошло (видно, что «замерзание» — после рукопожатия, а не на нём).
+DOH_SERVER = r"""
+import os,sys,time
+sys.path.insert(0, os.getcwd())
+from tests.test_doh_http import H2Server, PlainServer
+s = H2Server(sys.argv[1], sys.argv[2], "8.8.8.8")
+s.slow = {n: 7.0 for n in sys.argv[3].split(",") if n}
+PlainServer("77.88.55.242", s.port, "203.0.113.77")
+print(s.port, flush=True)
+while True:
+    with open(sys.argv[4] + ".tmp", "w") as f:
+        f.write(str(s.conns))
+    os.replace(sys.argv[4] + ".tmp", sys.argv[4])
+    time.sleep(0.1)
+"""
+# запросы к dnsproxy.py в amz по очереди: кто ответил (shared — DoH, fb — запасной, SF — SERVFAIL) и за сколько
+DNS_ASK = r"""
+import json,os,socket,struct,sys,time
+out = []
+for name in sys.argv[2].split(","):
+    q = struct.pack("!6H", 7, 0x0100, 1, 0, 0, 0) + b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) \
+        + b"\0\0\1\0\1"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(25); s.bind(("10.8.1.1", 0))
+    t0 = time.monotonic(); s.sendto(q, ("10.8.1.1", int(sys.argv[1])))
+    try:
+        r = s.recv(4096)
+        who = "SF" if r[3] & 0xF == 2 else "shared" if socket.inet_aton("203.0.113.9") in r else \
+            "fb" if socket.inet_aton("203.0.113.77") in r else "rc%d" % (r[3] & 0xF)
+    except OSError:
+        who = "TIMEOUT"
+    out.append([who, round(time.monotonic() - t0, 3)])
+print(json.dumps(out))
+"""
+# как dnsproxy.py открывает соединение DoH (ALPN h2, имя dns.google, начало HTTP/2) — и держит его: сколько байт уходит
+# до первого запроса (для правила «отбросить после рукопожатия»)
+DOH_HANDSHAKE = r"""
+import os,socket,ssl,sys,time
+sys.path.insert(0, os.getcwd())
+from app.dohttp import H2_PREFACE
+ctx = ssl.create_default_context(cafile=sys.argv[2]); ctx.set_alpn_protocols(["h2", "http/1.1"])
+s = socket.create_connection(("8.8.8.8", int(sys.argv[1])), 5)
+s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+t = ctx.wrap_socket(s, server_hostname="dns.google"); t.sendall(H2_PREFACE)
+print("ok", flush=True); time.sleep(30)
+"""
 CLIENT = r"""
 import socket,sys
 s=socket.socket(); s.settimeout(2)
@@ -238,7 +285,122 @@ def panel_dual_stack():
         srv.server_close()
 
 
+def dns_fallback():
+    """П31 полной проверки 1.25.0: запасной DNS «Напрямую» на настоящих сокетах и сроках, блокировки — правилами nftables
+    «в интернете» (inet): dnsproxy.py в amz, DoH 8.8.8.8 и запасной 77.88.55.242 в inet. Одно медленное имя — следующие
+    имена у DoH (не у запасного); настоящая блокировка (SYN, RST после ClientHello, ClientHello, «замерзание» после
+    рукопожатия) — первое имя у запасного за один срок ответа, следующие сразу. P31_DNSPROXY — dnsproxy.py другого кода
+    (сравнить до и после); печатает время каждого имени."""
+    from tests.test_doh_http import cert
+    d = tempfile.mkdtemp()
+    crt, key = cert(d, "dns.google")
+    conns = os.path.join(d, "conns")
+    srv = subprocess.Popen(["nsenter", "--net=/var/run/netns/inet", "--", sys.executable, "-c", DOH_SERVER, crt, key,
+                            "slow.example.", conns], stdout=subprocess.PIPE, text=True)
+    port = int(srv.stdout.readline())
+
+    def handshakes():
+        time.sleep(0.3)
+        with open(conns) as f:
+            return int(f.read() or 0)
+    proxy_py = os.environ.get("P31_DNSPROXY") or os.path.join(os.path.dirname(__file__), "..", "app", "dnsproxy.py")
+    results = []
+
+    def start():
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 5300, "clients": "10.8.1.0/24", "upstreams": ["8.8.8.8"],
+                       "encrypt": "doh", "direct_fallback": ["77.88.55.242"], "default": {"mark": 0, "tcp": False},
+                       "routes": {}, "ca_file": crt, "upstream_port": port}, f)
+        p = subprocess.Popen(["nsenter", "--net=/var/run/netns/amz", "--", sys.executable, "-I", proxy_py, conf],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        for _ in range(50):
+            if sh("amz", sys.executable, "-c", "import socket; socket.create_connection(('10.8.1.1', 5300), 0.3)"
+                  ).returncode == 0:
+                break
+            time.sleep(0.1)
+        return p
+
+    def ask(*names):
+        return json.loads(sh("amz", sys.executable, "-c", DNS_ASK, "5300", ",".join(names), timeout=180).stdout)
+
+    def block(text):
+        sh("inet", "nft", "delete", "table", "ip", "p31")
+        if text:
+            nft("inet", "table ip p31 {\n chain c_in {\n  type filter hook input priority 0;\n  " + text + "\n }\n}\n")
+
+    def show(label, got):
+        print(f"    {label:44} " + ", ".join(f"{w} {t:.2f} с" for w, t in got))
+
+    # ложная тревога: DoH в порядке, одно имя он разбирает 7 с
+    block("")
+    p = start()
+    try:
+        got = ask("a.example") + ask("slow.example")
+        time.sleep(0.5)                                     # проверка пути контрольным запросом — доли секунды
+        got += ask("n1.example", "n2.example", "n3.example")
+    finally:
+        p.terminate()
+        p.wait(10)
+    show("медленное имя: a, slow, затем три имени", got)
+    results += [check("П31: одно медленное имя — само у запасного", got[1][0] == "fb"),
+                check("П31: следующие имена — у DoH, а не у запасного", [w for w, _ in got[2:]] == ["shared"] * 3)]
+
+    # настоящая блокировка в пути
+    # сколько байт уходит от dnsproxy.py к DoH до первого запроса: правило «замерзания» — чуть больше
+    block(f"ip daddr 8.8.8.8 tcp dport {port} ct state != invalid counter")      # ct — модуль conntrack загружен
+    sysctl("inet", "net.netfilter.nf_conntrack_acct", 1)        # счёт байт соединений — для ct original bytes
+    h = subprocess.Popen(["nsenter", "--net=/var/run/netns/amz", "--", sys.executable, "-c", DOH_HANDSHAKE, str(port),
+                          crt], stdout=subprocess.PIPE, text=True)
+    h.stdout.readline()
+    time.sleep(1.0)
+    rules = json.loads(sh("inet", "nft", "-j", "list", "table", "ip", "p31").stdout)["nftables"]
+    hs = next(x["counter"]["bytes"] for r in rules if "rule" in r for x in r["rule"]["expr"] if "counter" in x)
+    h.kill()
+    h.wait()
+    print(f"    рукопожатие TLS и начало HTTP/2: {hs} байт от dnsproxy.py к DoH")
+    for label, rule in (("SYN отбрасывается", "tcp flags & (syn|ack) == syn drop"),
+                        ("RST после ClientHello", "ip length > 120 reject with tcp reset"),
+                        ("ClientHello отбрасывается", "ip length > 120 drop"),
+                        # запрос: имя в 200 букв — сам по себе больше запаса в 200 байт
+                        ("замерзание после рукопожатия", f"ct original bytes > {hs + 200} drop")):
+        block(f"ip daddr 8.8.8.8 tcp dport {port} {rule}")
+        p = start()
+        was = handshakes()
+        try:
+            got = ask(("x" * 50 + ".") * 4 + "first.example", "n1.example", "n2.example", "n3.example")
+        finally:
+            p.terminate()
+            p.wait(10)
+        hs_done = handshakes() - was
+        show(label, got)
+        print(f"    {'':44} рукопожатий TLS у DoH: {hs_done}")
+        if label.startswith("замерзание"):
+            results += [check("П31, замерзание: рукопожатие проходит, ответа нет", hs_done >= 1)]
+        elif label.startswith(("SYN", "ClientHello")):
+            results += [check(f"П31, {label}: рукопожатие не проходит", hs_done == 0)]
+        results += [check(f"П31, {label}: первое имя — у запасного за один срок ответа",
+                          got[0][0] == "fb" and got[0][1] < 11),
+                    check(f"П31, {label}: следующие — сразу у запасного",
+                          all(w == "fb" and t < 0.5 for w, t in got[1:]))]
+    block("")
+    srv.kill()
+    srv.wait()
+    return results
+
+
 def main():
+    if sys.argv[1:] == ["dns"]:                             # только П31 (сравнить код до и после: P31_DNSPROXY)
+        procs = setup()
+        try:
+            results = dns_fallback()
+        finally:
+            for p in procs:
+                p.kill()
+            for n in NS:
+                netns.remove(n)
+        print(f"\n{sum(results)}/{len(results)} проверок пройдено")
+        sys.exit(0 if all(results) else 1)
     results = panel_dual_stack()
     procs = setup()
     try:
@@ -316,6 +478,7 @@ def main():
         panel_apply({"rules": [(["ru"], "direct")], "default": "direct"}, {})
         results += [expect_dns("DNS на сервере выключен: напрямую, как раньше", "udp", "8.8.8.8",
                                "DNS-INET from 172.20.0.2")]
+        results += dns_fallback()
         # туннель исчез (упал amneziawg-go): маршрут по таблице → unreachable, утечки нет
         panel_apply(g, {})
         with NetNS("amz") as ip:

@@ -22,27 +22,31 @@ from app import dnsaddr, dnsproxy, dohttp  # noqa: E402
 from tests.test_v115 import a_reply, q_msg  # noqa: E402
 
 
-def cert(d: str, name: str = "dns.test") -> tuple[str, str]:
+def cert(d: str, name: str = "dns.test", ips: tuple = ()) -> tuple[str, str]:
     crt, key = os.path.join(d, "c.crt"), os.path.join(d, "c.key")
+    san = ",".join([f"DNS:{name}"] + [f"IP:{ip}" for ip in ips])
     subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
-                    "-days", "2", "-subj", "/CN=dns-test", "-addext", f"subjectAltName=DNS:{name}",
+                    "-days", "2", "-subj", "/CN=dns-test", "-addext", f"subjectAltName={san}",
                     "-keyout", key, "-out", crt], capture_output=True, check=True)
     return crt, key
 
 
 class H2Server:
     """Сервер DoH по HTTP/2: TLS с ALPN h2, свои SETTINGS, PING, ответ — заголовки и данные (по выбору теста:
-    код, Хаффман в коде, паддинг, CONTINUATION, сброс потока, GOAWAY)."""
+    код, Хаффман в коде, паддинг, CONTINUATION, сброс потока, GOAWAY). Клиент без ALPN — DoT. slow — имя → через
+    сколько секунд ответ (у имени молчат его серверы имён); frozen — соединения и запросы принимаются, ответа нет (DoH
+    «замерзает» после рукопожатия)."""
 
-    def __init__(self, crt: str, key: str):
+    def __init__(self, crt: str, key: str, addr: str = "127.0.0.1"):
         self.ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         self.ctx.load_cert_chain(crt, key)
         self.ctx.set_alpn_protocols(["h2"])
         self.sock = socket.socket()
-        self.sock.bind(("127.0.0.1", 0))
+        self.sock.bind((addr, 0))
         self.sock.listen(8)
         self.port = self.sock.getsockname()[1]
         self.mode, self.seen, self.conns = "ok", [], 0
+        self.slow, self.frozen = {}, False
         threading.Thread(target=self.loop, daemon=True).start()
 
     def loop(self):
@@ -63,11 +67,25 @@ class H2Server:
             b += d
         return b
 
+    def delay(self, msg: bytes) -> bool:
+        """Медленное имя — подождать; «замёрз» — False (не отвечать)."""
+        if self.frozen:
+            return False
+        time.sleep(self.slow.get(dnsproxy.read_name(msg, 12), 0))
+        return not self.frozen
+
     def one(self, raw):
         s = raw
         try:
             s = self.ctx.wrap_socket(raw, server_side=True)
             self.conns += 1
+            if s.selected_alpn_protocol() != "h2":       # DoT: длина и запрос, ответ — так же
+                while True:
+                    q = self.recv(s, struct.unpack("!H", self.recv(s, 2))[0])
+                    self.seen.append(q)
+                    if self.delay(q):
+                        body = a_reply(q, ["203.0.113.9"])
+                        s.sendall(struct.pack("!H", len(body)) + body)
             assert self.recv(s, 24) == b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
             s.sendall(dohttp.h2_frame(4, 0, 0, struct.pack("!HI", 3, 100)) + dohttp.h2_frame(6, 0, 0, b"12345678"))
             streams = {}
@@ -91,6 +109,8 @@ class H2Server:
 
     def answer(self, s, sid, req):
         self.seen.append(req["head"])
+        if not self.delay(req["data"]):
+            return
         body = a_reply(req["data"], ["203.0.113.9"])
         mode = self.mode
         if mode == "goaway":
@@ -157,6 +177,160 @@ class Proc:
         self.proc.terminate()
         self.proc.wait(5)
         self.proc.stdout.close()
+
+
+class PlainServer:
+    """Обычный DNS по UDP на addr:port: на всё — адрес ip (по нему видно, что ответил запасной)."""
+
+    def __init__(self, addr: str, port: int, ip: str):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((addr, port))
+        self.ip = ip
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            try:
+                data, peer = self.sock.recvfrom(4096)
+                self.sock.sendto(a_reply(data, [self.ip]), peer)
+            except OSError:
+                return
+
+    def close(self):
+        self.sock.close()
+
+
+class DirectProc(Proc):
+    """dnsproxy.py отдельным процессом с путём «напрямую»: общий сервер upstream (шифрование encrypt), запасной DNS
+    fallback — как у людей с галочкой «Запасной DNS для «Напрямую»». Все серверы — на одном порту port."""
+
+    def __init__(self, upstream: str, encrypt: str, fallback: list, ca: str, port: int, libssl: str | None = None):
+        from tests.test_v115 import free_port
+        d = tempfile.mkdtemp()
+        self.port = free_port()
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "127.0.0.1", "port": self.port, "clients": "127.0.0.0/8", "upstreams": [upstream],
+                       "encrypt": encrypt, "direct_fallback": fallback, "default": {"mark": 0, "tcp": False},
+                       "routes": {}, "ca_file": ca, "upstream_port": port, "libssl": libssl}, f)
+        self.proc = subprocess.Popen([sys.executable, "-I", os.path.join(os.path.dirname(dnsproxy.__file__),
+                                                                         "dnsproxy.py"), conf],
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        for _ in range(50):
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), 0.2):
+                    break
+            except OSError:
+                time.sleep(0.1)
+
+    def who(self, name: str) -> tuple[str, float]:
+        """→ (кто ответил: shared — общий сервер, fb — запасной, SF — SERVFAIL; секунды)."""
+        t0 = time.monotonic()
+        r = self.ask(name)[0]
+        dt = time.monotonic() - t0
+        if r[3] & 0xF == dnsproxy.RC_SERVFAIL:
+            return "SF", dt
+        return ("shared" if socket.inet_aton("203.0.113.9") in r else
+                "fb" if socket.inet_aton("203.0.113.77") in r else f"rc{r[3] & 0xF}"), dt
+
+
+class SlowNameRealTest(unittest.TestCase):
+    """П31 полной проверки 1.25.0 на настоящих сокетах и настоящих сроках (ENC_TIMEOUT 5 с): сервер отвечает на всё,
+    кроме одного имени (ему — через 7 с), или «замерзает» после рукопожатия. Одно медленное имя не отправляет к
+    запасному следующие; замёрзший сервер — отправляет сразу. До исправления (6a8c54f) медленное имя отправляло к
+    запасному всех на 2 минуты, а у запасного — давало всем SERVFAIL."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = tempfile.mkdtemp()
+        cls.crt, key = cert(cls.d, ips=("127.0.0.1",))
+        cls.srv = H2Server(cls.crt, key)
+        cls.fb = PlainServer("127.0.0.2", cls.srv.port, "203.0.113.77")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.close()
+        cls.fb.close()
+
+    def setUp(self):
+        self.srv.mode, self.srv.slow, self.srv.frozen = "ok", {}, False
+
+    def _slow(self, encrypt):
+        self.srv.slow = {"slow.example.": 7.0}
+        p = DirectProc("127.0.0.1", encrypt, ["127.0.0.2"], self.crt, self.srv.port)
+        self.addCleanup(p.close)
+        self.assertEqual(p.who("a.example")[0], "shared")
+        self.assertEqual(p.who("slow.example")[0], "fb")         # само имя — у запасного, как раньше
+        time.sleep(0.5)                                           # проверка пути (контрольный запрос) — меньше 0,5 с
+        out = [p.who(f"n{i}.example") for i in range(3)]
+        self.assertEqual([w for w, _ in out], ["shared"] * 3, encrypt)
+
+    def test_h2_slow_name(self):
+        self._slow("doh")
+
+    def test_dot_slow_name(self):
+        self._slow("dot")
+
+    def test_h2_frozen_switches_at_once(self):
+        self.srv.frozen = True
+        p = DirectProc("127.0.0.1", "doh", ["127.0.0.2"], self.crt, self.srv.port)
+        self.addCleanup(p.close)
+        first = p.who("a.example")
+        self.assertEqual(first[0], "fb")
+        self.assertLess(first[1], 6.0)                           # один срок ответа, как раньше
+        nxt = [p.who(f"n{i}.example") for i in range(3)]          # проверка идёт или не прошла — сразу у запасного
+        self.assertEqual([w for w, _ in nxt], ["fb"] * 3)
+        self.assertLess(max(t for _, t in nxt), 0.5)
+        time.sleep(getattr(dnsproxy, "CHECK_TIMEOUT", 5.0) + 0.5)    # проверка не прошла — «не отвечают»
+        later = p.who("later.example")
+        self.assertEqual(later[0], "fb")
+        self.assertLess(later[1], 0.5)
+
+
+class SlowNameH3RealTest(unittest.TestCase):
+    """Зеркальный случай П31 на настоящем QUIC: общие серверы недоступны, запасной — «h3://…». Одно имя без его ответа
+    не даёт всем SERVFAIL; замёрзший запасной пропускается сразу."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lib = quic_lib()
+        if cls.lib is None:
+            if os.environ.get("AWGR_TEST_H3") == "1":
+                raise AssertionError("OpenSSL 3.5+ с QUIC не найден")
+            raise unittest.SkipTest("OpenSSL 3.5+ с QUIC не найден (AWGR_TEST_LIBSSL)")
+        cls.d = tempfile.mkdtemp()
+        cls.crt, key = cert(cls.d)
+        cls.srv = H3Server(cls.lib, cls.crt, key)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.close()
+
+    def setUp(self):
+        self.srv.slow, self.srv.frozen = {}, False
+
+    def _proc(self):
+        # общий сервер 127.0.0.3: на этом порту по TCP никто не слушает — соединение сбрасывается (как RST)
+        p = DirectProc("127.0.0.3", "doh", ["h3://dns.test/dns-query#127.0.0.1"], self.crt, self.srv.port,
+                       os.environ.get("AWGR_TEST_LIBSSL"))
+        self.addCleanup(p.close)
+        return p
+
+    def test_one_slow_name_at_the_fallback(self):
+        self.srv.slow = {"slow.example.": 7.0}
+        p = self._proc()
+        self.assertEqual(p.who("a.example")[0], "shared")        # ответ запасного (h3; H3Server — тем же адресом)
+        self.assertEqual(p.who("slow.example")[0], "SF")
+        time.sleep(0.5)
+        self.assertEqual([p.who(f"n{i}.example")[0] for i in range(3)], ["shared"] * 3)
+
+    def test_frozen_fallback_skipped_at_once(self):
+        self.srv.frozen = True
+        p = self._proc()
+        self.assertEqual(p.who("a.example")[0], "SF")
+        nxt = [p.who(f"n{i}.example") for i in range(3)]
+        self.assertEqual([w for w, _ in nxt], ["SF"] * 3)
+        self.assertLess(max(t for _, t in nxt), 0.5)
 
 
 class FramesTest(unittest.TestCase):
@@ -276,6 +450,7 @@ class H3Server:
             f = getattr(lib, fn)
             f.restype, f.argtypes = res, args
         self.lib, self.answers, self.stop = lib, 0, False
+        self.slow, self.frozen = {}, False           # как у H2Server: имя → секунды до ответа; без ответа вовсе
         self.ctx = lib.SSL_CTX_new(lib.OSSL_QUIC_server_method())
         assert lib.SSL_CTX_use_certificate_chain_file(self.ctx, crt.encode()) == 1
         assert lib.SSL_CTX_use_PrivateKey_file(self.ctx, key.encode(), 1) == 1
@@ -301,7 +476,7 @@ class H3Server:
 
     def loop(self):
         lib = self.lib
-        conns, streams = [], {}                                     # поток запроса → прочитанное
+        conns, streams, later = [], {}, []                          # поток запроса → прочитанное; отложенные ответы
         buf, got = ctypes.create_string_buffer(65536), ctypes.c_size_t(0)
         while not self.stop:
             select.select([self.sock], [], [], 0.005)
@@ -327,9 +502,15 @@ class H3Server:
                 if lib.SSL_get_error(st, 0) != 6:                   # не SSL_ERROR_ZERO_RETURN: запрос ещё не весь
                     continue
                 frames = dict(dohttp.h3_frames(streams.pop(st)))
+                if self.frozen:
+                    continue
                 body = a_reply(frames[0], ["203.0.113.9"])
                 out = (dohttp.varint(1) + dohttp.varint(3) + b"\x00\x00\xd9" + dohttp.varint(0)
                        + dohttp.varint(len(body)) + body)
+                later.append((time.monotonic() + self.slow.get(dnsproxy.read_name(frames[0], 12), 0), st, out))
+            for item in [x for x in later if x[0] <= time.monotonic()]:
+                later.remove(item)
+                _, st, out = item
                 lib.SSL_write_ex(st, out, len(out), ctypes.byref(got))
                 lib.SSL_stream_conclude(st, 0)
                 self.answers += 1

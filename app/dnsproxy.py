@@ -41,6 +41,7 @@ SIGHUP — перечитать настройки. Счётчики — в фа
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import ipaddress
 import json
 import os
@@ -74,19 +75,31 @@ NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
 STATS_EVERY = 15
 MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
 # Путь «напрямую» и запасной DNS (cfg direct_fallback — записи, как у своего DNS; 1.25.0: включается галочкой и
-# вписывается вручную или кнопкой «Применить для …»). Серверы DNS из настроек не ответили (из России, Китая и Ирана по
+# вписывается вручную или кнопкой «Применить для …»). Серверы DNS из настроек не отвечают (из России, Китая и Ирана по
 # DoH/DoT это бывает) — имена пути спрашиваются у запасного, а серверы DNS пробуются снова не раньше чем через
 # DIRECT_RETRY и одним запросом в фоне: DoH из России «зависает» до ENC_TIMEOUT на каждом сервере, и проба с запросом
-# клиента раз в две минуты на 10 с останавливала бы имена всем, кто идёт напрямую. Запасной, который не ответил, —
+# клиента раз в две минуты на 10 с останавливала бы имена всем, кто идёт напрямую. Запасной, который не отвечает, —
 # так же: до DIRECT_RETRY не спрашивается (клиент сразу получает SERVFAIL, а не ждёт его), пробуется в фоне.
+# «Не отвечают» решает проверка пути (П31 полной проверки 1.25.0), а не одно имя без ответа: так бывает и у одного имени,
+# которое резолвер разбирает дольше срока (у домена молчат его серверы имён), и у одного потерянного пакета UDP — раньше
+# такое имя на 2 минуты отправляло к запасному всех, кто идёт напрямую, а если запасной тоже не ответил на это имя, всем
+# им 2 минуты шёл SERVFAIL. Теперь после имени без ответа серверы проверяются контрольным запросом (check_query) в фоне;
+# пока проверка идёт (не дольше CHECK_TIMEOUT), новые имена пути сразу идут к запасному — как при «не отвечают», поэтому
+# настоящая блокировка включает запасной не позже, чем раньше. Ответил хоть один сервер — путь в порядке; не ответил
+# никто — «не отвечают». У запасного — так же: одно имя без его ответа — проверка запасного, а не SERVFAIL всем.
 # Только «напрямую»: имена клиентов, которые идут через выход, и имена из правил по доменам, у которых сейчас нет
-# пути (выход подключается, лежит или «блок»), мимо выхода не уходят никогда. «Напрямую» — и с адреса системы (метка 0),
-# и «Напрямую — адрес» (1.25.0, метки адресов из cfg addr_marks): у каждого пути своё «не отвечает», и запасной
-# спрашивается тем же путём — с того же адреса, не с другого.
+# пути (выход подключается, лежит или «блок»), мимо выхода не уходят никогда — и во время проверки тоже. «Напрямую» — и с
+# адреса системы (метка 0), и «Напрямую — адрес» (1.25.0, метки адресов из cfg addr_marks): у каждого пути своё «не
+# отвечает» и своя проверка, и запасной спрашивается тем же путём — с того же адреса, не с другого.
 DIRECT_RETRY = 120.0
 
 DOT_PORT, DOH_PORT = 853, 443
 ENC_TIMEOUT = 5.0           # соединение и ответ по DoT/DoH
+# с: проверка пути целиком. Контрольный запрос идёт каждому серверу сразу, на своём новом соединении: соединение, TLS и
+# ответ из кэша резолвера — 3–4 пути туда и обратно (из России до Cloudflare ~0,5 с, при задержке 600 мс — ~2,5 с);
+# обычный DNS — две попытки по UDP_TIMEOUT (один потерянный пакет проверки — ещё не «не отвечают»). Больше ENC_TIMEOUT
+# не нужно: столько ждёт ответа и обычное имя, а замёрзший после рукопожатия DoH дольше не станет ответом.
+CHECK_TIMEOUT = ENC_TIMEOUT
 ENTRY_DOWN = 60.0           # с: запись своего или запасного DNS не ответила — столько спрашивается последней
 DOH_BODY_MAX = 65535        # ответ DNS не длиннее (как у HTTP/2 и HTTP/3 в dohttp.py)
 POOL_SIZE = 4               # открытых TLS-соединений на пару «путь, сервер»
@@ -102,9 +115,25 @@ SET_MAX = 86400
 SET_FLUSH = 0.3             # с: адреса копятся и уходят в nftables одной командой
 SET_LIVE_MAX = 200000       # живых адресов в памяти для повторного добавления; больше — старые забываются
 
-T_OPT, T_SOA, T_A, T_AAAA = 41, 6, 1, 28
+T_OPT, T_SOA, T_A, T_AAAA, T_NS = 41, 6, 1, 28, 2
 T_SVCB, T_HTTPS = 64, 65   # записи SVCB и HTTPS: в HTTPS браузер берёт ключи ECH
 RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
+
+# Запрос идёт в проверке пути (П31): на своём новом соединении, мимо очереди пула (соединения пула могут быть заняты
+# медленными именами), обычный DNS — второй попыткой, обрезанный ответ (TC) — уже ответ. Задаётся в задаче проверки:
+# подмены _enc/_udp в тестах этим не задеты.
+_CHECKING: contextvars.ContextVar = contextvars.ContextVar("awgr_dns_check", default=False)
+
+
+def check_query() -> bytes:
+    """Контрольный запрос проверки пути: «. NS» с флагом рекурсии. Корень любой резолвер держит в кэше и отвечает на него
+    сразу, даже когда какое-то имя он разбирает долго (у домена не отвечают его серверы имён)."""
+    return struct.pack("!6H", secrets.randbelow(65536), 0x0100, 1, 0, 0, 0) + b"\x00" + struct.pack("!HH", T_NS, 1)
+
+
+def _busy(task) -> bool:
+    """Задача (проверка, проба) ещё идёт."""
+    return task is not None and not task.done()
 
 
 # ---------------------------------------------------------------- разбор DNS
@@ -371,6 +400,16 @@ class Pool:
                 conn.close()
             return result
 
+    async def once(self, fn):
+        """Запрос на своём новом соединении — мимо очереди (POOL_SIZE) и простаивающих соединений, потом соединение
+        закрывается. Так идёт проверка пути (П31): все соединения пула могут быть заняты медленными именами, и проверка,
+        ждущая очереди, сочла бы живой сервер молчащим."""
+        conn = await self.open_fn()
+        try:
+            return await fn(conn)
+        finally:
+            conn.close()
+
     def close(self) -> None:
         for c in self.idle:
             c.close()
@@ -430,9 +469,10 @@ async def doh_query(conn: Conn, msg: bytes, host: str, path: str = "/dns-query")
 
 # ---------------------------------------------------------------- сервер
 class DirectPath:
-    """Серверы DNS на одном пути «напрямую»: когда последний раз ответили и не ответили, down — не отвечают (имена у
-    запасного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая проба (asyncio.Task). fb_* — то же у
-    запасного DNS этого пути."""
+    """Серверы DNS на одном пути «напрямую»: когда последний раз ответили (ok_at) и когда проверка решила «не отвечают»
+    (fail_at), down — не отвечают (имена у запасного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая
+    проверка пути после имени без ответа или проба по расписанию (asyncio.Task; пока идёт — имена тоже у запасного).
+    fb_* — то же у запасного DNS этого пути."""
     __slots__ = ("ok_at", "fail_at", "down", "retry_at", "probe",
                  "fb_ok_at", "fb_fail_at", "fb_down", "fb_retry_at", "fb_probe")
 
@@ -667,13 +707,21 @@ class Proxy:
             cfg = getattr(self, "cfg", None) or {}       # тесты собирают Proxy без load()
             direct = not servers and self.is_direct(mark)
             fb = tuple(cfg.get("direct_fallback") or ()) if direct and fallback else ()
+            has_fb = direct and bool(cfg.get("direct_fallback"))     # у пути есть запасной (у этого имени — fb)
+            p = self._dp(mark) if direct else None
             reply = None
-            if fb and self._dp(mark).down:
-                self._probe_direct(query, q, tcp, mark)    # клиент не ждёт: серверы DNS пробуются в фоне
+            if fb and (p.down or _busy(p.probe)):
+                # серверы DNS этого пути не отвечают или проверяются — имя сразу у запасного; клиент не ждёт ни
+                # проверки, ни пробы: серверы DNS пробуются в фоне
+                if p.down:
+                    self._probe_direct(tcp, mark)
             else:
                 reply = await self.forward(query, q, mark, tcp, servers)
                 if direct:
-                    self._direct_seen(reply is not None, bool(fb), mark)
+                    if reply is not None:
+                        self._direct_seen(True, has_fb, mark)
+                    else:
+                        self._doubt(p, mark, tcp, has_fb)
             if reply is None and fb:
                 # запасной — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого
                 reply = await self._fallback(query, q, tcp, mark, fb)
@@ -698,26 +746,35 @@ class Proxy:
         return struct.pack("!H", q["id"]) + reply[2:]
 
     async def _fallback(self, query: bytes, q: dict, tcp: bool, mark: int, fb: tuple) -> bytes | None:
-        """Запасной DNS пути mark. Не ответил — до DIRECT_RETRY не спрашивается (клиент сразу получает SERVFAIL, а не
-        ждёт зависший сервер), а пробуется одним запросом в фоне."""
+        """Запасной DNS пути mark. Не ответил на имя — проверка запасного в фоне (П31: одно имя без его ответа — ещё не
+        «запасной не отвечает»); пока она идёт и если она не прошла — до DIRECT_RETRY не спрашивается (клиент сразу
+        получает SERVFAIL, а не ждёт зависший сервер), а пробуется в фоне."""
         p = self._dp(mark)
-        if p.fb_down:
-            if time.monotonic() >= p.fb_retry_at and not (p.fb_probe and not p.fb_probe.done()):
+        if p.fb_down or _busy(p.fb_probe):
+            if p.fb_down and time.monotonic() >= p.fb_retry_at and not _busy(p.fb_probe):
                 p.fb_retry_at = time.monotonic() + DIRECT_RETRY
-
-                async def run():
-                    try:
-                        r = await self.forward(query, q, mark, tcp, fb)
-                    except Exception:  # noqa: BLE001  — проба не должна ронять цикл; считаем, что не ответил
-                        r = None
-                    self._fb_seen(p, r is not None)
-                p.fb_probe = asyncio.get_running_loop().create_task(run())
+                self._fb_check(p, mark, tcp, fb)
             return None
         reply = await self.forward(query, q, mark, tcp, fb)
-        self._fb_seen(p, reply is not None)
         if reply is not None:
+            self._fb_seen(p, True)
             self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
+        elif not (p.fb_down or _busy(p.fb_probe)):      # на пути одна проверка, сколько бы имён ни остались без ответа
+            self.stats["fb_checks"] = self.stats.get("fb_checks", 0) + 1
+            self._fb_check(p, mark, tcp, fb)
         return reply
+
+    def _fb_check(self, p: DirectPath, mark: int, tcp: bool, fb: tuple) -> None:
+        """Проверка запасного DNS пути в фоне (П31) — или проба, пока он «не отвечает». Пока она идёт, имена его не ждут."""
+        started, order = time.time(), self._order(mark, fb)
+
+        async def run():
+            ok = await self._check(mark, tcp, fb, order)
+            if ok:
+                self.stats["fb_checks_ok"] = self.stats.get("fb_checks_ok", 0) + 1
+            # пока шла проверка, запасной ответил на другое имя — он на связи
+            self._fb_seen(p, ok or p.fb_ok_at >= started)
+        p.fb_probe = asyncio.get_running_loop().create_task(run())
 
     @staticmethod
     def _fb_seen(p: DirectPath, ok: bool) -> None:
@@ -727,10 +784,14 @@ class Proxy:
             p.fb_fail_at, p.fb_down, p.fb_retry_at = time.time(), True, time.monotonic() + DIRECT_RETRY
 
     def _direct_seen(self, ok: bool, fallback: bool, mark: int = 0) -> None:
-        """Ответили ли серверы DNS на пути «напрямую» mark (ответ SERVFAIL — тоже ответ: сервер на связи, сломан
-        сайт). Не ответили и есть запасной — имена этого пути идут к нему, серверы DNS пробуются снова через
-        DIRECT_RETRY. У каждого пути своё: адрес системы и второй адрес могут выходить через разных провайдеров."""
-        p = self._dp(mark)
+        """Ответили ли серверы DNS на пути «напрямую» mark (ответ SERVFAIL — тоже ответ: сервер на связи, сломан сайт).
+        ok=False — решение проверки пути, а не одно имя без ответа (П31). Не отвечают и есть запасной — имена этого пути
+        идут к нему, серверы DNS пробуются снова через DIRECT_RETRY. У каждого пути своё: адрес системы и второй адрес
+        могут выходить через разных провайдеров."""
+        self._seen(self._dp(mark), ok, fallback)
+
+    @staticmethod
+    def _seen(p: DirectPath, ok: bool, fallback: bool) -> None:
         if ok:
             p.ok_at, p.down = time.time(), False
             return
@@ -738,87 +799,149 @@ class Proxy:
         if fallback:
             p.down, p.retry_at = True, time.monotonic() + DIRECT_RETRY
 
-    def _probe_direct(self, query: bytes, q: dict, tcp: bool, mark: int = 0) -> None:
-        """Серверы DNS не отвечают напрямую: раз в DIRECT_RETRY один запрос клиента спрашивается у них ещё раз — в
-        фоне, тем же путём, а клиент сразу получает ответ запасного DNS. Ответили — имена пути снова идут к ним."""
-        p = self._dp(mark)
-        if time.monotonic() < p.retry_at or (p.probe and not p.probe.done()):
+    def _doubt(self, p: DirectPath, mark: int, tcp: bool, has_fb: bool) -> None:
+        """Имя на пути «напрямую» осталось без ответа общих серверов DNS. Это ещё не «не отвечают» (П31): одно имя
+        резолвер может разбирать дольше срока, пакет UDP — потеряться. Путь проверяется в фоне (одна проверка на путь,
+        сколько бы имён ни ждали); пока проверка идёт, имена пути — у запасного. Без запасного проверка нужна только для
+        «Серверы DNS не отвечают напрямую» на «Сервере»: недавно не прошла — имена по-прежнему без ответа, новая не
+        нужна (без запасного все имена идут к серверам DNS, и первое же, что получит ответ, вернёт «отвечают»)."""
+        if p.down or _busy(p.probe):
             return
-        p.retry_at = time.monotonic() + DIRECT_RETRY
+        if not has_fb and p.fail_at > p.ok_at and time.time() - p.fail_at < DIRECT_RETRY:
+            p.fail_at = time.time()
+            return
+        self.stats["checks"] = self.stats.get("checks", 0) + 1
+        self._start_check(p, mark, tcp, has_fb)
+
+    def _start_check(self, p: DirectPath, mark: int, tcp: bool, has_fb: bool) -> None:
+        started, order = time.time(), self._order(mark, ())    # серверы — те, о ком был вопрос (SIGHUP мог их сменить)
 
         async def run():
-            try:
-                reply = await self.forward(query, q, mark, tcp)
-            except Exception:  # noqa: BLE001  — проба не должна ронять цикл; считаем, что не ответил
-                reply = None
-            self._direct_seen(reply is not None, True, mark)
+            ok = await self._check(mark, tcp, (), order)
+            if ok and not p.down:
+                self.stats["checks_ok"] = self.stats.get("checks_ok", 0) + 1     # ложная тревога, которой не стало
+            # пока шла проверка, другое имя этого пути получило ответ общих серверов — путь работает
+            self._seen(p, ok or p.ok_at >= started, has_fb)
         p.probe = asyncio.get_running_loop().create_task(run())
+
+    def _probe_direct(self, tcp: bool, mark: int = 0) -> None:
+        """Серверы DNS не отвечают напрямую: раз в DIRECT_RETRY они проверяются снова — контрольным запросом в фоне, тем
+        же путём, а клиенты сразу получают ответ запасного DNS. Ответили — имена пути снова идут к ним."""
+        p = self._dp(mark)
+        if time.monotonic() < p.retry_at or _busy(p.probe):
+            return
+        p.retry_at = time.monotonic() + DIRECT_RETRY
+        self._start_check(p, mark, tcp, True)
+
+    async def _check(self, mark: int, tcp: bool, servers: tuple = (), order: list | None = None) -> bool:
+        """Проверка пути mark (П31): контрольный запрос (check_query) всем серверам сразу — общим из настроек или записям
+        servers (запасной DNS; order — их порядок на момент вопроса), каждому своим способом и на своём новом соединении
+        (_CHECKING). Ответил хоть один (SERVFAIL — тоже ответ: сервер на связи) — True; не ответил никто за CHECK_TIMEOUT
+        — False. Запросы проверки не занимают места клиентов (MAX_INFLIGHT) и не ждут их очереди. Ошибка внутри — False:
+        проверка не роняет цикл."""
+        query = check_query()
+        cq = parse_query(query)
+        tasks = []
+        tok = _CHECKING.set(True)                        # задачи ниже берут копию контекста — с этой отметкой
+        try:
+            tasks = [asyncio.ensure_future(self._ask(query, cq, mark, tcp, servers, s))
+                     for s in (self._order(mark, servers) if order is None else order)]
+        finally:
+            _CHECKING.reset(tok)
+        try:
+            for fut in asyncio.as_completed(tasks, timeout=CHECK_TIMEOUT):
+                try:
+                    if await fut is not None:
+                        return True
+                except Exception:  # noqa: BLE001
+                    pass
+            return False
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            for t in tasks:
+                t.cancel()
 
     async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = ()) -> bytes | None:
         """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. Без servers — общие серверы с
         шифрованием из настроек (cfg encrypt); servers — свой DNS правила или запасной: каждый своим способом, как
         вписан (srv). Все, кто ответил, ответили SERVFAIL, — этот ответ (серверы на связи, не разрешилось само имя);
         None — не ответил никто."""
-        main = self.cfg.get("encrypt") or "plain"
         servfail = None
-        order = servers or self.cfg.get("upstreams") or []
-        down = self.__dict__.setdefault("entry_down", {})      # (путь, запись) → до какого времени не отвечает
-        now = time.monotonic()
-        if servers:
-            # запись своего или запасного DNS, которая только что не ответила, — последней: иначе каждое новое имя
-            # ждало её ENC_TIMEOUT перед второй записью (h3:// у сервера без HTTP/3; П30). Спрашивается как вписана
-            order = sorted(order, key=lambda e: down.get((mark, e), 0) > now)
-        for server in order:
-            entry = server
-            if servers and mark and self.is_direct(mark):
-                # «Напрямую — адрес»: адрес, который панель нашла для имени со своего адреса (адреса системы), здесь не
-                # берётся — имя ищется с этого адреса (_name_addr; проверка 1.25.0, А11)
-                server = _no_hint(server)
-            mode = srv(server)[0] if servers else main
-            if servers and mode != "plain" and not srv(server)[1]:
-                # имя сервиса без адреса (путь через выход, «Напрямую — адрес»): адрес — этим же путём
-                addr = await self._name_addr(srv(server)[2], mark, tcp)
-                if not addr:
-                    self._fail(server, "no address")
-                    continue
-                server = server + "#" + addr
-            if mode == "plain" and server == self.self_addr:
-                continue        # общий сервер = адрес этого DNS: спрашивал бы сам себя по кругу (Г20 проверки 1.23.0)
-            qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
-            out = struct.pack("!H", qid) + query[2:]
-            try:
-                if mode in ("dot", "doh", "doh3"):
-                    reply = await asyncio.wait_for(self._enc(out, server, mark, mode), ENC_TIMEOUT * 2)
-                elif tcp:
-                    reply = await self._tcp(out, server, mark)       # путь через SOCKS5: UDP там часто не проходит
-                else:
-                    reply = await self._udp(out, server, mark)
-                    if reply is None:
-                        # не ответил по UDP — следующий сервер, а не тот же по TCP (UDP 2 с + TCP 5 с на каждый
-                        # молчащий сервер держали имена клиентов до 14 с перед запасным DNS; проверка 1.25.0, А13)
-                        self._fail(server, "timeout")
-                        if servers:
-                            down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
-                        continue
-                    if struct.unpack("!H", reply[2:4])[0] & 0x0200:
-                        reply = await self._tcp(out, server, mark)   # ответ не поместился в UDP — по TCP, как у всех
-            except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError,
-                    ValueError, IndexError, struct.error) as e:
-                self._fail(server, e)
-                if servers:
-                    down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
-                continue
-            if not reply or len(reply) < 12 or struct.unpack("!H", reply[:2])[0] != qid \
-                    or reply[12:q["qend"]].lower() != query[12:q["qend"]].lower():
-                self._fail(server, "bad answer")
+        for server in self._order(mark, servers):
+            reply = await self._ask(query, q, mark, tcp, servers, server)
+            if reply is None:
                 continue
             if reply[3] & 0xF == RC_SERVFAIL:
                 servfail = reply
                 continue                                              # спросим следующий сервер
-            self.last_ok = time.time()
-            down.pop((mark, entry), None)
             return reply
         return servfail
+
+    def _order(self, mark: int, servers: tuple) -> list:
+        """Кого спрашивать: servers или общие серверы из настроек."""
+        order = list(servers or self.cfg.get("upstreams") or [])
+        if servers:
+            # запись своего или запасного DNS, которая только что не ответила, — последней: иначе каждое новое имя
+            # ждало её ENC_TIMEOUT перед второй записью (h3:// у сервера без HTTP/3; П30). Спрашивается как вписана
+            down = self.__dict__.setdefault("entry_down", {})      # (путь, запись) → до какого времени не отвечает
+            now = time.monotonic()
+            order.sort(key=lambda e: down.get((mark, e), 0) > now)
+        return order
+
+    async def _ask(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, server: str) -> bytes | None:
+        """Один сервер для forward и проверки пути: ответ (SERVFAIL тоже) или None — не ответил."""
+        down = self.__dict__.setdefault("entry_down", {})
+        entry = server
+        if servers and mark and self.is_direct(mark):
+            # «Напрямую — адрес»: адрес, который панель нашла для имени со своего адреса (адреса системы), здесь не
+            # берётся — имя ищется с этого адреса (_name_addr; проверка 1.25.0, А11)
+            server = _no_hint(server)
+        mode = srv(server)[0] if servers else (self.cfg.get("encrypt") or "plain")
+        if servers and mode != "plain" and not srv(server)[1]:
+            # имя сервиса без адреса (путь через выход, «Напрямую — адрес»): адрес — этим же путём
+            addr = await self._name_addr(srv(server)[2], mark, tcp)
+            if not addr:
+                self._fail(server, "no address")
+                return None
+            server = server + "#" + addr
+        if mode == "plain" and server == self.self_addr:
+            return None         # общий сервер = адрес этого DNS: спрашивал бы сам себя по кругу (Г20 проверки 1.23.0)
+        qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
+        out = struct.pack("!H", qid) + query[2:]
+        checking = _CHECKING.get()
+        try:
+            if mode in ("dot", "doh", "doh3"):
+                reply = await asyncio.wait_for(self._enc(out, server, mark, mode), ENC_TIMEOUT * 2)
+            elif tcp:
+                reply = await self._tcp(out, server, mark)       # путь через SOCKS5: UDP там часто не проходит
+            else:
+                reply = await self._udp(out, server, mark)
+                if reply is None and checking:
+                    reply = await self._udp(out, server, mark)   # проверка пути: один потерянный пакет — ещё не «молчит»
+                if reply is None:
+                    # не ответил по UDP — следующий сервер, а не тот же по TCP (UDP 2 с + TCP 5 с на каждый
+                    # молчащий сервер держали имена клиентов до 14 с перед запасным DNS; проверка 1.25.0, А13)
+                    self._fail(server, "timeout")
+                    if servers:
+                        down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
+                    return None
+                if struct.unpack("!H", reply[2:4])[0] & 0x0200 and not checking:
+                    reply = await self._tcp(out, server, mark)   # ответ не поместился в UDP — по TCP, как у всех
+        except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError,
+                ValueError, IndexError, struct.error) as e:
+            self._fail(server, e)
+            if servers:
+                down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
+            return None
+        if not reply or len(reply) < 12 or struct.unpack("!H", reply[:2])[0] != qid \
+                or reply[12:q["qend"]].lower() != query[12:q["qend"]].lower():
+            self._fail(server, "bad answer")
+            return None
+        if reply[3] & 0xF != RC_SERVFAIL:
+            self.last_ok = time.time()
+            down.pop((mark, entry), None)
+        return reply
 
     async def _name_addr(self, name: str, mark: int, tcp: bool) -> str | None:
         """Адрес имени шифрованного сервиса DNS для пути mark — тем же путём (через выход — через выход, «Напрямую —
@@ -836,8 +959,11 @@ class Proxy:
         cfg = getattr(self, "cfg", None) or {}
         tries = [()]                                     # общие серверы с шифрованием из настроек
         if mark and self.is_direct(mark):
-            if self._dp(mark).down:
-                tries = []                               # уже известно: этим путём не отвечают — не ждать их снова
+            p = self._dp(mark)
+            if p.down or _busy(p.probe):
+                # этим путём не отвечают или проверяются (П31: проверка — секунды) — не ждать их снова: иначе первое имя
+                # у запасного с именем ждало бы их ещё раз
+                tries = []
             fb = tuple(e for e in cfg.get("direct_fallback") or () if _literal(e))
             if fb:
                 tries.append(fb)
@@ -905,8 +1031,13 @@ class Proxy:
             dflt = DOH_PORT if mode == "doh" else DOT_PORT
             pool.host, pool.path = (name if port == dflt or self.cfg.get("upstream_port") else f"{name}:{port}"), path
         if mode == "dot":
-            return await pool.run(lambda c: asyncio.wait_for(dot_query(c, msg), ENC_TIMEOUT))
-        return await pool.run(lambda c: asyncio.wait_for(doh_query(c, msg, pool.host, pool.path), ENC_TIMEOUT))
+            def fn(c):
+                return asyncio.wait_for(dot_query(c, msg), ENC_TIMEOUT)
+        else:
+            def fn(c):
+                return asyncio.wait_for(doh_query(c, msg, pool.host, pool.path), ENC_TIMEOUT)
+        # проверка пути — на своём новом соединении, не в очереди за медленными именами (П31)
+        return await (pool.once(fn) if _CHECKING.get() else pool.run(fn))
 
     async def _h3(self, msg: bytes, server: str, mark: int) -> bytes:
         """Запрос DoH по HTTP/3 («h3://…»): QUIC из OpenSSL в своих потоках (dohttp.H3Pool), сокет UDP — с меткой
@@ -925,7 +1056,7 @@ class Proxy:
                                                      POOL_SIZE, POOL_IDLE, self.cfg.get("ca_file") or None)
             pool.host = name if port == DOH_PORT or self.cfg.get("upstream_port") else f"{name}:{port}"
             pool.path = path
-        return await dohttp.run_h3(pool, msg, pool.host, pool.path, ENC_TIMEOUT)
+        return await dohttp.run_h3(pool, msg, pool.host, pool.path, ENC_TIMEOUT, own=_CHECKING.get())
 
     @staticmethod
     def _sock(kind: int, mark: int) -> socket.socket:
@@ -1069,3 +1200,7 @@ async def main(conf_path: str) -> None:
 
 if __name__ == "__main__":
     asyncio.run(main(sys.argv[1]))
+    # Потоки запросов HTTP/3 и проверки пути (dohttp.run_h3) не прерываются и держали бы выход до своего срока (до 5 с,
+    # а замёрзший сервер — ровно 5 с), а панель на SIGTERM ждёт 5 с и потом убивает процесс — под блокировкой прохода.
+    # Сохранять при выходе нечего (счётчики пишутся раз в STATS_EVERY), поэтому выходим сразу.
+    os._exit(0)
