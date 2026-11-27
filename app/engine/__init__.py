@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import threading
 import time
 
@@ -551,6 +552,10 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                     f.write(text)
                 try:
                     t.ns(["nft", "-f", path], timeout=60)
+                except (subprocess.TimeoutExpired, OSError):
+                    if not present:
+                        self._close_forward(t)  # nft завис или не запустился — тоже не «без правил» (П14)
+                    raise
                 except system.SysError as e:
                     if not present:
                         self._close_forward(t)  # новая сеть без таблицы панели: не «без правил» (П14)

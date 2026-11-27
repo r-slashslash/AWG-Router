@@ -583,6 +583,8 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                    + (f"\t\telements = {{ {', '.join(elems)} }}\n" if elems else "") + "\t}")
         dom = f"ip daddr @{DOM_SET} " if dom_filter else ""
         keep = 0xFFFFFFFF ^ config.QUIC_CT_BIT
+        # Чужая метка до нас (wg-quick с полным туннелем: `meta mark set ct mark` в premangle) — не решение: c_prerouting
+        # принял бы её как решение очереди, а решение для остановленного выхода ушло бы мимо него (проверка исправлений)
         # Решение из conntrack — только если его путь ещё есть: метка выхода, который остановили, без
         # своего ip rule пошла бы по основной таблице, то есть мимо выхода напрямую. Такой поток QUIC
         # дальше блокируется (строка блока QUIC в политике), и браузер переходит на TCP.
@@ -594,6 +596,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
 \t\tiifname != "{wg_iface}" return
 \t\tudp dport != 443 return
 \t\tip daddr @local4 return
+\t\tmeta mark set 0x0
 \t\tct mark {{ {restore} }} meta mark set ct mark & {keep:#x} accept
 \t\tct state != new return
 \t\t{who}{dom}queue num {config.QUIC_QUEUE} bypass

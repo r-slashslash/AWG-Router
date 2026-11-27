@@ -178,7 +178,9 @@ class SniEarlyHupTest(unittest.TestCase):
         code = ("import os, signal, sys; sys.path.insert(0, sys.argv[2]); sys.argv = ['sniproxy.py', sys.argv[1]];"
                 "from app import sniproxy as s; r = s.Sniffer.reload\n"
                 "def hup(self):\n    os.kill(os.getpid(), signal.SIGHUP); r(self)\n"
-                "s.Sniffer.reload = hup; s.main()")
+                "ra = s.Sniffer.reload_async\n"
+                "async def again(self):\n    print('REREAD', file=sys.stderr, flush=True); await ra(self)\n"
+                "s.Sniffer.reload = hup; s.Sniffer.reload_async = again; s.main()")
         pr = subprocess.Popen([sys.executable, "-c", code, p, ROOT], stderr=subprocess.PIPE, text=True)
         try:
             deadline = time.monotonic() + 10
@@ -192,18 +194,20 @@ class SniEarlyHupTest(unittest.TestCase):
                     time.sleep(0.05)
             self.assertIsNone(pr.poll(), "посредник завершился от SIGHUP во время запуска")
             self.assertTrue(up)
-        finally:
             pr.send_signal(signal.SIGTERM)
-            try:
-                pr.wait(10)
-            except subprocess.TimeoutExpired:
-                pr.kill()
-                pr.wait()
-            pr.stderr.close()
+            err = pr.communicate(timeout=10)[1]
+            self.assertIn("REREAD", err, "настройки после раннего SIGHUP не перечитаны")
+        finally:
+            if pr.poll() is None:
+                pr.send_signal(signal.SIGTERM)
+                try:
+                    pr.wait(10)
+                except subprocess.TimeoutExpired:
+                    pr.kill()
+                    pr.wait()
+            if pr.stderr and not pr.stderr.closed:
+                pr.stderr.close()
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 def _ruleset(**kw) -> str:
@@ -428,8 +432,11 @@ class InstallerPluginsTest(unittest.TestCase):
         self.assertNotIn("checksums.txt", self.sh)
         comp = re.search(r"^COMPOSE_VERSION=(v[\d.]+)$", self.sh, re.M).group(1)
         bx = re.search(r"^BUILDX_VERSION=(v[\d.]+)$", self.sh, re.M).group(1)
-        arches = re.search(r"case \"\$\(uname -m\)\" in\n(.*?)\nesac", self.sh, re.S).group(1)
-        for b, dc in re.findall(r"BX_ARCH=(\S+);\s+DC_ARCH=(\S+) ;;", arches):
+        tail = self.sh[self.sh.index("# Binaries from GitHub releases"):]
+        arches = re.search(r"case \"\$\(uname -m\)\" in\n(.*?)\nesac", tail, re.S).group(1)
+        pairs = [x for x in re.findall(r"BX_ARCH=(\S+);\s+DC_ARCH=(\S+) ;;", arches) if x[0] != '""']
+        self.assertGreaterEqual(len(pairs), 7, arches)       # каждый процессор таблицы проверяется (проверка исправлений)
+        for b, dc in pairs:
             for asset in (f"docker-compose-linux-{dc}", f"buildx-{bx}.linux-{b}"):
                 self.assertRegex(self.sh, rf"\n    {re.escape(asset)}\)\s+echo [0-9a-f]{{64}} ;;", asset)
         self.assertTrue(comp and bx)
@@ -599,6 +606,42 @@ class HoldPassTest(unittest.TestCase):
         self.assertIn('iifname "awg0" reject', applied[0])
         self.assertIn("hook forward", applied[0])
 
+    def _fail_nth(self, n_fail, exc, key="container:amnezia-awg2:7272:e"):
+        """nft -f ruleset.nft: n_fail — какие по счёту вызовы падают (1 — правила до туннелей, 2 — основное применение)."""
+        t = self.t
+        applied, n = [], [0]
+        ns = t.ns
+
+        def failing(cmd, **kw):
+            if cmd[:2] == ["nft", "-f"] and cmd[2].endswith("ruleset.nft"):
+                n[0] += 1
+                if n[0] in n_fail:
+                    raise exc
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            if cmd[:2] == ["nft", "-f"] and cmd[2].endswith("ruleset-closed.nft"):
+                with open(cmd[2]) as f:
+                    applied.append(f.read())
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return ns(cmd, **kw)
+        t.table["present"] = False
+        tg = t.target(key)                         # новая цель: сначала правила до туннелей, потом основное применение
+        tg.ns.side_effect = failing
+        return tg, applied
+
+    def test_each_place_closes_forwarding(self):
+        """Проверка исправлений: и правила до туннелей, и основное применение по отдельности ставят запасную таблицу;
+        зависший nft (TimeoutExpired) — тоже."""
+        from app import system
+        for i, (n_fail, exc) in enumerate((({1}, system.SysError("bad")), ({2}, system.SysError("bad")),
+                                           ({2}, subprocess.TimeoutExpired(["nft"], 60)))):
+            tg, applied = self._fail_nth(n_fail, exc, f"container:amnezia-awg2:{7300 + i}:e")
+            try:
+                self.t.reconcile(tg)
+            except (system.SysError, subprocess.TimeoutExpired):
+                pass
+            self.assertTrue(applied, (n_fail, exc))
+            self.assertIn("hook forward", applied[-1])
+
     def test_present_table_is_left(self):
         """Прежний набор панели стоит (не новая сеть): запасная таблица не ставится — действуют прежние правила."""
         from app.engine import Engine
@@ -636,6 +679,27 @@ class HoldFilesTest(unittest.TestCase):
         up = sh.index('awg-quick up "$CONF"')
         self.assertLess(sh.index("awgr-hold6-awg0.nft"), up)
         self.assertLess(sh.index('nft -f "$HOLD"'), sh.index('nft -f "$HOLD6"'))
+
+    def test_drop_hold_removes_both(self):
+        from app import system
+        from app.engine import Engine
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        for n in (system.HOLD_NAME, system.HOLD6_NAME):
+            open(os.path.join(d, n.format(iface="awg0")), "w").close()
+
+        class T:
+            iface, conf_path = "awg0", os.path.join(d, "awg0.conf")
+
+            def host_path(self, p):
+                return p
+        e = Engine.__new__(Engine)
+        e._drop_hold(T())
+        self.assertEqual(os.listdir(d), [])
+        with open(os.path.join(ROOT, "install.sh")) as f:
+            sh = f.read()
+        self.assertIn('"$SRV_DATA"/awgr-hold6-*.nft', sh)       # и без панели (её uninstall не нашёл сервер)
+        self.assertIn('"$(dirname "$HOSTCONF")"/awgr-hold6-*.nft', sh)
 
     def test_hold6_rejects_clients(self):
         from app.engine import server
@@ -684,6 +748,22 @@ class KernelOrDeadTargetTest(unittest.TestCase):
 def _panel():
     from app import panel
     return panel
+
+
+class EmptyPasswordGuardTest(unittest.TestCase):
+    """П15 (проверка исправлений): пустой пароль не пускает и тогда, когда пароль панели — хеш пустой строки."""
+
+    def test_custom_hash_of_empty(self):
+        _panel()
+        from app.api import auth
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with mock.patch.object(auth, "PW_FILE", os.path.join(d, "pw.json")):
+            auth._pw_cache = (None, None)
+            auth.set_password("")
+            auth._pw_cache = (None, None)
+            self.assertFalse(auth.check_password(""))
+        auth._pw_cache = (None, None)
 
 
 class AuthFixTest(unittest.TestCase):
@@ -1127,10 +1207,10 @@ class StateFixTest(unittest.TestCase):
         from tests.test_v125 import Req
         panel.engine.reconcile()
         pk = panel.engine.clients[0]["public_key"]
+        st0 = panel.store.snapshot()                # до своих списков: после теста их нет и в общем состоянии
+        self.addCleanup(lambda: panel.store.mutate(lambda s: (s.clear(), s.update(st0))))
         lid = routing.add_list(Req({"kind": "manual", "name": "own", "source": "203.0.113.0/24"}))["id"]
         shared = routing.add_list(Req({"kind": "manual", "name": "shared", "source": "198.51.100.0/24"}))["id"]
-        st0 = panel.store.snapshot()
-        self.addCleanup(lambda: panel.store.mutate(lambda s: (s.clear(), s.update(st0))))
 
         def own(st):
             st["clients"].setdefault(pk, {}).update(rules_mode="custom", rules=[
@@ -1783,3 +1863,44 @@ class UiEscapeTest(unittest.TestCase):
         bad = [m.group(1) for m in re.finditer(r"\$\{([^{}]*\.name\b[^{}]*)\}", panel_js.source())
                if "esc(" not in m.group(1) and m.group(1) not in ok]
         self.assertEqual(bad, [])
+
+
+
+class ServerContainerFlagsTest(unittest.TestCase):
+    """П24: свой контейнер сервера AWG — без --privileged, с нужными правами и /dev/net/tun."""
+
+    def test_run_flags(self):
+        with open(os.path.join(ROOT, "install.sh")) as f:
+            sh = f.read()
+        a = sh.index("run_server_container() {")
+        fn = sh[a:sh.index("\n}\n", a) + 3]
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with open(os.path.join(d, "docker"), "w") as f:
+            f.write(f'#!/bin/sh\nfor a in "$@"; do echo "$a"; done > "{d}/args"\n')
+        os.chmod(os.path.join(d, "docker"), 0o755)
+        subprocess.run(["bash", "-c", fn + 'SRV_NAME=amnezia-awg2 AWG_PORT=4782 SRV_DATA=/x run_server_container'],
+                       env={**os.environ, "PATH": d + ":" + os.environ["PATH"]}, check=True)
+        with open(os.path.join(d, "args")) as f:
+            args = f.read().split()
+        self.assertNotIn("--privileged", args)
+        for x in ("--cap-add=NET_ADMIN", "--cap-add=SYS_MODULE", "/dev/net/tun", "net.ipv4.conf.all.src_valid_mark=1"):
+            self.assertIn(x, args)
+
+
+class QuicForeignMarkTest(unittest.TestCase):
+    """Проверка исправлений: метка, которую до нас поставил чужой (wg-quick: `meta mark set ct mark` в premangle),
+    не принимается за решение QUIC — c_quic сбрасывает её до своих строк."""
+
+    def test_wiped(self):
+        from app import nftgen
+        r = nftgen.generate("awg0", {}, [{"num": 1, "snat": "10.9.0.2", "mtu": 1280}],
+                            {"rules": [], "default": 1, "domain": [(["d"], 1)]}, {}, 1234, frozenset(), quic=True)
+        q = r[r.index("\tchain c_quic {"):]
+        q = q[:q.index("\n\t}")]
+        self.assertLess(q.index("ip daddr @local4 return"), q.index("meta mark set 0x0"))
+        self.assertLess(q.index("meta mark set 0x0"), q.index("ct mark {"))
+
+
+if __name__ == "__main__":
+    unittest.main()
