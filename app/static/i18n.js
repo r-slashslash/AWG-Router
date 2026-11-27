@@ -3213,7 +3213,7 @@ Object.assign(I18N.fa, {
 /* 1.21.0: правила по доменам на любой выход, строка правила, статус в шапке, порты */
 Object.assign(I18N.ru, {
   "srv.dom_filter": "Правила по доменам — только для адресов из ответов этого DNS",
-  "srv.dom_filter_hint": "Обработчик доменов получает только соединения к адресам, которые вернул DNS на сервере; остальное идёт мимо него. Устройства со своим DNS (DoH в браузере, ручной DNS, старый конфиг) это обходят: их сайты идут по правилам по адресам.",
+  "srv.dom_filter_hint": "Обработчик доменов получает только соединения к адресам, которые вернул DNS на сервере; остальное идёт мимо него. Устройства с шифрованным DNS (DoH в браузере) это обходят: их сайты идут по правилам по адресам.",
   "srv.dom_filter_needs_dns": "Работает только с включённым DNS на сервере — пока перехватывается всё, как без фильтра.",
   "ls.quic_off": "HTTP/3 (QUIC) у клиентов с правилами по доменам сейчас отключён для всех сайтов: ядро сервера не умеет очередь пакетов (nfnetlink_queue).",
   "ev.quic_no_queue": "Ядро сервера не принимает очередь пакетов (nft queue): HTTP/3 у клиентов с правилами по доменам отключён, как до 1.21.0",
@@ -3243,7 +3243,7 @@ Object.assign(I18N.ru, {
 });
 Object.assign(I18N.en, {
   "srv.dom_filter": "Domain rules only for addresses from this DNS's answers",
-  "srv.dom_filter_hint": "The domain handler gets only connections to addresses DNS on the server returned; everything else bypasses it. Devices with their own DNS (DoH in the browser, DNS set by hand, an old config) get around this: their sites go by address rules.",
+  "srv.dom_filter_hint": "The domain handler gets only connections to addresses DNS on the server returned; everything else bypasses it. Devices with encrypted DNS of their own (DoH in the browser) get around this: their sites go by address rules.",
   "srv.dom_filter_needs_dns": "Works only with DNS on the server turned on — until then everything is intercepted, as without the filter.",
   "ls.quic_off": "HTTP/3 (QUIC) is now off for all sites for clients with domain rules: the server's kernel can't queue packets (nfnetlink_queue).",
   "ev.quic_no_queue": "The server's kernel doesn't accept a packet queue (nft queue): HTTP/3 is off for clients with domain rules, as before 1.21.0",
@@ -3273,7 +3273,7 @@ Object.assign(I18N.en, {
 });
 Object.assign(I18N.zh, {
   "srv.dom_filter": "域名规则只针对此 DNS 应答中的地址",
-  "srv.dom_filter_hint": "域名处理程序只接收发往服务器上的 DNS 所返回地址的连接；其余流量绕过它。使用自己 DNS 的设备（浏览器 DoH、手动 DNS、旧配置）会绕过此过滤：它们的网站按地址规则走。",
+  "srv.dom_filter_hint": "域名处理程序只接收发往服务器上的 DNS 所返回地址的连接；其余流量绕过它。使用自己加密 DNS 的设备（浏览器 DoH）会绕过此过滤：它们的网站按地址规则走。",
   "srv.dom_filter_needs_dns": "仅在开启服务器上的 DNS 时有效——在此之前全部拦截，与不使用过滤时相同。",
   "ls.quic_off": "有域名规则的客户端目前对所有网站关闭了 HTTP/3（QUIC）：服务器内核不支持数据包队列（nfnetlink_queue）。",
   "ev.quic_no_queue": "服务器内核不接受数据包队列（nft queue）：有域名规则的客户端关闭 HTTP/3，与 1.21.0 之前相同",
@@ -3303,7 +3303,7 @@ Object.assign(I18N.zh, {
 });
 Object.assign(I18N.fa, {
   "srv.dom_filter": "قانون‌های دامنه فقط برای نشانی‌هایی که این DNS برگردانده",
-  "srv.dom_filter_hint": "پردازشگر دامنه فقط اتصال‌هایی را می‌گیرد که به نشانی‌های برگردانده‌شده از DNS روی سرور می‌روند؛ بقیه از کنارش می‌گذرد. دستگاه‌هایی که DNS خودشان را دارند (DoH مرورگر، DNS دستی، پیکربندی قدیمی) این را دور می‌زنند: سایت‌هایشان با قانون‌های نشانی می‌روند.",
+  "srv.dom_filter_hint": "پردازشگر دامنه فقط اتصال‌هایی را می‌گیرد که به نشانی‌های برگردانده‌شده از DNS روی سرور می‌روند؛ بقیه از کنارش می‌گذرد. دستگاه‌هایی که DNS رمزگذاری‌شدهٔ خودشان را دارند (DoH مرورگر) این را دور می‌زنند: سایت‌هایشان با قانون‌های نشانی می‌روند.",
   "srv.dom_filter_needs_dns": "فقط با روشن بودن DNS روی سرور کار می‌کند — تا آن زمان همه‌چیز رهگیری می‌شود، مثل بدون فیلتر.",
   "ls.quic_off": "HTTP/3 (QUIC) برای کلاینت‌هایی که قانون دامنه دارند اکنون برای همهٔ سایت‌ها خاموش است: هستهٔ سرور صف بسته‌ها (nfnetlink_queue) را پشتیبانی نمی‌کند.",
   "ev.quic_no_queue": "هستهٔ سرور صف بسته‌ها (nft queue) را نمی‌پذیرد: HTTP/3 برای کلاینت‌های دارای قانون دامنه خاموش است، مثل پیش از 1.21.0",

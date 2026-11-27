@@ -32,7 +32,7 @@ namespace, and enters the network of the AWG container with `nsenter`.
 | Server addresses (1.25.0) | `app/srcaddr.py` (the "Direct — address" value in memory, on disk and in backups, every place an exit is chosen), `app/engine/addrs.py` (adding, checking and removing addresses, Docker networks), `app/srcnet.py` (the panel's own connections from a chosen address), `app/ctflush.py` (closing connections whose path changed) |
 | Input checks, one per kind of thing | `app/checks.py`; the server's client settings in `users.py` |
 | Engine (`Engine`, one class in parts) | `app/engine/`: `__init__` (the pass, loops, events), `tunnels` (exits' tunnels, health, traffic, quotas), `routes` (routing decisions, nftables, ip rule), `sni` (domain rules, QUIC by name), `dns` (DNS on the server), `server` (AWG server, kernel module, rules "before the panel"), `addrs` (server addresses), `speed` (`tc`), `diag` (exit check, route check), `common` |
-| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), a file per tab (`overview`, `clients`, `routing` — rules and the rule window with its lists, also used for a client's own rules, `clientrules` — the Client rules section of Routing (1.24.0), `exits`, `server`, `system`, `settings` — Telegram, password, backup); a window over a window (the rule window over the client window) is the second `dialog`, `#modal2`, `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
+| Interface | `app/static/js/`, loaded in the order of `index.html`: `core.js` first (helpers, API, state, header, windows), `addrs.js` (server addresses: Direct — address in exit choices, the Server fields and Routing → Server addresses), a file per tab (`overview`, `clients`, `routing` — rules and the rule window with its lists, also used for a client's own rules, `clientrules` — the Client rules section of Routing (1.24.0), `exits`, `server`, `system`, `settings` — Telegram, password, backup); a window over a window (the rule window over the client window) is the second `dialog`, `#modal2`, `start.js` last; texts in `i18n.js`; the light or dark theme — `theme.js` in `<head>` (also on the client's page) |
 
 ## The AWG server ("Target")
 
@@ -167,7 +167,7 @@ the path is chosen, data is relayed inside the kernel (`splice`), so Python only
 QUIC (UDP 443) of these clients is read by name too: the first packets of a new connection go to a kernel
 queue (`nfqueue.py`, netlink without libraries), `quic.py` decrypts the Initial packets (their keys come from
 the connection ID in the header, RFC 9001 / 9369), puts the ClientHello together from CRYPTO frames and
-`sniproxy.py` answers with a mark: the exit's tunnel (an AmneziaWG exit, or a SOCKS5 exit with "Let QUIC
+`sniproxy.py` answers with a mark: the exit's tunnel (an AmneziaWG exit, or a SOCKS5 exit with "Let QUIC (HTTP/3)
 through the proxy", where it goes over UDP ASSOCIATE), the main table (Direct), a reject (Block and other SOCKS5
 exits: the browser falls back to TCP, where the proxy gets the name) or "pass" to the address rules. A SOCKS5
 exit without that box rejects UDP 443 for everyone routed to it, not only for domain rules. The decision,
@@ -175,11 +175,15 @@ exit without that box rejects UDP 443 for everyone routed to it, not only for do
 and QUIC that isn't Initial are rejected; no listener (`bypass`) or no `nft_queue` in the kernel means QUIC is
 blocked for these clients, as before.
 
+While DNS on the server is on, every DNS query of the clients goes to it: the ruleset has a `c_dns` chain (`nat`
+prerouting, `dstnat`) that redirects UDP and TCP port 53 from the clients' interface to any other address to
+`dnsproxy.py` (`Engine.dns_redirect`, `nftgen.generate(dns_to=…)`). It is in the rules before the panel too, so while the
+panel restarts names don't resolve rather than go another way.
 DNS on the server (`dnsproxy.py`) resolves names from domain rules through the rule's exit. With the DNS
 filter setting, only addresses that it returned for those names (the `dom4` set with timeouts, refilled after
 every rebuild of the table) are redirected to the handler.
 On the direct path only, when the shared servers don't answer (DoH/DoT is often cut in Russia, China and Iran), it
-asks the fallback DNS (`direct_fallback`: **Server → Fallback DNS for "Direct"**, `settings.fallback_dns_on` and
+asks the fallback DNS (`direct_fallback`: **Server → DNS → Fallback DNS for "Direct"**, `settings.fallback_dns_on` and
 `fallback_dns`; **Apply for …** fills in the country's DNS) and skips the shared servers for `DIRECT_RETRY`, then tries
 them again with one query in the background; a fallback that doesn't answer is skipped the same way. Paths through an
 exit and names of a domain rule without a path (its exit down or "Block") never fall back.

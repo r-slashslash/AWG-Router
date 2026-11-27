@@ -84,7 +84,8 @@ class Panel:
 
     def start(self) -> None:
         env = {**os.environ, "DRY_RUN": "1", "DATA_DIR": self.data_dir, "PANEL_PORT": str(self.port),
-               "PANEL_HOST": "127.0.0.1", "PANEL_PASSWORD": PASSWORD, "TLS_MODE": "off",
+               # не 127.0.0.1: панель только на loopback — «только через SSH-туннель», и личной ссылки в окне клиента нет
+               "PANEL_HOST": "0.0.0.0", "PANEL_PASSWORD": PASSWORD, "TLS_MODE": "off",
                "PANEL_BASE_PATH": BASE_PATH, "PUBLIC_HOST": "203.0.113.5", "TZ": "UTC"}
         log = open(os.path.join(self.data_dir, "panel.log"), "a")
         self.proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--panel"], env=env,

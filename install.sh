@@ -18,6 +18,8 @@
 #   port 80 taken by nginx or Apache: AWGR_WEB=yes adds the Let's Encrypt validation file to it
 #   build the images here instead of downloading the ready ones: AWGR_BUILD=1
 #   how long to wait for a ready image before building it here: AWGR_PULL_TIMEOUT=600 (seconds)
+#   go back to an earlier version (as root, not after sudo):
+#     AWGR_SRC_URL=https://github.com/r-slashslash/AWG-Router/releases/download/vX.Y.Z/awg-router.tar.gz awg-router update
 set -uo pipefail
 
 REPO="${AWGR_REPO:-r-slashslash/AWG-Router}"
@@ -80,7 +82,7 @@ fetch_code() {
     done
   fi
   if [ "$ok" != 1 ]; then
-    rm -rf "$tmp"; echo "Could not download https://github.com/$REPO" >&2; return 1
+    rm -rf "$tmp"; echo "Could not download ${urls[*]:-https://github.com/$REPO}" >&2; return 1
   fi
   # IMAGES of an earlier release must not outlive it: a branch archive has none, so it is built here
   mkdir -p "$1" && rm -f "$1/IMAGES" && tar -xzf "$tmp/src.tgz" --strip-components=1 -C "$1"
@@ -966,7 +968,7 @@ RECONCILE_INTERVAL="$(envget RECONCILE_INTERVAL)"
 ok "Panel port: $PANEL_PORT"
 
 # Panel domain: asked on a new install and with --reconfigure; Enter — the panel opens by IP.
-# Kept by the panel in data/tls.json (System → Domain and certificate changes it too).
+# Kept by the panel in data/tls.json (System → Panel address changes it too).
 cur_domain() {
   local d=""
   [ -f "$DIR/data/tls.json" ] && d=$(sed -n 's/.*"domain": *"\([^"]*\)".*/\1/p' "$DIR/data/tls.json" | head -1)

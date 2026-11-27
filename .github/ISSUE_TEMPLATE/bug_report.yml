@@ -12,7 +12,7 @@ body:
     attributes:
       label: Panel version
       description: Shown on the System tab, or run `grep VERSION /opt/awg-router/app/version.py` on the server.
-      placeholder: "1.19.0"
+      placeholder: "1.25.0"
     validations:
       required: true
   - type: dropdown

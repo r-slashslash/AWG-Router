@@ -501,5 +501,33 @@ class ProjectRulesTest(unittest.TestCase):
             self.assertIn(f"app.{m}", line, m)
 
 
+
+class ReadmeFactsTest(unittest.TestCase):
+    """README ×4 (полная проверка 1.25.0, П7, П36, D5): «Фаервол» называет UDP-порт AmneziaWG (без него на хостинге со
+    своим фаерволом клиенты не подключатся), есть возврат на прошлую версию и раздел «если что-то не работает»;
+    шапка install.sh тоже называет AWGR_SRC_URL; release.yml не соберёт черновик без даты выпуска в CHANGELOG."""
+    FILES = {"README.md": ("> **Firewall:**", "### If something doesn't work"),
+             "README.ru.md": ("> **Фаервол:**", "### Если что-то не работает"),
+             "README.zh.md": ("> **防火墙：**", "### 如果出了问题"),
+             "README.fa.md": ("> **فایروال:**", "### اگر چیزی کار نکرد")}
+
+    def test_readmes(self):
+        for name, (fw, trouble) in self.FILES.items():
+            text = read(name)
+            line = next(x for x in text.splitlines() if x.startswith(fw))
+            self.assertIn("UDP", line, name)
+            self.assertIn(trouble, text, name)
+            self.assertIn("AWGR_SRC_URL=https://github.com/r-slashslash/AWG-Router/releases/download/vX.Y.Z/", text, name)
+            self.assertIn("100.100.100.200", text, name)
+        head = read("install.sh")[:3000]
+        self.assertIn("AWGR_SRC_URL=", head)
+
+    def test_changelog_date_checked(self):
+        rel = read(".github", "workflows", "release.yml")
+        self.assertIn('grep -qE "^## ${v#v} — [0-9]{4}-[0-9]{2}-[0-9]{2}', rel)
+        from app.version import VERSION
+        self.assertRegex(read("CHANGELOG.md"), rf"\n## {re.escape(VERSION)} — (\d{{4}}-\d{{2}}-\d{{2}}|unreleased)\n")
+
+
 if __name__ == "__main__":
     unittest.main()

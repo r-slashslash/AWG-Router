@@ -3,7 +3,7 @@
 Panels compare their version with the latest GitHub release and show "update available" when
 it grows, so every user-visible change gets a new version.
 
-## 1.25.0 — unreleased
+## 1.25.0 — 2026-11-27
 
 - **Outgoing server addresses.** **Server → Additional outgoing addresses** takes other IPv4 addresses of this server
   (up to 16); the panel adds them to the system itself (host: `ip addr add … label <dev>:awgr`, recorded in
@@ -122,11 +122,70 @@ it grows, so every user-visible change gets a new version.
   truncated answer goes to TCP), so the fallback DNS takes over in about 2 s instead of 7–14; the connection reset
   after a manual change keeps only clients' conntrack entries in memory; name lookups share one deadline; the
   in-panel question is cancelled by the tab row too.
+- **DNS on the server answers every DNS query of the clients** (owner's answer to the full audit of 1.25.0, П5): with
+  it on, the ruleset gets a `c_dns` chain (`nat` prerouting, `dstnat`) that sends UDP and TCP port 53 from the clients'
+  interface to any other address to `dnsproxy.py` on the server's tunnel address. The second DNS in client configs,
+  a DNS typed into a device and private addresses no longer go past the exit or unencrypted; old configs need no new
+  import. The redirect stays in the rules before the panel: while the panel restarts, names don't resolve for a few
+  seconds instead of going another way.
+- **AmneziaWG server image for arm64 too** (П4): `release.yml` builds `linux/amd64,linux/arm64`; the installer refuses
+  a ready image of another CPU ("the ready image is for amd64, this server is arm64") and builds it on the server, checks
+  free space in Docker's root (3 GB) before a build and prunes the build cache after it (П6).
+- **The own AWG container runs without `--privileged`** (П24): `--cap-add=NET_ADMIN --cap-add=SYS_MODULE --device
+  /dev/net/tun`; checked on GitHub with amneziawg-go and with the kernel module. It takes effect at the next
+  `refresh_own_server` (update).
+- **Installer** (full audit of 1.25.0): after the last question a lost SSH session (SIGHUP) no longer stops it in the
+  middle of replacing the AWG container (П9), and a container left "created" by an interrupted update is started by the
+  panel itself (`system._start_created`); Docker Compose v5.6.1 and buildx v0.38.1 are pinned with sha256 per CPU
+  instead of "the latest from GitHub" (П22, `tools/upstream.py` watches them); `.env` and `.env.bak` are 0600 even when
+  they existed; `AWGR_DOMAIN` from the environment is checked like a typed one; "Run as root: sudo -i, then the same
+  command again"; the own AWG container NATs clients also on the interface of its default route (with outgoing address
+  networks Docker may rename it after a restart, П34); `awg-router uninstall` names clients the panel turned off (they
+  stay off without it, П67).
+- **Routing fixes from the full audit of 1.25.0.** Domain rules: a manual change of an exit now reconnects their sites
+  (a method shadowed by an attribute in `Sniffer`, П1); connections open before the redirect keep their path instead of
+  getting the handler's mark and going past the exit (`ct status dnat accept`, a reject for the mark in `c_forward`, П2);
+  SOCKS5 rules connect from the exit's **Connect from address** (П32); a reload failing in the first moments no longer
+  stops the handler (П18); HTTP with headers over 16 KB or a short first piece is read correctly (П21); QUIC of a client
+  not yet in the handler's settings is blocked (S11); an empty TLS record ends the read (S4). `c_prerouting` runs after
+  `wg-quick`'s premangle (`mangle + 10`), so a full-tunnel wg-quick on the host can't wipe exit marks (П10); IPv6 of
+  clients is closed in the rules before the panel too (`awgr-hold6-<iface>.nft`, П11); an exit with **Connect from
+  address** blocks until the address path is up after a restart (П12, П17); a new server network without the panel's
+  table gets a closed forward chain if the rules fail (П14); the cloud service address `100.100.100.200` (Alibaba) is
+  closed like `169.254.0.0/16` (П33); the exit NAT runs at `srcnat - 1` (П49); address guards skip `lo` (П48); a port
+  change keeps `GwPriority` of address networks (П42); a hung `awg show` marks AWG exits stale instead of failing every
+  pass (П27); a working address is checked again soon after the system network restarts (П29).
+- **DNS fixes**: DoH and DoT sockets use `TCP_NODELAY` (40–150 ms less per query, П3); at most 32 TCP connections per
+  client and an idle timeout (П43); DoH bodies over 64 KB, more than 100 control frames or a bad PING are refused (П44);
+  an HTTP/3 connection is replaced after 1000 queries (memory, П45); a service name keeps one address (`min`), so the
+  proxy isn't reloaded for a reordered answer (П47); a rule's own DNS whose first server is down is asked second for 60 s
+  (П30); the open files limit is raised.
+- **Sign-in and web**: an empty password or session key file is made again (written atomically, П15); failed sign-ins
+  count per /48 too (32), with one Telegram message per network (П16); `/api/restore` and `/api/backup/decrypt` take
+  backups up to the backup limit through the middleware (П26); a full disk is "507 out of disk space" (П56); a body
+  that stops arriving is "408" (W6); wrong types in a backup are a clear refusal, and restored files stay 0600 (П57).
+- **Telegram**: a changed bot token resets `offset` (П28); **Direct — main** goes from the main address (П53); exit names
+  with `&` and `<` are shown right, the status picture fits plain DNS, a refused saved picture is uploaded again
+  instead of "Couldn't", and after a Chat ID change the bot no longer deletes a message in another chat (П54); the
+  memory of sent notifications is pruned.
+- **Interface**: Persian isolates `vpn://`, `.conf`, `socks5://` (П38); messages in a window are at its top and close on
+  click (П39); the rule window fits a phone (П40); route check says a cloud service address is closed and names
+  **Direct — address** in a balance step (П50); errors of **Apply rules again**, **Sign out**, **Generate new** are shown
+  (П59); an expired session closes the window over the window (П60); typed fields survive closing a window (П61); an
+  empty client name says so, and the client window isn't saved twice (П62); contrast of warnings, muted text and dark
+  buttons (П63); **Add exit** on **Overview** opens the window (П64); the proxy port, quota and non-JSON errors are
+  clearer, and one typed letter no longer switches an exit to SOCKS5 (П65); deleting a client drops lists of its own
+  rules (П55).
+- **Faster** (full audit, optimization): address parsing is cached (`srcaddr._ipv4`), API answers are encoded by the C
+  encoder with `Msg` as `default` (same bytes), a pass makes one full state copy instead of four (`Store.peek`) and
+  computes client policies once; client speeds are measured and sent only for the **Clients** tab (`X-Speeds: 1`).
 - lego (the program that gets the HTTPS certificate) 5.6.0 → 5.7.0 (#55): new DNS providers and small fixes;
   the flags the panel passes are the same.
 - Going back to 1.24.x: Direct with an address goes from the system address there (not blocked), exits connect from
   it too, and addresses the panel added stay in the system until a reboot (the container mode's Docker networks stay
-  until removed; they carry no traffic there).
+  until removed: `docker network disconnect zz-awgr-out-N <AWG container>` and `docker network rm zz-awgr-out-N`; they
+  carry no traffic there). An incoming IP the panel added to the system works until a reboot. DNS on the server stops
+  catching other DNS servers' queries.
 
 ## 1.24.0 — 2026-11-25
 
