@@ -72,7 +72,11 @@ it grows, so every user-visible change gets a new version.
   failed check marks the path down; the fallback gets the same check, and the probe every `DIRECT_RETRY` asks `. NS`
   instead of a client's name. Names through an exit and names of rules without a path never go to the fallback, during
   the check too; the Server tab warns only after a failed check. `dnsproxy.py` exits at once on SIGTERM (an HTTP/3
-  query thread held the exit up to 5 s).
+  query thread held the exit up to 5 s). From the independent check of the fix: a SIGHUP that changes the fallback
+  while a name waits no longer writes the old fallback's failure into the new one (it then wasn't asked for two
+  minutes); a pooled DoH/DoT connection cancelled by the query deadline is closed instead of dropped; checks over
+  HTTP/3 have 16 threads of their own (a frozen entry keeps its thread until its deadline, and with 4 the next checks
+  queued and failed).
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't

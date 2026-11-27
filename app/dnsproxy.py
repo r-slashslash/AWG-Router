@@ -383,14 +383,14 @@ class Pool:
                 conn = await self.open_fn()
             try:
                 result = await fn(conn)
-            except Exception:
-                conn.close()
-                if fresh:
+            except BaseException as e:
+                conn.close()                         # и при отмене снаружи (срок в forward): иначе соединение брошено
+                if fresh or not isinstance(e, Exception):
                     raise
                 conn = await self.open_fn()          # старое соединение уже закрыто сервером
                 try:
                     result = await fn(conn)
-                except Exception:
+                except BaseException:
                     conn.close()
                     raise
             conn.used = time.monotonic()
@@ -718,13 +718,15 @@ class Proxy:
             else:
                 reply = await self.forward(query, q, mark, tcp, servers)
                 if direct:
+                    # p — состояние, взятое до ожидания: SIGHUP с новыми серверами или запасным за это время заменил его
+                    # новым, и решение о прежних серверах в новое не пишется
                     if reply is not None:
-                        self._direct_seen(True, has_fb, mark)
+                        self._seen(p, True, has_fb)
                     else:
                         self._doubt(p, mark, tcp, has_fb)
             if reply is None and fb:
-                # запасной — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого
-                reply = await self._fallback(query, q, tcp, mark, fb)
+                # запасной — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого; fb и p — прежние
+                reply = await self._fallback(query, q, tcp, mark, fb, p)
         finally:
             self.inflight -= 1
         if reply is None or reply[3] & 0xF == RC_SERVFAIL:
@@ -745,11 +747,13 @@ class Proxy:
             self.cache_bytes += len(reply)
         return struct.pack("!H", q["id"]) + reply[2:]
 
-    async def _fallback(self, query: bytes, q: dict, tcp: bool, mark: int, fb: tuple) -> bytes | None:
+    async def _fallback(self, query: bytes, q: dict, tcp: bool, mark: int, fb: tuple,
+                        p: DirectPath | None = None) -> bytes | None:
         """Запасной DNS пути mark. Не ответил на имя — проверка запасного в фоне (П31: одно имя без его ответа — ещё не
         «запасной не отвечает»); пока она идёт и если она не прошла — до DIRECT_RETRY не спрашивается (клиент сразу
-        получает SERVFAIL, а не ждёт зависший сервер), а пробуется в фоне."""
-        p = self._dp(mark)
+        получает SERVFAIL, а не ждёт зависший сервер), а пробуется в фоне. p — состояние пути, в котором fb был в
+        настройках (SIGHUP, пока имя ждало общие серверы, сменил запасной — решение о прежнем в новое не пишется)."""
+        p = p or self._dp(mark)
         if p.fb_down or _busy(p.fb_probe):
             if p.fb_down and time.monotonic() >= p.fb_retry_at and not _busy(p.fb_probe):
                 p.fb_retry_at = time.monotonic() + DIRECT_RETRY
@@ -770,8 +774,8 @@ class Proxy:
 
         async def run():
             ok = await self._check(mark, tcp, fb, order)
-            if ok:
-                self.stats["fb_checks_ok"] = self.stats.get("fb_checks_ok", 0) + 1
+            if ok and not p.fb_down:
+                self.stats["fb_checks_ok"] = self.stats.get("fb_checks_ok", 0) + 1     # ложная тревога, которой не стало
             # пока шла проверка, запасной ответил на другое имя — он на связи
             self._fb_seen(p, ok or p.fb_ok_at >= started)
         p.fb_probe = asyncio.get_running_loop().create_task(run())

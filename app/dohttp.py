@@ -584,8 +584,10 @@ def run_h3(pool: H3Pool, msg: bytes, host: str, path: str, timeout: float, own: 
     from concurrent.futures import ThreadPoolExecutor
     if own:
         if _CHECK_EXEC is None:
-            # проверка — одна на путь (адрес системы и адреса «Напрямую — адрес»), у общих серверов и у запасного
-            _CHECK_EXEC = ThreadPoolExecutor(max_workers=4, thread_name_prefix="doh3-check")
+            # HTTP/3 бывает только у запасного: проверка — одна на путь (адрес системы и до 16 «Напрямую — адрес»), по
+            # запросу на запись. Поток с замёрзшим сервером занят до срока и после конца проверки (поток не прервать):
+            # с 4 потоками следующие проверки ждали очереди и ложно решали «не отвечает» (проверка исправления П31)
+            _CHECK_EXEC = ThreadPoolExecutor(max_workers=16, thread_name_prefix="doh3-check")
         return asyncio.get_running_loop().run_in_executor(_CHECK_EXEC, pool.once, msg, host, path, timeout)
     if _EXEC is None:
         _EXEC = ThreadPoolExecutor(max_workers=8, thread_name_prefix="doh3")

@@ -490,7 +490,7 @@ class ManyNamesTest(unittest.TestCase):
         net = Net()
         p = proxy(net)
         net.slow["1.1.1.1"] = {f"slow{i}.example." for i in range(50)}
-        net.check_delay = 0.2                                     # проверка ещё идёт, когда не ответили остальные
+        net.check_delay = 0.1                                     # проверка ещё идёт, когда не ответили остальные
 
         async def go():
             return await asyncio.gather(*[ask(p, f"slow{i}.example") for i in range(50)])
@@ -507,13 +507,297 @@ class ManyNamesTest(unittest.TestCase):
         net.mode["77.88.8.8"] = "ok"
 
         async def go():
-            await ask(p, "slow.example")                              # проверка пошла (0,5 с)
+            await ask(p, "slow.example")
+            await asyncio.sleep(0.05)                                 # проверка правда идёт и ждёт ответа (0,5 с)
+            self.assertTrue(busy(p._direct_probe))
             self.assertEqual(p.inflight, 0)
             with mock.patch.object(dnsproxy, "MAX_INFLIGHT", 1):
                 r = await ask(p, "a.example")                         # единственное место — клиенту
             await settle(p)
             return r
         self.assertEqual(run(go)[0], "fb")
+
+
+class CheckDetailsTest(unittest.TestCase):
+    """Сама проверка пути: что считается ответом, кого и как долго она спрашивает, что после себя оставляет."""
+
+    def test_servfail_to_check_is_an_answer(self):
+        net = Net()
+        p = proxy(net)
+        net.slow["1.1.1.1"] = {"slow.example."}
+        orig = net.enc
+
+        async def enc(msg, server, mark, mode):
+            r = await orig(msg, server, mark, mode)
+            if dnsproxy.read_name(msg, 12) == ".":
+                r = r[:3] + bytes([(r[3] & 0xF0) | dnsproxy.RC_SERVFAIL]) + r[4:]       # сервер на связи, корень сломан
+            return r
+        net.enc = enc
+
+        async def go():
+            await ask(p, "slow.example")
+            await settle(p)
+        run(go)
+        self.assertFalse(p.direct_down)
+
+    def test_truncated_answer_to_check_is_an_answer(self):
+        """Обычный DNS: «. NS» пришёл обрезанным (TC), а TCP 53 режут — сервер ответил, путь в порядке."""
+        net = Net()
+        p = proxy(net, encrypt="plain")
+        net.slow["1.1.1.1"] = {"slow.example."}
+        orig = net.udp
+
+        async def udp(msg, server, mark):
+            r = await orig(msg, server, mark)
+            if r is not None and dnsproxy.read_name(msg, 12) == ".":
+                r = r[:2] + bytes([r[2] | 0x02]) + r[3:]
+            return r
+
+        async def tcp(msg, server, mark):
+            raise OSError("reset")
+        p._udp, p._tcp = udp, tcp
+
+        async def go():
+            await ask(p, "slow.example")
+            await settle(p)
+        run(go)
+        self.assertFalse(p.direct_down)
+
+    def test_every_server_at_once(self):
+        """Два общих сервера: первый замёрз, у второго медленное имя. Проверка спрашивает обоих сразу — второй отвечает,
+        путь в порядке (по очереди или только первого — «не отвечают»)."""
+        net = Net()
+        p = proxy(net, upstreams=["1.1.1.1", "9.9.9.9"])
+        net.mode["1.1.1.1"] = "freeze"
+        net.slow["9.9.9.9"] = {"slow.example."}
+
+        async def go():
+            await ask(p, "slow.example")
+            await settle(p)
+        run(go)
+        self.assertFalse(p.direct_down)
+        self.assertEqual(len(net.checks("9.9.9.9")), 1)
+
+    def test_not_longer_than_check_timeout(self):
+        net = Net()
+        net.mode["1.1.1.1"] = "freeze"
+        p = proxy(net)
+
+        async def go():
+            await ask(p, "a.example")
+            t0 = time.monotonic()
+            await settle(p)
+            return time.monotonic() - t0
+        dt = run(go)
+        self.assertTrue(p.direct_down)
+        self.assertLess(dt, ENC + 0.1)                        # CHECK_TIMEOUT, а не срок ответа имени (ENC × 2)
+
+    def test_leaves_no_tasks(self):
+        """Один сервер ответил — запросы проверки к остальным отменены, а не висят до своего срока."""
+        net = Net()
+        p = proxy(net, upstreams=["9.9.9.9", "1.1.1.1"])
+        net.mode["1.1.1.1"] = "freeze"
+        net.slow["9.9.9.9"] = {"slow.example."}
+
+        async def go():
+            await ask(p, "slow.example")
+            await settle(p)
+            await asyncio.sleep(0)
+            return len(asyncio.all_tasks())
+        self.assertEqual(run(go), 1)
+
+    def test_one_fallback_check_for_fifty(self):
+        net = Net()
+        net.mode["1.1.1.1"] = "rst"
+        p = proxy(net)
+        net.slow["77.88.8.8"] = {f"slow{i}.example." for i in range(50)}
+        net.check_delay = 0.1                                     # проверка ещё идёт, когда не ответили остальные
+
+        async def go():
+            await ask(p, "a.example")
+            await settle(p)
+            self.assertTrue(p.direct_down)
+            await asyncio.gather(*[ask(p, f"slow{i}.example") for i in range(50)])
+            await settle(p)
+        with mock.patch.object(dnsproxy, "MAX_INFLIGHT", 60):
+            run(go)
+        self.assertEqual(len(net.checks("77.88.8.8")), 1)
+        self.assertEqual(p.stats.get("fb_checks"), 1)
+        self.assertEqual(p.stats.get("fb_checks_ok"), 1)
+        self.assertFalse(p._dp(0).fb_down)
+
+
+class FreshConnectionTest(unittest.TestCase):
+    """Проверка — на своём новом соединении, мимо очереди пула: все соединения пула могут ждать медленные имена (П31).
+    Настоящий _enc и _h3, подменены только пулы."""
+
+    def _proxy(self, **cfg):
+        d = tempfile.mkdtemp()
+        conf = os.path.join(d, "dns.json")
+        with open(conf, "w") as f:
+            json.dump({"listen": "10.8.1.1", "port": 53, "clients": "10.8.1.0/24", "upstreams": ["1.1.1.1"],
+                       "encrypt": "doh", "direct_fallback": ["77.88.8.8"], "default": {"mark": 0, "tcp": False},
+                       "routes": {}, **cfg}, f)
+        return dnsproxy.Proxy(conf)
+
+    def test_doh_and_dot_check_goes_past_a_busy_pool(self):
+        for mode in ("doh", "dot"):
+            p = self._proxy(encrypt=mode)
+            used = []
+
+            class BusyPool:
+                host, path = "cloudflare-dns.com", "/dns-query"
+
+                async def run(self, fn):                   # все соединения заняты медленными именами
+                    used.append("run")
+                    await asyncio.sleep(LONG)
+
+                async def once(self, fn):
+                    used.append("once")
+
+                    class C:
+                        pass
+                    return "ok"
+            p.pools[(mode, 0, "1.1.1.1")] = BusyPool()
+
+            async def answer(conn, msg, *a):
+                return a_reply(msg, [SHARED])
+            with mock.patch.object(dnsproxy, "dot_query", answer), mock.patch.object(dnsproxy, "doh_query", answer):
+                orig_once = BusyPool.once
+
+                async def once(self, fn):
+                    await orig_once(self, fn)
+                    return await fn(object())
+                BusyPool.once = once
+                ok = run(lambda: p._check(0, False))
+            self.assertTrue(ok, mode)
+            self.assertEqual(used, ["once"], mode)
+
+    def test_h3_check_goes_past_a_busy_pool(self):
+        from app import dohttp
+        entry = "h3://dns.example/dns-query#77.88.8.8"
+        p = self._proxy(direct_fallback=[entry])
+
+        class BusyH3:
+            host, path = "dns.example", "/dns-query"
+
+            def query(self, msg, host, path, timeout):     # 8 потоков пула заняты медленными именами
+                time.sleep(LONG)
+
+            def once(self, msg, host, path, timeout):
+                return a_reply(msg, [FB])
+        p.h3pools[(0, entry)] = BusyH3()
+        t0 = time.monotonic()
+        self.assertTrue(run(lambda: p._check(0, False, (entry,))))
+        self.assertLess(time.monotonic() - t0, 0.15)
+        self.assertIsNotNone(dohttp._CHECK_EXEC)
+
+    def test_h3_checks_do_not_wait_for_frozen_threads(self):
+        """Запасной — две записи h3: одна замёрзла (её поток занят до срока и после конца проверки), другая живая.
+        Проверки на нескольких путях сразу не ждут друг друга: с 4 потоками часть из них ложно не проходила."""
+        from app import dohttp
+        fb = ("h3://192.0.2.1/dns-query", "h3://192.0.2.2/dns-query")   # адрес в записи — и на «Напрямую — адрес»
+        p = self._proxy(direct_fallback=list(fb), addr_marks=[0x2101, 0x2110])
+
+        def once(self, msg, host, path, timeout):
+            if self.ip == "192.0.2.1":
+                time.sleep(timeout)
+                raise TimeoutError("HTTP/3: timeout")
+            time.sleep(0.02)
+            return a_reply(msg, [FB])
+
+        async def go():
+            return await asyncio.gather(*[p._check(m, False, fb) for m in [0] + list(range(0x2101, 0x2109))])
+        old = dohttp._CHECK_EXEC
+        dohttp._CHECK_EXEC = None                         # потоки проверки — заново, своего размера
+        try:
+            with mock.patch.object(dohttp.H3Pool, "once", once), mock.patch.object(dohttp, "h3_supported", lambda: True):
+                res = run(go)
+        finally:
+            dohttp._CHECK_EXEC = old
+        self.assertEqual(res, [True] * 9)
+
+    def test_once_closes_its_connection(self):
+        closed = []
+
+        class C:
+            def close(self):
+                closed.append(self)
+
+        async def open_conn():
+            return C()
+
+        async def fn(conn):
+            return "ok"
+
+        async def bad(conn):
+            raise OSError("reset")
+        pool = dnsproxy.Pool(open_conn)
+        self.assertEqual(asyncio.run(pool.once(fn)), "ok")
+        with self.assertRaises(OSError):
+            asyncio.run(pool.once(bad))
+        self.assertEqual(len(closed), 2)
+        self.assertEqual(pool.idle, [])
+
+    def test_h3_once_closes_its_connection(self):
+        from app import dohttp
+        made = []
+
+        class Conn:
+            def __init__(self, *a):
+                self.closed = False
+                made.append(self)
+
+            def query(self, *a):
+                return b"ok"
+
+            def close(self):
+                self.closed = True
+        with mock.patch.object(dohttp, "H3Conn", Conn):
+            pool = dohttp.H3Pool(lambda: None, "127.0.0.1", 443, "dns.test", 2, 50)
+            self.assertEqual(pool.once(b"q", "dns.test", "/dns-query", 1.0), b"ok")
+        self.assertTrue(made[0].closed)
+        self.assertEqual(pool.free, [])
+
+    def test_pool_closes_a_connection_cancelled_from_outside(self):
+        """Срок ответа в forward отменяет Pool.run: соединение закрывается, а не бросается (проверка исправления П31: на
+        пути медленного имени — ResourceWarning «unclosed StreamWriter»)."""
+        closed = []
+
+        class C:
+            reusable, used = True, 0.0
+
+            def __init__(self):
+                self.reader = type("R", (), {"at_eof": lambda s: False})()
+
+            def close(self):
+                closed.append(self)
+
+        async def open_conn():
+            return C()
+
+        async def hang(conn):
+            await asyncio.sleep(LONG)
+
+        async def go(pool):
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(pool.run(hang), 0.05)
+        pool = dnsproxy.Pool(open_conn)
+        asyncio.run(go(pool))                             # новое соединение
+        self.assertEqual(len(closed), 1)
+        old = C()
+        old.used = time.monotonic()
+        pool.idle.append(old)                             # простаивавшее: не ответило — повтор на новом, его отменили
+        with mock.patch.object(dnsproxy, "POOL_IDLE", 3600):
+            async def go2():
+                async def fail_then_hang(conn):
+                    if conn is old:
+                        raise OSError("closed by the server")
+                    await asyncio.sleep(LONG)
+                with self.assertRaises(asyncio.TimeoutError):
+                    await asyncio.wait_for(pool.run(fail_then_hang), 0.05)
+            asyncio.run(go2())
+        self.assertEqual(len(closed), 3)
 
 
 class SighupTest(unittest.TestCase):
@@ -540,6 +824,52 @@ class SighupTest(unittest.TestCase):
         run(go)
         self.assertFalse(p.direct_down)
         self.assertEqual(p.direct_fail_at, 0.0)
+
+
+class SighupFallbackTest(unittest.TestCase):
+    """SIGHUP с новым запасным, пока имя ждёт общие серверы или идёт проверка прежнего запасного: решение о прежнем
+    запасном не ложится на новый (найдено отдельной проверкой исправления; было и до него)."""
+
+    def _reload(self, p, **cfg):
+        with open(p.conf_path, "w") as f:
+            json.dump(dict(p.cfg, **cfg), f)
+        p.load()
+
+    def test_change_while_a_name_waits(self):
+        net = Net()
+        net.mode.update({"1.1.1.1": "freeze", "77.88.8.8": "drop"})
+        net.answer["77.88.8.9"] = FB2
+        p = proxy(net)
+
+        async def go():
+            first = asyncio.ensure_future(ask(p, "a.example"))     # ждёт замёрзший общий сервер (ENC × 2)
+            await asyncio.sleep(0.1)
+            self._reload(p, direct_fallback=["77.88.8.9"])         # SIGHUP: новый запасной, он отвечает
+            await first                                              # прежний запасной не ответил
+            for m in (p._dp(0).probe, p._dp(0).fb_probe):
+                if busy(m):
+                    await m
+            await asyncio.sleep(ENC * 2)                             # и его проверка — тоже
+            return await ask(p, "b.example")
+        b = run(go)
+        self.assertFalse(p._dp(0).fb_down)
+        self.assertEqual(p._dp(0).fb_fail_at, 0.0)
+        self.assertEqual(b[0], "fb2")
+
+    def test_change_while_the_fallback_is_checked(self):
+        net = Net()
+        net.mode.update({"1.1.1.1": "rst", "77.88.8.8": "drop"})
+        p = proxy(net)
+
+        async def go():
+            await ask(p, "a.example")                               # общие режут, запасной молчит — его проверка
+            old = p._dp(0).fb_probe
+            self.assertTrue(busy(old))
+            self._reload(p, direct_fallback=["77.88.8.9"])
+            await old
+        run(go)
+        self.assertFalse(p._dp(0).fb_down)
+        self.assertEqual(p._dp(0).fb_fail_at, 0.0)
 
 
 if __name__ == "__main__":
