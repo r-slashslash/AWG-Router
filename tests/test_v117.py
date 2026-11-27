@@ -84,7 +84,9 @@ class InstallerImagesTest(unittest.TestCase):
         r = subprocess.run(["bash", "-uo", "pipefail", "-c", f'DIR="{self.tmp}"\n{body}'],
                            env={**self.env, **env}, capture_output=True, text=True, timeout=30)
         with open(self.log) as f:
-            calls = [ln.strip() for ln in f if ln.strip()]
+            # проверки процессора, места на диске и уборка кэша сборки (1.25.0) — в test_v125_fix
+            calls = [ln.strip() for ln in f if ln.strip() and not ln.startswith(("docker info", "docker builder prune"))
+                     and "{{.Architecture}}" not in ln]
         return r, calls
 
     # ---------------------------------------------------------- image_ref
@@ -234,16 +236,16 @@ class WorkflowImagesTest(unittest.TestCase):
         self.assertIn("context: .\n", panel)
         plat = re.search(r"platforms: (\S+)", panel).group(1)
         self.assertEqual(set(plat.split(",")), {"linux/amd64", "linux/arm64"})
-        server = self.steps["AmneziaWG server image (amd64)"]
+        server = self.steps["AmneziaWG server image (amd64, arm64)"]
         self.assertIn("context: awg-server\n", server)
-        self.assertIn("platforms: linux/amd64\n", server)
+        self.assertIn("platforms: linux/amd64,linux/arm64\n", server)
         for b in (panel, server):
             self.assertIn("push: ${{ steps.v.outputs.state != 'published' }}", b)
 
     def test_check_run_publishes_nothing(self):
         """Ручной запуск check собирает образы, но не пушит их и не трогает архив и черновик."""
         self.assertIn("      check:\n", self.text)
-        for name in ("Panel image (amd64, arm64)", "AmneziaWG server image (amd64)"):
+        for name in ("Panel image (amd64, arm64)", "AmneziaWG server image (amd64, arm64)"):
             self.assertIn("|| inputs.check", self.steps[name])
         for name in ("Anyone can pull the images", "Build the archive", "Create or refresh the draft",
                      "Release notes (4 languages)"):
@@ -252,7 +254,7 @@ class WorkflowImagesTest(unittest.TestCase):
 
     def test_archive_after_images_and_carries_them(self):
         names = list(self.steps)
-        self.assertLess(names.index("AmneziaWG server image (amd64)"), names.index("Build the archive"))
+        self.assertLess(names.index("AmneziaWG server image (amd64, arm64)"), names.index("Build the archive"))
         self.assertLess(names.index("Build the archive"), names.index("Create or refresh the draft"))
         run = self.steps["Build the archive"]
         self.assertIn("--add-file=", run)

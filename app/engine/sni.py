@@ -106,8 +106,13 @@ class SniMixin:
             pc = None
         acct = u["id"] if u else None           # для учёта трафика выхода (sniproxy считает байты)
         if pc and pc.kind == "socks5":
+            try:
+                mark = self.exit_mark(st, u)    # «Подключаться с адреса» выхода, как у hev (1.25.0, П32)
+            except Exception:  # noqa: BLE001 — адресу нет номера: выход и так лежит (bind_ok), не с адреса системы
+                return {"block": True}
             return {"socks": {"ip": (r.socks_ip if r and r.socks_ip else pc.socks["host"]), "port": pc.socks["port"],
-                              "user": pc.socks["user"], "password": pc.socks["password"]}, "acct": acct}
+                              "user": pc.socks["user"], "password": pc.socks["password"], "mark": mark},
+                    "acct": acct}
         return {"mark": nftgen.mark_for(eff), "acct": acct}
 
     @staticmethod

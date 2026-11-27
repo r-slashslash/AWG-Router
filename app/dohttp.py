@@ -123,6 +123,9 @@ H2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + h2_frame(4, 0, 0, struct.pack
     + h2_frame(8, 0, 0, struct.pack("!I", H2_WINDOW - 65535))      # без push, своё окно потока и соединения
 
 
+H2_CTL_MAX = 100        # кадров SETTINGS и PING на один запрос; больше — сервер сломан или злой
+
+
 class H2:
     """Состояние соединения HTTP/2: следующий номер потока. Один запрос за раз (как пул dnsproxy.py: по одному на
     соединение), поэтому без очередей потоков."""
@@ -141,12 +144,18 @@ async def h2_query(conn, msg: bytes, host: str, path: str) -> bytes:
     st.sid += 2
     w.write(h2_frame(1, 0x4, sid, h2_request(host, path, len(msg))) + h2_frame(0, 0x1, sid, msg))
     await w.drain()
-    status, body, block = None, b"", b""
+    status, body, block, ctl = None, b"", b"", 0
     while True:
         head = await r.readexactly(9)
         n = int.from_bytes(head[:3], "big")
         typ, flags, s = head[3], head[4], struct.unpack("!I", head[5:])[0] & 0x7FFFFFFF
         payload = await r.readexactly(n) if n else b""
+        if typ in (4, 6):
+            # служебные кадры на каждый ответ пишутся в буфер без drain: сервер, который шлёт их потоком и не читает,
+            # раздул бы память (П44 полной проверки 1.25.0)
+            ctl += 1
+            if ctl > H2_CTL_MAX or (typ == 6 and n != 8):
+                raise DohError("HTTP/2: too many control frames")
         if typ == 4:                                     # SETTINGS
             if not flags & 0x1:
                 w.write(h2_frame(4, 0x1, 0))
@@ -489,6 +498,9 @@ class H3Conn:
             pass
 
 
+H3_CONN_QUERIES = 1000                              # запросов на одно соединение HTTP/3, потом новое
+
+
 class H3Pool:
     """Соединения HTTP/3 к одному серверу по одному пути (как Pool в dnsproxy.py): не больше size, по одному запросу на
     соединение; простаивавшее дольше idle — закрывается. Работа — в отдельных потоках (QUIC OpenSSL синхронный): цикл
@@ -530,8 +542,11 @@ class H3Pool:
                 except BaseException:
                     conn.close()
                     raise
+                conn.queries = getattr(conn, "queries", 0) + 1
                 with self.lock:
-                    if self.closed:
+                    # не дольше H3_CONN_QUERIES запросов: пока соединение QUIC OpenSSL живо, память процесса растёт
+                    # ~300 байт на запрос (полная проверка 1.25.0, П45)
+                    if self.closed or conn.queries >= H3_CONN_QUERIES:
                         conn.close()
                     else:
                         self.free.append(conn)

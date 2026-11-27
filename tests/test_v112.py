@@ -186,7 +186,7 @@ class NftTest(unittest.TestCase):
     def test_sniff_chains(self):
         text = self.gen()
         self.assertIn("udp dport 443 goto o_block", text)
-        self.assertIn(f"tcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept", text)
+        self.assertIn(f"tcp dport {{ 80, 443 }} ct state new meta mark set {config.SNIFF_MARK:#x} accept", text)
         self.assertIn(f'iifname "awg0" meta mark {config.SNIFF_MARK:#x} meta l4proto tcp redirect to :10443', text)
         self.assertIn("type route hook output priority mangle", text)
         self.assertIn(f"meta mark vmap {{ {config.SNIFF_OUT_BASE:#x} : goto q_p_global }}", text)

@@ -30,6 +30,13 @@ PROGRAMS = (
     ("lego", "https://github.com/go-acme/lego", "LEGO_IMAGE", None),
 )
 
+# Программы, которые install.sh ставит на сервер сам (закреплены версией и sha256 файла каждого процессора, 1.25.0):
+# имя, репозиторий, переменная с версией в install.sh
+INSTALL_PROGRAMS = (
+    ("docker-compose", "https://github.com/docker/compose", "COMPOSE_VERSION"),
+    ("docker-buildx", "https://github.com/docker/buildx", "BUILDX_VERSION"),
+)
+
 # Версии, которые проверены и сознательно не взяты: о них issue не напоминает (о более новых — напоминает)
 SKIP = {
     "hev-socks5-tunnel": {"2.20.0"},
@@ -42,6 +49,10 @@ NOTES = {
     "hev-socks5-tunnel": "2.20.0 was slower under a speed limit (hev-socks5-core `8e3b4cd`): before updating, "
                          "look at the speed lines of `domains_socks_e2e` in net-tests.",
     "lego": "The image is pinned by digest: take the new tag's digest from Docker Hub (`goacme/lego`).",
+    "docker-compose": "Pinned in `install.sh` (`COMPOSE_VERSION` and `plugin_sum`): take the sums of every "
+                      "`docker-compose-linux-*` from the release's `checksums.txt`.",
+    "docker-buildx": "Pinned in `install.sh` (`BUILDX_VERSION` and `plugin_sum`): take the sums of every "
+                     "`buildx-*.linux-*` from the release's `checksums.txt`.",
 }
 
 VERSION = re.compile(r"v?(\d+(?:\.\d+)+)")
@@ -50,6 +61,11 @@ VERSION = re.compile(r"v?(\d+(?:\.\d+)+)")
 def pinned(text: str) -> dict:
     """ARG из Dockerfile: имя → значение."""
     return dict(re.findall(r"^ARG (\w+)=(\S+)", text, re.M))
+
+
+def pinned_sh(text: str) -> dict:
+    """Переменные install.sh вида NAME=значение в начале строки: имя → значение."""
+    return dict(re.findall(r"^([A-Z_]+)=(\S+)$", text, re.M))
 
 
 def version_of(ref: str) -> str:
@@ -135,16 +151,19 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     with open(os.path.join(ROOT, "Dockerfile"), encoding="utf-8") as f:
         args = pinned(f.read())
+    with open(os.path.join(ROOT, "install.sh"), encoding="utf-8") as f:
+        sh = pinned_sh(f.read())
     found, failed = [], 0
-    for name, url, ref_arg, sha_arg in PROGRAMS:
-        current = version_of(args[ref_arg])
+    every = [(n, u, version_of(args[r]), args.get(s) if s else None) for n, u, r, s in PROGRAMS]
+    every += [(n, u, sh[v], None) for n, u, v in INSTALL_PROGRAMS]
+    for name, url, current, sha in every:
         try:
             remote = tags(ls_remote(url))
         except (OSError, subprocess.SubprocessError) as e:
             print(f"::warning::{name}: no tag list ({e})")
             failed += 1
             continue
-        res = compare(name, current, args.get(sha_arg) if sha_arg else None, remote)
+        res = compare(name, current, sha, remote)
         print(f"{name}: {current} → " + (", ".join(f"{k}: {v}" for k, v in res.items()) or "up to date"))
         found.append((name, current, res))
     title, body = report(found)
@@ -156,7 +175,7 @@ def main(argv=None) -> int:
             if text:
                 with open(os.path.join(a.out, n), "w", encoding="utf-8") as f:
                     f.write(text)
-    return 1 if failed == len(PROGRAMS) else 0
+    return 1 if failed == len(every) else 0
 
 
 if __name__ == "__main__":

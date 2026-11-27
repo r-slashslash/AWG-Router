@@ -402,5 +402,157 @@ class H3Test(unittest.TestCase):
             s.close()
 
 
+class DohFixTest(unittest.TestCase):
+    """Исправления полной проверки 1.25.0 в DoH (П3, П30, П43–П45, П47)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = tempfile.mkdtemp()
+        cls.crt, key = cert(cls.d)
+        cls.srv = H2Server(cls.crt, key)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.close()
+
+    def test_h2_queries_do_not_wait_for_acks(self):
+        """П3: 20 запросов подряд на одно соединение HTTP/2 — без ожидания подтверждения сервера (Нейгл): медиана
+        меньше 10 мс (без TCP_NODELAY — ~44 мс и на loopback)."""
+        self.srv.mode = "ok"
+        p = Proc(["https://dns.test/dns-query#127.0.0.1"], self.crt, self.srv.port)
+        self.addCleanup(p.close)
+        p.ask("warm.site.example")
+        times = []
+        for i in range(20):
+            t0 = time.monotonic()
+            p.ask(f"n{i}.site.example")
+            times.append(time.monotonic() - t0)
+        self.assertLess(sorted(times)[10], 0.010, times)
+
+    def test_dead_first_entry_is_asked_last(self):
+        """П30: первая запись своего DNS молчит — первое имя ждёт её, следующие сразу идут ко второй."""
+        self.srv.mode = "ok"
+        silent = socket.socket()
+        silent.bind(("127.0.0.2", self.srv.port))        # соединение принимает ядро, TLS не отвечает
+        silent.listen(64)
+        self.addCleanup(silent.close)
+        p = Proc(["https://dns.test/dns-query#127.0.0.2", "https://dns.test/dns-query#127.0.0.1"], self.crt,
+                 self.srv.port)
+        self.addCleanup(p.close)
+        self.assertIn(socket.inet_aton("203.0.113.9"), p.ask("first.site.example")[0])
+        t0 = time.monotonic()
+        self.assertIn(socket.inet_aton("203.0.113.9"), p.ask("second.site.example")[0])
+        self.assertLess(time.monotonic() - t0, 1.0)
+
+    def test_control_frame_flood(self):
+        """П44: сервер шлёт SETTINGS и PING потоком вместо ответа (или PING не той длины) — ошибка, а не буфер в
+        сотни МБ."""
+        import asyncio
+
+        class W:
+            def write(self, b):
+                pass
+
+            async def drain(self):
+                pass
+
+        def conn(frames):
+            r = asyncio.StreamReader()
+            r.feed_data(frames)
+            r.feed_eof()
+            return type("C", (), {"h2": dohttp.H2(), "reader": r, "writer": W()})()
+
+        async def run(frames):
+            return await dohttp.h2_query(conn(frames), q_msg("a.example"), "dns.test", "/dns-query")
+        with self.assertRaises(dohttp.DohError):
+            asyncio.run(run(dohttp.h2_frame(4, 0, 0) * 200))
+        with self.assertRaises(dohttp.DohError):
+            asyncio.run(run(dohttp.h2_frame(6, 0, 0, b"1234")))
+
+    def test_huge_http1_answer_refused(self):
+        """П44: HTTP/1.1 с огромной длиной ответа — ошибка, а не чтение сколько скажет сервер."""
+        import asyncio
+
+        class W:
+            def write(self, b):
+                pass
+
+            async def drain(self):
+                pass
+        async def run(head):
+            r = asyncio.StreamReader()
+            r.feed_data(b"HTTP/1.1 200 OK\r\n" + head + b"\r\nfffffff\r\n")
+            r.feed_eof()
+            c = type("C", (), {"reader": r, "writer": W(), "reusable": True})()
+            return await dnsproxy.doh_query(c, q_msg("a.example"), "dns.test")
+        for head in (b"Content-Length: 999999999\r\n", b"Transfer-Encoding: chunked\r\n"):
+            with self.assertRaises(OSError):
+                asyncio.run(run(head))
+
+    def test_h3_connection_replaced_after_many_queries(self):
+        """П45: соединение HTTP/3 — не дольше H3_CONN_QUERIES запросов (память OpenSSL растёт, пока оно живо)."""
+        made = []
+
+        class Conn:
+            def __init__(self, *a):
+                self.used = time.monotonic()
+                made.append(self)
+
+            def query(self, *a):
+                self.used = time.monotonic()
+                return b"ok"
+
+            def close(self):
+                pass
+        orig = dohttp.H3Conn
+        dohttp.H3Conn = Conn
+        self.addCleanup(setattr, dohttp, "H3Conn", orig)
+        pool = dohttp.H3Pool(lambda: None, "127.0.0.1", 443, "dns.test", 2, 50)
+        for _ in range(dohttp.H3_CONN_QUERIES + 1):
+            pool.query(b"q", "dns.test", "/dns-query", 1.0)
+        self.assertEqual(len(made), 2)
+
+    def test_one_client_cannot_take_all_tcp(self):
+        """П43: соединений по TCP с одного адреса — не больше CLIENT_TCP_MAX; мягкий предел файлов поднят."""
+        import asyncio
+        import resource
+        p = dnsproxy.Proxy.__new__(dnsproxy.Proxy)
+        p.allowed = lambda ip: True
+        p.tcp_conns = {"10.8.1.2": dnsproxy.CLIENT_TCP_MAX}
+
+        class R:
+            async def readexactly(self, n):
+                raise AssertionError("лишнее соединение не читается")
+
+        class W:
+            closed = False
+
+            def get_extra_info(self, k):
+                return ("10.8.1.2", 5353)
+
+            def close(self):
+                self.closed = True
+        w = W()
+        asyncio.run(p.handle_tcp(R(), w))
+        self.assertTrue(w.closed)
+        self.assertEqual(p.tcp_conns, {"10.8.1.2": dnsproxy.CLIENT_TCP_MAX})
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (min(256, hard), hard))
+            dnsproxy.raise_open_files_limit()
+            self.assertEqual(resource.getrlimit(resource.RLIMIT_NOFILE)[0], hard)
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+    def test_name_address_is_stable(self):
+        """П47: порядок адресов в ответе меняется — запись «#адрес» для dnsproxy.py та же."""
+        from unittest import mock
+        answers = [[("10.0.0.2",), ("10.0.0.1",)], [("10.0.0.1",), ("10.0.0.2",)]]
+        for order in answers:
+            gai = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", a) for a in order]
+            with mock.patch.object(dnsaddr.socket, "getaddrinfo", lambda *a, **k: gai):
+                self.assertEqual(dnsaddr.lookup(["dns.test"]), {"dns.test": "10.0.0.1"})
+
+
 if __name__ == "__main__":
     unittest.main()

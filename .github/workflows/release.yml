@@ -9,8 +9,8 @@
 # install.sh скачивает именно этот архив (releases/latest/download/awg-router.tar.gz), поэтому у
 # файла растёт счётчик скачиваний: установки и обновления панелей.
 #
-# Готовые образы: из того же коммита собираются образ панели (amd64, arm64) и образ сервера AWG
-# (только amd64: базовый amneziavpn/amneziawg-go другим не бывает) и уходят в
+# Готовые образы: из того же коммита собираются образ панели и образ сервера AWG (оба — amd64 и arm64: сервер
+# с 1.22.0 собирается из alpine и golang, они есть для обоих) и уходят в
 # ghcr.io/<владелец>/awg-router с тегами <VERSION> и server-<VERSION>. Их digest записывается в файл
 # IMAGES внутри архива: install.sh скачивает образ по digest вместо сборки на сервере (сборка ходит
 # в dl-cdn.alpinelinux.org и в GitHub по git, а они фильтруются в России, Китае, Иране — issue #8).
@@ -152,13 +152,13 @@ jobs:
           provenance: false     # без манифестов аттестации: индекс читают и старые Docker
           tags: ${{ steps.img.outputs.repo }}:${{ steps.v.outputs.ver }}
 
-      - name: AmneziaWG server image (amd64)
+      - name: AmneziaWG server image (amd64, arm64)
         if: steps.v.outputs.state != 'published' || inputs.check
         id: server
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7
         with:
           context: awg-server
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: ${{ steps.v.outputs.state != 'published' }}   # проверка (check) ничего не публикует
           provenance: false
           tags: ${{ steps.img.outputs.repo }}:server-${{ steps.v.outputs.ver }}

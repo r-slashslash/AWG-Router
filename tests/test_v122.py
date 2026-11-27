@@ -663,9 +663,16 @@ case "$1" in
   build) exit 0 ;;
   exec) exit "${UP_RC:-0}" ;;
   image) case "$2" in
-           inspect) echo "${NEW_IMG:-sha256:new}" ;;
+           inspect) case "$*" in
+                      *Architecture*) echo "${IMG_ARCH:-amd64}" ;;
+                      *) echo "${NEW_IMG:-sha256:new}" ;;
+                    esac ;;
            *) exit 0 ;;
          esac ;;
+  info) case "$*" in
+          *Architecture*) echo "${HOST_ARCH:-x86_64}" ;;
+          *DockerRootDir*) echo "${DOCKER_ROOT:-/var/lib/docker}" ;;
+        esac ;;
   inspect) case "$3" in
              *Mounts*) echo "$MOUNT" ;;
              *Image*) echo sha256:old ;;
@@ -676,13 +683,20 @@ exit 0
 """
 
 
+# df: свободное место (МБ) — из FREE_MB, по умолчанию с запасом
+DF = r"""#!/bin/sh
+echo "Filesystem 1048576-blocks Used Available Capacity Mounted on"
+echo "/dev/x 100000 1 ${FREE_MB:-50000} 1% /"
+"""
+
+
 class RefreshOwnServerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
         bindir = os.path.join(self.tmp, "bin")
         os.makedirs(bindir)
-        for name, body in (("docker", DOCKER), ("sleep", "#!/bin/sh\nexit 0\n")):
+        for name, body in (("docker", DOCKER), ("sleep", "#!/bin/sh\nexit 0\n"), ("df", DF)):
             with open(os.path.join(bindir, name), "w") as f:
                 f.write(body)
             os.chmod(os.path.join(bindir, name), 0o755)
@@ -708,7 +722,7 @@ class RefreshOwnServerTest(unittest.TestCase):
             AWG_MODE=container; INSTALL_AWG=""; AMN=amnezia-awg2
             step() {{ echo "STEP $1"; }}; ok() {{ echo "OK $1"; }}; warn() {{ echo "WARN $1"; }}
             buildx_ver() {{ :; }}
-            """) + "".join(self.fn(n) for n in ("our_container", "image_ref", "no_ready_image", "pull_image",
+            """) + "".join(self.fn(n) for n in ("our_container", "image_ref", "no_ready_image", "docker_arch", "pull_image",
                                                  "build_image", "last_line", "saved_port", "run_server_container",
                                                  "refresh_own_server")) + "refresh_own_server\n"
         r = subprocess.run(["bash", "-uo", "pipefail", "-c", script], env={**self.env, **env},

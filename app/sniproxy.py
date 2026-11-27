@@ -91,6 +91,10 @@ def tls_sni(data: bytes) -> str | None | bool:
         if data[off] != 0x16 or data[off + 1] != 0x03:
             return None
         rlen = struct.unpack("!H", data[off + 3:off + 5])[0]
+        if rlen == 0:
+            # пустая запись в TLS запрещена; поток таких записей не растит ClientHello, а разбор каждого куска
+            # шёл бы заново по всему прочитанному
+            return None
         if len(data) < off + 5 + rlen:
             return False
         hs += data[off + 5:off + 5 + rlen]
@@ -135,12 +139,30 @@ def _client_hello_sni(b: bytes) -> str | None:
     return None
 
 
+HTTP_HEAD_MAX = 16 * 1024   # дальше конца заголовков HTTP не ждём: Host ищется в уже полных строках
+HTTP_METHODS = (b"GET ", b"POST", b"HEAD", b"PUT ", b"OPTI", b"DELE", b"PATC", b"CONN")
+
+
 def http_host(data: bytes) -> str | None | bool:
     end = data.find(b"\r\n\r\n")
     if end < 0:
-        return False if len(data) < 16 * 1024 else None
+        if len(data) < HTTP_HEAD_MAX:
+            return False
+        # заголовки длиннее (большие cookie): Host обычно в начале — берём из полных строк; нет его там —
+        # False (соединение закроется), а не «имени нет»: иначе сайт из списка ушёл бы по правилам адресов
+        end = data.rfind(b"\r\n")
+        if end < 0:
+            return False
+        lines = data[:end].decode("latin-1").split("\r\n")
+        if len(lines[0].split(" ")) != 3:
+            return None                 # не запрос HTTP
+        return _host_line(lines) or False
     head = data[:end].decode("latin-1")
-    lines = head.split("\r\n")
+    return _host_line(head.split("\r\n"))
+
+
+def _host_line(lines: list[str]) -> str | None:
+    """Имя из строки Host запроса HTTP (первая строка — запрос). None — не запрос или Host нет."""
     if len(lines[0].split(" ")) != 3:
         return None
     for line in lines[1:]:
@@ -156,8 +178,10 @@ def http_host(data: bytes) -> str | None | bool:
 def name_of(data: bytes, port: int) -> str | None | bool:
     if data[:1] == b"\x16":
         return tls_sni(data)
-    if port == 80 or data[:4] in (b"GET ", b"POST", b"HEAD", b"PUT ", b"OPTI", b"DELE", b"PATC", b"CONN"):
+    if port == 80 or data[:4] in HTTP_METHODS:
         return http_host(data)
+    if len(data) < 4 and any(m.startswith(data) for m in HTTP_METHODS):
+        return False                    # первый кусок «GE» — начало запроса HTTP: ждём продолжения
     return None
 
 
@@ -642,7 +666,7 @@ class Sniffer:
                             if c.shared.get(k) == old.get(k) and self.buckets.get(k) is old_buckets.get(k)}
         return [d for k, d in old.items() if k not in c.shared or c.shared[k].get("tc") != d.get("tc")]
 
-    def path(self, pol: dict, maps: tuple, name: str | None, ip: str) -> str:
+    def rule_path(self, pol: dict, maps: tuple, name: str | None, ip: str) -> str:
         """Путь соединения по пути настроек (drop): правила по доменам — по имени (они раньше), по адресам — по адресу
         сайта, иначе «По умолчанию». maps — (списки доменов, списки сетей) тех настроек, к которым относится pol."""
         doms, nets = maps
@@ -671,7 +695,7 @@ class Sniffer:
         new = (self.lists, self.nets)
         for key, (peer, name, dip, *socks) in list(self.__dict__.setdefault("live", {}).items()):
             c = clients.get(peer)
-            if not c or self.path(c["old"], old, name, dip) == self.path(c["new"], new, name, dip):
+            if not c or self.rule_path(c["old"], old, name, dip) == self.rule_path(c["new"], new, name, dip):
                 continue
             for x in socks:
                 try:
@@ -703,12 +727,19 @@ class Sniffer:
             # клиента нет в настройках (панель только что их сменила, а nftables ещё прежние): его путь не
             # известен — закрыть, а не отпустить с меткой 0 по основной таблице мимо выхода
             return {"block": True}, None, None
+        rule, lid = self.name_rule(pol, name)
+        if rule is not None:
+            return rule.get("to") or {"mark": 0}, lid, rule.get("slot")
+        return {"mark": int(pol.get("mark") or 0)}, None, None
+
+    def name_rule(self, pol: dict, name: str | None) -> tuple[dict | None, str | None]:
+        """Первое правило по доменам политики, в чьём списке есть имя, и этот список (одно для TCP и QUIC)."""
         if name:
             for rule in pol.get("rules") or []:
                 for lid in rule.get("lists") or []:
                     if match(name, self.lists.get(lid, set())):
-                        return rule.get("to") or {"mark": 0}, lid, rule.get("slot")
-        return {"mark": int(pol.get("mark") or 0)}, None, None
+                        return rule, lid
+        return None, None
 
     # ------------------------------------------------------------ QUIC (UDP 443) по имени
     def open_queue(self) -> None:
@@ -733,12 +764,14 @@ class Sniffer:
         AWG — туннель, «напрямую» — без туннеля, SOCKS5 и «блок» — отказ, браузер перейдёт на TCP);
         нет — «пропустить», дальше обычные правила политики."""
         q = self.cfg.get("quic") or {}
-        if name:
-            for rule in self.policy(client).get("rules") or []:
-                for lid in rule.get("lists") or []:
-                    if match(name, self.lists.get(lid, set())):
-                        self.stats["quic_matched"] = self.stats.get("quic_matched", 0) + 1
-                        return int(rule.get("qmark") or q.get("block") or 0)
+        pol = self.policy(client)
+        if not pol:
+            # клиента нет в настройках, как у TCP (decide_rule): путь не известен — блок, а не «пропустить»
+            return int(q.get("block") or 0)
+        rule, _ = self.name_rule(pol, name)
+        if rule is not None:
+            self.stats["quic_matched"] = self.stats.get("quic_matched", 0) + 1
+            return int(rule.get("qmark") or q.get("block") or 0)
         return int(q.get("pass") or 0)
 
     def on_queue(self) -> None:
@@ -868,7 +901,8 @@ class Sniffer:
         первых байт клиента, прочитанных ради имени сайта. lim — номер ограничения скорости правила в битах метки:
         rl_lab в nftables ставит по нему метку соединения и снимает биты до выбора маршрута."""
         if to.get("socks"):
-            out = await socks_connect(to["socks"], name, dip, dport, with_lim(0, lim))
+            # метка адреса «Подключаться с адреса» выхода (как у hev и проверки выхода), 0 — адрес системы
+            out = await socks_connect(to["socks"], name, dip, dport, with_lim(int(to["socks"].get("mark") or 0), lim))
         else:
             out = await direct_socket(dip, dport, with_lim(int(to.get("mark") or 0), lim))
         try:
@@ -1056,6 +1090,10 @@ class Sniffer:
         accepting.add_done_callback(self.accept_stopped)
         loop.add_signal_handler(signal.SIGHUP, self.on_hup)
         loop.add_signal_handler(signal.SIGTERM, loop.stop)
+        if EARLY_HUP:
+            # SIGHUP пришёл, пока разбирались списки (main): настройки могли смениться — перечитать
+            EARLY_HUP.clear()
+            self.on_hup()
         log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
         self.open_queue()
         asyncio.ensure_future(self.share_loop())
@@ -1128,7 +1166,12 @@ class Sniffer:
             except Exception as e:  # noqa: BLE001
                 log(f"reload: {e}")             # прежние настройки остаются
                 continue
-            for d in self.apply(conf):
+            try:
+                ds = self.apply(conf)
+            except Exception as e:  # noqa: BLE001 — иначе задача молча умирает, и следующий SIGHUP её не разбудит
+                log(f"apply: {e!r}")
+                continue
+            for d in ds:
                 p = self.tc_set(d, d["cap"])    # выход ушёл из деления — весь предел туннелю
                 if p is not None:
                     await loop.run_in_executor(None, self._reap, p)
@@ -1149,12 +1192,28 @@ def raise_open_files_limit() -> None:
             log(f"open files limit stays {soft}: {e}")
 
 
+# SIGHUP до serve(): действие по умолчанию — завершить процесс, а панель шлёт его при любом изменении настроек,
+# и упавшего посредника перезапускает только через минуту. Пока разбираются списки, сигнал только запоминается
+EARLY_HUP: list[bool] = []
+
+
+def serve_stopped(task: asyncio.Task) -> None:
+    """serve() упал (порт занят и т. п.): без него процесс жив, но не принимает соединений и не даёт пульса — панель
+    ждала бы минуту. Остановка видна панели сразу, и она запускает посредника заново."""
+    if task.cancelled() or task.exception() is None:
+        return
+    log(f"serve stopped: {task.exception()!r}")
+    asyncio.get_running_loop().stop()
+
+
 def main() -> None:
+    signal.signal(signal.SIGHUP, lambda *_: EARLY_HUP.append(True))
     raise_open_files_limit()
     s = Sniffer(sys.argv[1])
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     task = loop.create_task(s.serve())
+    task.add_done_callback(serve_stopped)
     try:
         loop.run_forever()
     finally:

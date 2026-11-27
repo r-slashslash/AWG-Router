@@ -174,8 +174,11 @@ def lookup(hosts, timeout: float = LOOKUP_TIMEOUT) -> dict[str, str]:
 
     def one(h):
         try:
-            res[h] = socket.getaddrinfo(h, None, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
-        except (OSError, UnicodeError, IndexError):
+            # наименьший из адресов, а не первый: порядок в ответе меняется при каждом запросе, и запись «#адрес» для
+            # dnsproxy.py менялась бы — SIGHUP, сброс кэша и состояния запасного DNS раз в 10–20 минут (П47)
+            res[h] = min((a[4][0] for a in socket.getaddrinfo(h, None, socket.AF_INET, socket.SOCK_STREAM)),
+                         key=ipaddress.ip_address)
+        except (OSError, UnicodeError, ValueError):
             pass
     ths = [threading.Thread(target=one, args=(h,), daemon=True) for h in hosts]
     for th in ths:

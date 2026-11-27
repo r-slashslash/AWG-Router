@@ -44,6 +44,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import resource
 import secrets
 import signal
 import socket
@@ -64,6 +65,7 @@ PORT = 53
 UDP_TIMEOUT = 2.0           # ждём ответа сервера по UDP, потом следующий сервер
 TCP_TIMEOUT = 5.0
 CLIENT_TCP_IDLE = 10.0      # соединение клиента по TCP без новых запросов дольше — закрываем
+CLIENT_TCP_MAX = 32         # открытых соединений по TCP с одного адреса клиента
 CACHE_MAX = 20000           # записей в кэше; старые вытесняются
 CACHE_BYTES = 16 * 1024 * 1024   # и не больше 16 МБ ответов: по TCP ответ до 64 КБ, 20 000 таких — больше гигабайта
 TTL_MAX = 3600              # дольше часа не храним, даже если TTL больше
@@ -85,6 +87,8 @@ DIRECT_RETRY = 120.0
 
 DOT_PORT, DOH_PORT = 853, 443
 ENC_TIMEOUT = 5.0           # соединение и ответ по DoT/DoH
+ENTRY_DOWN = 60.0           # с: запись своего или запасного DNS не ответила — столько спрашивается последней
+DOH_BODY_MAX = 65535        # ответ DNS не длиннее (как у HTTP/2 и HTTP/3 в dohttp.py)
 POOL_SIZE = 4               # открытых TLS-соединений на пару «путь, сервер»
 POOL_IDLE = 50.0            # дольше без запросов — соединение закрываем (серверы сами закрывают через ~60 с)
 # Имя сервиса для известных адресов: с ним проверяется сертификат и его ждёт заголовок Host у DoH
@@ -405,12 +409,16 @@ async def doh_query(conn: Conn, msg: bytes, host: str, path: str = "/dns-query")
         body = b""
         while True:
             size = int((await conn.reader.readline()).split(b";")[0].strip() or b"0", 16)
+            if size + len(body) > DOH_BODY_MAX:
+                raise OSError("DoH: answer too long")
             if size == 0:
                 await conn.reader.readline()
                 break
             body += await conn.reader.readexactly(size)
             await conn.reader.readline()
     elif "content-length" in headers:
+        if int(headers["content-length"]) > DOH_BODY_MAX:
+            raise OSError("DoH: answer too long")     # ответ DNS не больше 64 КБ; иначе читали бы сколько скажет сервер
         body = await conn.reader.readexactly(int(headers["content-length"]))
     else:
         conn.reusable = False
@@ -480,6 +488,7 @@ class Proxy:
             # и «не отвечают напрямую» было о прежних серверах, прежнем шифровании или прежнем запасном
             self.dpaths = {}
         self.names = {}                              # адреса имён сервисов DNS: пути и общие серверы могли смениться
+        self.entry_down = {}                         # записи своего DNS могли смениться
         for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
             p.close()
         self.pools.clear()
@@ -752,7 +761,15 @@ class Proxy:
         None — не ответил никто."""
         main = self.cfg.get("encrypt") or "plain"
         servfail = None
-        for server in servers or self.cfg.get("upstreams") or []:
+        order = servers or self.cfg.get("upstreams") or []
+        down = self.__dict__.setdefault("entry_down", {})      # (путь, запись) → до какого времени не отвечает
+        now = time.monotonic()
+        if servers:
+            # запись своего или запасного DNS, которая только что не ответила, — последней: иначе каждое новое имя
+            # ждало её ENC_TIMEOUT перед второй записью (h3:// у сервера без HTTP/3; П30). Спрашивается как вписана
+            order = sorted(order, key=lambda e: down.get((mark, e), 0) > now)
+        for server in order:
+            entry = server
             if servers and mark and self.is_direct(mark):
                 # «Напрямую — адрес»: адрес, который панель нашла для имени со своего адреса (адреса системы), здесь не
                 # берётся — имя ищется с этого адреса (_name_addr; проверка 1.25.0, А11)
@@ -780,12 +797,16 @@ class Proxy:
                         # не ответил по UDP — следующий сервер, а не тот же по TCP (UDP 2 с + TCP 5 с на каждый
                         # молчащий сервер держали имена клиентов до 14 с перед запасным DNS; проверка 1.25.0, А13)
                         self._fail(server, "timeout")
+                        if servers:
+                            down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
                         continue
                     if struct.unpack("!H", reply[2:4])[0] & 0x0200:
                         reply = await self._tcp(out, server, mark)   # ответ не поместился в UDP — по TCP, как у всех
             except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError,
                     ValueError, IndexError, struct.error) as e:
                 self._fail(server, e)
+                if servers:
+                    down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
                 continue
             if not reply or len(reply) < 12 or struct.unpack("!H", reply[:2])[0] != qid \
                     or reply[12:q["qend"]].lower() != query[12:q["qend"]].lower():
@@ -795,6 +816,7 @@ class Proxy:
                 servfail = reply
                 continue                                              # спросим следующий сервер
             self.last_ok = time.time()
+            down.pop((mark, entry), None)
             return reply
         return servfail
 
@@ -910,6 +932,10 @@ class Proxy:
         s = socket.socket(socket.AF_INET, kind)
         if mark:
             s.setsockopt(socket.SOL_SOCKET, SO_MARK, mark)
+        if kind == socket.SOCK_STREAM:
+            # без алгоритма Нейгла: после ответа HTTP/2 пишется маленький WINDOW_UPDATE, и следующий запрос на соединении
+            # ждал подтверждения сервера — +40–150 мс на каждое имя (П3 полной проверки 1.25.0)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.setblocking(False)
         return s
 
@@ -945,9 +971,11 @@ class Proxy:
     # ---- приём запросов
     async def handle_tcp(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         ip = (writer.get_extra_info("peername") or ("",))[0]
+        tcp = self.__dict__.setdefault("tcp_conns", {})          # тесты собирают Proxy без __init__
+        tcp[ip] = tcp.get(ip, 0) + 1
         try:
-            if not self.allowed(ip):
-                return
+            if not self.allowed(ip) or tcp[ip] > CLIENT_TCP_MAX:
+                return          # один клиент не занимает все дескрипторы: иначе SERVFAIL у всех (П43)
             while True:
                 head = await asyncio.wait_for(reader.readexactly(2), CLIENT_TCP_IDLE)
                 query = await asyncio.wait_for(reader.readexactly(struct.unpack("!H", head)[0]), CLIENT_TCP_IDLE)
@@ -956,10 +984,13 @@ class Proxy:
                     return
                 reply = await self.resolve(query, q, ip)
                 writer.write(struct.pack("!H", len(reply)) + reply)
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), CLIENT_TCP_IDLE)    # клиент не читает ответы — закрыть
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, OSError):
             pass
         finally:
+            tcp[ip] -= 1
+            if not tcp[ip]:
+                tcp.pop(ip, None)
             writer.close()
 
     def stats_loop(self) -> None:
@@ -1008,7 +1039,18 @@ class UDPServer(asyncio.DatagramProtocol):
         self.transport.sendto(reply, addr)
 
 
+def raise_open_files_limit() -> None:
+    """Мягкий предел открытых файлов, унаследованный от панели (бывает 1024), — до жёсткого, как у sniproxy.py."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < hard:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        except (OSError, ValueError):
+            pass
+
+
 async def main(conf_path: str) -> None:
+    raise_open_files_limit()
     proxy = Proxy(conf_path)
     loop = asyncio.get_running_loop()
     listen, port = proxy.cfg["listen"], int(proxy.cfg.get("port") or PORT)

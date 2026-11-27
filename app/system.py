@@ -656,7 +656,9 @@ def recover_renamed() -> str | None:
         old = cands[-1]
         name = _RENAMED.fullmatch(old).group(1)
         if name in names:
-            return None                              # контейнер с обычным именем есть (пусть и выключен)
+            # контейнер с обычным именем есть: выключенный — не трогаем, а созданный и ни разу не запущенный (обрыв SSH
+            # между созданием и запуском при обновлении или смене порта) — запускаем: порт и конфиг у него уже свои
+            return _start_created(name)
     elif mf and mf.group(1) in names and mark["old"] not in names:
         old = name = mf.group(1)                     # смену прервали до переименования
     else:
@@ -685,6 +687,24 @@ def recover_renamed() -> str | None:
                 old, name)
     if by_mark:
         _port_mark(None)
+    recovered.append(name)
+    return name
+
+
+def _start_created(name: str) -> str | None:
+    """Контейнер сервера создан, но не запущен (State.Status «created») дольше RECOVER_AFTER: запустить. → имя или None."""
+    q = urllib.parse.quote
+    try:
+        info = docker_get(f"/containers/{q(name)}/json") or {}
+        if (info.get("State") or {}).get("Status") != "created" \
+                or time.time() - _docker_time(info.get("Created")) < RECOVER_AFTER:
+            return None
+        docker_api("POST", f"/containers/{q(name)}/update", body={"RestartPolicy": {"Name": "always"}})
+        docker_api("POST", f"/containers/{q(name)}/start", timeout=40)
+    except (SysError, OSError) as e:
+        log.warning("container %s was created and not started, could not start it: %s", name, e)
+        return None
+    log.warning("container %s was created and not started by an interrupted update or port change: started", name)
     recovered.append(name)
     return name
 

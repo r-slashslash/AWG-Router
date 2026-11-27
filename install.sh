@@ -95,7 +95,7 @@ fetch_code() {
   _update=0
   for a in "$@"; do [ "$a" = "--update" ] && _update=1; done
   if [ -z "$_here" ] || [ ! -f "$_here/docker-compose.yml" ] || [ "$_update" = 1 ]; then
-    [ "$(id -u)" = 0 ] || { echo "Run as root: sudo bash install.sh" >&2; exit 1; }
+    [ "$(id -u)" = 0 ] || { echo "Run as root: sudo -i, then the same command again" >&2; exit 1; }
     for b in curl tar; do
       command -v "$b" >/dev/null || { apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq "$b" >/dev/null 2>&1; }
     done
@@ -465,7 +465,7 @@ if [ "$INFO_ONLY" = 1 ] && [ "$(id -u)" != 0 ] && [ -f "$DIR/.env" ] && [ ! -r "
   die "Run as root: sudo awg-router info"
 fi
 if [ "$INFO_ONLY" = 1 ]; then print_info; exit 0; fi
-[ "$(id -u)" = 0 ] || die "Run as root: sudo bash install.sh"
+[ "$(id -u)" = 0 ] || die "Run as root: sudo -i, then the same command again"
 if [ "$KERNEL_ONLY" = 1 ]; then install_kernel; exit $?; fi
 
 # ------------------------------------------------------------------ the AWG server on the host
@@ -562,6 +562,7 @@ leftovers() {
   local l=() p
   [ -f "$MODBLOCK" ] && l+=("the AmneziaWG kernel module is blocked by $MODBLOCK — a module installed by hand won't load until: rm -f $MODBLOCK")
   dpkg -s amneziawg-dkms >/dev/null 2>&1 && l+=("the AmneziaWG kernel module: apt remove amneziawg-dkms && rm -f $MODLOAD")
+  [ -f "${PANIC_CONF:-}" ] && l+=("reboot 10 s after a kernel panic (set by the installer): rm -f $PANIC_CONF")
   ls /etc/apt/sources.list.d/ 2>/dev/null | grep -qi amnezia && l+=("the Amnezia PPA: rm -f /etc/apt/sources.list.d/*amnezia* && apt update")
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
     p="$(envget PANEL_PORT)"
@@ -642,23 +643,37 @@ case "$(uname -m)" in
 esac
 PLUGINS=/usr/local/lib/docker/cli-plugins     # searched before the distro's /usr/lib and /usr/libexec
 
-gh_latest() { # $1 owner/repo, $2 tag to use if GitHub does not answer → the latest release tag
-  local u t
-  u=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --max-time 20 "https://github.com/$1/releases/latest" 2>/dev/null) || u=""
-  t="${u##*/}"
-  [[ "$t" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || t="$2"
-  echo "$t"
+# Docker Compose and buildx are pinned like the code in the images (by digest or commit): a version and the sha256 of
+# its file for every CPU. A replaced release on GitHub can't put another program here, run as root on every update;
+# newer versions are found by the weekly tools/upstream.py (it reads these two lines).
+COMPOSE_VERSION=v5.6.1
+BUILDX_VERSION=v0.38.1
+plugin_sum() { # $1 asset → its pinned sha256
+  case "$1" in
+    docker-compose-linux-x86_64)  echo 47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0 ;;
+    docker-compose-linux-aarch64) echo 42cfa75f51ad0ccf290bad37899e0038a8c10a0069e85233ecc1d53e3ff1347d ;;
+    docker-compose-linux-armv7)   echo e2ed79b41693f5e6473eb9c1005bd4cbb83844d8220ac72fe5c6a6cc5e0bfee8 ;;
+    docker-compose-linux-armv6)   echo bf1573bca672a535409fca7d6a53d836554fd90b76c27e0c3830a8a431517ecd ;;
+    docker-compose-linux-ppc64le) echo 2af4a1b5890fcf4830029d85c01d94ca7b8add96edc5b32bf8d598438be75840 ;;
+    docker-compose-linux-riscv64) echo e9af542c3a5ee961130c316b9a43b08e359503ab0efebf50980e57d92bd883fc ;;
+    docker-compose-linux-s390x)   echo b91bf1ab1a15d7e7863002a796e7a41937e5fb77b9e4826e7a38d7216958d850 ;;
+    buildx-v0.38.1.linux-amd64)   echo e25d5cd675092bb5d1d03632fdc46cdf3fede7b514dc5f023a105e00d3ce5ad4 ;;
+    buildx-v0.38.1.linux-arm64)   echo 3b83b3731916ba433feccaaa689fe5bcdc81c641d92c8e6c2ea865dfa141c97a ;;
+    buildx-v0.38.1.linux-arm-v7)  echo 9b7cbbf641caedc5fed87d1132aa4be45c74cfd6c502af48a9286e64b5f9e704 ;;
+    buildx-v0.38.1.linux-arm-v6)  echo a1d906b59689858d11e951701b2ce8fc76215d22df416f00e65da5b86be908b8 ;;
+    buildx-v0.38.1.linux-ppc64le) echo 7f1fdd2c9b81513b2feab5c8222842bae80cd4b919facadbc2bf485d3b0708fd ;;
+    buildx-v0.38.1.linux-riscv64) echo a5fc405944c4aaa4bb69d5f40c830de4d52dd84230841f46939603c84edb3ff3 ;;
+    buildx-v0.38.1.linux-s390x)   echo 154b7faa9ecc6fceac2f486928815124bd794f25b3aceb7c15c51687be274204 ;;
+  esac
 }
 
-gh_plugin() { # $1 owner/repo, $2 tag, $3 asset, $4 plugin file — download, check sha256, install
-  local tmp sum base="https://github.com/$1/releases/download/$2"
+gh_plugin() { # $1 owner/repo, $2 tag, $3 asset, $4 plugin file, $5 pinned sha256 — download, check, install
+  local tmp base="https://github.com/$1/releases/download/$2"
+  [[ "${5:-}" =~ ^[0-9a-f]{64}$ ]] || return 1          # no pinned sum for this file: nothing is installed
   tmp=$(mktemp -d) || return 1
   if curl -fsSL --retry 3 --max-time 600 -o "$tmp/bin" "$base/$3" 2>/dev/null \
-     && curl -fsSL --retry 3 --max-time 60 -o "$tmp/sums" "$base/checksums.txt" 2>/dev/null; then
-    sum=$(awk -v f="$3" '{n=$2; sub(/^\*/, "", n)} n == f {print $1}' "$tmp/sums")
-    if [ -n "$sum" ] && echo "$sum  $tmp/bin" | sha256sum -c --status 2>/dev/null; then
-      install -D -m 0755 "$tmp/bin" "$PLUGINS/$4"; rm -rf "$tmp"; return 0
-    fi
+     && echo "$5  $tmp/bin" | sha256sum -c --status 2>/dev/null; then
+    install -D -m 0755 "$tmp/bin" "$PLUGINS/$4"; rm -rf "$tmp"; return 0
   fi
   rm -rf "$tmp"; return 1
 }
@@ -961,7 +976,8 @@ cur_domain() {
 valid_domain() { [[ "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]; }
 PANEL_DOMAIN="$(cur_domain)"; SET_DOMAIN=0
 if [ "$ACCESS" = public ] && [ -n "${AWGR_DOMAIN+x}" ]; then
-  PANEL_DOMAIN="$(echo "$AWGR_DOMAIN" | tr 'A-Z' 'a-z')"; SET_DOMAIN=1
+  PANEL_DOMAIN="$(echo "$AWGR_DOMAIN" | tr 'A-Z' 'a-z')"; PANEL_DOMAIN="${PANEL_DOMAIN%.}"; SET_DOMAIN=1
+  [ -z "$PANEL_DOMAIN" ] || valid_domain "$PANEL_DOMAIN" || die "AWGR_DOMAIN=$AWGR_DOMAIN is not a domain name (for example panel.example.com)"
 elif [ "$ACCESS" = public ] && [ "$ASK_DOMAIN" = 1 ]; then
   printf '\n%sPanel domain%s — only if you have one and it points to this server (an A record).\n' "$B" "$N"
   while true; do
@@ -1040,6 +1056,11 @@ if [ -n "$PANEL_HOST_SET" ] && [ "$PANEL_HOST_SET" != "$PUBLIC_HOST" ] && [ -z "
 fi
 TLS_HOST="${PANEL_DOMAIN:-$PUBLIC_HOST}"
 
+# Nothing is asked from here on (the web server question reads /dev/tty and has a default). A dropped SSH connection
+# must not kill the installer halfway through replacing the AmneziaWG container or the panel: the VPN would stay down
+# for everyone until the next update. Output to a closed terminal is just lost.
+trap '' HUP
+
 # ------------------------------------------------------------------ firewall
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
   [ "$ACCESS" = public ] && { ufw allow "$PANEL_PORT/tcp" >/dev/null; ufw allow 80/tcp >/dev/null; }
@@ -1072,6 +1093,7 @@ SSH_USER=$SSH_USER
 SSH_PORT=$SSH_PORT
 EOF
 umask 022
+chmod 600 "$ENV_FILE"; [ -f "$ENV_FILE.bak" ] && chmod 600 "$ENV_FILE.bak"   # the panel password: an old 0644 too
 # Everything else the previous .env had (EXIT_ENGINE, AWG_CONTAINER, SNI_PROXY_PORT, ACME_HTTP_PORT …) is
 # carried over: this file is rewritten on every update, and settings added by hand must not vanish with it.
 # tac: for a name written twice the last line wins, as it does for Docker. Only from this run's copy: a .env.bak
@@ -1100,26 +1122,21 @@ if ! command -v docker >/dev/null; then
 fi
 ensure_daemon
 
-# Compose and buildx are kept at the latest GitHub release on every install and update
-# (sha256-checked, into $PLUGINS). Distro packages are only a fallback when GitHub is unreachable:
+# Compose and buildx are brought up to the pinned versions (COMPOSE_VERSION, BUILDX_VERSION) on every install and
+# update, into $PLUGINS. Distro packages are only a fallback when GitHub is unreachable:
 # Debian 11/12 have only Compose v1, Debian 13 ships buildx 0.13 while Compose 2.40.2+ needs 0.17+.
-plugin_latest() { # $1 label, $2 owner/repo, $3 tag if GitHub is silent, $4 asset (@TAG@ = tag), $5 plugin file, $6 installed version, $7 minimum
-  local cur="$6" tag
-  tag="$(gh_latest "$2" "")"
-  if [ -z "$tag" ]; then
-    { [ -n "$cur" ] && ver_ge "$cur" "$7"; } && return 0    # cannot check, the installed one is enough
-    tag="$3"
-  fi
-  { [ -n "$cur" ] && ver_ge "$cur" "${tag#v}"; } && return 0
-  echo "  Installing $1 ${tag#v}${cur:+ (installed: $cur)}…"
-  gh_plugin "$2" "$tag" "${4//@TAG@/$tag}" "$5" && return 0
-  warn "Could not download $1 ${tag#v} from GitHub"
+plugin_pinned() { # $1 label, $2 owner/repo, $3 tag, $4 asset, $5 plugin file, $6 installed version
+  local cur="$6"
+  { [ -n "$cur" ] && ver_ge "$cur" "${3#v}"; } && return 0
+  echo "  Installing $1 ${3#v}${cur:+ (installed: $cur)}…"
+  gh_plugin "$2" "$3" "$4" "$5" "$(plugin_sum "$4")" && return 0
+  warn "Could not download $1 ${3#v} from GitHub"
   return 1
 }
 dc_ver() { docker compose version --short 2>/dev/null | sed 's/^v//; s/[+-].*//'; }
 
-[ -n "$DC_ARCH" ] && plugin_latest "Docker Compose" docker/compose v5.6.1 \
-  "docker-compose-linux-$DC_ARCH" docker-compose "$(dc_ver)" 2.0.0
+[ -n "$DC_ARCH" ] && plugin_pinned "Docker Compose" docker/compose "$COMPOSE_VERSION" \
+  "docker-compose-linux-$DC_ARCH" docker-compose "$(dc_ver)"
 if ! docker compose version >/dev/null 2>&1; then
   # Ubuntu: docker-compose-v2; Docker's own repo: docker-compose-plugin; Debian 13: docker-compose 2.x
   for p in docker-compose-v2 docker-compose-plugin; do
@@ -1133,8 +1150,8 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 BX_MIN=0.17.0
-[ -n "$BX_ARCH" ] && plugin_latest "Docker buildx" docker/buildx v0.38.1 \
-  "buildx-@TAG@.linux-$BX_ARCH" docker-buildx "$(buildx_ver)" "$BX_MIN"
+[ -n "$BX_ARCH" ] && plugin_pinned "Docker buildx" docker/buildx "$BUILDX_VERSION" \
+  "buildx-$BUILDX_VERSION.linux-$BX_ARCH" docker-buildx "$(buildx_ver)"
 [ -n "$(buildx_ver)" ] || apt_install docker-buildx || apt_install docker-buildx-plugin || true
 bx="$(buildx_ver)"
 if [ -z "$bx" ]; then warn "Docker buildx is not available — the panel is built with the classic builder"
@@ -1147,9 +1164,19 @@ ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), Compose
 # Images are built by "docker build" rather than "docker compose build": it does not depend on
 # the Compose/buildx version pairing. If BuildKit fails (very old engine), the classic builder is tried.
 build_image() { # $1 tag, $2 context dir, $3 log (the classic attempt goes to $3.classic)
-  docker build -t "$1" "$2" >"$3" 2>&1 && return 0
-  [ -n "$(buildx_ver)" ] || return 1          # it already was the classic builder
-  DOCKER_BUILDKIT=0 docker build -t "$1" "$2" >"$3.classic" 2>&1
+  local free rc need=3072     # MB: a build here takes 1.5–2 GB (base images, Go, the build cache)
+  free="$(df -Pm "$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)" 2>/dev/null \
+          | awk 'NR == 2 {print $4}')"
+  if [[ "$free" =~ ^[0-9]+$ ]] && [ "$free" -lt "$need" ]; then
+    echo "Not enough disk space to build here: $free MB free, about $need MB needed. Free some space (docker system df shows what Docker keeps) and run it again" >"$3"
+    return 1
+  fi
+  docker build -t "$1" "$2" >"$3" 2>&1; rc=$?
+  if [ "$rc" != 0 ] && [ -n "$(buildx_ver)" ]; then   # not when it already was the classic builder
+    DOCKER_BUILDKIT=0 docker build -t "$1" "$2" >"$3.classic" 2>&1; rc=$?
+  fi
+  docker builder prune -f >/dev/null 2>&1             # the build cache would stay on the disk for good
+  return "$rc"
 }
 
 # A release archive carries IMAGES: the ready images the release workflow built from the same commit,
@@ -1172,12 +1199,24 @@ no_ready_image() { # $1 what (the panel / AmneziaWG)
   warn "This download has no ready image of $1 (no IMAGES file: a branch, AWGR_SRC_URL or an old release) — building it here; this needs dl-cdn.alpinelinux.org and github.com"
 }
 
+docker_arch() { # this server's CPU in Docker's words (amd64, arm64 …)
+  case "$(docker info -f '{{.Architecture}}' 2>/dev/null || uname -m)" in
+    x86_64|amd64) echo amd64 ;; aarch64|arm64) echo arm64 ;; armv7l|armhf|arm) echo arm ;; *) uname -m ;;
+  esac
+}
+
 pull_image() { # $1 reference, $2 local tag, $3 log
   [ -n "$1" ] || return 1
-  local rc
+  local rc want got
   timeout "${AWGR_PULL_TIMEOUT:-600}" docker pull "$1" >"$3" 2>&1; rc=$?
   [ "$rc" = 124 ] && echo "no answer in ${AWGR_PULL_TIMEOUT:-600} s" >>"$3"
-  [ "$rc" = 0 ] && docker tag "$1" "$2" >>"$3" 2>&1
+  [ "$rc" = 0 ] || return 1
+  # an image of one CPU is pulled by digest on another too, and the container then restarts in a loop: built here instead
+  want="$(docker_arch)"; got="$(docker image inspect -f '{{.Architecture}}' "$1" 2>/dev/null)"
+  if [ -n "$got" ] && [ "$got" != "$want" ]; then
+    echo "the ready image is for $got, this server is $want" >>"$3"; return 1
+  fi
+  docker tag "$1" "$2" >>"$3" 2>&1
 }
 
 # Last line of a log, for a one-line reason
@@ -1223,8 +1262,9 @@ fi
 
 # ------------------------------------------------------------------ AmneziaWG in a container
 run_server_container() { # our own AmneziaWG container from the image $SRV_NAME, port $AWG_PORT
+  # without --privileged: amneziawg-go listens to the internet, and a privileged container is one step from root on the host
   docker run -d --name "$SRV_NAME" --restart always --log-driver none \
-      --privileged --cap-add=NET_ADMIN --cap-add=SYS_MODULE \
+      --cap-add=NET_ADMIN --cap-add=SYS_MODULE --device /dev/net/tun \
       -p "$AWG_PORT:$AWG_PORT/udp" -v /lib/modules:/lib/modules \
       -v "$SRV_DATA:/opt/amnezia/awg" \
       --sysctl net.ipv4.conf.all.src_valid_mark=1 \

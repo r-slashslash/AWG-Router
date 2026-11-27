@@ -454,7 +454,7 @@ class RulesetAddrTest(unittest.TestCase):
         self.assertIn("chain o_a1 {\n\t\tmeta mark set 0x2101 accept", txt)
         self.assertIn("type nat hook postrouting priority srcnat - 1", txt)
         self.assertIn(f'meta mark 0x2101 oifname "eth0" snat to {A}', txt)
-        self.assertIn(f"meta mark 0x2101 ip saddr != {A} drop", txt)                   # после подмены — только с него
+        self.assertIn(f'meta mark 0x2101 oifname != "lo" ip saddr != {A} drop', txt)                   # после подмены — только с него
         self.assertIn('meta mark 0x2101 oifname != "eth0" reject', txt)               # пересылка — только этим путём
         self.assertIn("meta mark 0x2101-0x2110 meta mark != { 0x2101 } drop", txt)     # номер без пути — никуда
 
@@ -700,7 +700,12 @@ class SniDropTest(unittest.TestCase):
 
             def shutdown(self, how):
                 self.shut = True
-        s = sniproxy.Sniffer.__new__(sniproxy.Sniffer)
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d)
+        p = os.path.join(d, "sni.json")
+        with open(p, "w") as f:
+            json.dump({"listen": "127.0.0.1"}, f)
+        s = sniproxy.Sniffer(p)                 # настоящий: self.path — путь к файлу (П1 полной проверки)
         socks = {k: (Sock(), Sock()) for k in ("ru", "other", "site")}
         s.live = {1: ("10.8.1.2", None, "77.88.55.242", *socks["ru"]),
                   2: ("10.8.1.2", None, "8.8.8.8", *socks["other"]),

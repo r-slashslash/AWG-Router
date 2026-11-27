@@ -602,7 +602,7 @@ class NftQuicTest(unittest.TestCase):
         self.assertIn("ip saddr != @q_skip ip daddr @dom4 queue", t)
         self.assertIn("elements = { 10.8.1.5 }", t)                    # у клиента своя политика без доменов
         self.assertIn(f"ip daddr @dom4 udp dport 443 meta mark != {_config.QUIC_PASS_MARK:#x} goto o_block", t)
-        self.assertIn("ip daddr @dom4 tcp dport { 80, 443 } meta mark set", t)
+        self.assertIn("ip daddr @dom4 tcp dport { 80, 443 } ct state new meta mark set", t)
         self.assertIn(f"ct mark set meta mark | {_config.QUIC_CT_BIT:#x} accept", t)
         self.assertLess(t.index("ip daddr @local4 return\n\t\tudp dport 443 meta mark"), t.index("ip saddr vmap @clients"))
 

@@ -24,6 +24,8 @@ LOCAL_NETS = [
 # Сеть link-local: в облаках там служебный адрес 169.254.169.254 (данные сервера, у AWS — и ключи доступа к
 # облаку). Клиентам VPN он не нужен, а маршрутизаторы такие адреса и так не пересылают (RFC 3927)
 LINK_LOCAL = "169.254.0.0/16"
+# служебный адрес Alibaba Cloud (данные сервера и ключи роли RAM): он в 100.64.0.0/10, а не в link-local
+CLOUD_META = "100.100.100.200"
 
 ACCT_TABLE = "awgr_acct"
 ACCT_VER = 1
@@ -278,7 +280,11 @@ def _policy_chain(name: str, policy: dict, available: set[str], sniff: bool = Fa
         pre = f"ip daddr @{DOM_SET} " if dom else ""
         skip = f"meta mark != {config.QUIC_PASS_MARK:#x} " if quic else ""
         lines.append(f"\t\t{pre}udp dport 443 {skip}goto {oc('block')}")
-        lines.append(f"\t\t{pre}tcp dport {{ 80, 443 }} meta mark set {config.SNIFF_MARK:#x} accept")
+        # только новые соединения: открытое раньше (до перенаправления или до того, как адрес попал в dom4) с этой меткой
+        # ушло бы по основной таблице мимо выхода — перенаправить его уже нельзя, оно идёт по правилам ниже
+        lines.append(f"\t\t{pre}tcp dport {{ 80, 443 }} ct state new meta mark set {config.SNIFF_MARK:#x} accept")
+        # пакеты уже перенаправленных соединений (их ведёт conntrack) — посреднику, мимо правил по адресам
+        lines.append(f"\t\t{pre}tcp dport {{ 80, 443 }} ct status dnat accept")
     for i, (list_ids, out) in enumerate(policy["rules"]):
         lab = f"ct label set {int(slots[i])} " if slots is not None else ""
         if i < len(lims) and lims[i] is not None:
@@ -363,9 +369,10 @@ def _addr_guard(addrs: dict[int, dict], verdict: str, post: bool = False) -> lis
     out = []
     for k, a in sorted(addrs.items()):
         m = addr_mark(k)
-        out.append(f'\t\tmeta mark {m:#x} oifname != "{a["dev"]}" {verdict}')
+        lo = 'oifname != "lo" ' if post else ""     # соединение посредника к адресу самого сервера — через lo
+        out.append(f'\t\tmeta mark {m:#x} {lo}oifname != "{a["dev"]}" {verdict}')
         if post and a.get("nat") == "snat":
-            out.append(f"\t\tmeta mark {m:#x} ip saddr != {a['ip']} {verdict}")
+            out.append(f"\t\tmeta mark {m:#x} {lo}ip saddr != {a['ip']} {verdict}")
     known = ", ".join(f"{addr_mark(k):#x}" for k in sorted(addrs))
     out.append(f"\t\tmeta mark {ADDR_LO:#x}-{ADDR_HI:#x} " + (f"meta mark != {{ {known} }} " if known else "") + verdict)
     return out
@@ -492,7 +499,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                  f"\t\tudp dport 443 meta mark != 0x0 meta mark != {config.QUIC_PASS_MARK:#x} "
                  f"ct mark set meta mark | {config.QUIC_CT_BIT:#x} accept\n") if quic else ""
     out.append(f"""\tchain c_prerouting {{
-\t\ttype filter hook prerouting priority mangle; policy accept;
+\t\ttype filter hook prerouting priority mangle + 10; policy accept;
 \t\tiifname != "{wg_iface}" return
 \t\tip daddr @local4 return
 {quic_line}\t\tip saddr vmap @clients
@@ -533,6 +540,9 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
         "\t\ttype filter hook forward priority filter; policy accept;",
         # служебный адрес облака (169.254.169.254): link-local входит в local4 и шёл бы с самого сервера при любом выходе
         f'\t\tiifname "{wg_iface}" ip daddr {LINK_LOCAL} reject with icmp type admin-prohibited',
+        f'\t\tiifname "{wg_iface}" ip daddr {CLOUD_META} reject with icmp type admin-prohibited',
+        # пакет с меткой перенаправления в посредника пересылается — значит, перенаправлен не был (П2): никуда
+        f'\t\tiifname "{wg_iface}" meta mark {config.SNIFF_MARK:#x} reject with icmp type admin-prohibited',
         f"\t\tmeta mark {config.MARK_BLOCK:#x} reject with icmp type admin-prohibited",
         # биты номера правила из вердикта QUIC снимает q_lab; дошли сюда — метка выхода не та, что у ip rule
         f'\t\tiifname "{wg_iface}" meta mark & {bits:#x} != 0x0 reject with icmp type admin-prohibited',
@@ -574,7 +584,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                       | {config.QUIC_PASS_MARK, config.QUIC_DIRECT_MARK, config.MARK_BLOCK})
         restore = ", ".join(f"{m | config.QUIC_CT_BIT:#x}" for m in live)
         out.append(f"""\tchain c_quic {{
-\t\ttype filter hook prerouting priority mangle - 5; policy accept;
+\t\ttype filter hook prerouting priority mangle + 5; policy accept;
 \t\tiifname != "{wg_iface}" return
 \t\tudp dport != 443 return
 \t\tip daddr @local4 return
@@ -649,7 +659,7 @@ def generate(wg_iface: str, lists: dict[str, list[str]], upstreams: list[dict],
                + "\n".join(_addr_guard(addrs, "drop", post=True)) + "\n\t}")
 
     post = ["\tchain c_postrouting {",
-            "\t\ttype nat hook postrouting priority srcnat; policy accept;"]
+            "\t\ttype nat hook postrouting priority srcnat - 1; policy accept;"]
     for u in sorted(upstreams, key=lambda x: x["num"]):
         if not u.get("snat"):          # SOCKS5: соединения завершает hev-socks5-tunnel, SNAT не нужен
             continue
