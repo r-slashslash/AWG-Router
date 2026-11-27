@@ -77,6 +77,24 @@ it grows, so every user-visible change gets a new version.
   minutes); a pooled DoH/DoT connection cancelled by the query deadline is closed instead of dropped; checks over
   HTTP/3 have 16 threads of their own (a frozen entry keeps its thread until its deadline, and with 4 the next checks
   queued and failed).
+- **Fixes from the independent check of P31.** A DoH/DoT connection cancelled right after its TLS handshake (the query
+  deadline, or the path check cancelling its other queries) no longer leaves its descriptor number "used by transport"
+  for up to 30 s: `open_conn` closed the socket the transport still owned, Linux gave that number to the next sockets,
+  and under a burst of hundreds of names new connections failed, path checks failed in a row and Direct paths went to
+  the fallback for two minutes (1000 clients on 17 paths, 300 dead names at once: 6–17 of 17 paths in 5 of 6 runs, up
+  to half the names SERVFAIL; now none). The same query already on its way waits for its answer instead of going to the
+  servers again (`Proxy.asking`): a dead name repeated every second or two held a pool connection per repeat until its
+  deadline, and every Direct name waited 3–9 s; the key keeps paths, rules without a path and the RD, CD, EDNS and DO
+  flags apart, each client gets its own ID and letter case, and followers take no `MAX_INFLIGHT` place. With **Domain
+  rules only for addresses from this DNS's answers**, an address that isn't in the set yet goes there before the answer
+  leaves (one `nft` command per batch in a thread, at most `SET_WAIT` = 1 s while the panel rebuilds its table, counted
+  as `set_late`): clients connect at once, and the first connection to a new address went by the address rules — past
+  the exit. A name that waited for the shared servers while the fallback was changed or switched off goes to the current
+  one. "The fallback DNS doesn't answer either" shows only together with "The DNS servers don't answer directly" (once
+  the shared servers answered again nobody asked the fallback, and the line stayed up to 15 minutes). A fallback written
+  by name (`tls://…`) on Direct — address with unencrypted shared servers that don't answer uses the address the panel
+  found when that path has nothing to ask (`name_hint`), instead of being marked down for two minutes. README: your own
+  AdGuard Home as a shared server answers one address 20 queries a second by default.
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't
