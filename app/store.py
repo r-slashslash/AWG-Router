@@ -282,8 +282,10 @@ class Store:
             # state.json остаётся повреждённым, и следующий запуск снова возьмёт state.json.bak
             try:
                 shutil.copyfile(self.path, self.path + ".broken")
+                os.chmod(self.path + ".broken", 0o600)      # закрытые ключи клиентов, токен бота: как state.json
                 tmp = self.path + ".restore"
                 shutil.copyfile(self.path + ".bak", tmp)
+                os.chmod(tmp, 0o600)
                 with open(tmp, "rb") as f:
                     os.fsync(f.fileno())
                 os.replace(tmp, self.path)

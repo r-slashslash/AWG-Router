@@ -74,11 +74,21 @@ def label_for(dev: str) -> str | None:
     return lab if len(lab) <= 15 else None
 
 
+_REC_LOCK = threading.Lock()
+
+
 class AddrsMixin:
     """Адреса сервера в системе: добавление, проверка, удаление (часть Engine)."""
 
     # ------------------------------------------------------------------ запись о своих адресах
     def _addr_rec(self) -> dict:
+        r = getattr(self, "_addr_rec_cache", None)
+        if r is not None:
+            return r
+        with _REC_LOCK:             # проход, поток адресов и запросы браузера: один словарь на всех (П52)
+            return self._addr_rec_load()
+
+    def _addr_rec_load(self) -> dict:
         r = getattr(self, "_addr_rec_cache", None)
         if r is None:
             try:
@@ -96,6 +106,11 @@ class AddrsMixin:
 
     def _addr_save(self) -> None:
         r = self._addr_rec()
+        with _REC_LOCK:             # общий временный файл: при двух записях сразу одна уносила файл другой
+            self._addr_write(r)
+
+    @staticmethod
+    def _addr_write(r: dict) -> None:
         try:
             os.makedirs(config.DATA_DIR, exist_ok=True)
             tmp = rec_path() + ".tmp"
@@ -279,6 +294,10 @@ class AddrsMixin:
                 # прежней проверки показываем, пока идёт новая; событие «не работает» второй раз не пишем (retry)
                 if time.time() - float((rt.get(ip) or {}).get("at") or 0) < ADDR_BAD_RETRY:
                     continue
+                if getattr((rt.get(ip) or {}).get("error"), "key", None) == "addr.docker_gw":
+                    # сеть адреса Docker сделал маршрутом по умолчанию контейнера: сама больше не подключается — каждый
+                    # повтор на доли секунды уводил весь «Напрямую» на этот адрес. Снова — когда «Сервер» сохранят
+                    continue
                 rt[ip] = {**(rt.get(ip) or {}), "state": "checking", "retry": True, "fails": 0}
             want.append(ip)
         for ip in want:
@@ -288,8 +307,12 @@ class AddrsMixin:
                     changed = True
                 continue
             dev = wan.get("dev")
+            # адрес, который уже работал: сеть системы перезапускается (маршрута по умолчанию на миг нет, добавить не
+            # вышло) — попробовать на следующем круге, а не считать «не заработал» на 15 минут (П29)
+            ever = ip in r["ever"]
             if not dev:
-                rt[ip] = {**(rt.get(ip) or {}), "state": "bad", "error": Msg("addr.no_wan"), "at": time.time()}
+                if not ever:
+                    rt[ip] = {**(rt.get(ip) or {}), "state": "bad", "error": Msg("addr.no_wan"), "at": time.time()}
                 continue
             was = ip in r["ours"]
             if self._addr_add(ip, dev):
@@ -298,7 +321,7 @@ class AddrsMixin:
                 host[ip] = {"dev": dev, "label": label_for(dev) or dev}
                 if was and (rt.get(ip) or {}).get("state") in ("ok", "failed"):
                     self.event("info", Msg("ev.addr_readded", addr=ip))
-            else:
+            elif not ever:
                 rt[ip] = {**(rt.get(ip) or {}), "state": "bad", "error": Msg("addr.add_failed"), "at": time.time()}
         keep = set(want) | held | {ip for ip in out_ips if (rt.get(ip) or {}).get("state") != "bad"}
         for ip, dev in list(r["ours"].items()):
@@ -623,6 +646,13 @@ class AddrsMixin:
                     info = system.docker_get(f"/containers/{t.name}/json") or {}
                     attached = ((info.get("NetworkSettings") or {}).get("Networks") or {})
                 ep = attached.get(name) or {}
+                if ep.get("Gateway") and f"/{ep['Gateway']}" in self._ct_default(t).split(",")[0]:
+                    # маршрут по умолчанию контейнера уже в сети адреса (смена порта без GwPriority, старый Docker после
+                    # перезапуска): весь «Напрямую» шёл бы с этого адреса — отключить сеть (П42)
+                    self._net_drop(t, name, True)
+                    self.addr_rt()[ip] = {**(self.addr_rt().get(ip) or {}), "state": "bad",
+                                          "error": Msg("addr.docker_gw"), "at": time.time()}
+                    continue
                 dev = self._ct_iface(t, ep.get("IPAddress"))
                 if dev and ep.get("Gateway"):
                     out[k] = {"ip": ip, "dev": dev, "gw": ep["Gateway"]}

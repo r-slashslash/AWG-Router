@@ -549,7 +549,9 @@ def _post(token: str, method: str, data: bytes, ctype: str, timeout: float, via:
 
 def _post_once(token: str, method: str, data: bytes, ctype: str, timeout: float, via: str) -> dict:
     url = f"{API}/bot{token}/{method}"
-    route = router(via) if router and via and via != "direct" else None
+    # и «Напрямую»: когда основной исходящий адрес — дополнительный, бот идёт с него, как подписано в выборе (П53); с
+    # адреса системы router сам отвечает None (напрямую из панели)
+    route = router(via) if router and via else None
     try:
         if route is None:
             code, raw = _post_direct(url, data, ctype, timeout)

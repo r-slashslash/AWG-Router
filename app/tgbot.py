@@ -543,6 +543,13 @@ TEXTS = {
 }
 
 
+def _button_refused(e: Exception) -> bool:
+    """Telegram не принял кнопку со ссылкой («Панель»), а не сохранённую картинку: отказ в file_id тоже говорит «URL»
+    («wrong file identifier/HTTP URL specified») — тогда картинку надо загрузить заново (П54)."""
+    s = str(e).lower()
+    return "url" in s and "file identifier" not in s
+
+
 def tr(lang: str, key: str, html_safe: bool = True, **params) -> str:
     """Текст бота. Параметры экранируются для parse_mode=HTML (html_safe=False — для всплывающих
     подсказок, там разметки нет)."""
@@ -722,7 +729,9 @@ class Bot:
 
     def _save(self) -> None:
         try:
-            with open(STATE + ".tmp", "w") as f:
+            # 0600: в файле ключи личных ссылок клиентов (по ним открывается конфиг)
+            fd = os.open(STATE + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
                 json.dump(self._st, f)
             os.replace(STATE + ".tmp", STATE)
         except OSError as e:
@@ -1060,6 +1069,13 @@ class Bot:
             self._announce_update(c)
         if c.get("clients"):
             self._learn_name(c)
+        bot = c["token"].split(":", 1)[0]
+        if self._st.get("offset_bot") != bot:
+            # другой бот (сменили токен): номера событий у него свои — со старой отметкой Telegram молча выбросил бы его
+            # команды и приглашения, а панель писала бы «работает» (П28). Файл до 1.25.0 без номера — тот же бот
+            if self._st.get("offset_bot") is not None:
+                self._st["offset"] = 0
+            self._st["offset_bot"] = bot
         ups = notify._call(c["token"], "getUpdates",
                            {"offset": int(self._st.get("offset") or 0), "timeout": timeout,
                             "allowed_updates": ["message", "callback_query"]},
@@ -1190,10 +1206,12 @@ class Bot:
         """Управление — в одном сообщении: новое становится меню, прежнее убираем."""
         if not (isinstance(r, dict) and r.get("message_id")):
             return
-        for mid in self._panel_msgs:
-            self._delete(c, mid)
+        if self._st.get("panel_chat") in (None, str(c["chat_id"])):
+            for mid in self._panel_msgs:
+                self._delete(c, mid)        # номера — из этого же чата: после смены Chat ID удалилось бы чужое (П54)
         self._panel_msgs = [r["message_id"]]
         self._st["panel"] = self._panel_msgs
+        self._st["panel_chat"] = str(c["chat_id"])
         if photo:
             self._st["photo"] = r["message_id"]
         else:
@@ -1216,7 +1234,7 @@ class Bot:
                 self._set_panel(c, r, photo=True)
                 return r
             except notify.NotifyError as e:
-                if "url" in str(e).lower():
+                if _button_refused(e):
                     raise                   # кнопку «Панель» не приняли — решает show_menu
                 log.info("telegram: logo file_id refused (%s), uploading again", e)
         with open(LOGO, "rb") as f:
@@ -1295,7 +1313,7 @@ class Bot:
             except notify.NotifyError as e:
                 if "not modified" in str(e):
                     return
-                if "url" in str(e).lower():
+                if _button_refused(e):
                     raise                   # кнопку «Панель» не приняли — решает show_menu
                 log.info("telegram: picture not replaced in place (%s), sending anew", e)
         mp = self._st.get("menu_pic") or {}
@@ -1307,7 +1325,7 @@ class Bot:
                 self._set_panel(c, r, photo=True)
                 return
             except notify.NotifyError as e:
-                if "url" in str(e).lower():
+                if _button_refused(e):
                     raise
                 log.info("telegram: menu picture file_id refused (%s), uploading again", e)
         r = notify.send_photo(c["token"], c["chat_id"], png, caption, c["via"], html=True, markup=markup,
@@ -1686,12 +1704,13 @@ class Bot:
         if out == "direct" or out == "direct@system":
             return tr(L, "o_direct")
         if isinstance(out, str) and out.startswith("direct@"):      # «Напрямую — адрес» (1.25.0)
-            return tr(L, "o_direct_at", addr=out[7:])
+            return tr(L, "o_direct_at", False, addr=out[7:])
         if out == "block":
             return tr(L, "o_block")
         for u in st.get("upstreams", []):
             if out == "up:" + u["id"] or out == u.get("num"):
-                return tr(L, "o_exit", name=u["name"])
+                # без экранирования: подпись идёт параметром в tr, который экранирует сам (иначе «&amp;»; П54)
+                return tr(L, "o_exit", False, name=u["name"])
         return str(out)
 
     def show_server(self, c: dict, msg: dict | None) -> None:

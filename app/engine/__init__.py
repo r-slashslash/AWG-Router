@@ -200,7 +200,7 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 tries += 1
                 ip = None
                 try:
-                    r = self.probe("direct")
+                    r = self.probe("direct@system")     # адрес системы, даже если основной исходящий — другой (П51)
                     ip = r.get("ip") if r.get("ok") else None
                     cc = r.get("cc") if r.get("ok") else None
                     if isinstance(cc, str) and len(cc) == 2 and cc.isalpha() and cc.upper() != getattr(self, "public_cc", None):
@@ -213,11 +213,14 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 wait = HOST_FAST_WAIT if tries < HOST_FAST_TRIES else HOST_SLOW_WAIT
                 if ip:
                     self.public_v4, self.public_v4_state = ip, "ok"
-                    if not self.srv.public_host(self.store.snapshot()):
-                        def _first(st, ip=ip):
-                            st["settings"].setdefault("public_host", ip)
-                            Store.split_hosts(st)       # и входящий адрес клиентов — явно (1.25.0)
-                        self.store.mutate(_first)
+                    try:
+                        if not self.srv.public_host(self.store.snapshot()):
+                            def _first(st, ip=ip):
+                                st["settings"].setdefault("public_host", ip)
+                                Store.split_hosts(st)       # и входящий адрес клиентов — явно (1.25.0)
+                            self.store.mutate(_first)
+                    except Exception:  # noqa: BLE001 — нет места на диске и т. п.: поток не должен умереть (П52)
+                        log.exception("public address")
                     # страна не узналась (ответил только ifconfig.me) — спросить снова через 10 минут, а не через
                     # 6 часов: без неё нет местного DNS пути «напрямую», когда шифрованный не проходит
                     tries, wait = 0, HOST_RECHECK if getattr(self, "public_cc", None) else HOST_SLOW_WAIT

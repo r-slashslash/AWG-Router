@@ -169,8 +169,11 @@ def clean_backup_state(new: dict) -> dict:
     умолчанию (checks.forgive). Здесь же чинится то, что прежние выпуски сохраняли иначе: круги резервов, «как
     резерв» у квоты, прежние имена шаблонов маскировки, IPv6 DNS, подписи правил с именем выхода."""
     with checks.any_address():          # «Напрямую — адрес»: какие адреса есть у сервера, решает restore_state
-        if srcaddr.pinned(new) or dnsaddr.on_disk(new):    # и свой DNS правила с DoH/DoT (как на диске)
-            new = dnsaddr.from_disk(srcaddr.from_disk(copy.deepcopy(new)))
+        try:
+            if srcaddr.pinned(new) or dnsaddr.on_disk(new):    # и свой DNS правила с DoH/DoT (как на диске)
+                new = dnsaddr.from_disk(srcaddr.from_disk(copy.deepcopy(new)))
+        except (TypeError, AttributeError, ValueError):
+            pass    # поля неверного вида: проверка ниже назовёт поле, а не «внутренняя ошибка» (П57)
         return _clean_backup_state(new)
 
 

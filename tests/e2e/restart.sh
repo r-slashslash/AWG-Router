@@ -131,8 +131,10 @@ api POST users '{"name":"e2e-client"}' >/dev/null || die "could not add a client
 t=$(wait_for 90 full_rules) && ok "the panel's rules with the exit tunnel are up (${t}s)" || die "no panel rules with the exit"
 step "A second exit without a connection, by default, fallback: direct"
 conf2=$(printf '[Interface]\nPrivateKey = %s\nAddress = 10.99.0.3/32\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = 192.0.2.11:51820\n' "$k1" "$k2")
-body=$(python3 -c 'import json,sys; print(json.dumps({"name": "e2e-direct", "config": sys.argv[1], "fallback": "direct", "make_default": True}))' "$conf2")
-api POST upstreams "$body" >/dev/null || die "could not add the second exit"
+body=$(python3 -c 'import json,sys; print(json.dumps({"name": "e2e-direct", "config": sys.argv[1], "fallback": "direct"}))' "$conf2")
+id2=$(api POST upstreams "$body" | jq_py 'd["id"]') || die "could not add the second exit"
+# «По умолчанию» — второй выход (make_default ставит выход, только пока «По умолчанию» — «Напрямую» или «Блокировать»)
+api PUT routing "{\"default\": \"up:$id2\", \"rules\": []}" >/dev/null || die "could not make the second exit the default"
 # лежит дольше CONNECTING_SECS — его клиенты на резерве «Напрямую», так задумано (при работающей панели)
 t=$(wait_for 120 direct_now) && ok "the second exit is down: its clients are on the fallback Direct (${t}s)" \
   || bad "the fallback Direct of the second exit did not come"

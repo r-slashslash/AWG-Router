@@ -34,6 +34,9 @@ CLIENT_SPEED_PAUSE = 10  # с: замер не удался (сервер пер
 _speed_lock = threading.Lock()
 
 
+AWG_HUNG: dict = {}          # _pass_dumps: `awg show all dump` не ответил (у всех туннелей AWG — нет рукопожатия)
+
+
 class TunnelsMixin:
     """Туннели выходов: запуск, остановка, живость, трафик и квоты (часть Engine)."""
     # ------------------------------------------------------------ скорость клиентов
@@ -480,8 +483,14 @@ class TunnelsMixin:
         awg_on, socks_on = len(kinds - {"socks5"}) > 0, "socks5" in kinds
         dumps = links = None
         if awg_on:
-            p = t.ns(["awg", "show", "all", "dump"], check=False, timeout=10)
-            dumps = system.parse_all_dump(p.stdout) if p.stdout else None
+            try:
+                p = t.ns(["awg", "show", "all", "dump"], check=False, timeout=10)
+                dumps = system.parse_all_dump(p.stdout) if p.stdout else None
+            except subprocess.TimeoutExpired:
+                # завис amneziawg-go какого-то выхода (или сервера): каждый проход падал бы здесь, резерв не включался
+                # бы никогда. Нет ответа — у всех туннелей AWG нет рукопожатия: «stale», резерв (П27)
+                log.warning("awg show all: no answer in 10 s (a hung amneziawg-go?)")
+                dumps = AWG_HUNG
         if socks_on:
             p = t.ns(["ip", "-j", "-s", "link", "show"], check=False, timeout=10)
             try:
@@ -520,10 +529,13 @@ class TunnelsMixin:
                 # в демо второй туннель «мёртвый», чтобы было видно резервирование
                 self._fake.handshakes[r.iface] = now - (900 if r.num == 2 else 20)
             peers = (dumps or {}).get(r.iface)
-            if peers is None:                   # нет в общем ответе — спросить сам туннель, как раньше
-                p = t.ns(["awg", "show", r.iface, "dump"], check=False, timeout=10)
-                peers = system._parse_dump(p.stdout) if p.returncode == 0 else {}
-            peer = next(iter(peers.values()), None)
+            if peers is None and dumps is not AWG_HUNG:   # нет в общем ответе — спросить сам туннель, как раньше
+                try:
+                    p = t.ns(["awg", "show", r.iface, "dump"], check=False, timeout=10)
+                    peers = system._parse_dump(p.stdout) if p.returncode == 0 else {}
+                except subprocess.TimeoutExpired:
+                    peers = {}
+            peer = next(iter((peers or {}).values()), None)
             try:
                 limit = self.parsed(u).rekey_after + 70
             except Exception:  # noqa: BLE001

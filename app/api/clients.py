@@ -339,8 +339,14 @@ def del_user(req, pk):
 
 
 def delete_user(pk: str) -> None:
-    """Удаление клиента: из панели и из бота."""
-    user_errors(lambda: engine.srv.delete_client(_pk(pk)))
+    """Удаление клиента: из панели и из бота. Списки его своих правил, которые больше нигде не стоят, — вместе с ним
+    (иначе они скачивались бы и слали ошибки, а удалить их в панели негде; П55)."""
+    key = _pk(pk)
+    c = store.snapshot()["clients"].get(key) or {}
+    own = routing.rule_lists(c.get("rules") if c.get("rules_mode") == "custom" else [])
+    user_errors(lambda: engine.srv.delete_client(key))
+    if own:
+        routing.forget_lists(store.mutate(lambda st: routing.drop_unused_lists(st, own)))
     engine.traffic.forget(pk)
     engine.reconcile_soon()
 

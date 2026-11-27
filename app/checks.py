@@ -277,7 +277,7 @@ def balance(st: dict, b) -> dict:
     """Балансировка: {"on": bool, "skip": [id выходов, которые в ней не участвуют]}."""
     if not isinstance(b, dict) or not isinstance(b.get("skip", []), list):
         bad("err.bad_value")
-    skip = [x for x in dict.fromkeys(b.get("skip") or []) if isinstance(x, str) and Store.upstream(st, x)]
+    skip = [x for x in dict.fromkeys(x for x in b.get("skip") or [] if isinstance(x, str)) if Store.upstream(st, x)]
     return {"on": flag(b.get("on"), False), "skip": skip}
 
 

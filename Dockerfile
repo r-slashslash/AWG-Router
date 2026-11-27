@@ -76,7 +76,7 @@ COPY app ./app
 # мимо выходов). Импорт панели в демо-режиме компилирует ровно то, что ей нужно из стандартной библиотеки.
 RUN python3 -m compileall -q app \
  && DRY_RUN=1 DATA_DIR=/tmp/awgr-build PANEL_PASSWORD=build \
-    python3 -c "import app.main, app.sniproxy, app.dnsproxy, app.probe, app.tgreq, app.webfront" \
+    python3 -c "import app.main, app.sniproxy, app.dnsproxy, app.probe, app.tgreq, app.webfront, app.ctflush" \
  && rm -rf /tmp/awgr-build
 ENV DATA_DIR=/data PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 VOLUME ["/data"]

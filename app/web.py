@@ -416,6 +416,22 @@ class App:
                     self._json(e.code, body, extra)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+                except OSError as e:
+                    if e.errno == errno.ENOSPC:
+                        # сохранение не применилось (прежнее состояние цело): сказать, что делать, а не «внутренняя
+                        # ошибка: [Errno 28]» (П56)
+                        log.warning("%s %s: %s", self.command, path, e)
+                        self._json(507, {"detail": Msg("err.disk_full")})
+                    elif isinstance(e, TimeoutError) and getattr(self, "body_read", True) is False:
+                        # тело запроса не дошло за срок (медленная связь или нарочно): отказ, а не 500 с трассировкой
+                        self.close_connection = True
+                        self._json(408, {"detail": Msg("err.timeout")}, [("Connection", "close")])
+                    else:
+                        log.error("%s %s: %s\n%s", self.command, path, e, traceback.format_exc())
+                        try:
+                            self._json(500, {"detail": Msg("err.internal", detail=str(e)[:300])})
+                        except Exception:  # noqa: BLE001
+                            pass
                 except Exception as e:  # noqa: BLE001
                     log.error("%s %s: %s\n%s", self.command, path, e, traceback.format_exc())
                     try:

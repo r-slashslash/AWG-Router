@@ -837,3 +837,367 @@ class DnsRedirectTest(unittest.TestCase):
         p = subprocess.run(["unshare", "-n", "nft", "-c", "-f", "-"], input=_ruleset(dns_to="10.8.1.1"),
                            capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
+
+
+class HungExitTest(unittest.TestCase):
+    """П27: завис amneziawg-go выхода (`awg show` не отвечает) — проход идёт, выход «stale», клиенты на резерве; раньше
+    каждый проход падал на TimeoutExpired и резерв не включался никогда."""
+
+    def test_hung_awg_show(self):
+        from app import config
+        from app.engine import Engine
+        from app.engine.common import UpRT
+        e = Engine.__new__(Engine)
+        e.health, e.events = {}, []
+        e.rt = {"u1": UpRT(1, "h", "k")}
+        e.rt["u1"].started = time.time() - 600
+        e.event = lambda kind, msg: e.events.append(msg.key)
+        e.parsed = lambda u: mock.Mock(kind="awg", rekey_after=120)
+        e._fake = None
+        calls = []
+
+        def ns(cmd, **kw):
+            calls.append(cmd)
+            if cmd[:2] == ["awg", "show"]:
+                raise subprocess.TimeoutExpired(cmd, 10)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        t = mock.Mock(key="k")
+        t.ns.side_effect = ns
+        st = {"upstreams": [{"id": "u1", "num": 1, "name": "NL", "enabled": True, "fallback": "direct"}]}
+        with mock.patch.object(config, "DRY_RUN", False):
+            e._update_health(t, st)
+        self.assertEqual(e.health["u1"]["state"], "stale")
+        self.assertEqual(sum(1 for c in calls if c[:2] == ["awg", "show"]), 1)   # не 10 с на каждый выход
+
+
+class AddressFixTest(unittest.TestCase):
+    """Адреса сервера: П29, П42, повтор раз в 15 минут, П51, П52."""
+
+    def setUp(self):
+        from tests import test_v125
+        self.t = test_v125.AddressesInSystemTest("test_added_checked_and_removed")
+        self.t.setUp()
+        self.addCleanup(self.t.tearDown)
+
+    def test_network_restart_keeps_a_working_address(self):
+        """П29: сеть системы перезапускается в момент круга (маршрута по умолчанию нет) — рабочий адрес не «не заработал»
+        на 15 минут, а добавляется снова на следующем круге."""
+        t = self.t
+        t.tick(out_hosts=[A])
+        self.assertTrue(t.eng.addr_ok(A))
+        t.host.addrs.pop(A)                                       # адрес пропал вместе с сетью
+        wan = t.eng._wan
+        t.eng._wan = lambda: {}                                  # и маршрута по умолчанию ещё нет
+        t.eng._addr_tick(t.store.snapshot())
+        self.assertNotEqual(t.eng.addr_state(A), "bad")
+        t.eng._wan = wan                                          # сеть вернулась
+        t.tick()
+        self.assertIn(A, t.host.addrs)
+        self.assertTrue(t.eng.addr_ok(A))
+
+    def test_docker_gw_not_retried_by_itself(self):
+        """Сеть адреса, которую Docker сделал маршрутом по умолчанию, сама через 15 минут больше не подключается."""
+        from app.engine import addrs as addrs_mod
+        from app.i18n import Msg
+        t = self.t
+        t.store.mutate(lambda s: s["settings"].update(out_hosts=[A]))
+        t.eng.addr_rt()[A] = {"state": "bad", "error": Msg("addr.docker_gw"),
+                              "at": time.time() - addrs_mod.ADDR_BAD_RETRY - 5}
+        t.eng._addr_tick(t.store.snapshot())
+        self.assertEqual(t.eng.addr_state(A), "bad")
+        t.eng.addrs_wake(retry=[A])                              # «Сервер» сохранили снова — пробуется
+        t.eng._addr_tick(t.store.snapshot())
+        self.assertNotEqual(t.eng.addr_state(A), "bad")
+
+
+class GwPriorityTest(unittest.TestCase):
+    """П42: смена порта сохраняет низкий приоритет сети адреса; проход замечает маршрут по умолчанию в сети адреса."""
+
+    def test_endpoint_keeps_gw_priority(self):
+        from app import system
+        info = {"Id": "abcdef1234567890", "HostConfig": {"NetworkMode": "bridge"},
+                "NetworkSettings": {"Networks": {"bridge": {}, "zz-awgr-out-1": {"GwPriority": -1000,
+                                                                                  "Aliases": ["abcdef123456"]}}}}
+        self.assertEqual(system.extra_networks(info), {"zz-awgr-out-1": {"GwPriority": -1000}})
+
+    def test_pass_drops_network_that_became_default(self):
+        from app import system
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e._addr_rt = {}
+        e.addr_slots = lambda st: {A: 1}
+        e._addr_rec = lambda: {"ever": [A], "slots": {A: 1}}
+        t = mock.Mock(key="k", kind="container")
+        t.name = "amnezia-awg2"
+        t.ns.side_effect = lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, 0, json.dumps([{"dev": "eth1", "gateway": "172.30.0.1"}]) if "route" in cmd else "[]", "")
+        dropped = []
+        e._net_drop = lambda tg, name, connected: dropped.append(name)
+        net = {"Name": "zz-awgr-out-1", "Options": {"com.docker.network.host_ipv4": A}}
+        ct = {"NetworkSettings": {"Networks": {"zz-awgr-out-1": {"Gateway": "172.30.0.1", "IPAddress": "172.30.0.2"}}}}
+        from app import config
+        with mock.patch.object(system, "docker_get", lambda p: [net] if p.startswith("/networks") else ct), \
+                mock.patch.object(system, "docker_api", lambda *a, **k: {}), \
+                mock.patch.object(config, "DRY_RUN", False), mock.patch("os.path.exists", lambda p: True):
+            out = e._sync_addr_nets(t, {})
+        self.assertEqual(out, {})
+        self.assertEqual(dropped, ["zz-awgr-out-1"])
+        self.assertEqual(e.addr_state(A), "bad")
+
+
+class DetectHostTest(unittest.TestCase):
+    """П51: внешний адрес системы ищется с адреса системы, а не с основного исходящего; П52: поток не умирает молча."""
+
+    def test_probe_from_the_system_address_and_survives(self):
+        from app.engine import Engine
+        e = Engine.__new__(Engine)
+        e.stop_ev = mock.Mock()
+        e.stop_ev.is_set.side_effect = [False, True]
+        e.target = mock.Mock(exists=True)
+        seen = []
+        e.probe = lambda out: seen.append(out) or {"ok": True, "ip": "203.0.113.5", "cc": "RU"}
+        e.trigger = lambda: None
+        e.public_v4 = None
+        e.srv = mock.Mock()
+        e.srv.public_host.side_effect = OSError(28, "No space left on device")
+        e.store = mock.Mock()
+        with mock.patch("app.engine.log"):
+            e._detect_host()
+        self.assertEqual(seen, ["direct@system"])
+        self.assertEqual(e.public_v4, "203.0.113.5")
+
+
+class BotFixTest(unittest.TestCase):
+    """Бот: П28 (смена токена), П54 (экранирование, отказ в file_id, смена чата, права файла), тесты вслепую."""
+
+    def setUp(self):
+        from app import notify, tgbot
+        from app.api import telegram
+        from tests import test_v19
+        self.tgbot, self.notify, self.v19 = tgbot, notify, test_v19
+        self.tg = test_v19.FakeTG()
+        p = mock.patch.object(notify, "_post", self.tg)
+        p.start()
+        self.addCleanup(p.stop)
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        sp = mock.patch.object(tgbot, "STATE", os.path.join(d, "tgbot.json"))
+        sp.start()
+        self.addCleanup(sp.stop)
+        self.bot = tgbot.Bot(_panel().store, telegram.bot_ops)
+        self.c = test_v19.cfg()
+
+    def test_new_bot_starts_without_old_offset(self):
+        """П28: другой бот после смены токена опрашивается без старой отметки — его команды не пропадают."""
+        self.bot._st.update(offset=20008, offset_bot=self.c["token"].split(":")[0])
+        self.bot.poll_once(self.c, timeout=0)
+        self.assertEqual(self.tg.last("getUpdates")["offset"], 20008)          # тот же бот — та же отметка
+        other = {**self.c, "token": "987654321:" + "B" * 35}
+        self.bot.poll_once(other, timeout=0)
+        self.assertEqual(self.tg.last("getUpdates")["offset"], 0)
+
+    def test_state_file_private(self):
+        self.bot._st["x"] = 1
+        self.bot._save()
+        self.assertEqual(os.stat(self.tgbot.STATE).st_mode & 0o777, 0o600)
+
+    def test_exit_name_escaped_once(self):
+        """П54: имя выхода «NL & <1>» в тексте бота — «&amp;» один раз, а не «&amp;amp;»."""
+        st = {"upstreams": [{"id": "u1", "num": 1, "name": "NL & <1>"}]}
+        label = self.bot.out_label(self.c, "up:u1", st)
+        text = self.tgbot.tr("en", "st_default", out=label)
+        self.assertIn("NL &amp; &lt;1&gt;", text)
+        self.assertNotIn("&amp;amp;", text)
+
+    def test_file_id_refused_is_not_a_button_error(self):
+        e = self.notify.NotifyError("Bad Request: wrong file identifier/HTTP URL specified")
+        self.assertFalse(self.tgbot._button_refused(e))
+        self.assertTrue(self.tgbot._button_refused(self.notify.NotifyError("Bad Request: BUTTON_URL_INVALID")))
+
+    def test_new_chat_does_not_delete_by_old_numbers(self):
+        """П54: после смены Chat ID первое меню не удаляет сообщение нового чата с номером меню из прежнего."""
+        self.bot._set_panel(self.c, {"message_id": 1015}, photo=False)
+        self.tg.calls.clear()
+        self.bot._set_panel({**self.c, "chat_id": "-4002"}, {"message_id": 7}, photo=False)
+        self.assertNotIn("deleteMessage", self.tg.methods())
+        self.bot._set_panel({**self.c, "chat_id": "-4002"}, {"message_id": 8}, photo=False)
+        self.assertEqual(self.tg.last("deleteMessage")["message_id"], 7)
+
+    def test_migration_only_from_own_chat(self):
+        """Тест вслепую (было): «группа стала супергруппой» из чужого чата не меняет Chat ID панели."""
+        seen = []
+        with mock.patch.object(self.notify, "on_migrate", lambda old, new: seen.append((old, new))):
+            want = self.c["chat_id"]
+            self.assertFalse(self.bot._migration({"chat": {"id": -777}, "migrate_to_chat_id": -1001}, self.c))
+            self.assertFalse(self.bot._migration({"chat": {"id": -1001}, "migrate_from_chat_id": -777}, self.c))
+            self.assertEqual(seen, [])
+            self.assertTrue(self.bot._migration({"chat": {"id": int(want)}, "migrate_to_chat_id": -1002}, self.c))
+            self.assertTrue(self.bot._migration({"chat": {"id": -1003}, "migrate_from_chat_id": int(want)}, self.c))
+            self.assertEqual(seen, [(want, "-1002"), (want, "-1003")])
+
+
+class BackupToTelegramTest(unittest.TestCase):
+    """Тест вслепую (было): копия в Telegram с паролем уходит зашифрованной — без подмены send_backup целиком."""
+
+    def test_encrypted_with_password(self):
+        _panel()
+        from app import notify
+        from app.api import backup
+        sent = []
+        with mock.patch.object(notify, "send_document", lambda tok, chat, name, data, cap, via: sent.append((name, data))):
+            backup.send_backup({"token": "t", "chat_id": "1", "lang": "en", "backup_pw": "pw-123456", "via": "direct"})
+            backup.send_backup({"token": "t", "chat_id": "1", "lang": "en", "via": "direct"})
+        self.assertTrue(sent[0][0].endswith(".json.enc"))
+        self.assertTrue(sent[0][1].startswith(b"Salted__"))
+        self.assertTrue(sent[1][0].endswith(".json"))
+        self.assertTrue(sent[1][1].lstrip().startswith(b"{"))
+
+
+class BotDirectFromMainTest(unittest.TestCase):
+    """П53: бот на «Напрямую», когда основной исходящий адрес — дополнительный, идёт с него (как подписано в выборе)."""
+
+    def test_router_asked_for_direct(self):
+        from app import notify
+        asked = []
+        old = notify.router
+        notify.router = lambda via: asked.append(via) or (4242, 0x2101)
+        self.addCleanup(setattr, notify, "router", old)
+        with mock.patch.object(notify, "_post_via", lambda route, *a: (200, b'{"ok":true,"result":1}')):
+            notify._post_once("t", "getMe", b"{}", "application/json", 5, "direct")
+        self.assertEqual(asked, ["direct"])
+
+
+class StatusCardDnsTest(unittest.TestCase):
+    """П54: картинка «Состояние» — при DNS без шифрования счётчики запросов не налезают на значение строки."""
+
+    def test_counts_do_not_overlap(self):
+        from app import tgbot, tgcard
+        from tests.test_v124 import STATUS
+        rows = []
+        orig = tgcard.Painter.row
+
+        def row(self, y, icon, label, value, sub=None, **kw):
+            if icon == "compass":
+                rows.append((self.lang, self.width(sub or []), self.width(value)))
+            return orig(self, y, icon, label, value, sub, **kw)
+        dns = {"state": "on", "listen": "10.8.0.1", "encrypt": "plain", "queries": 1234567, "cached": 7654321}
+        with mock.patch.object(tgcard.Painter, "row", row):
+            for lang in ("ru", "en", "zh", "fa"):
+                tgcard.status(tgbot.TEXTS[lang], lang, {**STATUS, "dns": dns})
+        room = tgcard.W - 2 * tgcard.PAD_X - 44 - tgcard.GAP
+        for lang, sub, value in rows:
+            self.assertLessEqual(sub + value + tgcard.GAP, room, lang)
+
+
+class StateFixTest(unittest.TestCase):
+    """Состояние и копии: П55, П56, П57; П58 — медленное тело запроса."""
+
+    def test_deleted_client_takes_its_lists(self):
+        """П55: удаление клиента со своими правилами убирает их списки, которые больше нигде не стоят."""
+        panel = _panel()
+        from app.api import clients, routing
+        from tests.test_v125 import Req
+        panel.engine.reconcile()
+        pk = panel.engine.clients[0]["public_key"]
+        lid = routing.add_list(Req({"kind": "manual", "name": "own", "source": "203.0.113.0/24"}))["id"]
+        shared = routing.add_list(Req({"kind": "manual", "name": "shared", "source": "198.51.100.0/24"}))["id"]
+        st0 = panel.store.snapshot()
+        self.addCleanup(lambda: panel.store.mutate(lambda s: (s.clear(), s.update(st0))))
+
+        def own(st):
+            st["clients"].setdefault(pk, {}).update(rules_mode="custom", rules=[
+                {"lists": [lid, shared], "outbound": "direct", "enabled": True, "comment": ""}])
+            st["routing"]["rules"].append({"lists": [shared], "outbound": "direct", "enabled": True, "comment": ""})
+        panel.store.mutate(own)
+        with mock.patch.object(panel.engine.srv, "delete_client",          # как настоящий: клиента в состоянии нет
+                               lambda key: panel.store.mutate(lambda st: st["clients"].pop(key, None))):
+            clients.delete_user(pk)
+        ids = {x["id"] for x in panel.store.snapshot()["lists"]}
+        self.assertNotIn(lid, ids)
+        self.assertIn(shared, ids)                  # стоит и в общих правилах — остаётся
+
+    def test_disk_full_is_explained(self):
+        """П56: нет места на диске — ответ «кончилось место», а не «внутренняя ошибка: [Errno 28]»."""
+        import errno
+        from app import web
+        app_ = web.App("")
+
+        @app_.post("/api/x")
+        def x(req):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        code, body = _call(app_, "POST", "/api/x", b"{}")
+        self.assertEqual(code, 507)
+        self.assertEqual(body["detail"]["$t"], "err.disk_full")
+
+    def test_wrong_types_in_backup(self):
+        """П57: копия с полями неверного вида — отказ с именем поля, а не «внутренняя ошибка»."""
+        _panel()
+        from app.api import backup
+        from app.web import HTTPError
+        from tests.test_v125 import state
+        for path, value in ((("routing", "rules"), 5), (("clients",), 5), (("routing", "balance"), {"skip": [[1]]})):
+            st = state()
+            o = st
+            for k in path[:-1]:
+                o = o[k]
+            o[path[-1]] = value
+            try:
+                backup.clean_backup_state(st)
+            except HTTPError:
+                pass                                 # отказ с именем поля — так и надо
+
+    def test_restored_state_file_private(self):
+        """П57: после возврата state.json.bak файлы — 0600 (закрытые ключи клиентов)."""
+        from app.store import Store
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "state.json")
+        s = Store(p)
+        s.mutate(lambda st: st["settings"].update(a=1))
+        s.mutate(lambda st: st["settings"].update(a=2))
+        with open(p, "w") as f:
+            f.write("{broken")
+        old = os.umask(0o022)
+        try:
+            with mock.patch("app.store.log"):
+                Store(p)
+        finally:
+            os.umask(old)
+        for f in (p, p + ".broken"):
+            self.assertEqual(os.stat(f).st_mode & 0o777, 0o600, f)
+
+    def test_slow_body_is_408(self):
+        """П58: тело запроса не дошло за срок — 408 и закрытие соединения, без трассировки в журнале."""
+        from app import web
+        app_ = web.App("")
+
+        @app_.post("/api/y")
+        def y(req):
+            return req.json()
+        with mock.patch.object(web, "IDLE_TIMEOUT", 0.5), mock.patch.object(web.log, "error") as err:
+            code, body = _call(app_, "POST", "/api/y", b'{"a"', length=100)
+        self.assertEqual(code, 408)
+        err.assert_not_called()
+
+
+def _call(app_, method, path, body, length=None):
+    """Настоящий запрос к App на своём порту."""
+    import http.client
+    srv = app_.serve("127.0.0.1", 0)
+    import threading as th
+    t = th.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        port = srv.server_address[1]
+        s = socket.create_connection(("127.0.0.1", port), 5)
+        head = (f"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n"
+                f"Content-Length: {length if length is not None else len(body)}\r\n\r\n").encode()
+        s.sendall(head + body)
+        r = http.client.HTTPResponse(s)
+        r.begin()
+        data = json.loads(r.read() or b"{}")
+        s.close()
+        return r.status, data
+    finally:
+        srv.shutdown()
+        srv.server_close()

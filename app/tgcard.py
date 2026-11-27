@@ -548,12 +548,15 @@ def status(tx: dict, lang: str, d: dict, atlas: Atlas | None = None) -> bytes:
         dsub = [Seg("sub", GRAY, [_p(tx, "ps_dns_err_sub")])]
     else:
         mode = {"doh": "DoH", "dot": "DoT"}.get(dns.get("encrypt") or "plain")
-        addr = _ascii(dns.get("listen") or "—") + " · "
-        dval = sval([("a", addr + mode)] if mode else [("a", addr), _p(tx, "st_dns_plain")])
+        addr = _ascii(dns.get("listen") or "—")
+        # разделитель — своим куском: справа налево (fa) куски идут в обратном порядке, и он оказывался у края
+        dval = sval([("a", addr), ("a", " · "), ("a", mode) if mode else _p(tx, "st_dns_plain")])
         if dns.get("upstream_error"):
             dsub = [Seg("sub", ORANGE, [_p(tx, "ps_dns_upfail")])]
         elif dns.get("queries") is not None:
             dsub = [Seg("sub", GRAY, tpl(tx["st_dns_stats"], q=str(dns["queries"]), c=str(dns.get("cached") or 0)))]
+        if dsub and p.width(dsub) + p.width(dval) + 2 * GAP > W - 2 * PAD_X - 44 - GAP:
+            dval = sval([("a", addr)])      # рядом со счётчиками не влезает: без «· без шифрования» (П54)
     rows.append(("compass", "ps_dns", dval, dsub))
     up = d.get("uptime")
     if up is None:

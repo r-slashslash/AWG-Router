@@ -481,6 +481,10 @@ def _endpoint(ep: dict, short: str) -> dict:
     aliases = [a for a in (ep.get("Aliases") or []) if a != short]
     if aliases:
         out["Aliases"] = aliases
+    if isinstance(ep.get("GwPriority"), int) and ep["GwPriority"]:
+        # сеть адреса подключена с GwPriority −1000: без него после смены порта маршрут по умолчанию контейнера мог
+        # уйти в неё — весь «Напрямую» с дополнительного адреса (П42 полной проверки 1.25.0)
+        out["GwPriority"] = ep["GwPriority"]
     return out
 
 

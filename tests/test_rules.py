@@ -485,5 +485,21 @@ class ProjectRulesTest(unittest.TestCase):
         self.assertEqual(checks.list_id(st, "ab", {"kind": "domains", "source": ""}), "ab")
 
 
+    def test_helpers_compiled_in_the_image(self):
+        """Программы, которые панель запускает отдельным процессом (…/<имя>.py в app/), — в строке импорта Dockerfile:
+        python:alpine без .pyc, и каждый запуск компилировал бы их заново (app/ctflush.py в 1.25.0 там не было)."""
+        started = set()
+        for d, _, names in os.walk(os.path.join(ROOT, "app")):
+            for n in names:
+                if n.endswith(".py"):
+                    with open(os.path.join(d, n), encoding="utf-8") as f:
+                        started |= set(re.findall(r'^.*os\.path\.join\(.*"([a-z_]+)\.py"\)', f.read(), re.M))
+        with open(os.path.join(ROOT, "Dockerfile"), encoding="utf-8") as f:
+            line = next(ln for ln in f if 'python3 -c "import app.main' in ln)
+        self.assertTrue(started)
+        for m in sorted(started):
+            self.assertIn(f"app.{m}", line, m)
+
+
 if __name__ == "__main__":
     unittest.main()

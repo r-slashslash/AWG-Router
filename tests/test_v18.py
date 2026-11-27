@@ -63,10 +63,12 @@ class PostViaTest(unittest.TestCase):
         notify.router = None
 
     def test_direct_is_default(self):
-        notify.router = mock.Mock()
+        # «Напрямую» тоже спрашивает путь (1.25.0, П53: основной исходящий адрес бывает дополнительным); с адреса
+        # системы путь — None, запрос идёт прямо из панели
+        notify.router = mock.Mock(return_value=None)
         with mock.patch.object(notify, "_post_direct", return_value=(200, b'{"ok":true,"result":{}}')) as d:
             notify.send(TOKEN, "42", "hi")
-        notify.router.assert_not_called()
+        notify.router.assert_called_once_with("direct")
         self.assertTrue(d.call_args[0][0].endswith("/sendMessage"))
 
     def test_through_exit(self):
