@@ -1542,8 +1542,8 @@ class DirectFallbackTest(unittest.TestCase):
             out = self.run_q(p, ["www.youtube.com", "example.org"])
             self.assertEqual(out[0][3] & 0xF, dnsproxy.RC_SERVFAIL, rule)
             # к запасному — только второе имя, оно не из правила (П25 полной проверки 1.25.0: сверялся только список
-            # серверов, и тест проходил, когда к запасному уходило имя правила)
-            self.assertEqual(plain, [("77.88.8.8", "example.org")], rule)
+            # серверов, и тест проходил, когда к запасному уходило имя правила); «.» — проверка самого запасного (П31)
+            self.assertEqual([x for x in plain if x[1]], [("77.88.8.8", "example.org")], rule)
 
     def test_direct_down_shown_on_the_server_tab(self):
         import json as _json

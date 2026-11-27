@@ -281,7 +281,9 @@ class DnsMixin:
                     if any(_down(o, f) for o, f in paths):
                         v["direct_down"] = True
                     fbs = list((s.get("fb_paths") or {}).values())
-                    if s.get("fallback") and any(_down(o, f) for o, f in fbs):
+                    # «Запасной DNS тоже не отвечает» — только вместе с «Серверы DNS не отвечают напрямую»: когда общие
+                    # снова отвечают, запасной больше не спрашивают, и строка висела до 15 минут (Д8)
+                    if s.get("fallback") and v.get("direct_down") and any(_down(o, f) for o, f in fbs):
                         v["fallback"] = "down"
                     elif s.get("fallback") and v.get("direct_down") and \
                             any(float(o or 0) > float(f or 0) and time.time() - float(o or 0) < 900 for o, f in fbs):

@@ -78,6 +78,24 @@ n,t0=0,time.monotonic()
 while time.monotonic()-t0<secs: n+=len(f.read1(262144))
 print(round(n*8/(time.monotonic()-t0)/1e6,2))
 """
+# «фильтр по DNS» (Д2 независимой проверки П31): спросить имя у DNS на сервере и сразу — как браузер — соединиться с
+# адресом из ответа; → «адрес мс-ответа ответ-сервера»
+CLIENT_DNS_HELLO = r"""
+import socket,ssl,struct,sys,time
+name,dns=sys.argv[1],sys.argv[2]
+q=struct.pack("!6H",0x4242,0x0100,1,0,0,0)+b"".join(bytes([len(x)])+x.encode() for x in name.split("."))+b"\0"
+q+=struct.pack("!HH",1,1)
+u=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); u.settimeout(5)
+t0=time.monotonic(); u.sendto(q,(dns,53)); r=u.recv(512); ms=round((time.monotonic()-t0)*1000)
+ip=socket.inet_ntoa(r[-4:])
+i,o=ssl.MemoryBIO(),ssl.MemoryBIO(); obj=ssl.create_default_context().wrap_bio(i,o,server_hostname=name)
+try: obj.do_handshake()
+except ssl.SSLWantReadError: pass
+s=socket.socket(); s.settimeout(5)
+try:
+    s.connect((ip,443)); s.sendall(o.read()); print(ip, ms, s.recv(100).decode() or "EMPTY")
+except OSError as e: print(ip, ms, "FAIL", type(e).__name__)
+"""
 CLIENT_UDP = r"""
 import socket,sys
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3)
@@ -250,9 +268,10 @@ UPS = [{"num": 1, "snat": "", "mtu": 8500}]
 IP_LISTS = {"via": ["8.8.4.4/32", "9.9.9.9/32"]}
 
 
-def rules(policy, sniff=True, quic=False, strict=False, balance=frozenset(), labels=False, limits=None):
+def rules(policy, sniff=True, quic=False, strict=False, balance=frozenset(), labels=False, limits=None,
+          dom_filter=False):
     nft("amz", nftgen.generate("awg0", IP_LISTS, UPS, policy, {}, config.SNI_PROXY_PORT if sniff else None,
-                               balance, quic=quic, strict=strict, labels=labels, limits=limits))
+                               balance, dom_filter=dom_filter, quic=quic, strict=strict, labels=labels, limits=limits))
 
 
 def racct():
@@ -415,6 +434,66 @@ def rule_limits(procs):
         procs["sni"].wait(5)
 
 
+def dns_filter(procs, pol):
+    """«Правила по доменам — только для адресов из ответов этого DNS» (набор dom4 наполняет dnsproxy.py). Д2 независимой
+    проверки П31: клиент соединяется сразу после ответа DNS, и первое соединение к новому адресу должно уже быть в наборе
+    — иначе оно идёт по правилам адресов и «По умолчанию» («Напрямую»), мимо выхода. Код до исправления —
+    P31_DNSPROXY=<другой app/dnsproxy.py> (адрес попадал в набор через ~0,3 с: здесь — DIRECT)."""
+    rules(pol, dom_filter=True)
+    procs["dns-up"] = bg("inet", sys.executable, SRV, "dns", "172.20.0.2", "foreign.test=8.8.8.8",
+                         "www.foreign.test=8.8.8.8", "cdnfoo.test=8.8.4.4", "ru.test=77.88.55.242", log="dns-up")
+    policies, _ = nftgen.layout(pol, {}, {1})
+    stats = os.path.join(TMP, "dns-stats.json")
+    conf = os.path.join(TMP, "dns.json")
+    with open(conf, "w") as f:
+        json.dump({"listen": "10.8.1.0", "port": 53, "clients": "10.8.1.0/24", "stats": stats,
+                   "upstreams": ["172.20.0.2"], "encrypt": "plain", "default": {"mark": 0, "tcp": False},
+                   "routes": {}, "dom": {"lists": {"dvid": os.path.join(TMP, "dvid.domains")}, "clients": {},
+                                         "set": [config.NFT_TABLE, nftgen.DOM_SET],
+                                         "policies": {n: [[["dvid"], {"mark": 0, "tcp": False}]] for n in policies}}},
+                  f)
+    code = os.environ.get("P31_DNSPROXY") or os.path.join(HERE, "..", "app", "dnsproxy.py")
+    procs["dns"] = bg("amz", sys.executable, code, conf, log="dnsproxy")
+    time.sleep(1.0)
+
+    def ask(name):
+        return sh("cli", sys.executable, "-c", CLIENT_DNS_HELLO, name, "10.8.1.0", timeout=15).stdout.strip()
+
+    def in_set(ip):
+        return ip in sh("amz", "nft", "list", "set", "ip", config.NFT_TABLE, nftgen.DOM_SET).stdout
+
+    check("фильтр по DNS: адреса до ответа в наборе нет", str(in_set("8.8.8.8")), "False")
+    got = ask("foreign.test")
+    check("фильтр по DNS: первое соединение к новому адресу — уже через выход", got, lambda g: g.split()[2:3] == ["PROXY"])
+    ms = int(got.split()[1]) if got.count(" ") >= 2 and got.split()[1].isdigit() else -1
+    print(f"    ответ DNS на новое имя: {ms} мс")
+    check("…ответ DNS на новое имя — быстро (запись в набор, не 0,3 с ожидания)", str(ms), lambda g: 0 <= int(g) < 300)
+    check("…адрес правда в наборе", str(in_set("8.8.8.8")), "True")
+    check("…имя не из правила — по правилам адресов, как раньше", ask("ru.test"), lambda g: g.split()[2:3] == ["DIRECT"])
+    # панель пересобирает таблицу: nft ждёт, ответ — не дольше SET_WAIT (1 с), потом как раньше
+    big = os.path.join(TMP, "big.nft")
+    with open(big, "w") as f:
+        f.write("table ip awgr_big {\n set s {\n  type ipv4_addr\n  elements = { ")
+        f.write(", ".join(f"10.{i >> 16 & 255}.{i >> 8 & 255}.{i & 255}" for i in range(1, 300001)))
+        f.write(" }\n }\n}\n")
+    sh("amz", "nft", "flush", "set", "ip", config.NFT_TABLE, nftgen.DOM_SET)
+    sh("amz", "nft", "delete", "table", "ip", "awgr_big")
+    rebuild = subprocess.Popen(["nsenter", "--net=/var/run/netns/amz", "--", "nft", "-f", big])
+    time.sleep(0.3)
+    t0 = time.monotonic()
+    got = ask("cdnfoo.test")
+    dt = time.monotonic() - t0
+    rebuild.wait(120)
+    print(f"    во время пересборки таблицы (nft -f, 300 000 адресов): ответ и соединение за {dt:.2f} с → {got}")
+    check("…во время пересборки таблицы ответ DNS не ждёт nft дольше 1 с", f"{dt:.2f}", lambda g: float(g) < 2.5)
+    sh("amz", "nft", "delete", "table", "ip", "awgr_big")
+    procs["dns"].terminate()
+    procs["dns"].wait(5)
+    procs["dns-up"].terminate()
+    procs["dns-up"].wait(5)
+    rules(pol)
+
+
 def udp(ip, port=7):
     return sh("cli", sys.executable, "-c", CLIENT_UDP, ip, str(port), timeout=10).stdout.strip()
 
@@ -496,6 +575,7 @@ def main():
         check("клиент молчит (сервер говорит первым): соединение идёт через 3 с", tcp("77.88.55.242", 6), "DIRECT")
         stats = json.load(open(os.path.join(TMP, "sni-stats.json"))) if os.path.exists(os.path.join(TMP, "sni-stats.json")) else {}
         check("счётчики sniproxy.py пишутся", str(sorted(stats)), lambda g: "pid" in g)
+        dns_filter(procs, pol)
 
         # общий предел скорости выхода SOCKS5 для туннеля и посредника
         procs["sni"].terminate()

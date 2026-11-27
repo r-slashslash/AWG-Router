@@ -1607,12 +1607,13 @@ class NameThroughExitTest(unittest.TestCase):
                        "direct_fallback": ["tls://dns.google#8.8.8.8", "77.88.8.8"],
                        "addr_marks": [nftgen.ADDR_LO, nftgen.ADDR_HI]}, f)
         p = dnsproxy.Proxy(conf)
-        calls = []
+        calls, shared = [], []
 
         async def enc(msg, server, mark, mode):
             calls.append((server, mark, mode))
             q = dnsproxy.parse_query(msg)
             if server == "1.1.1.1":
+                shared.append(q["name"])
                 return None                               # общие по DoH этим путём не отвечают (Россия)
             return a_reply(msg, ["203.0.113.7"]) if q["name"] == "site.example." else None
 
@@ -1637,7 +1638,8 @@ class NameThroughExitTest(unittest.TestCase):
         self.assertTrue(all(c[1] == m for c in calls))                           # всё — с меткой адреса
         # общие не ответили (путь «не отвечает»): имя сервиса — у запасного с адресом, без ожидания общих по DoH
         self.assertEqual([c for c in calls if c[0] == "77.88.8.8"][0], ("77.88.8.8", m, "plain"))
-        self.assertEqual(calls.count(("1.1.1.1", m, "doh")), 1)
+        # общим по DoH — только само имя (и «.» проверки пути, П31), а не имя сервиса ещё раз
+        self.assertEqual([n for n in shared if n != "."], ["site.example."])
         # «напрямую» с адреса системы — подсказка панели остаётся
         self.assertEqual(dnsproxy._no_hint("tls://dns.google#8.8.8.8"), "tls://dns.google")
         self.assertEqual(dnsproxy._no_hint("77.88.8.8"), "77.88.8.8")
