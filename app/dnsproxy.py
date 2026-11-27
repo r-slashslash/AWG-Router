@@ -757,7 +757,11 @@ class Proxy:
 
     async def _resolve(self, query: bytes, q: dict, route: dict, servers: tuple = (), fallback: bool = True) -> bytes:
         mark, tcp = int(route.get("mark") or 0), bool(route.get("tcp"))
-        key = (mark, servers, q["name"], q["qtype"], q["qclass"])
+        # Флаги запроса, с которыми ответ сервера разный: рекурсия (RD), без проверки DNSSEC (CD), EDNS и подписи DNSSEC
+        # (DO). Они — и в ключе кэша: устройство, которое само проверяет DNSSEC (systemd-resolved с DNSSEC=yes), получало
+        # из кэша ответ без подписей, если имя первым спросил телефон без них, и имя у него не открывалось.
+        flags = (struct.unpack("!H", query[2:4])[0] & 0x0110, bool(q.get("edns")), bool(q.get("do")))
+        key = (mark, servers, q["name"], q["qtype"], q["qclass"], flags)
         hit = self.cache.get(key)
         now = time.monotonic()
         if hit and hit[0] > now:
@@ -766,12 +770,10 @@ class Proxy:
         # Одинаковый запрос уже в пути — ждать его ответа, а не спрашивать снова (Д1 независимой проверки П31): «мёртвое»
         # имя, которое устройство повторяет раз в секунду-две, держало каждым повтором одно из POOL_SIZE соединений к
         # серверу до срока, и остальные имена всех, кто идёт напрямую, ждали очереди 3–9 с; каждый повтор начинал ещё и
-        # проверку пути. Ключ — всё, от чего зависит ответ: путь (метка и TCP), свой DNS правила, имя, тип, класс, можно ли
-        # к запасному (клиент через выход и имя правила без пути с обычным клиентом не смешиваются) и флаги запроса, с
-        # которыми ответ сервера разный: рекурсия (RD), без проверки DNSSEC (CD), EDNS и подписи DNSSEC (DO). ID и регистр
-        # букв вопроса у каждого клиента свои (_for_client), размер под UDP — свой (UDPServer).
-        flags = struct.unpack("!H", query[2:4])[0] & 0x0110
-        wkey = key + (tcp, bool(fallback), flags, bool(q.get("edns")), bool(q.get("do")))
+        # проверку пути. Ключ — всё, от чего зависит ответ: ключ кэша (путь, свой DNS правила, имя, тип, класс, флаги
+        # запроса), TCP и можно ли к запасному (клиент через выход и имя правила без пути с обычным клиентом не
+        # смешиваются). ID и регистр букв вопроса у каждого клиента свои (_for_client), размер под UDP — свой (UDPServer).
+        wkey = key + (tcp, bool(fallback))
         asking = self.__dict__.setdefault("asking", {})          # тесты собирают Proxy и через __new__
         task = asking.get(wkey)
         if task is None:

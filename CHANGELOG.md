@@ -95,6 +95,9 @@ it grows, so every user-visible change gets a new version.
   by name (`tls://…`) on Direct — address with unencrypted shared servers that don't answer uses the address the panel
   found when that path has nothing to ask (`name_hint`), instead of being marked down for two minutes. README: your own
   AdGuard Home as a shared server answers one address 20 queries a second by default.
+- **The DNS cache keeps the query flags apart** (RD, CD, EDNS, DO; found while fixing the above, as old as DNS on the
+  server): a device that validates DNSSEC itself (systemd-resolved with `DNSSEC=yes`) got a cached answer without
+  signatures when a phone had asked the name first, and the name failed for it.
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't

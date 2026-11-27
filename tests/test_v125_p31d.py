@@ -351,6 +351,39 @@ class SameQueryTest(unittest.TestCase):
         self.assertLess(dt, 0.1)
 
 
+class CacheFlagsTest(unittest.TestCase):
+    """Кэш различает флаги запроса (рекурсия, без проверки DNSSEC — CD, EDNS, подписи DNSSEC — DO): устройство, которое
+    само проверяет DNSSEC, получало из кэша ответ без подписей, если имя первым спросил телефон без них (найдено при
+    исправлениях по проверке П31, было с первых выпусков). Те же флаги — из кэша, как раньше."""
+
+    def test_flags_apart_same_flags_cached(self):
+        net = Net()
+        p = proxy(net)
+        seen = []
+
+        async def enc(msg, server, mark, mode):
+            q = dnsproxy.parse_query(msg)
+            cd = bool(struct.unpack("!H", msg[2:4])[0] & 0x0010)
+            seen.append((q["name"], q["do"], cd))
+            return a_reply(msg, [FB if q["do"] else FB2 if cd else SHARED])     # «подписанный» ответ — другой
+        p._enc = enc
+        cd = q_msg("sig.example", qid=5)
+        cd = cd[:2] + struct.pack("!H", 0x0110) + cd[4:]
+
+        async def go():
+            out = []
+            for m in (q_msg("sig.example", qid=1), do_query("sig.example", 2), cd,
+                      q_msg("SIG.example", qid=3), do_query("sig.example", 4)):
+                out.append(await resolve(p, m))
+            return out
+        plain, signed, nocheck, plain2, signed2 = run(go)
+        self.assertEqual([who(r) for r in (plain, signed, nocheck, plain2, signed2)],
+                         ["shared", "fb", "fb2", "shared", "fb"])
+        self.assertEqual(len(seen), 3)                                 # повторы с теми же флагами — из кэша
+        self.assertEqual(p.stats["cached"], 2)
+        self.assertEqual(plain2[:2], struct.pack("!H", 3))             # из кэша — свой ID
+
+
 # ------------------------------------------------------------------ Д2
 class SetWriteTest(unittest.TestCase):
     """Д2: «фильтр по DNS» — адрес из ответа на имя правила, которого ещё нет в наборе nftables, сначала записывается в
