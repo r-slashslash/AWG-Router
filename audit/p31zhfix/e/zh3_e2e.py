@@ -21,9 +21,13 @@ def ns(cmd, **kw):
         return system.run(["unshare", "-rn", "nft", "-f", cmd[2]], timeout=60)
     return real(cmd, **kw)
 tg = h.target("container:amnezia-awg2:9999:z"); tg.ns.side_effect = ns
-old = open("/proc/sys/net/core/wmem_max").read().strip()
-for wmem in ("212992", os.environ.get("WMEM_OK", "4194304")):
-    subprocess.run(["sysctl", "-qw", f"net.core.wmem_max={wmem}"], check=True)
+try:
+    old = open("/proc/sys/net/core/wmem_max").read().strip()
+except OSError:
+    old = None                       # в контейнере: значение хоста (его ставит сам workflow)
+for wmem in ("212992", os.environ.get("WMEM_OK", "4194304")) if old else ("host",):
+    if old and subprocess.run(["sysctl", "-qw", f"net.core.wmem_max={wmem}"]).returncode:
+        print("sysctl refused: the host value stays"); wmem = "host"
     try:
         h.reconcile(tg); print(f"wmem_max {wmem}: rules applied, size {len(h.e.ruleset)} bytes")
     except Exception as e:
@@ -32,4 +36,5 @@ for wmem in ("212992", os.environ.get("WMEM_OK", "4194304")):
         for lang in ("ru", "en", "zh", "fa"):
             print(f"  {lang}: {uitext.text(lang, m)}")
         print("  nft:", str(e.__cause__)[:300].replace("\n", " | "))
-subprocess.run(["sysctl", "-qw", f"net.core.wmem_max={old}"], check=True)
+if old:
+    subprocess.run(["sysctl", "-qw", f"net.core.wmem_max={old}"])

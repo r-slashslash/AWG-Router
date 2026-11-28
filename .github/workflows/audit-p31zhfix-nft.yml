@@ -1,0 +1,31 @@
+# Временная проверка Ж3: таблица панели со списком размера России при net.core.wmem_max 212992 без CAP_NET_ADMIN
+# (unshare -rn, как Docker в LXC) — настоящий проход движка и настоящий nft: образа панели (musl) и хоста.
+name: audit p31zhfix nft
+on:
+  push:
+    branches: [audit-tmp-p31zhfix-nft]
+permissions:
+  contents: read
+jobs:
+  nft:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Host nft, wmem_max 212992
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq nftables >/dev/null; nft --version; uname -r
+          sudo sysctl -qw net.core.wmem_max=212992
+          sudo env DATA_DIR=/tmp/zh3h python3 audit/p31zhfix/e/zh3_e2e.py "$PWD" 2>&1 | grep -v "INFO\|WARNING awgr" | tail -12
+      - name: Panel image nft (musl), wmem_max 212992
+        run: |
+          sudo sysctl -qw net.core.wmem_max=212992
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -w /w -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
+            apk add -q --no-cache nftables util-linux >/dev/null; nft --version
+            cp -r /w /tmp/r && cd /tmp/r && rm -rf .git
+            DATA_DIR=/tmp/zh3 python3 audit/p31zhfix/e/zh3_e2e.py /tmp/r 2>&1 | grep -v "INFO\|WARNING awgr" | tail -12'
