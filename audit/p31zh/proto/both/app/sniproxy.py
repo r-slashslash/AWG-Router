@@ -1,0 +1,1226 @@
+"""Правила по доменам (на любой выход). Только стандартная библиотека, без импорта панели.
+
+Запускается панелью в сети сервера AWG (как туннели выходов):
+    nsenter -t PID -n -- python3 sniproxy.py /run/awgr/sni.json
+Клиенты, у которых в правилах есть список доменов, отправляют сюда свои TCP-соединения на
+порты 443 и 80 (nftables, redirect). Посредник читает начало соединения — имя сайта из TLS
+ClientHello (SNI) или заголовок Host у HTTP — и решает:
+  * имя есть в списке из правила → на выход SOCKS5 соединение открывается через прокси командой
+    CONNECT с именем сайта (адрес находит сам прокси, поэтому подменённый местным DNS адрес
+    ничему не мешает); на выход AWG и «напрямую» — к исходному адресу (тому, что клиент получил
+    из своего DNS) с меткой этого выхода; «блок» — соединение закрывается;
+  * иначе → соединение к исходному адресу с меткой «политика клиента N»: цепочка nftables
+    type route (hook output) проверяет обычные правила по адресам и ставит метку нужного выхода
+    (AWG, SOCKS5 через hev-socks5-tunnel, напрямую или блок).
+Если выход правила не работает, панель передаёт его резервный путь (метку, напрямую или блок).
+QUIC (UDP 443, с 1.21.0): первые пакеты новых соединений QUIC таких клиентов приходят из очереди
+ядра (NFQUEUE, nfqueue.py); имя сайта достаётся из Initial (quic.py), и пакет получает метку:
+выход AWG — его туннель, «напрямую» — основная таблица, SOCKS5 и «блок» — отказ (браузер сразу
+переходит на TCP, а там прокси получит имя), не из списка — «пропустить» к обычным правилам.
+ClientHello, которое не собралось за QUIC_HOLD, и QUIC без Initial — отказ: иначе сайт из списка
+ушёл бы мимо своего выхода. Остальные пакеты соединения берут метку из conntrack (цепочка c_quic).
+Данные соединений пересылаются внутри ядра (splice), без копирования в Python: через посредника
+идёт весь TCP 80/443 таких клиентов, а не только сайты из списков.
+Ограничение скорости выхода SOCKS5 (rates в настройках): соединения через CONNECT идут к прокси
+мимо туннеля выхода, и очередь tc на нём их не видит — их ограничивает общий для выхода «бак
+токенов» в каждую сторону; splice берёт из бака каждую порцию до отправки дальше.
+Предел выхода у двух дорог общий (shared): раз в секунду посредник смотрит, сколько идёт через
+туннель (/proc/net/dev — счётчики своей сети) и через него самого, и делит предел (share):
+каждой дороге — то, что не занято другой, но не меньше половины. Свою долю он ставит баку, долю
+туннеля — классу tc на нём (tc class change, очередь не пересоздаётся). При остановке и когда
+выход пропадает из настроек туннель получает весь предел обратно.
+SIGHUP — перечитать настройки и списки (разбор идёт в потоке, соединения его не ждут; списки,
+файлы которых не менялись, заново не разбираются).
+Счётчики и байты по «клиент|выход» — в файл stats раз в 15 секунд и при остановке (по ним панель
+считает трафик выходов).
+"""
+from __future__ import annotations
+
+import asyncio
+import bisect
+import fcntl
+import ipaddress
+import json
+import os
+import resource
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
+
+try:                                    # в панели и тестах — пакет app, у запущенного файла — файлы рядом
+    from . import nfqueue, quic
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import nfqueue  # type: ignore[no-redef]  # noqa: E402
+    import quic  # type: ignore[no-redef]  # noqa: E402
+
+SO_MARK = 36
+SO_ORIGINAL_DST = 80
+QUIC_HOLD = 0.1             # с: первый пакет QUIC ждёт продолжения ClientHello (Chrome режет его на 2–3)
+QUIC_FLOWS_MAX = 4096       # соединений QUIC, у которых ClientHello ещё собирается
+QUIC_DONE_TTL = 60.0        # с: решение по соединению (адреса и порты) помнится для его повторных первых пакетов
+QUIC_DONE_MAX = 16384
+PEEK_TIMEOUT = 3.0          # сколько ждём первых данных клиента (ClientHello / запрос HTTP)
+PEEK_MAX = 64 * 1024
+CONNECT_TIMEOUT = 10.0
+BUF = 256 * 1024
+# splice без блокировки (ожидание готовности сокета остаётся за циклом событий); MOVE просит ядро
+# переносить страницы, а не копировать. Запасные числа: модуль импортируется и там, где splice нет
+# (тесты на macOS), сами вызовы splice там не выполняются.
+SPLICE_FLAGS = getattr(os, "SPLICE_F_MOVE", 1) | getattr(os, "SPLICE_F_NONBLOCK", 2)
+IDLE_TIMEOUT = 900          # соединение без данных в обе стороны дольше — закрываем
+KEEPALIVE = (120, 30, 4)    # TCP keepalive: пропавший без FIN собеседник виден через ~4 мин
+STATS_EVERY = 15
+ACCEPT_LOG_EVERY = 10.0     # повторяющуюся ошибку приёма пишем в журнал не чаще, с
+QUIC_ERR_LOG_EVERY = 60     # ошибка разбора QUIC в журнал — не чаще раза в столько секунд
+
+
+# --------------------------------------------------------------- разбор имени
+def tls_sni(data: bytes) -> str | None | bool:
+    """Имя из TLS ClientHello. None — это не TLS или имени нет; False — данных пока мало."""
+    hs = b""
+    off = 0
+    while True:
+        if len(data) < off + 5:
+            return False
+        if data[off] != 0x16 or data[off + 1] != 0x03:
+            return None
+        rlen = struct.unpack("!H", data[off + 3:off + 5])[0]
+        if rlen == 0:
+            # пустая запись в TLS запрещена; поток таких записей не растит ClientHello, а разбор каждого куска
+            # шёл бы заново по всему прочитанному
+            return None
+        if len(data) < off + 5 + rlen:
+            return False
+        hs += data[off + 5:off + 5 + rlen]
+        off += 5 + rlen
+        if len(hs) >= 4:
+            if hs[0] != 0x01:
+                return None
+            need = 4 + int.from_bytes(hs[1:4], "big")
+            if len(hs) >= need:
+                return _client_hello_sni(hs[4:need])
+            if need > PEEK_MAX:
+                return None
+
+
+def _client_hello_sni(b: bytes) -> str | None:
+    try:
+        p = 2 + 32                                   # версия, random
+        p += 1 + b[p]                                # session id
+        p += 2 + struct.unpack("!H", b[p:p + 2])[0]  # cipher suites
+        p += 1 + b[p]                                # compression
+        if p + 2 > len(b):
+            return None
+        end = p + 2 + struct.unpack("!H", b[p:p + 2])[0]
+        p += 2
+        while p + 4 <= min(end, len(b)):
+            etype, elen = struct.unpack("!HH", b[p:p + 4])
+            p += 4
+            if etype == 0:
+                q = p + 2
+                while q + 3 <= p + elen:
+                    ntype, nlen = b[q], struct.unpack("!H", b[q + 1:q + 3])[0]
+                    q += 3
+                    if ntype == 0:
+                        if nlen > 253:
+                            return None
+                        return b[q:q + nlen].decode("ascii", "replace").lower().rstrip(".")
+                    q += nlen
+                return None
+            p += elen
+    except (IndexError, struct.error):
+        return None
+    return None
+
+
+HTTP_HEAD_MAX = 16 * 1024   # дальше конца заголовков HTTP не ждём: Host ищется в уже полных строках
+HTTP_METHODS = (b"GET ", b"POST", b"HEAD", b"PUT ", b"OPTI", b"DELE", b"PATC", b"CONN")
+
+
+def http_host(data: bytes) -> str | None | bool:
+    end = data.find(b"\r\n\r\n")
+    if end < 0:
+        if len(data) < HTTP_HEAD_MAX:
+            return False
+        # заголовки длиннее (большие cookie): Host обычно в начале — берём из полных строк; нет его там —
+        # False (соединение закроется), а не «имени нет»: иначе сайт из списка ушёл бы по правилам адресов
+        end = data.rfind(b"\r\n")
+        if end < 0:
+            return False
+        lines = data[:end].decode("latin-1").split("\r\n")
+        if len(lines[0].split(" ")) != 3:
+            return None                 # не запрос HTTP
+        return _host_line(lines) or False
+    head = data[:end].decode("latin-1")
+    return _host_line(head.split("\r\n"))
+
+
+def _host_line(lines: list[str]) -> str | None:
+    """Имя из строки Host запроса HTTP (первая строка — запрос). None — не запрос или Host нет."""
+    if len(lines[0].split(" ")) != 3:
+        return None
+    for line in lines[1:]:
+        k, _, v = line.partition(":")
+        if k.strip().lower() == "host":
+            v = v.strip().lower()
+            if v.startswith("[") or len(v) > 260:
+                return None
+            return (v.rsplit(":", 1)[0] if ":" in v else v).rstrip(".")
+    return None
+
+
+def name_of(data: bytes, port: int) -> str | None | bool:
+    if data[:1] == b"\x16":
+        return tls_sni(data)
+    if port == 80 or data[:4] in HTTP_METHODS:
+        return http_host(data)
+    if len(data) < 4 and any(m.startswith(data) for m in HTTP_METHODS):
+        return False                    # первый кусок «GE» — начало запроса HTTP: ждём продолжения
+    return None
+
+
+def match(name: str, doms: set[str]) -> bool:
+    if len(name) > 253:                 # не имя сайта; на нём перебор суффиксов занял бы секунды, а с ним — весь обработчик
+        return False
+    labels = name.split(".")
+    return any(".".join(labels[i:]) in doms for i in range(len(labels)))
+
+
+async def peek_name(sock: socket.socket, dport: int) -> tuple[bytes, str | None]:
+    """Начало соединения клиента, пока из него не прочитается имя сайта (или PEEK_TIMEOUT, или
+    PEEK_MAX байт). -> (прочитанное: его надо отправить сайту, имя; None — имени нет: клиент молчит, это не TLS и
+    не HTTP или в ClientHello нет SNI; False — ClientHello или запрос начался, но не дошёл целиком)."""
+    loop = asyncio.get_running_loop()
+    data = b""
+    name = False
+    deadline = time.monotonic() + PEEK_TIMEOUT
+    while name is False and len(data) < PEEK_MAX:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        try:
+            chunk = await asyncio.wait_for(loop.sock_recv(sock, PEEK_MAX - len(data)), left)
+        except asyncio.TimeoutError:
+            break
+        if not chunk:
+            break
+        data += chunk
+        name = name_of(data, dport)
+    if name is False and data:
+        return data, False      # начало ClientHello или запроса HTTP есть, а имени так и нет (связь оборвалась)
+    return data, name or None
+
+
+# --------------------------------------------------------------- SOCKS5
+async def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Ровно n байт ответа прокси. Лишнее не читается: данные сайта, пришедшие сразу за ответом,
+    остаются в сокете, и их пересылает splice."""
+    loop = asyncio.get_running_loop()
+    buf = b""
+    while len(buf) < n:
+        chunk = await asyncio.wait_for(loop.sock_recv(sock, n - len(buf)), CONNECT_TIMEOUT)
+        if not chunk:
+            raise OSError("socks: connection closed")
+        buf += chunk
+    return buf
+
+
+async def _connect_any(host: str, port: int, mark: int = 0) -> socket.socket:
+    """Подключение к прокси. Панель передаёт адрес, а если не смогла его разрешить, то имя; у имени
+    может быть несколько адресов (IPv4 и IPv6), поэтому они пробуются по очереди. Адрес, который
+    не подходит сети сервера (IPv6 без IPv6), тоже просто пропускается."""
+    loop = asyncio.get_running_loop()
+    err = None
+    for family, kind, proto, _, addr in await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        try:
+            s = socket.socket(family, kind, proto)
+        except OSError as e:
+            err = e
+            continue
+        try:
+            if mark:
+                s.setsockopt(socket.SOL_SOCKET, SO_MARK, mark)
+            s.setblocking(False)
+            await loop.sock_connect(s, addr)
+            return s
+        except OSError as e:
+            s.close()
+            err = e
+        except BaseException:
+            s.close()
+            raise
+    raise err                                           # getaddrinfo не отдаёт пустой список
+
+
+async def send_all(sock: socket.socket, data: bytes) -> None:
+    """Отправка с пределом времени: собеседник, который принял соединение, но не читает,
+    иначе держал бы задачу и её сокеты бесконечно (IDLE_TIMEOUT сюда не доходит)."""
+    await asyncio.wait_for(asyncio.get_running_loop().sock_sendall(sock, data), CONNECT_TIMEOUT)
+
+
+async def socks_connect(s: dict, host: str | None, ip: str, port: int, mark: int = 0) -> socket.socket:
+    """Соединение через прокси: CONNECT по имени (или по адресу, если имени нет).
+    Возвращает сырой сокет: дальше поток идёт через splice, как и на прямом пути.
+    mark — метка сокета с номером ограничения скорости правила (with_lim; 0 — нет): по нему nftables ограничивает ответы."""
+    sock = await asyncio.wait_for(_connect_any(s["ip"], int(s["port"]), mark), CONNECT_TIMEOUT)
+    try:
+        user, pw = (s.get("user") or "").encode(), (s.get("password") or "").encode()
+        await send_all(sock, b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")
+        ver, method = await _recv_exact(sock, 2)
+        if ver != 5 or method == 0xFF:
+            raise OSError("socks: no acceptable auth method")
+        if method == 2:
+            await send_all(sock, b"\x01" + bytes([len(user)]) + user + bytes([len(pw)]) + pw)
+            if (await _recv_exact(sock, 2))[1] != 0:
+                raise OSError("socks: login rejected")
+        if host:
+            hb = host.encode("idna") if any(ord(c) > 127 for c in host) else host.encode()
+            addr = b"\x03" + bytes([len(hb)]) + hb
+        else:
+            addr = b"\x01" + socket.inet_aton(ip)
+        await send_all(sock, b"\x05\x01\x00" + addr + struct.pack("!H", port))
+        head = await _recv_exact(sock, 4)
+        if head[1] != 0:
+            raise OSError(f"socks: connect failed ({head[1]})")
+        n = {1: 4, 4: 16}.get(head[3])
+        if n is None:
+            n = (await _recv_exact(sock, 1))[0]          # адрес-имя: длина в первом байте
+        await _recv_exact(sock, n + 2)
+        return sock
+    except BaseException:
+        sock.close()
+        raise
+
+
+async def direct_socket(ip: str, port: int, mark: int) -> socket.socket:
+    """Соединение к исходному адресу; метка политики выбирает выход в цепочке type route."""
+    loop = asyncio.get_running_loop()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if mark:
+            s.setsockopt(socket.SOL_SOCKET, SO_MARK, mark)
+        s.setblocking(False)
+        await asyncio.wait_for(loop.sock_connect(s, (ip, port)), CONNECT_TIMEOUT)
+    except BaseException:
+        s.close()
+        raise
+    return s
+
+
+def no_delay(sock: socket.socket) -> None:
+    """Без алгоритма Нейгла: мелкие порции (рукопожатие TLS, кадры HTTP/2) уходят сразу, а не ждут
+    подтверждения предыдущих. Потоки asyncio включали это сами; splice работает с сырыми сокетами."""
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except OSError:
+        pass
+
+
+def keepalive(sock: socket.socket) -> None:
+    """Пропавший клиент (телефон ушёл из сети без FIN) не держит соединение вечно."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for opt, v in zip(("TCP_KEEPIDLE", "TCP_KEEPINTVL", "TCP_KEEPCNT"), KEEPALIVE):
+            if hasattr(socket, opt):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), v)
+    except OSError:
+        pass
+
+
+SHARE_EVERY = 1.0          # как часто делить предел выхода между туннелем и посредником, с
+TC_REFRESH = 10.0          # долю туннеля повторяем не реже (панель могла пересоздать очередь)
+SHARE_SMOOTH = 0.5         # сглаживание скоростей при делении
+
+
+def _lim(v) -> int:
+    """Номер ограничения скорости правила из настроек → биты метки RULE_LIM_MASK (0x00FF0000); чужое — 0."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 and not v & ~0x00FF0000 else 0
+
+
+# config.RULE_LIM_TAG: метка сокета без своей (к клиенту, к прокси, «напрямую»), когда у него номер ограничения скорости.
+# nftables снимает номер (rl_lab) только с меток панели: на сервере «на хосте» те же биты у чужих программ (Tailscale)
+LIM_TAG = 0xE1F0
+
+
+def with_lim(mark: int, lim: int) -> int:
+    """Метка сокета с номером ограничения скорости правила: у сокета без своей метки — ещё служебная LIM_TAG."""
+    if not lim:
+        return mark
+    return mark | lim if mark else LIM_TAG | lim
+
+
+def share(cap: float, other: float) -> float:
+    """Доля одной дороги в общем пределе cap: то, что не занято другой, но не меньше половины —
+    когда качают обе, предел делится примерно поровну, когда одна — она получает весь."""
+    return max(cap - other, cap / 2)
+
+
+def net_dev(text: str) -> dict[str, tuple[int, int]]:
+    """/proc/net/dev → {интерфейс: (принято, отправлено)} в байтах."""
+    out = {}
+    for line in text.splitlines()[2:]:
+        name, _, rest = line.partition(":")
+        f = rest.split()
+        if len(f) >= 9:
+            out[name.strip()] = (int(f[0]), int(f[8]))
+    return out
+
+
+class Bucket:
+    """Ограничение скорости, общее для всех соединений одного выхода в одну сторону: каждое
+    соединение берёт байты из бака и, уйдя в минус, ждёт, пока бак не наполнится."""
+
+    def __init__(self, rate: float):
+        self.rate = float(rate)                       # байт/с
+        self.cap = self.rate                          # предел из настроек (rate — текущая доля)
+        self.burst = max(self.rate * 0.05, 65536.0)
+        self.tokens = self.burst
+        self.t = time.monotonic()
+        self.total = 0                                # байт через бак — скорость посредника по выходу
+
+    async def take(self, n: int) -> None:
+        self.total += n
+        now = time.monotonic()
+        self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
+        self.t = now
+        self.tokens -= n
+        if self.tokens < 0:
+            await asyncio.sleep(-self.tokens / self.rate)
+
+
+async def _ready(fd: int, writable: bool) -> None:
+    """Ждёт готовности сокета через цикл событий, не читая данные в Python."""
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    add, remove = (loop.add_writer, loop.remove_writer) if writable else (loop.add_reader, loop.remove_reader)
+    add(fd, lambda: fut.done() or fut.set_result(None))
+    try:
+        await fut
+    finally:
+        remove(fd)
+
+
+async def splice_pipe(src: socket.socket, dst: socket.socket, cnt: list | None, i: int, act: list,
+                      bucket: Bucket | None) -> None:
+    """Копирует поток src -> dst внутри ядра: сокет -> канал -> сокет через splice.
+
+    Данные не попадают в Python: копирование в пространство пользователя и обратно стоило
+    большей части CPU посредника. cnt[i]: счётчик байт (учёт трафика выходов), act[0]: время
+    последних данных, bucket: ограничение скорости выхода SOCKS5. Пока бак ждёт, прочитанное
+    лежит в канале, а сокет src не читается: TCP притормаживает отправителя.
+    """
+    rp, wp = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        try:
+            fcntl.fcntl(wp, fcntl.F_SETPIPE_SZ, BUF)    # меньше переключений на каждый мегабайт
+        except OSError:
+            pass                                        # лимит pipe-user-pages: остаётся размер по умолчанию
+        while True:
+            try:
+                n = os.splice(src.fileno(), wp, BUF, flags=SPLICE_FLAGS)
+            except BlockingIOError:
+                await _ready(src.fileno(), False)
+                continue
+            if n == 0:
+                break                                   # собеседник закрыл запись
+            if cnt is not None:
+                cnt[i] += n
+            act[0] = time.monotonic()
+            if bucket is not None:
+                await bucket.take(n)
+            # Канал опустошается до следующего чтения: так EAGAIN при чтении означает только пустой сокет.
+            while n:
+                try:
+                    n -= os.splice(rp, dst.fileno(), n, flags=SPLICE_FLAGS)
+                except BlockingIOError:
+                    await _ready(dst.fileno(), True)
+    except OSError:
+        pass
+    finally:
+        os.close(rp)
+        os.close(wp)
+        try:
+            dst.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+async def relay_both(up: Awaitable[None], down: Awaitable[None], act: list) -> None:
+    """Обе стороны соединения: до конца или пока соединение молчит дольше IDLE_TIMEOUT (act[0] -
+    время последних данных). Сокеты потом закрывает вызывающий, поэтому возврат только когда обе
+    стороны остановлены: иначе уцелевшая ждала бы на закрытом дескрипторе, который ядро уже выдало
+    другому соединению. Сторона, закончившая нормально (собеседник закрыл запись), другую не
+    останавливает. Ошибка одной стороны останавливает другую и поднимается дальше."""
+    tasks = [asyncio.ensure_future(up), asyncio.ensure_future(down)]
+    try:
+        while True:
+            done, pending = await asyncio.wait(tasks, timeout=min(60, IDLE_TIMEOUT),
+                                               return_when=asyncio.FIRST_EXCEPTION)
+            if not pending or any(t.exception() for t in done) or time.monotonic() - act[0] > IDLE_TIMEOUT:
+                break
+    finally:
+        for t in tasks:
+            t.cancel()
+        # Повторная отмена (остановка посредника) не прерывает это ожидание: стороны ещё снимают
+        # свои дескрипторы с цикла событий, а сразу за возвратом сокеты закрываются.
+        cancelled = False
+        while not all(t.done() for t in tasks):
+            try:
+                await asyncio.wait(tasks)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+    for t in tasks:
+        if not t.cancelled() and t.exception():
+            raise t.exception()
+
+
+def _ipv4_range(text: str) -> int | None:
+    """'a.b.c.d/nn' или адрес -> первый адрес << 32 | последний; None: IPv6, мусор, пустая строка.
+    Без модуля ipaddress: на больших списках он медленный, а inet_pton работает в C. Длина
+    префикса проверяется как у ipaddress (только цифры, 0-32): учёт не должен расходиться с маршрутами."""
+    addr, slash, bits = text.partition("/")
+    if slash and not (bits.isascii() and bits.isdigit()):
+        return None
+    try:
+        a = int.from_bytes(socket.inet_pton(socket.AF_INET, addr), "big")
+    except (OSError, ValueError):                   # ValueError: нулевой байт в испорченной строке
+        return None
+    n = int(bits) if slash else 32
+    if n > 32:
+        return None
+    host = (1 << (32 - n)) - 1                      # биты узла обнуляются, как ip_network(strict=False)
+    return (a & ~host) << 32 | a | host
+
+
+class Nets:
+    """Адреса списка (файл CIDR панели) для поиска «в какой выход уйдёт соединение» —
+    так же, как цепочка q_* в nftables, только для учёта трафика."""
+
+    def __init__(self, src: str | Iterable[str]):
+        """src: путь к файлу или его строки (уже открытый файл)."""
+        if isinstance(src, str):
+            with open(src) as f:
+                self._build(f)
+        else:
+            self._build(src)
+
+    def _build(self, lines: Iterable[str]) -> None:
+        # Полоса хранится одним числом "начало << 32 | конец": сортировка держит GIL и на это время
+        # останавливает цикл событий, а числа сортируются быстрее пар.
+        ranges = []
+        for line in lines:
+            r = _ipv4_range(line.strip())
+            if r is not None:
+                ranges.append(r)
+        ranges.sort()
+        self.starts, self.ends = [], []
+        for r in ranges:
+            a, b = r >> 32, r & 0xFFFFFFFF
+            if self.ends and a <= self.ends[-1] + 1:
+                self.ends[-1] = max(self.ends[-1], b)
+            else:
+                self.starts.append(a)
+                self.ends.append(b)
+
+    def __contains__(self, ip: str) -> bool:
+        x = int(ipaddress.IPv4Address(ip))
+        i = bisect.bisect_right(self.starts, x) - 1
+        return i >= 0 and self.ends[i] >= x
+
+
+# --------------------------------------------------------------- настройки
+@dataclass(frozen=True)
+class Conf:
+    """Разобранный sni.json со списками. Строится целиком до подмены: посредник видит либо старые
+    настройки, либо новые, но не смесь."""
+    cfg: dict
+    lists: dict[str, set[str]]                      # домены списков из правил
+    nets: dict[str, Nets]                           # адреса списков: учёт трафика без совпадения
+    rates: dict[tuple[str, int], float]             # (выход, сторона) -> байт/с для бака
+    shared: dict[tuple[str, int], dict]             # общий предел туннеля и посредника: {"iface", "cap", "tc"}
+    net: ipaddress.IPv4Network | ipaddress.IPv6Network   # адреса клиентов, которых посредник обслуживает
+    files: dict = field(default_factory=dict)       # разобранные списки для следующего load (_cached)
+
+
+def _positive(v) -> bool:
+    """Число больше нуля из JSON. bool — подкласс int в Python, но true пределом не считается."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+
+
+def _domains(f: Iterable[str]) -> set[str]:
+    """Строки файла списка доменов -> множество имён."""
+    return {x.strip() for x in f if x.strip()}
+
+
+def _cached(kind: str, path: str, prev: dict, files: dict, parse: Callable[[Iterable[str]], object]):
+    """Разобранный файл списка. Тот же файл (inode, размер, время изменения в нс) берётся из прошлого
+    разбора: панель шлёт SIGHUP при каждом изменении настроек, а большие списки при этом обычно не
+    меняются, и их повторный разбор держал бы GIL (а с ним цикл событий) впустую. Признаки берутся
+    у уже открытого файла: подмена между проверкой и чтением не даст старый разбор под новым именем.
+    prev — прошлый кэш (только читается: им ещё пользуется посредник), files — новый."""
+    with open(path) as f:
+        st = os.fstat(f.fileno())
+        sig = (st.st_ino, st.st_size, st.st_mtime_ns)
+        hit = prev.get((kind, path))
+        value = hit[1] if hit is not None and hit[0] == sig else parse(f)
+    files[(kind, path)] = (sig, value)
+    return value
+
+
+def load(path: str, prev: dict | None = None) -> Conf:
+    """Читает и разбирает настройки, ничего не меняя в посреднике: так это можно делать в потоке,
+    пока цикл событий обслуживает соединения (большие списки адресов разбираются заметное время).
+    prev — Conf.files прошлого разбора: неизменённые списки берутся оттуда, не разбираются заново."""
+    prev = prev or {}
+    files: dict = {}
+    with open(path) as f:
+        cfg = json.load(f)
+    lists = {}
+    for lid, p in (cfg.get("lists") or {}).items():
+        try:
+            lists[lid] = _cached("lists", p, prev, files, _domains)
+        except OSError as e:
+            log(f"list {lid}: {e}")
+    nets = {}
+    for lid, p in (cfg.get("cidrs") or {}).items():
+        try:
+            nets[lid] = _cached("cidrs", p, prev, files, Nets)
+        except OSError as e:
+            log(f"cidrs {lid}: {e}")
+    rates = {}
+    for out, pair in (cfg.get("rates") or {}).items():
+        for i in (0, 1):
+            v = pair[i] if isinstance(pair, list) and len(pair) == 2 else 0
+            if _positive(v):
+                rates[(out, i)] = float(v)
+    shared = {}
+    for out, dirs in (cfg.get("shared") or {}).items():
+        for i in (0, 1):
+            d = (dirs or {}).get(str(i)) if isinstance(dirs, dict) else None
+            if isinstance(d, dict) and (out, i) in rates and isinstance(d.get("tc"), list) and _positive(d.get("cap")):
+                shared[(out, i)] = d
+    net = ipaddress.ip_network(cfg.get("clients") or "0.0.0.0/0", strict=False)
+    return Conf(cfg, lists, nets, rates, shared, net, files)
+
+
+# --------------------------------------------------------------- посредник
+class Sniffer:
+    def __init__(self, path: str):
+        self.path = path
+        self.stats = {"conns": 0, "active": 0, "matched": 0, "errors": 0, "no_name": 0,
+                      "started": time.time(), "by_list": {}}
+        # байты по «клиент|выход» с запуска процесса: панель добавляет их к трафику выходов
+        # (соединения через посредника — не транзитные, таблица учёта nftables их не видит)
+        self.bytes: dict[str, list[int]] = {}
+        self.buckets: dict[tuple[str, int], Bucket] = {}   # (выход, 0 — отдача | 1 — загрузка)
+        self.shared: dict[tuple[str, int], dict] = {}
+        self.share_state: dict[tuple[str, int], dict] = {}  # скорости и последняя доля tc для деления
+        self.hup_pending = False            # пришёл SIGHUP, который ещё не перечитан
+        self.reload_task: asyncio.Task | None = None
+        self.files: dict = {}               # разобранные списки прошлого перечитывания (Conf.files)
+        self.queue: nfqueue.Queue | None = None
+        self.qflows: dict[tuple, dict] = {}  # соединения QUIC, чей ClientHello ещё не собран
+        # принятые решения: пока сервер не ответил, пакеты соединения остаются «новыми» для conntrack и
+        # снова идут в очередь (повтор Initial — бывает и половиной ClientHello); «пропустить» не
+        # записывается в conntrack, поэтому повтор получает то же решение отсюда
+        self.qdone: dict[tuple, tuple[int, float]] = {}
+        self._quic_logged = -1e9            # когда последний раз писали ошибку разбора QUIC в журнал
+        # открытые соединения (1.25.0): id → (клиент, имя сайта, адрес сайта, сокет клиента, сокет к сайту) — их
+        # закрывает ручная смена пути клиента (drop); drop_gen — номер последней такой смены, которую уже сделали
+        self.live: dict[int, tuple] = {}
+        self.drop_gen = None
+        self.reload()
+
+    def reload(self) -> None:
+        """Перечитать настройки сразу, в вызывающем потоке (запуск посредника)."""
+        self.give_back(self.apply(load(self.path, self.files)))
+
+    def give_back(self, ds) -> None:
+        """Туннелям этих выходов — весь предел, с ожиданием tc (запуск и остановка: цикл событий
+        ещё или уже не обслуживает соединения)."""
+        for d in ds:
+            self.tc_set(d, d["cap"], wait=False)
+
+    def apply(self, c: Conf) -> list[dict]:
+        """Подменяет настройки. Бак с прежней скоростью остаётся тем же: открытые соединения держат
+        ссылку на него, и с новым баком предел выхода делился бы надвое.
+        -> настройки tc выходов, которые больше не делятся: их туннелям нужно вернуть весь предел."""
+        old = (getattr(self, "lists", {}), getattr(self, "nets", {}))
+        self.cfg, self.lists, self.nets, self.net, self.files = c.cfg, c.lists, c.nets, c.net, c.files
+        self.drop(old)
+        old_buckets = self.buckets
+        self.buckets = {k: b if (b := old_buckets.get(k)) and b.cap == r else Bucket(r)
+                        for k, r in c.rates.items()}
+        old, self.shared = self.shared, c.shared
+        # Скорости для деления считаются от счётчика бака: при новом баке или новом пределе старое
+        # состояние дало бы ложную (даже отрицательную) скорость посредника.
+        self.share_state = {k: v for k, v in self.share_state.items()
+                            if c.shared.get(k) == old.get(k) and self.buckets.get(k) is old_buckets.get(k)}
+        return [d for k, d in old.items() if k not in c.shared or c.shared[k].get("tc") != d.get("tc")]
+
+    def rule_path(self, pol: dict, maps: tuple, name: str | None, ip: str) -> str:
+        """Путь соединения по пути настроек (drop): правила по доменам — по имени (они раньше), по адресам — по адресу
+        сайта, иначе «По умолчанию». maps — (списки доменов, списки сетей) тех настроек, к которым относится pol."""
+        doms, nets = maps
+        if name:
+            for lids, out in pol.get("drules") or []:
+                if any(lid in doms and match(name, doms[lid]) for lid in lids):
+                    return str(out)
+        for lids, out in pol.get("rules") or []:
+            try:
+                if any(lid in nets and ip in nets[lid] for lid in lids):
+                    return str(out)
+            except ValueError:
+                pass
+        return str(pol.get("default"))
+
+    def drop(self, old: tuple) -> int:
+        """Ручная смена выхода или адреса у правил клиентов (настройки "drop" от панели, 1.25.0): открытые соединения,
+        у которых путь стал другим, закрываются — приложение откроет новое, и оно пойдёт новым путём. Соединения
+        других правил остаются. Автоматические переносы (балансировка, резерв) сюда не попадают. → сколько закрыто."""
+        d = self.cfg.get("drop") or {}
+        gen = d.get("gen")
+        if gen is None or gen == getattr(self, "drop_gen", None):
+            return 0
+        self.drop_gen = gen
+        clients, n = d.get("clients") or {}, 0
+        new = (self.lists, self.nets)
+        for key, (peer, name, dip, *socks) in list(self.__dict__.setdefault("live", {}).items()):
+            c = clients.get(peer)
+            if not c or self.rule_path(c["old"], old, name, dip) == self.rule_path(c["new"], new, name, dip):
+                continue
+            for x in socks:
+                try:
+                    x.shutdown(socket.SHUT_RDWR)        # пересылка увидит конец и закроет оба сокета сама
+                except OSError:
+                    pass
+            self.live.pop(key, None)
+            n += 1
+        # решения QUIC, которые ещё не в conntrack (сервер не ответил): у этих клиентов — заново
+        self.qdone = {k: v for k, v in getattr(self, "qdone", {}).items()
+                      if not (isinstance(k, tuple) and k and k[0] in clients)}
+        if n:
+            log(f"closed {n} connections with a new path")
+        return n
+
+    def policy(self, client: str) -> dict:
+        pname = (self.cfg.get("client_policy") or {}).get(client, "p_global")
+        return (self.cfg.get("policies") or {}).get(pname) or {}
+
+    def decide(self, client: str, name: str | None) -> tuple[dict, str | None]:
+        """→ (куда: {"socks"} | {"mark"} | {"block"}, список). Без совпадения — метка политики."""
+        return self.decide_rule(client, name)[:2]
+
+    def decide_rule(self, client: str, name: str | None) -> tuple[dict, str | None, int | None]:
+        """decide и номер совпавшего правила в политике клиента (учёт трафика по правилам, 1.24.0; None — без него).
+        Номер ограничения скорости правила — в to["lim"] (биты метки; нет ключа — без ограничения)."""
+        pol = self.policy(client)
+        if not pol:
+            # клиента нет в настройках (панель только что их сменила, а nftables ещё прежние): его путь не
+            # известен — закрыть, а не отпустить с меткой 0 по основной таблице мимо выхода
+            return {"block": True}, None, None
+        rule, lid = self.name_rule(pol, name)
+        if rule is not None:
+            return rule.get("to") or {"mark": 0}, lid, rule.get("slot")
+        return {"mark": int(pol.get("mark") or 0)}, None, None
+
+    def name_rule(self, pol: dict, name: str | None) -> tuple[dict | None, str | None]:
+        """Первое правило по доменам политики, в чьём списке есть имя, и этот список (одно для TCP и QUIC)."""
+        if name:
+            for rule in pol.get("rules") or []:
+                for lid in rule.get("lists") or []:
+                    if match(name, self.lists.get(lid, set())):
+                        return rule, lid
+        return None, None
+
+    # ------------------------------------------------------------ QUIC (UDP 443) по имени
+    def open_queue(self) -> None:
+        """Очередь ядра для первых пакетов QUIC клиентов с правилами по доменам (правило nftables
+        `queue … bypass` в цепочке c_quic). Нет модуля nfnetlink_queue (OpenVZ/LXC) — QUIC у них
+        блокируется, как раньше: панель видит это по счётчикам (quic)."""
+        q = self.cfg.get("quic") or {}
+        if not q.get("queue"):
+            self.stats["quic"] = "off"
+            return
+        try:
+            self.queue = nfqueue.Queue(int(q["queue"]))
+        except OSError as e:
+            self.stats["quic"] = f"error: {e}"
+            log(f"quic queue: {e}")
+            return
+        asyncio.get_running_loop().add_reader(self.queue.fileno(), self.on_queue)
+        self.stats["quic"] = "on"
+
+    def quic_mark(self, client: str, name: str | None) -> int:
+        """Метка первого пакета QUIC: правило по доменам совпало — метка его выхода (qmark: выход
+        AWG — туннель, «напрямую» — без туннеля, SOCKS5 и «блок» — отказ, браузер перейдёт на TCP);
+        нет — «пропустить», дальше обычные правила политики."""
+        q = self.cfg.get("quic") or {}
+        pol = self.policy(client)
+        if not pol:
+            # клиента нет в настройках, как у TCP (decide_rule): путь не известен — блок, а не «пропустить»
+            return int(q.get("block") or 0)
+        rule, _ = self.name_rule(pol, name)
+        if rule is not None:
+            self.stats["quic_matched"] = self.stats.get("quic_matched", 0) + 1
+            return int(rule.get("qmark") or q.get("block") or 0)
+        return int(q.get("pass") or 0)
+
+    def on_queue(self) -> None:
+        q = self.cfg.get("quic") or {}
+        block, passm = int(q.get("block") or 0), int(q.get("pass") or 0)
+        try:
+            packets = self.queue.read()
+        except OSError as e:
+            log(f"quic queue read: {e}")
+            return
+        for pid, pkt in packets:
+            try:
+                self.on_packet(pid, pkt, block, passm)
+            except Exception as e:  # noqa: BLE001 — пакет не должен остаться в очереди навсегда
+                self._quic_count("quic_errors")
+                now = time.monotonic()
+                if now - self._quic_logged >= QUIC_ERR_LOG_EVERY:   # ошибка на каждый пакет залила бы журнал
+                    self._quic_logged = now
+                    log(f"quic: {e!r}")
+                self.queue.verdict(pid, True, block)
+
+    def on_packet(self, pid: int, pkt: bytes, block: int, passm: int) -> None:
+        u = nfqueue.udp_of(pkt)
+        if not u:
+            self.queue.verdict(pid, True, passm)
+            return
+        src, sport, dst, dport, data = u
+        five = (src, sport, dst, dport)
+        done = self.qdone.get(five)
+        if done and done[1] > time.monotonic():
+            self.queue.verdict(pid, True, done[0])
+            return
+        k = quic.kind(data)
+        if k == "other":                          # не QUIC (DTLS, другой VPN) — обычные правила
+            self.remember(five, passm)
+            self.queue.verdict(pid, True, passm)
+            return
+        if k == "quic":                           # QUIC, но не Initial: имени не узнать — на TCP
+            self._quic_count("quic_unknown")
+            self.queue.verdict(pid, True, block)
+            return
+        try:
+            dcid, crypto = quic.initial_frames(data)
+        except quic.NotInitial:
+            self._quic_count("quic_bad")
+            self.queue.verdict(pid, True, block)
+            return
+        key = (src, sport, dst, dport, dcid)
+        f = self.qflows.get(key)
+        if f is None:
+            if len(self.qflows) >= QUIC_FLOWS_MAX:
+                self._quic_count("quic_busy")
+                self.queue.verdict(pid, True, block)
+                return
+            f = self.qflows[key] = {"asm": quic.Assembler(), "ids": [], "timer": None}
+            f["timer"] = asyncio.get_running_loop().call_later(QUIC_HOLD, self.quic_timeout, key, block)
+        f["ids"].append(pid)
+        f["asm"].add(crypto)
+        try:
+            hello = f["asm"].hello()
+        except quic.NotInitial:
+            self._quic_count("quic_bad")
+            self.quic_finish(key, block)
+            return
+        if hello is not None:
+            self.quic_finish(key, self.quic_mark(src, _client_hello_sni(hello)))
+
+    def quic_timeout(self, key: tuple, block: int) -> None:
+        """ClientHello не собрался за QUIC_HOLD — отказ: браузер перейдёт на TCP, где имя видно. Пустить
+        «как обычно» нельзя: сайт из списка ушёл бы мимо своего выхода."""
+        if key in self.qflows:
+            self._quic_count("quic_timeout")
+            self.quic_finish(key, block)
+
+    def remember(self, five: tuple, mark: int) -> None:
+        if len(self.qdone) >= QUIC_DONE_MAX:
+            now = time.monotonic()
+            self.qdone = {k: v for k, v in self.qdone.items() if v[1] > now}
+            while len(self.qdone) >= QUIC_DONE_MAX:
+                self.qdone.pop(next(iter(self.qdone)))
+        self.qdone[five] = (mark, time.monotonic() + QUIC_DONE_TTL)
+
+    def quic_finish(self, key: tuple, mark: int) -> None:
+        f = self.qflows.pop(key, None)
+        if not f:
+            return
+        self.remember(key[:4], mark)
+        if f["timer"]:
+            f["timer"].cancel()
+        for pid in f["ids"]:
+            self.queue.verdict(pid, True, mark)
+
+    def _quic_count(self, k: str) -> None:
+        self.stats[k] = self.stats.get(k, 0) + 1
+
+    def miss_out(self, client: str, ip: str) -> str | None:
+        """Выход соединения без совпадения по домену (для учёта): правила политики по адресам,
+        затем выход по умолчанию — как цепочка q_* в nftables. None — блок или неизвестно."""
+        return self.miss(client, ip)[0]
+
+    def miss(self, client: str, ip: str) -> tuple[str | None, int | None]:
+        """miss_out и номер правила по адресам (или «По умолчанию»), если панель его дала (учёт по правилам)."""
+        return self.miss_rule(client, ip)[:2]
+
+    def miss_rule(self, client: str, ip: str) -> tuple[str | None, int | None, int]:
+        """miss и номер ограничения скорости этого правила по адресам (биты метки, 0 — нет)."""
+        acct = self.policy(client).get("acct") or {}
+        try:
+            for r in acct.get("rules") or []:
+                lids, out = r[0], r[1]
+                if any(ip in self.nets[lid] for lid in lids if lid in self.nets):
+                    return out, (r[2] if len(r) > 2 else None), _lim(r[3] if len(r) > 3 else 0)
+        except (ValueError, TypeError, IndexError):
+            return None, None, 0
+        return acct.get("default"), acct.get("slot"), 0
+
+    def counter(self, client: str, out: str | None, slot: int | None = None) -> list | None:
+        """Байты по «клиент|выход» и (учёт по правилам) «клиент|выход|номер правила»."""
+        if not out:
+            return None
+        key = f"{client}|{out}" if not isinstance(slot, int) or isinstance(slot, bool) else f"{client}|{out}|{slot}"
+        return self.bytes.setdefault(key, [0, 0])
+
+    async def open_upstream(self, to: dict, name: str | None, dip: str, dport: int, data: bytes,
+                            lim: int = 0) -> socket.socket:
+        """Соединение с сайтом по решению decide (через SOCKS5 или с меткой выхода) и отправка
+        первых байт клиента, прочитанных ради имени сайта. lim — номер ограничения скорости правила в битах метки:
+        rl_lab в nftables ставит по нему метку соединения и снимает биты до выбора маршрута."""
+        if to.get("socks"):
+            # метка адреса «Подключаться с адреса» выхода (как у hev и проверки выхода), 0 — адрес системы
+            out = await socks_connect(to["socks"], name, dip, dport, with_lim(int(to["socks"].get("mark") or 0), lim))
+        else:
+            out = await direct_socket(dip, dport, with_lim(int(to.get("mark") or 0), lim))
+        try:
+            no_delay(out)
+            keepalive(out)
+            if data:
+                await send_all(out, data)
+        except BaseException:
+            out.close()
+            raise
+        return out
+
+    async def client(self, sock: socket.socket) -> None:
+        """Одно перенаправленное соединение: имя сайта, выбор пути, пересылка через splice."""
+        sock.setblocking(False)
+        out = None
+        counted = False
+        peer = "?"                  # для журнала, если клиент пропал раньше, чем узнали его адрес
+        try:
+            peer = sock.getpeername()[0]
+            if ipaddress.ip_address(peer) not in self.net:
+                return
+            raw = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
+            dport = struct.unpack("!H", raw[2:4])[0]
+            dip = socket.inet_ntoa(raw[4:8])
+            if (dip, dport) == sock.getsockname()[:2]:
+                # Исходный адрес — сам посредник: соединение не перенаправлял nftables, клиент открыл порт
+                # напрямую. Без совпадения по домену посредник соединился бы с этим адресом, то есть сам
+                # с собой, и так по кругу, пока не кончатся дескрипторы.
+                self.stats["direct"] = self.stats.get("direct", 0) + 1
+                return
+            self.stats["conns"] += 1
+            self.stats["active"] += 1
+            counted = True
+            data, name = await peek_name(sock, dport)
+            if name is False:
+                # не дошёл за PEEK_TIMEOUT: имя могло быть из списка, а без него соединение пошло бы по правилам
+                # по адресам, мимо выхода этого сайта. Закрыть, как QUIC без имени: браузер откроет заново
+                self.stats["partial"] = self.stats.get("partial", 0) + 1
+                return
+            if name is None:
+                self.stats["no_name"] += 1
+            to, lid, slot = self.decide_rule(peer, name)
+            if lid:
+                self.stats["matched"] += 1
+                self.stats["by_list"][lid] = self.stats["by_list"].get(lid, 0) + 1
+            if to.get("block"):
+                return
+            no_delay(sock)
+            keepalive(sock)
+            if lid:
+                cnt, lim = self.counter(peer, to.get("acct"), slot), _lim(to.get("lim"))
+            else:
+                mo, ms, lim = self.miss_rule(peer, dip)
+                cnt = self.counter(peer, mo, ms)
+            if lim:
+                # ограничение скорости правила: метка сокета к клиенту даёт номер ограничения соединению клиента
+                # (nftables ограничивает по нему то, что приходит от клиента), к сайту — ответам сайта
+                sock.setsockopt(socket.SOL_SOCKET, SO_MARK, with_lim(0, lim))
+            act = [time.monotonic()]
+            out = await self.open_upstream(to, name, dip, dport, data, lim)
+            self.__dict__.setdefault("live", {})[id(sock)] = (peer, name, dip, sock, out)   # тесты: __new__
+            if cnt is not None:
+                cnt[0] += len(data)
+            # через прокси — мимо туннеля выхода: его ограничение скорости — здесь; с меткой
+            # соединение идёт через туннель выхода, и его ограничивает tc там
+            bk = [self.buckets.get((to.get("acct"), i)) if to.get("socks") else None for i in (0, 1)]
+            await relay_both(splice_pipe(sock, out, cnt, 0, act, bk[0]),
+                             splice_pipe(out, sock, cnt, 1, act, bk[1]), act)
+        except (OSError, asyncio.TimeoutError, ValueError) as e:
+            self.stats["errors"] += 1
+            if self.cfg.get("debug"):
+                log(f"{peer}: {e!r}")
+        finally:
+            self.__dict__.setdefault("live", {}).pop(id(sock), None)
+            if counted:
+                self.stats["active"] -= 1
+            for c in (sock, out):
+                if c is not None:
+                    try:
+                        c.close()
+                    except OSError:
+                        pass
+
+    # ------------------------------------------------ общий предел выхода SOCKS5
+    def tc_set(self, d: dict, bps: float, wait: bool = True):
+        """Скорость класса tc туннеля → bps (байт/с). wait=False — дождаться tc здесь же, до 5 с
+        (запуск и остановка); иначе процесс tc отдаётся вызывающему, чтобы ждать его вне цикла."""
+        argv = [str(x).replace("{kbit}", str(max(1, int(bps * 8 / 1000)))) for x in d["tc"]]
+        try:
+            p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except OSError as e:
+            log(f"tc: {e}")
+            return None
+        if not wait:
+            try:
+                p.wait(5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            return None
+        return p
+
+    def share_tick(self, dev: dict[str, tuple[int, int]], now: float) -> list:
+        """Одно деление: новые доли бакам и туннелям. → [(настройка, байт/с)] — что поставить tc."""
+        todo = []
+        for k, d in self.shared.items():
+            out, i = k
+            b = self.buckets[k]
+            st = self.share_state.setdefault(k, {"t": now, "own": b.total, "tun": None,
+                                                  "r_own": 0.0, "r_tun": 0.0, "tc": None, "tc_at": 0.0})
+            dt = now - st["t"]
+            c = dev.get(d.get("iface") or "")
+            # отправлено в туннель — отдача клиентов (0), принято из туннеля — загрузка (1)
+            tun = c[1] if c and i == 0 else c[0] if c else None
+            if dt > 0:
+                inst_own = (b.total - st["own"]) / dt
+                inst_tun = (tun - st["tun"]) / dt if tun is not None and st["tun"] is not None and tun >= st["tun"] else 0.0
+                st["r_own"] += SHARE_SMOOTH * (inst_own - st["r_own"])
+                st["r_tun"] += SHARE_SMOOTH * (inst_tun - st["r_tun"])
+            st.update(t=now, own=b.total, tun=tun)
+            cap = float(d["cap"])
+            b.rate = share(cap, st["r_tun"])
+            want = share(cap, st["r_own"])
+            if st["tc"] is None or abs(want - st["tc"]) > cap * 0.03 or now - st["tc_at"] >= TC_REFRESH:
+                st["tc"], st["tc_at"] = want, now
+                todo.append((d, want))
+        return todo
+
+    async def share_loop(self) -> None:
+        while True:
+            await asyncio.sleep(SHARE_EVERY)
+            if not self.shared:
+                continue
+            try:
+                with open("/proc/net/dev") as f:
+                    dev = net_dev(f.read())
+            except OSError:
+                dev = {}
+            await self.share_once(dev, time.monotonic())
+
+    async def share_once(self, dev: dict[str, tuple[int, int]], now: float) -> None:
+        """Одно деление с установкой долей туннелям. Пока ждём tc одного выхода, SIGHUP мог убрать
+        другой из деления и уже вернуть его туннелю весь предел: запоздалая доля его бы урезала."""
+        for d, bps in self.share_tick(dev, now):
+            if not any(x is d for x in self.shared.values()):
+                continue
+            p = self.tc_set(d, bps)
+            if p is not None:
+                await asyncio.get_running_loop().run_in_executor(None, self._reap, p)
+
+    @staticmethod
+    def _reap(p) -> None:
+        try:
+            _, err = p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            return
+        if p.returncode and err:
+            log(f"tc: {err.decode(errors='replace').strip()[-200:]}")
+
+    def restore(self) -> None:
+        """Остановка: туннелям — весь предел."""
+        self.give_back(self.shared.values())
+
+    def write_stats(self) -> None:
+        p = self.cfg.get("stats")
+        if not p:
+            return
+        try:
+            with open(p + ".tmp", "w") as f:
+                json.dump({**self.stats, "bytes": self.bytes, "pid": os.getpid(), "at": time.time()}, f)
+            os.replace(p + ".tmp", p)
+        except OSError:
+            pass
+
+    async def serve(self) -> None:
+        loop = asyncio.get_running_loop()
+        host, port = self.cfg["listen"], int(self.cfg.get("port") or 10443)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
+        listener.listen(1024)
+        listener.setblocking(False)
+        accepting = asyncio.ensure_future(self.accept_loop(listener))
+        accepting.add_done_callback(self.accept_stopped)
+        loop.add_signal_handler(signal.SIGHUP, self.on_hup)
+        loop.add_signal_handler(signal.SIGTERM, loop.stop)
+        if EARLY_HUP:
+            # SIGHUP пришёл, пока разбирались списки (main): настройки могли смениться — перечитать
+            EARLY_HUP.clear()
+            self.on_hup()
+        log(f"listening on {host}:{port}, {len(self.lists)} domain lists")
+        self.open_queue()
+        asyncio.ensure_future(self.share_loop())
+        n = 0
+        while True:
+            if n % STATS_EVERY == 0:
+                self.write_stats()
+            self.beat()
+            n += 1
+            await asyncio.sleep(1)
+
+    def beat(self) -> None:
+        """Пульс для панели: цикл событий жив (mtime файла). Остановился — панель перезапустит."""
+        p = self.cfg.get("beat")
+        if not p:
+            return
+        try:
+            os.utime(p)
+        except FileNotFoundError:
+            try:
+                open(p, "a").close()
+            except OSError:
+                pass
+        except OSError:
+            pass
+
+    @staticmethod
+    def accept_stopped(task: asyncio.Task) -> None:
+        """Цикл приёма упал: без него посредник только писал бы счётчики, а соединения клиентов
+        ждали бы в очереди. Остановка процесса видна панели, и она запускает посредника заново."""
+        if task.cancelled():
+            return
+        log(f"accept loop stopped: {task.exception()!r}")
+        asyncio.get_running_loop().stop()
+
+    async def accept_loop(self, listener: socket.socket) -> None:
+        """Свой приём вместо start_server: клиенту нужен сырой сокет, а не потоки asyncio."""
+        loop = asyncio.get_running_loop()
+        tasks: set[asyncio.Task] = set()      # цикл событий держит только слабые ссылки на задачи
+        logged = None                         # когда последний раз писали об ошибке приёма
+        while True:
+            try:
+                conn, _ = await loop.sock_accept(listener)
+            except OSError as e:
+                # например, исчерпаны дескрипторы: сокет остаётся готовым, и ошибка повторяется
+                # на каждой попытке; не крутим цикл впустую и не заливаем журнал
+                if logged is None or time.monotonic() - logged >= ACCEPT_LOG_EVERY:
+                    logged = time.monotonic()
+                    log(f"accept: {e}")
+                await asyncio.sleep(0.1)
+                continue
+            task = asyncio.ensure_future(self.client(conn))
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+    def on_hup(self) -> None:
+        """SIGHUP: перечитать настройки. Панель шлёт его при каждом изменении, и сигнал во время
+        перечитывания не теряется: после текущего идёт ещё одно, уже с последним файлом."""
+        self.hup_pending = True
+        if self.reload_task is None or self.reload_task.done():
+            self.reload_task = asyncio.ensure_future(self.reload_async())
+
+    async def reload_async(self) -> None:
+        """Чтение и разбор идут в потоке, подмена в цикле событий: соединения не ждут разбора."""
+        loop = asyncio.get_running_loop()
+        while self.hup_pending:
+            self.hup_pending = False
+            try:
+                conf = await loop.run_in_executor(None, load, self.path, self.files)
+            except Exception as e:  # noqa: BLE001
+                log(f"reload: {e}")             # прежние настройки остаются
+                continue
+            try:
+                ds = self.apply(conf)
+            except Exception as e:  # noqa: BLE001 — иначе задача молча умирает, и следующий SIGHUP её не разбудит
+                log(f"apply: {e!r}")
+                continue
+            for d in ds:
+                p = self.tc_set(d, d["cap"])    # выход ушёл из деления — весь предел туннелю
+                if p is not None:
+                    await loop.run_in_executor(None, self._reap, p)
+
+
+def log(text: str) -> None:
+    print(time.strftime("%Y-%m-%d %H:%M:%S"), text, file=sys.stderr, flush=True)
+
+
+def raise_open_files_limit() -> None:
+    """Соединение держит 6 дескрипторов (2 сокета и 2 канала splice), а мягкий предел, унаследованный
+    от панели, бывает 1024: это около 170 соединений. Жёсткий предел процесс может взять себе сам."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < hard:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        except (OSError, ValueError) as e:
+            log(f"open files limit stays {soft}: {e}")
+
+
+# SIGHUP до serve(): действие по умолчанию — завершить процесс, а панель шлёт его при любом изменении настроек,
+# и упавшего посредника перезапускает только через минуту. Пока разбираются списки, сигнал только запоминается
+EARLY_HUP: list[bool] = []
+
+
+def serve_stopped(task: asyncio.Task) -> None:
+    """serve() упал (порт занят и т. п.): без него процесс жив, но не принимает соединений и не даёт пульса — панель
+    ждала бы минуту. Остановка видна панели сразу, и она запускает посредника заново."""
+    if task.cancelled() or task.exception() is None:
+        return
+    log(f"serve stopped: {task.exception()!r}")
+    asyncio.get_running_loop().stop()
+
+
+def main() -> None:
+    signal.signal(signal.SIGHUP, lambda *_: EARLY_HUP.append(True))
+    raise_open_files_limit()
+    s = Sniffer(sys.argv[1])
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    task = loop.create_task(s.serve())
+    task.add_done_callback(serve_stopped)
+    try:
+        loop.run_forever()
+    finally:
+        task.cancel()
+        s.write_stats()
+        s.restore()
+
+
+if __name__ == "__main__":
+    main()

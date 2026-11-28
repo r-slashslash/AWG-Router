@@ -1,0 +1,1446 @@
+"""DNS панели для клиентов. Только стандартная библиотека, без импорта панели.
+
+Запускается панелью в сети сервера AWG (как туннели выходов и sniproxy.py):
+    nsenter -t PID -n -- python3 dnsproxy.py /run/awgr/dns.json
+Слушает UDP и TCP 53 на адресе сервера в туннеле. Клиенты получают этот адрес в строке DNS
+своего конфига. Запрос клиента пересылается серверам DNS из настроек (рекурсией занимаются
+они) — тем же путём, что и трафик этого клиента: сокет получает метку (fwmark) его основного
+выхода, поэтому запрос уходит через туннель выхода, а ответ получен в стране выхода. Клиент,
+который ходит напрямую, получает ответ, полученный напрямую с этого сервера; клиент с блоком —
+отказ (REFUSED). На запрос адреса IPv6 (AAAA) — ответ «записей нет»: в туннеле только IPv4.
+
+Ответы кэшируются отдельно для каждого пути (ответы CDN зависят от страны) на срок их TTL,
+отдаются с уменьшенным TTL.
+
+Шифрование (настройка encrypt): «doh» — DNS поверх HTTPS (порт 443, RFC 8484), «dot» — поверх TLS
+(порт 853, RFC 7858), «plain» — без шифрования. С шифрованием сертификат сервера проверяется (по имени
+сервиса для известных адресов — KNOWN_NAMES — или по IP-адресу), открытый DNS вместо него не
+используется: сервер не ответил — клиент получает SERVFAIL и спрашивает второй DNS из конфига.
+TLS-соединения держатся открытыми (пул на пару «путь, сервер»), чтобы не делать рукопожатие на
+каждый запрос. Без шифрования через выходы SOCKS5 запросы идут по TCP (UDP через прокси часто не
+работает), иначе — UDP, а при обрезанном ответе — TCP.
+
+Свой DNS правила по доменам и запасной DNS пути «напрямую» (1.25.0) — записи: «77.88.8.8» — обычный DNS,
+«tls://имя[:порт]» — DoT, «https://имя[:порт]/путь» — DoH. Как вписан, так и спрашивается (srv): шифрованный, который не
+ответил, без шифрования не спрашивается; не ответила первая запись — спрашивается вторая. Адрес имени сервиса: на пути
+«напрямую» с адреса системы его дописывает панель («tls://dns.google#8.8.8.8»: в сети сервера AWG системного резолвера
+нет); на пути через выход и «Напрямую — адрес» панель его не ищет (её запрос ушёл бы с сервера мимо выхода, владелец
+2026-11-26, или с адреса системы, проверка 1.25.0, А11) — адрес спрашивается тем же путём (_name_addr, кэш по TTL).
+
+Правила по доменам (с 1.21.0, настройка dom). Имя из правила по доменам политики клиента
+разбирается через выход этого правила, а не через основной: соединение с сайтом уйдёт в этот
+выход (sniproxy.py), и адрес нужен оттуда — не подменённый по дороге и рядом с выходом (CDN).
+Правило «блок» и выход, который сейчас не работает, — обычным путём клиента. Если задан набор
+nftables (dom.set), адреса A из ответа на такое имя добавляются в него на срок TTL, но не меньше
+SET_MIN: с ним панель перехватывает только соединения к этим адресам (режим «фильтр по DNS»).
+Набор пересоздаётся вместе с таблицей панели — по SIGUSR1 все живые адреса добавляются заново.
+
+SIGHUP — перечитать настройки. Счётчики — в файл stats раз в 15 секунд (по свежести файла
+панель видит, что процесс не завис).
+"""
+from __future__ import annotations
+
+import asyncio
+import contextvars
+import ipaddress
+import json
+import os
+import resource
+import secrets
+import signal
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import time
+
+try:                                    # в панели и тестах — пакет app, у запущенного файла — файлы рядом
+    from . import dohttp
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import dohttp  # type: ignore[no-redef]  # noqa: E402
+
+SO_MARK = 36
+PORT = 53
+UDP_TIMEOUT = 2.0           # ждём ответа сервера по UDP, потом следующий сервер
+TCP_TIMEOUT = 5.0
+CLIENT_TCP_IDLE = 10.0      # соединение клиента по TCP без новых запросов дольше — закрываем
+CLIENT_TCP_MAX = 32         # открытых соединений по TCP с одного адреса клиента
+CACHE_MAX = 20000           # записей в кэше; старые вытесняются
+CACHE_BYTES = 16 * 1024 * 1024   # и не больше 16 МБ ответов: по TCP ответ до 64 КБ, 20 000 таких — больше гигабайта
+TTL_MAX = 3600              # дольше часа не храним, даже если TTL больше
+NEG_TTL_MAX = 300           # «нет такого имени» / «нет записей» — не дольше 5 минут
+NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
+STATS_EVERY = 15
+MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
+JOIN_MAX = 1024             # клиентов, которые ждут один и тот же запрос в пути (Д1, Е3); больше — отказ (SERVFAIL)
+JOIN_ALL = 8192             # и всех таких ждущих вместе: MAX_INFLIGHT разных «мёртвых» имён по JOIN_MAX — гигабайты
+# с: повтор запроса, который ждёт общие серверы дольше, когда путь «напрямую» с запасным столько же ничего не ответил, —
+# проверка пути сразу (Е1, _resolve). Столько ждёт одна попытка шифрованного DNS: на исправном пути ответ приходит раньше
+JOIN_CHECK = 5.0
+# с: повтор запроса, а первый всё ещё ждёт шифрованный общий сервер, — одна попытка того же запроса на новом соединении
+# (мимо пула: его соединения может держать «мёртвое» имя). На пути с потерями (DNSPod DoH из России: 7–9 % запросов без
+# ответа) ответ, потерянный первым, приходит со второй попытки, как до Д1, когда повтор шёл своим запросом
+HEDGE_AFTER = 1.5
+# Путь «напрямую» и запасной DNS (cfg direct_fallback — записи, как у своего DNS; 1.25.0: включается галочкой и
+# вписывается вручную или кнопкой «Применить для …»). Серверы DNS из настроек не отвечают (из России, Китая и Ирана по
+# DoH/DoT это бывает) — имена пути спрашиваются у запасного, а серверы DNS пробуются снова не раньше чем через
+# DIRECT_RETRY и одним запросом в фоне: DoH из России «зависает» до ENC_TIMEOUT на каждом сервере, и проба с запросом
+# клиента раз в две минуты на 10 с останавливала бы имена всем, кто идёт напрямую. Запасной, который не отвечает, —
+# так же: до DIRECT_RETRY не спрашивается (клиент сразу получает SERVFAIL, а не ждёт его), пробуется в фоне.
+# «Не отвечают» решает проверка пути (П31 полной проверки 1.25.0), а не одно имя без ответа: так бывает и у одного имени,
+# которое резолвер разбирает дольше срока (у домена молчат его серверы имён), и у одного потерянного пакета UDP — раньше
+# такое имя на 2 минуты отправляло к запасному всех, кто идёт напрямую, а если запасной тоже не ответил на это имя, всем
+# им 2 минуты шёл SERVFAIL. Теперь после имени без ответа серверы проверяются контрольным запросом (check_query) в фоне;
+# пока проверка идёт (не дольше CHECK_TIMEOUT), новые имена пути сразу идут к запасному — как при «не отвечают», поэтому
+# настоящая блокировка включает запасной не позже, чем раньше. Ответил хоть один сервер — путь в порядке; не ответил
+# никто — «не отвечают». У запасного — так же: одно имя без его ответа — проверка запасного, а не SERVFAIL всем.
+# Только «напрямую»: имена клиентов, которые идут через выход, и имена из правил по доменам, у которых сейчас нет
+# пути (выход подключается, лежит или «блок»), мимо выхода не уходят никогда — и во время проверки тоже. «Напрямую» — и с
+# адреса системы (метка 0), и «Напрямую — адрес» (1.25.0, метки адресов из cfg addr_marks): у каждого пути своё «не
+# отвечает» и своя проверка, и запасной спрашивается тем же путём — с того же адреса, не с другого.
+DIRECT_RETRY = 120.0
+
+DOT_PORT, DOH_PORT = 853, 443
+ENC_TIMEOUT = 5.0           # соединение и ответ по DoT/DoH
+# с: проверка пути целиком. Контрольный запрос идёт каждому серверу сразу, на своём новом соединении: соединение, TLS и
+# ответ из кэша резолвера — 3–4 пути туда и обратно (из России до Cloudflare ~0,5 с, при задержке 600 мс — ~2,5 с);
+# обычный DNS — две попытки по UDP_TIMEOUT (один потерянный пакет проверки — ещё не «не отвечают»). Больше ENC_TIMEOUT
+# не нужно: столько ждёт ответа и обычное имя, а замёрзший после рукопожатия DoH дольше не станет ответом.
+CHECK_TIMEOUT = ENC_TIMEOUT
+ENTRY_DOWN = 60.0           # с: запись своего или запасного DNS не ответила — столько спрашивается последней
+DOH_BODY_MAX = 65535        # ответ DNS не длиннее (как у HTTP/2 и HTTP/3 в dohttp.py)
+POOL_SIZE = 4               # открытых TLS-соединений на пару «путь, сервер»
+POOL_IDLE = 50.0            # дольше без запросов — соединение закрываем (серверы сами закрывают через ~60 с)
+# Имя сервиса для известных адресов: с ним проверяется сертификат и его ждёт заголовок Host у DoH
+# (Google по голому IP DoH может не отвечать). Остальные адреса проверяются по IP в сертификате.
+KNOWN_NAMES = {"1.1.1.1": "cloudflare-dns.com", "1.0.0.1": "cloudflare-dns.com",
+               "8.8.8.8": "dns.google", "8.8.4.4": "dns.google",
+               "9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net"}
+
+SET_MIN = 1800              # с: адрес сайта из правила держится в наборе не меньше (устройства кэшируют дольше TTL)
+SET_MAX = 86400
+# Новые адреса уходят в nftables сразу, одной командой на пачку: пока команда идёт, следующие копятся и уходят
+# следующей, и команды начинаются не чаще раза в SET_FLUSH (процесс nft на каждый ответ — заметный процессор на 1 vCPU).
+SET_FLUSH = 0.05
+# Ответ на имя из правила с адресом, которого ещё нет в наборе, ждёт его записи (Д2 независимой проверки П31): клиент
+# соединяется сразу после ответа, а соединение к адресу не из набора уходило по правилам адресов — мимо выхода. Обычно
+# 5–20 мс; пока панель пересобирает таблицу, nft ждёт секунды — тогда не дольше SET_WAIT, дальше ответ как раньше
+# (счётчик set_late в stats).
+SET_WAIT = 1.0
+SET_LIVE_MAX = 200000       # живых адресов в памяти для повторного добавления; больше — старые забываются
+SET_TX_MIN = 1000           # адресов в транзакции nft, если он отказал по размеру (_nft_add); меньше не делим
+_set_tx = [0]               # предел адресов в одной транзакции nft: 0 — нет; ставит отказ nft по размеру
+
+T_OPT, T_SOA, T_A, T_AAAA, T_NS = 41, 6, 1, 28, 2
+T_SVCB, T_HTTPS = 64, 65   # записи SVCB и HTTPS: в HTTPS браузер берёт ключи ECH
+RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
+
+# Запрос идёт в проверке пути (П31): на своём новом соединении, мимо очереди пула (соединения пула могут быть заняты
+# медленными именами), обычный DNS — второй попыткой, обрезанный ответ (TC) — уже ответ. Задаётся в задаче проверки:
+# подмены _enc/_udp в тестах этим не задеты.
+_CHECKING: contextvars.ContextVar = contextvars.ContextVar("awgr_dns_check", default=False)
+# Запрос — на своём новом соединении, мимо пула (вторая попытка запроса, который ждёт, — HEDGE_AFTER)
+_FRESH: contextvars.ContextVar = contextvars.ContextVar("awgr_dns_fresh", default=False)
+
+
+def check_query() -> bytes:
+    """Контрольный запрос проверки пути: «. NS» с флагом рекурсии. Корень любой резолвер держит в кэше и отвечает на него
+    сразу, даже когда какое-то имя он разбирает долго (у домена не отвечают его серверы имён)."""
+    return struct.pack("!6H", secrets.randbelow(65536), 0x0100, 1, 0, 0, 0) + b"\x00" + struct.pack("!HH", T_NS, 1)
+
+
+def _busy(task) -> bool:
+    """Задача (проверка, проба) ещё идёт."""
+    return task is not None and not task.done()
+
+
+# ---------------------------------------------------------------- разбор DNS
+_SRV: dict[str, tuple] = {}
+NAME_TTL_MIN, NAME_TTL_MAX = 60, 3600      # с: адрес имени сервиса DNS держится по TTL ответа в этих пределах
+NAME_FAIL = 60                             # с: не нашёлся — столько не спрашиваем снова
+NAMES_MAX = 256
+
+
+def srv(entry: str) -> tuple:
+    """Запись своего или запасного DNS → (способ, адрес, имя для TLS, порт, путь DoH). «77.88.8.8» — обычный DNS;
+    «tls://имя[:порт][#адрес]» — DoT, «https://имя[:порт]/путь[#адрес]» — DoH. Адрес — IPv4 из записи или после «#»
+    (имя разобрала панель); нет его — None: такой сервер не спрашивается. Имя для TLS у адреса без имени — известное
+    имя сервиса (KNOWN_NAMES) или сам адрес. Запись общего сервера из настроек — просто адрес (способ — cfg encrypt)."""
+    hit = _SRV.get(entry)
+    if hit:
+        return hit
+    if "://" not in entry:
+        out = ("plain", entry, None, PORT, "")
+    else:
+        scheme, rest = entry.split("://", 1)
+        rest, _, ip = rest.partition("#")
+        mode = {"https": "doh", "h3": "doh3"}.get(scheme.lower(), "dot")      # h3:// — DoH только по HTTP/3
+        hostport, sl, path = rest.partition("/") if mode != "dot" else (rest, "", "")
+        host, _, port = hostport.partition(":")
+        port = int(port) if port.isdigit() else (DOT_PORT if mode == "dot" else DOH_PORT)
+        try:
+            ipaddress.IPv4Address(host)
+            ip, name = host, KNOWN_NAMES.get(host, host)
+        except ValueError:
+            name = host
+        out = (mode, ip or None, name, port, (sl + path) or "/dns-query")
+    if len(_SRV) > 256:
+        _SRV.clear()
+    _SRV[entry] = out
+    return out
+
+
+def _no_hint(entry: str) -> str:
+    """Запись без адреса, который дописала панель («tls://dns.google#8.8.8.8» → «tls://dns.google»); адрес в самой записи
+    («tls://1.1.1.1») — остаётся."""
+    return entry.split("#", 1)[0] if "://" in entry and "#" in entry else entry
+
+
+def _literal(entry: str) -> bool:
+    """Запись с адресом в ней самой (обычный DNS, «tls://77.88.8.8»), а не с именем сервиса: её можно спросить, не ища
+    сначала адрес имени."""
+    if "://" not in entry:
+        return True
+    host = entry.split("://", 1)[1].split("#", 1)[0].split("/", 1)[0].partition(":")[0]
+    try:
+        ipaddress.IPv4Address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def a_query(name: str) -> bytes:
+    """Запрос адреса IPv4 имени (с флагом рекурсии)."""
+    labels = b"".join(bytes([len(x)]) + x.encode("ascii") for x in name.rstrip(".").split(".") if x)
+    return struct.pack("!6H", secrets.randbelow(65536), 0x0100, 1, 0, 0, 0) + labels + b"\x00" + struct.pack("!HH", T_A, 1)
+
+
+def skip_name(msg: bytes, off: int) -> int:
+    """Смещение сразу после имени (с учётом сжатия: указатель занимает 2 байта)."""
+    while True:
+        if off >= len(msg):
+            raise ValueError("name")
+        n = msg[off]
+        if n == 0:
+            return off + 1
+        if n & 0xC0 == 0xC0:
+            return off + 2
+        if n & 0xC0:
+            raise ValueError("label")
+        off += 1 + n
+
+
+def read_name(msg: bytes, off: int) -> str:
+    """Имя из вопроса (без сжатия — в вопросе его не бывает), строчными буквами."""
+    labels = []
+    start = off
+    while True:
+        n = msg[off]
+        if n == 0:
+            return ".".join(labels).lower() + "."
+        if n & 0xC0:
+            raise ValueError("label")
+        label = msg[off + 1:off + 1 + n]
+        if b"." in label:
+            # метка «victim.site» + «test» дала бы то же имя «victim.site.test.», что у обычного вопроса, и
+            # ответ «нет такого имени» на неё из кэша получили бы другие клиенты
+            raise ValueError("label")
+        labels.append(label.decode("ascii", "replace"))
+        off += 1 + n
+        if off - start > 255:           # имя в DNS — не длиннее 255 байт (RFC 1035 §3.1)
+            raise ValueError("name")
+
+
+def parse_query(msg: bytes) -> dict | None:
+    """Запрос клиента → {id, name, qtype, qclass, qend, udp_max} или None, если это не запрос."""
+    if len(msg) < 12:
+        return None
+    qid, flags, qd, an, ns, ar = struct.unpack("!6H", msg[:12])
+    if flags & 0x8000 or (flags >> 11) & 0xF != 0 or qd != 1:
+        return None                                  # ответ, не QUERY или не один вопрос
+    try:
+        name = read_name(msg, 12)
+        qend = skip_name(msg, 12) + 4
+        if qend > len(msg):
+            return None
+        qtype, qclass = struct.unpack("!HH", msg[qend - 4:qend])
+        udp_max, edns, do = 512, False, False
+        off = qend
+        for _ in range(an + ns + ar):               # ищем OPT (EDNS0): размер UDP клиента и флаг DO (подписи DNSSEC)
+            off = skip_name(msg, off)
+            rtype, rclass, ttl, rdlen = struct.unpack("!HHIH", msg[off:off + 10])
+            if rtype == T_OPT:
+                udp_max, edns, do = max(512, min(rclass, 4096)), True, bool(ttl & 0x8000)
+            off += 10 + rdlen
+    except (ValueError, IndexError, struct.error):
+        return None
+    return {"id": qid, "name": name, "qtype": qtype, "qclass": qclass, "qend": qend, "udp_max": udp_max,
+            "edns": edns, "do": do}
+
+
+def ttl_fields(msg: bytes) -> tuple[int, list[int], int | None]:
+    """→ (rcode, смещения полей TTL всех записей, кроме OPT; TTL для отрицательного ответа из SOA)."""
+    _id, flags, qd, an, ns, ar = struct.unpack("!6H", msg[:12])
+    off = 12
+    for _ in range(qd):
+        off = skip_name(msg, off) + 4
+    offs, neg = [], None
+    for i in range(an + ns + ar):
+        off = skip_name(msg, off)
+        rtype, _rclass, ttl, rdlen = struct.unpack("!HHIH", msg[off:off + 10])
+        if rtype != T_OPT:
+            offs.append(off + 4)
+            if rtype == T_SOA and an <= i < an + ns:
+                # отрицательный ответ хранится min(TTL записи SOA, поле MINIMUM) — RFC 2308
+                rd = off + 10
+                try:
+                    p = skip_name(msg, skip_name(msg, rd)) + 16
+                    neg = min(ttl, struct.unpack("!I", msg[p:p + 4])[0])
+                except (ValueError, struct.error):
+                    neg = ttl
+        off += 10 + rdlen
+    if off > len(msg):
+        raise ValueError("short")
+    return flags & 0xF, offs, neg
+
+
+def cache_ttl(msg: bytes) -> tuple[int, list[int]]:
+    """Сколько хранить ответ (0 — не хранить) и где в нём поля TTL."""
+    rcode, offs, neg = ttl_fields(msg)
+    an = struct.unpack("!H", msg[6:8])[0]
+    if rcode == RC_NXDOMAIN or (rcode == 0 and an == 0):
+        return min(NEG_TTL_MAX, neg if neg is not None else NEG_TTL_DEFAULT), offs
+    if rcode != 0:
+        return 0, offs                               # SERVFAIL и прочее не храним
+    ttls = [struct.unpack("!I", msg[o:o + 4])[0] for o in offs[:an]] or [0]
+    return min(min(ttls), TTL_MAX), offs
+
+
+def answer_v4(msg: bytes) -> list[tuple[str, int]]:
+    """Адреса IPv4 из раздела ответов (вместе с теми, что после CNAME): [(адрес, TTL)]."""
+    _id, _flags, qd, an, _ns, _ar = struct.unpack("!6H", msg[:12])
+    off = 12
+    for _ in range(qd):
+        off = skip_name(msg, off) + 4
+    out = []
+    for _ in range(an):
+        off = skip_name(msg, off)
+        rtype, rclass, ttl, rdlen = struct.unpack("!HHIH", msg[off:off + 10])
+        off += 10
+        if rtype == T_A and rclass == 1 and rdlen == 4 and off + 4 <= len(msg):
+            out.append((socket.inet_ntoa(msg[off:off + 4]), ttl))
+        off += rdlen
+    return out
+
+
+def match(name: str, doms: set[str]) -> bool:
+    """Имя (с точкой в конце или без) есть в списке — само или как поддомен (как в sniproxy.py)."""
+    if len(name) > 254:                 # не имя DNS; на нём перебор суффиксов занял бы секунды
+        return False
+    labels = name.rstrip(".").split(".")
+    return any(".".join(labels[i:]) in doms for i in range(len(labels)))
+
+
+def with_ttl(msg: bytes, offs: list[int], minus: int) -> bytes:
+    """Ответ из кэша: TTL всех записей уменьшены на прошедшее время."""
+    b = bytearray(msg)
+    for o in offs:
+        ttl = struct.unpack("!I", b[o:o + 4])[0]
+        b[o:o + 4] = struct.pack("!I", max(0, ttl - minus))
+    return bytes(b)
+
+
+def error_reply(query: bytes, q: dict, rcode: int) -> bytes:
+    """Ответ без записей с кодом ошибки: заголовок и вопрос запроса."""
+    flags = struct.unpack("!H", query[2:4])[0]
+    flags = 0x8000 | (flags & 0x7900) | 0x0080 | rcode       # QR, OPCODE/RD/CD как в запросе, RA
+    return struct.pack("!6H", q["id"], flags, 1, 0, 0, 0) + query[12:q["qend"]]
+
+
+def _for_client(reply: bytes, query: bytes, q: dict) -> bytes:
+    """Ответ сервера (из кэша или на запрос другого клиента, Д1) — этому клиенту: его ID и вопрос, как задал он (регистр
+    букв), а не первый, чей ответ лёг в кэш или чей запрос ушёл к серверу."""
+    if reply[4:6] == b"\x00\x01":
+        reply = reply[:12] + query[12:q["qend"]] + reply[q["qend"]:]
+    return struct.pack("!H", q["id"]) + reply[2:]
+
+
+def truncated(reply: bytes, q: dict) -> bytes:
+    """Ответ не влезает в UDP клиента: только заголовок и вопрос с флагом TC — клиент спросит по TCP."""
+    flags = struct.unpack("!H", reply[2:4])[0] | 0x0200
+    return reply[:2] + struct.pack("!H", flags) + struct.pack("!4H", 1, 0, 0, 0) + reply[12:q["qend"]]
+
+
+# ---------------------------------------------------------------- DoT / DoH
+class Conn:
+    """Открытое TLS-соединение к серверу DNS."""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        self.reader, self.writer = reader, writer
+        self.used = time.monotonic()
+        self.reusable = True
+
+    def close(self) -> None:
+        try:
+            self.writer.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class Pool:
+    """Соединения к одному серверу по одному пути: не больше POOL_SIZE, по одному запросу на соединение.
+    Сервер мог закрыть простаивавшее соединение — тогда запрос повторяется на новом."""
+
+    def __init__(self, open_fn):
+        self.open_fn = open_fn
+        self.idle: list[Conn] = []
+        self.sem = asyncio.Semaphore(POOL_SIZE)
+
+    async def run(self, fn):
+        async with self.sem:
+            conn = None
+            while self.idle and conn is None:
+                c = self.idle.pop()
+                if c.reusable and time.monotonic() - c.used < POOL_IDLE and not c.reader.at_eof():
+                    conn = c
+                else:
+                    c.close()
+            fresh = conn is None
+            if fresh:
+                conn = await self.open_fn()
+            try:
+                result = await fn(conn)
+            except BaseException as e:
+                conn.close()                         # и при отмене снаружи (срок в forward): иначе соединение брошено
+                if fresh or not isinstance(e, Exception):
+                    raise
+                conn = await self.open_fn()          # старое соединение уже закрыто сервером
+                try:
+                    result = await fn(conn)
+                except BaseException:
+                    conn.close()
+                    raise
+            conn.used = time.monotonic()
+            if conn.reusable:
+                self.idle.append(conn)
+            else:
+                conn.close()
+            return result
+
+    async def once(self, fn):
+        """Запрос на своём новом соединении — мимо очереди (POOL_SIZE) и простаивающих соединений, потом соединение
+        закрывается. Так идёт проверка пути (П31): все соединения пула могут быть заняты медленными именами, и проверка,
+        ждущая очереди, сочла бы живой сервер молчащим."""
+        conn = await self.open_fn()
+        try:
+            return await fn(conn)
+        finally:
+            conn.close()
+
+    def close(self) -> None:
+        for c in self.idle:
+            c.close()
+        self.idle.clear()
+
+
+async def dot_query(conn: Conn, msg: bytes) -> bytes:
+    conn.writer.write(struct.pack("!H", len(msg)) + msg)
+    await conn.writer.drain()
+    n = struct.unpack("!H", await conn.reader.readexactly(2))[0]
+    return await conn.reader.readexactly(n)
+
+
+async def doh_query(conn: Conn, msg: bytes, host: str, path: str = "/dns-query") -> bytes:
+    """POST по HTTP/1.1 с keep-alive (RFC 8484); path — из адреса DoH (обычно /dns-query). Сервер выбрал HTTP/2 (ALPN)
+    — запрос по HTTP/2 (dohttp.h2_query)."""
+    if getattr(conn, "h2", None) is not None:
+        return await dohttp.h2_query(conn, msg, host, path)
+    conn.writer.write((f"POST {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: awg-router\r\n"
+                       f"Content-Type: application/dns-message\r\nAccept: application/dns-message\r\n"
+                       f"Content-Length: {len(msg)}\r\n\r\n").encode() + msg)
+    await conn.writer.drain()
+    status = (await conn.reader.readline()).decode("latin-1").split()
+    if len(status) < 2:
+        raise OSError("DoH: no answer")
+    headers = {}
+    while True:
+        line = (await conn.reader.readline()).decode("latin-1")
+        if line in ("\r\n", "\n", ""):
+            break
+        k, _, v = line.partition(":")
+        headers[k.strip().lower()] = v.strip()
+    if headers.get("connection", "").lower() == "close":
+        conn.reusable = False
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        body = b""
+        while True:
+            size = int((await conn.reader.readline()).split(b";")[0].strip() or b"0", 16)
+            if size + len(body) > DOH_BODY_MAX:
+                raise OSError("DoH: answer too long")
+            if size == 0:
+                await conn.reader.readline()
+                break
+            body += await conn.reader.readexactly(size)
+            await conn.reader.readline()
+    elif "content-length" in headers:
+        if int(headers["content-length"]) > DOH_BODY_MAX:
+            raise OSError("DoH: answer too long")     # ответ DNS не больше 64 КБ; иначе читали бы сколько скажет сервер
+        body = await conn.reader.readexactly(int(headers["content-length"]))
+    else:
+        conn.reusable = False
+        body = await conn.reader.read(65535)
+    if status[1] != "200":
+        raise OSError(f"DoH: HTTP {status[1]}")
+    return body
+
+
+# ---------------------------------------------------------------- сервер
+class DirectPath:
+    """Серверы DNS на одном пути «напрямую»: когда последний раз ответили (ok_at) и когда проверка решила «не отвечают»
+    (fail_at), down — не отвечают (имена у запасного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая
+    проверка пути после имени без ответа или проба по расписанию (asyncio.Task; пока идёт — имена тоже у запасного).
+    fb_* — то же у запасного DNS этого пути."""
+    __slots__ = ("ok_at", "fail_at", "down", "retry_at", "probe",
+                 "fb_ok_at", "fb_fail_at", "fb_down", "fb_retry_at", "fb_probe")
+
+    def __init__(self):
+        self.ok_at = self.fail_at = 0.0
+        self.down, self.retry_at, self.probe = False, 0.0, None
+        self.fb_ok_at = self.fb_fail_at = 0.0
+        self.fb_down, self.fb_retry_at, self.fb_probe = False, 0.0, None
+
+
+def _dp_attr(name: str) -> property:
+    """Прежние имена (direct_down и др.) — путь с адреса системы, метка 0: их читают статистика и тесты."""
+    return property(lambda s: getattr(s._dp(0), name), lambda s, v: setattr(s._dp(0), name, v))
+
+
+class Proxy:
+    direct_ok_at, direct_fail_at = _dp_attr("ok_at"), _dp_attr("fail_at")
+    direct_down, direct_retry_at, _direct_probe = _dp_attr("down"), _dp_attr("retry_at"), _dp_attr("probe")
+
+    def __init__(self, conf_path: str):
+        self.conf_path = conf_path
+        self.cfg: dict = {}
+        self.net = None
+        self.cache: dict[tuple, tuple[float, int, bytes, list[int]]] = {}
+        self.cache_bytes = 0
+        self.stats = {"queries": 0, "cached": 0, "errors": 0, "refused": 0}
+        self.last_ok = 0.0                  # когда серверы DNS последний раз ответили
+        # шифрованный DNS на путях «напрямую»: метка пути (0 — адрес системы) → DirectPath
+        self.dpaths: dict[int, DirectPath] = {}
+        self.last_error, self.last_error_at = "", 0.0
+        self.inflight = 0
+        self.pools: dict[tuple, Pool] = {}
+        self.dom_lists: dict[str, set[str]] = {}
+        self._dom_files: dict[str, tuple] = {}       # путь → (признаки файла, разобранное): SIGHUP не разбирает заново
+        self.live: dict[str, float] = {}             # адрес → до какого времени (time.time) он в наборе
+        self.pending: dict[str, int] = {}            # адрес → секунд, ещё не отправленные в nftables
+        self._flush_at = 0.0
+        self.asking: dict[tuple, asyncio.Future] = {}    # одинаковые запросы в пути (Д1): ключ → общая задача
+        self.joins: dict[asyncio.Future, list] = {}      # общая задача → [сколько ждут сверх первого (Е3), когда начата]
+        self.followers = 0                               # их всех вместе
+        self.load()
+
+    def load(self) -> None:
+        with open(self.conf_path) as f:
+            cfg = json.load(f)
+        self.net = ipaddress.ip_network(cfg["clients"]) if cfg.get("clients") else None
+        self.up_port = int(cfg.get("upstream_port") or PORT)     # не 53 — только в тестах
+        # адрес этого DNS: свой DNS правила с ним спрашивал бы сам себя (domain_route его пропускает)
+        self.self_addr = cfg.get("listen") if self.up_port == int(cfg.get("port") or PORT) else None
+        old = self.cfg
+        self.cfg = cfg
+        if old and (old.get("upstreams") != cfg.get("upstreams") or old.get("encrypt") != cfg.get("encrypt")
+                    or old.get("direct_fallback") != cfg.get("direct_fallback")):
+            self.cache.clear()                       # другие серверы — старые ответы не нужны
+            self.cache_bytes = 0
+            # и «не отвечают напрямую» было о прежних серверах, прежнем шифровании или прежнем запасном
+            self.dpaths = {}
+        self.names = {}                              # адреса имён сервисов DNS: пути и общие серверы могли смениться
+        # запросы, начатые до SIGHUP, отвечают своим клиентам, а новые к ним не присоединяются (Д1): серверы,
+        # шифрование, запасной или пути правил могли смениться
+        self.asking = {}
+        self.entry_down = {}                         # записи своего DNS могли смениться
+        for p in self.pools.values():                # пути, серверы или сертификаты могли смениться
+            p.close()
+        self.pools.clear()
+        for p in self.__dict__.setdefault("h3pools", {}).values():
+            p.close()
+        self.h3pools.clear()
+        self.ctx = ssl.create_default_context(cafile=cfg.get("ca_file") or None)   # ca_file — только в тестах
+        self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        # DoH: HTTP/2 или HTTP/1.1 — что выберет сервер (ALPN; Quad9 и Яндекс по HTTP/1.1 не отвечают, А1)
+        self.ctx_doh = ssl.create_default_context(cafile=cfg.get("ca_file") or None)
+        self.ctx_doh.minimum_version = ssl.TLSVersion.TLSv1_2
+        self.ctx_doh.set_alpn_protocols(["h2", "http/1.1"])
+        if cfg.get("libssl") and dohttp.LIBSSL != (cfg["libssl"],):      # путь к libssl с QUIC — только в тестах
+            dohttp.LIBSSL, dohttp._lib, dohttp._lib_tried = (cfg["libssl"],), None, False
+        self.dom = cfg.get("dom") or {}
+        lists, files = {}, {}
+        for lid, path in (self.dom.get("lists") or {}).items():
+            try:
+                with open(path) as f:
+                    st = os.fstat(f.fileno())
+                    sig = (st.st_ino, st.st_size, st.st_mtime_ns)
+                    hit = self._dom_files.get(path)
+                    lists[lid] = hit[1] if hit and hit[0] == sig else {x.strip() for x in f if x.strip()}
+                files[path] = (sig, lists[lid])
+            except OSError as e:
+                print(f"dnsproxy: list {lid}: {e}", flush=True)
+        self.dom_lists, self._dom_files = lists, files
+        if old and old.get("dom", {}).get("set") != self.dom.get("set"):
+            self.live.clear()
+
+    def domain_route(self, ip: str, name: str):
+        """Правило по доменам политики клиента, в чей список входит имя: (путь, серверы, в набор?) — разбирать
+        через выход правила (путь None — обычным путём клиента: «блок» или выход сейчас не работает) у своих
+        серверов DNS правила (пусто — у общих); None — имя ни в одном правиле. Правило — [списки, путь] или
+        [списки, путь, серверы, в набор?] (у политики со своим DNS).
+        Без пути (выход правила подключается, лежит или «блок») свой DNS не спрашивается: путь клиента часто
+        «напрямую», и имена сайтов правила ушли бы мимо выхода обычным DNS без шифрования — общие серверы, как
+        до 1.22.0. Свой DNS с адресом, на котором слушает этот DNS, пропускается: он спрашивал бы сам себя."""
+        pol = (self.dom.get("clients") or {}).get(ip, "p_global")
+        for rule in (self.dom.get("policies") or {}).get(pol) or ():
+            if any(match(name, self.dom_lists.get(lid) or ()) for lid in rule[0]):
+                if len(rule) >= 4:
+                    own = () if rule[1] is None else tuple(s for s in rule[2] or () if s != self.self_addr)
+                    return rule[1], own, bool(rule[3])
+                return rule[1], (), True
+        return None
+
+    def remember(self, reply: bytes):
+        """Адреса из ответа на имя из правила — в набор nftables (режим «фильтр по DNS»). → future записи, если среди
+        них есть адрес, которого в наборе ещё нет или чья команда ещё идёт (ответ клиенту ждёт её, Д2), иначе None."""
+        if not self.dom.get("set"):
+            return None
+        try:
+            ips = answer_v4(reply)
+        except (ValueError, struct.error, IndexError):
+            return None
+        now = time.time()
+        writing = self.__dict__.setdefault("writing", {})      # адрес → future команды, которая его добавляет
+        need = []
+        for addr, ttl in ips:
+            secs = max(SET_MIN, min(int(ttl), SET_MAX))
+            until = self.live.get(addr, 0)
+            w = writing.get(addr)
+            if w is not None and w not in need:
+                # команда, которая его добавляет, ещё идёт — ответ ждёт её: и когда адрес уже записан «почти на тот же
+                # срок», и когда этот ответ продлевает срок (TTL больше SET_MIN): до конца первой команды адреса в наборе
+                # может ещё не быть, а соединение пошло бы мимо
+                need.append(w)
+            if until - now > secs - 60:                         # уже в наборе почти на тот же срок
+                continue
+            self.pending[addr] = secs
+            if len(self.live) >= SET_LIVE_MAX:
+                self.live.pop(next(iter(self.live)))
+            self.live[addr] = now + secs
+            batch = self.__dict__.get("_batch")
+            if batch is None:
+                batch = self._batch = asyncio.get_running_loop().create_future()
+            writing[addr] = batch
+            if until <= now and batch not in need:
+                need.append(batch)                               # адреса в наборе нет: соединение пошло бы мимо
+        self._kick()
+        if not need:
+            return None
+        return need[0] if len(need) == 1 else asyncio.gather(*need)
+
+    def _kick(self) -> None:
+        """Накопленные адреса — в nftables сразу, но не чаще раза в SET_FLUSH и не пока идёт прошлая команда (тогда —
+        когда она кончится): одна команда на пачку."""
+        if not self.pending or self._flush_at or _busy(self.__dict__.get("_flushing")):
+            return
+        self._flush_at = time.time()
+        wait = self.__dict__.get("_last_flush", 0.0) + SET_FLUSH - time.monotonic()
+        asyncio.get_running_loop().call_later(max(0.0, wait), self.flush)
+
+    def resync(self) -> None:
+        """SIGUSR1: панель пересоздала свою таблицу (а с ней пустой набор) — добавить все живые адреса."""
+        now = time.time()
+        self.live = {a: t for a, t in self.live.items() if t > now + 5}
+        for a, t in self.live.items():
+            self.pending[a] = int(t - now)
+        # сразу, без SET_FLUSH: пока набор пуст, соединения к сайтам из правил идут мимо обработчика
+        if self.pending:
+            self.flush()
+
+    def flush(self):
+        """Накопленные адреса — в набор nftables. Команда идёт в отдельном потоке: nft ждёт блокировку
+        таблицы, пока панель её пересобирает (с большими списками — секунды), а цикл событий в это
+        время должен отвечать на запросы DNS. Кончилась — ответы, ждавшие эти адреса, уходят клиентам, а
+        накопленное за это время — следующей командой. → future команды (тестам) или None."""
+        self._flush_at = 0.0
+        batch, self.pending = self.pending, {}
+        done, self._batch = self.__dict__.get("_batch"), None
+        writing = self.__dict__.setdefault("writing", {})
+        target = self.dom.get("set")
+
+        def finished(_f=None):
+            for a in batch:
+                if writing.get(a) is done:
+                    writing.pop(a, None)
+            if done is not None and not done.done():
+                done.set_result(None)
+            if _f is not None:
+                self._kick()                                     # копились, пока шла команда
+        if not batch or not target:
+            finished()
+            return None
+        self.stats["set_added"] = self.stats.get("set_added", 0) + len(batch)
+        self._last_flush = time.monotonic()
+        fut = self._flushing = asyncio.get_running_loop().run_in_executor(None, self._nft_add, *target,
+                                                                          list(batch.items()))
+        fut.add_done_callback(finished)
+        return fut
+
+    @staticmethod
+    def _nft_add(table: str, name: str, items: list) -> None:
+        """Адреса (адрес, срок) — в набор: одна транзакция nft на пачку (Е2 проверки исправлений П31). Слишком большую
+        транзакцию nft не отправит, если у него нет CAP_NET_ADMIN в начальном пространстве имён (Docker в LXC): netlink
+        берёт не больше net.core.wmem_max (по умолчанию ~5000 адресов), nft отвечает «Message too long» (musl — «too
+        large»). Тогда — частями вдвое меньше, и этот предел запоминается (_set_tx) для следующих пачек."""
+        lim, done = _set_tx[0] or len(items) or 1, 0
+        while done < len(items):
+            part = items[done:done + lim]
+            err = Proxy._nft_tx(table, name, part)
+            if err and len(part) > SET_TX_MIN and ("Message too l" in err or "wmem_max" in err):
+                lim = _set_tx[0] = max(SET_TX_MIN, len(part) // 2)
+                continue                                 # та же часть — вдвое меньшими транзакциями
+            if err:
+                print(f"dnsproxy: nft: {err[:200]}", flush=True)
+            done += len(part)
+
+    @staticmethod
+    def _nft_tx(table: str, name: str, items: list) -> str:
+        """Одна транзакция `nft -f -`: «add со сроком 1 с → delete → add с нужным сроком». Повторный add адреса, который
+        уже в наборе, срок не продлевает (ядро 6.8 — никогда, 6.18 и 7.0 — при том же сроке), и адрес, который
+        продолжают спрашивать, выпадал из набора через SET_MIN; delete без первого add отказал бы на адресе, которого в
+        наборе нет, и с ним — вся транзакция. Ядро применяет транзакцию целиком: адрес ни на миг не пропадает из набора.
+        Одна команда nft и читает таблицу панели один раз (resync после пересборки — один процесс, а не по процессу на
+        2000 адресов). Адреса в items не повторяются (ключи словаря): второй delete того же адреса отказал бы.
+        → текст ошибки или ""."""
+        lines = []
+        for i in range(0, len(items), 2000):             # строка — не больше 2000 адресов
+            part = items[i:i + 2000]
+            lines.append(f"add element ip {table} {name} {{ " + ", ".join(f"{a} timeout 1s" for a, _t in part) + " }")
+            lines.append(f"delete element ip {table} {name} {{ " + ", ".join(a for a, _t in part) + " }")
+            lines.append(f"add element ip {table} {name} {{ " + ", ".join(f"{a} timeout {t}s" for a, t in part) + " }")
+        try:
+            # срок — как прежде на команду, и сверх того на объём: resync с 200 000 адресов на 1 vCPU — секунды
+            r = subprocess.run(["nft", "-f", "-"], input="\n".join(lines) + "\n", capture_output=True, text=True,
+                               timeout=10 + len(items) // 1000)
+            return (r.stderr.strip() or "nft failed") if r.returncode else ""
+        except (OSError, subprocess.SubprocessError) as e:
+            return str(e) or type(e).__name__
+
+    def _dp(self, mark: int) -> DirectPath:
+        d = self.__dict__.setdefault("dpaths", {})          # тесты собирают Proxy и через __new__
+        p = d.get(mark)
+        if p is None:
+            p = d[mark] = DirectPath()
+        return p
+
+    def is_direct(self, mark: int) -> bool:
+        """Путь «напрямую»: с адреса системы (метка 0) или «Напрямую — адрес» (метки адресов, cfg addr_marks)."""
+        if not mark:
+            return True
+        lo, hi = ((getattr(self, "cfg", None) or {}).get("addr_marks") or (0, -1))[:2]
+        return lo <= mark <= hi
+
+    def route(self, ip: str) -> dict | None:
+        """Путь запросов клиента: {"mark", "tcp"}; None — блок."""
+        r = (self.cfg.get("routes") or {}).get(ip, "default")
+        return self.cfg.get("default") if r == "default" else r
+
+    def allowed(self, ip: str) -> bool:
+        try:
+            return self.net is None or ipaddress.ip_address(ip) in self.net
+        except ValueError:
+            return False
+
+    async def resolve(self, query: bytes, q: dict, ip: str) -> bytes:
+        self.stats["queries"] += 1
+        dom = self.domain_route(ip, q["name"]) if self.dom else None
+        route = dom[0] if dom and dom[0] is not None else self.route(ip)
+        servers = dom[1] if dom else ()
+        if dom:
+            self.stats["by_rule"] = self.stats.get("by_rule", 0) + 1
+        if route is None:
+            self.stats["refused"] += 1
+            return error_reply(query, q, RC_REFUSED)
+        if q["qtype"] == T_AAAA and q["qclass"] == 1:
+            # В туннеле только IPv4 (у клиентов нет адреса IPv6, правила панели — для IPv4): с адресом IPv6
+            # приложение сначала ждало бы соединения, которое не пройдёт, и только потом брало IPv4.
+            # Ответ «записей нет» (NOERROR без записей) — и оно сразу идёт по IPv4.
+            self.stats["aaaa"] = self.stats.get("aaaa", 0) + 1
+            return error_reply(query, q, 0)
+        if dom and q["qtype"] in (T_HTTPS, T_SVCB) and q["qclass"] == 1:
+            # ECH: ключи ECH браузер берёт из записи HTTPS (Cloudflare включил ECH по умолчанию), и тогда имя сайта в
+            # ClientHello зашифровано — правило по доменам его не узнаёт, и сайт идёт по правилам адресов. Для имён из
+            # правил по доменам — «записей нет»: браузер открывает сайт без ECH (решение владельца 2026-11-21)
+            self.stats["https_rr"] = self.stats.get("https_rr", 0) + 1
+            return error_reply(query, q, 0)
+        if servers:
+            self.stats["own_dns"] = self.stats.get("own_dns", 0) + 1
+        # имя из правила, у которого сейчас нет пути (выход подключается, лежит или «блок»): запасного DNS ему нельзя —
+        # сайт должен идти через выход, и имя ушло бы мимо него открытым текстом
+        reply = await self._resolve(query, q, route, servers, fallback=not (dom and dom[0] is None))
+        if dom and dom[2] and q["qtype"] == T_A:
+            wait = self.remember(reply)
+            if wait is not None:
+                # новый адрес — сначала в набор, потом клиенту (Д2): иначе первое соединение шло мимо обработчика
+                try:
+                    await asyncio.wait_for(asyncio.shield(wait), SET_WAIT)
+                except asyncio.TimeoutError:
+                    self.stats["set_late"] = self.stats.get("set_late", 0) + 1     # nft ждёт пересборку таблицы
+                except Exception:  # noqa: BLE001  — запись не удалась: ответ клиенту всё равно уходит
+                    pass
+        return reply
+
+    async def _resolve(self, query: bytes, q: dict, route: dict, servers: tuple = (), fallback: bool = True) -> bytes:
+        mark, tcp = int(route.get("mark") or 0), bool(route.get("tcp"))
+        # Флаги запроса, с которыми ответ сервера разный: рекурсия (RD), без проверки DNSSEC (CD), EDNS и подписи DNSSEC
+        # (DO). Они — и в ключе кэша: устройство, которое само проверяет DNSSEC (systemd-resolved с DNSSEC=yes), получало
+        # из кэша ответ без подписей, если имя первым спросил телефон без них, и имя у него не открывалось.
+        flags = (struct.unpack("!H", query[2:4])[0] & 0x0110, bool(q.get("edns")), bool(q.get("do")))
+        key = (mark, servers, q["name"], q["qtype"], q["qclass"], flags)
+        hit = self.cache.get(key)
+        now = time.monotonic()
+        if hit and hit[0] > now:
+            self.stats["cached"] += 1
+            return _for_client(with_ttl(hit[2], hit[3], int(now - hit[1])), query, q)
+        # Одинаковый запрос уже в пути — ждать его ответа, а не спрашивать снова (Д1 независимой проверки П31): «мёртвое»
+        # имя, которое устройство повторяет раз в секунду-две, держало каждым повтором одно из POOL_SIZE соединений к
+        # серверу до срока, и остальные имена всех, кто идёт напрямую, ждали очереди 3–9 с; каждый повтор начинал ещё и
+        # проверку пути. Ключ — всё, от чего зависит ответ: ключ кэша (путь, свой DNS правила, имя, тип, класс, флаги
+        # запроса), TCP и можно ли к запасному (клиент через выход и имя правила без пути с обычным клиентом не
+        # смешиваются). ID и регистр букв вопроса у каждого клиента свои (_for_client), размер под UDP — свой (UDPServer).
+        # И ещё — «путь „напрямую“ с запасным сейчас не отвечает или проверяется» (Е1 проверки исправлений П31): в это
+        # время запрос идёт к запасному сам (_lookup), а не ждёт того, кто начал раньше и ещё ждёт общие серверы (до
+        # ENC_TIMEOUT × 2 на каждый). Устройство, которое повторяет запрос через 1–2 с (Windows, Linux), в начале блокировки
+        # ждало ответа до 20 с вместо 10–15; повторы друг к другу по-прежнему присоединяются.
+        stage, dp = False, None
+        if fallback and not servers and self.is_direct(mark) and (getattr(self, "cfg", None) or {}).get("direct_fallback"):
+            dp = self._dp(mark)
+            stage = bool(dp.down or _busy(dp.probe))
+        wkey = key + (tcp, bool(fallback), stage)
+        asking = self.__dict__.setdefault("asking", {})          # тесты собирают Proxy и через __new__
+        joins = self.__dict__.setdefault("joins", {})            # задача → [сколько ждут сверх первого, когда начата]
+        task = asking.get(wkey)
+        if task is None:
+            if self.inflight >= MAX_INFLIGHT:
+                self.stats["errors"] += 1
+                return error_reply(query, q, RC_SERVFAIL)
+            self.inflight += 1
+            # своя задача, а не задача первого клиента: его отмена (клиент ушёл) не отменяет ответ остальным
+            task = asking[wkey] = asyncio.ensure_future(self._lookup(query, q, mark, tcp, servers, fallback, key))
+            joins[task] = [0, time.monotonic()]
+            task.add_done_callback(lambda t: self._asked(wkey, t))
+        else:
+            # Ждущие не занимают мест MAX_INFLIGHT (повторы не вытесняют другие имена), но и без предела не копятся (Е3):
+            # поток тысяч одинаковых запросов к имени без ответа держал каждый в памяти до конца задачи (35 → 191–218 МБ
+            # за 30 с). Сверх JOIN_MAX у одной задачи или JOIN_ALL у всех вместе — сразу SERVFAIL, как сверх MAX_INFLIGHT.
+            info = joins.setdefault(task, [0, time.monotonic()])
+            if info[0] >= JOIN_MAX or self.__dict__.get("followers", 0) >= JOIN_ALL:
+                self.stats["errors"] += 1
+                self.stats["join_full"] = self.stats.get("join_full", 0) + 1
+                return error_reply(query, q, RC_SERVFAIL)
+            info[0] += 1
+            self.followers = self.__dict__.get("followers", 0) + 1
+            self.stats["joined"] = self.stats.get("joined", 0) + 1
+            if len(info) == 2 and not servers and (self.cfg.get("encrypt") or "plain") != "plain" \
+                    and time.monotonic() - info[1] >= HEDGE_AFTER and self.inflight < MAX_INFLIGHT:
+                info.append(True)                      # одна вторая попытка на запрос
+                self._hedge(task, query, q, mark, tcp, key)
+            # Повтор, а первый запрос ждёт общие серверы уже JOIN_CHECK, и этим путём за это время не ответило ничего, —
+            # проверка пути сейчас, а не когда первый дождётся срока (Е1). Без объединения проверку раньше начинал более
+            # быстрый повтор: первому запросу могло достаться «замёрзшее» соединение пула (у него срок — ENC_TIMEOUT × 2 на
+            # сервер), а повтор шёл по новому; с объединением запрос один, и в начале блокировки «популярное» имя ждало до
+            # 15 с вместо 11. Медленное имя на исправном пути проверку не начинает: другие имена в это время отвечаются
+            # (ok_at свежее); одна такая проверка на запрос.
+            if dp is not None and not stage and time.monotonic() - info[1] >= JOIN_CHECK \
+                    and time.time() - dp.ok_at >= JOIN_CHECK:
+                info[1] = float("inf")
+                self.stats["join_checks"] = self.stats.get("join_checks", 0) + 1
+                self._doubt(dp, mark, tcp, True)
+        early = getattr(task, "early", None)
+        if early is None:
+            early = task.early = asyncio.get_running_loop().create_future()
+            task.add_done_callback(lambda t: early.done() or early.set_result(None if t.cancelled() or t.exception()
+                                                                              else t.result()))
+        reply = await asyncio.shield(early)
+        if reply is None and task.done() and not task.cancelled() and task.exception() is None:
+            reply = task.result()
+        if reply is None or reply[3] & 0xF == RC_SERVFAIL:
+            self.stats["errors"] += 1           # SERVFAIL самих серверов не кэшируется (cache_ttl) и уходит клиенту
+            if reply is None:
+                return error_reply(query, q, RC_SERVFAIL)
+        return _for_client(reply, query, q)
+
+    def _hedge(self, task, query: bytes, q: dict, mark: int, tcp: bool, key: tuple) -> None:
+        """Вторая попытка запроса, который ждёт общие серверы: тем же путём, на новом соединении; ответ — тем, кто ждёт
+        task (общая задача отдаёт первый ответ), и в кэш. Без ответа — ничего: решает первый запрос (проверка пути и
+        запасной — как без неё)."""
+        self.inflight += 1
+        self.stats["hedged"] = self.stats.get("hedged", 0) + 1
+        tok = _FRESH.set(True)
+        try:
+            h = asyncio.ensure_future(self.forward(query, q, mark, tcp, ()))
+        finally:
+            _FRESH.reset(tok)
+
+        def done(t):
+            self.inflight -= 1
+            if t.cancelled() or t.exception() is not None:
+                return
+            reply = t.result()
+            if reply is None or reply[3] & 0xF == RC_SERVFAIL:
+                return
+            if self.is_direct(mark):
+                self._seen(self._dp(mark), True, False)
+            self.stats["hedged_ok"] = self.stats.get("hedged_ok", 0) + 1
+            early = getattr(task, "early", None)
+            if early is not None and not early.done():
+                early.set_result(reply)
+        h.add_done_callback(done)
+
+    def _asked(self, wkey: tuple, task) -> None:
+        """Запрос, которого ждали (Д1), кончился: место клиента свободно, следующий такой же — снова к серверам."""
+        self.inflight -= 1
+        self.followers = self.__dict__.get("followers", 0) - self.__dict__.setdefault("joins", {}).pop(task, [0])[0]
+        if self.asking.get(wkey) is task:
+            self.asking.pop(wkey, None)
+        if not task.cancelled():
+            task.exception()                    # ошибка уже ушла ждавшим; без них asyncio писал бы её в журнал
+
+    async def _lookup(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, fallback: bool,
+                      key: tuple) -> bytes | None:
+        """Ответ на имя для _resolve: общие серверы или свой DNS правила, на пути «напрямую» — запасной DNS, если общие
+        не ответили. → ответ сервера (с его ID) или None; ответ с TTL — в кэш."""
+        now = time.monotonic()
+        cfg = getattr(self, "cfg", None) or {}       # тесты собирают Proxy без load()
+        direct = not servers and self.is_direct(mark)
+        fb = tuple(cfg.get("direct_fallback") or ()) if direct and fallback else ()
+        has_fb = direct and bool(cfg.get("direct_fallback"))     # у пути есть запасной (у этого имени — fb)
+        p = self._dp(mark) if direct else None
+        reply = None
+        if fb and (p.down or _busy(p.probe)):
+            # серверы DNS этого пути не отвечают или проверяются — имя сразу у запасного; клиент не ждёт ни
+            # проверки, ни пробы: серверы DNS пробуются в фоне
+            if p.down:
+                self._probe_direct(tcp, mark)
+        else:
+            reply = await self.forward(query, q, mark, tcp, servers)
+            if direct:
+                # p — состояние, взятое до ожидания: SIGHUP с новыми серверами или запасным за это время заменил его
+                # новым, и решение о прежних серверах в новое не пишется
+                if reply is not None:
+                    self._seen(p, True, has_fb)
+                else:
+                    self._doubt(p, mark, tcp, has_fb)
+                if reply is None and fallback:
+                    # Д7: имя ждало общие серверы до ENC_TIMEOUT × 2, и SIGHUP за это время мог сменить или выключить
+                    # запасной — спрашивается нынешний, и решение о нём — в нынешнее состояние пути
+                    fb = tuple((getattr(self, "cfg", None) or {}).get("direct_fallback") or ())
+        if reply is None and fb:
+            # запасной — тем же путём (с того же адреса): «Напрямую — адрес» не уходит с другого
+            reply = await self._fallback(query, q, tcp, mark, fb, self._dp(mark))
+        if reply is None:
+            return None
+        try:
+            ttl, offs = cache_ttl(reply)
+        except (ValueError, struct.error):
+            ttl, offs = 0, []
+        if ttl > 0:
+            old = self.cache.pop(key, None)
+            if old:
+                self.cache_bytes -= len(old[2])
+            while self.cache and (len(self.cache) >= CACHE_MAX or self.cache_bytes + len(reply) > CACHE_BYTES):
+                self.cache_bytes -= len(self.cache.pop(next(iter(self.cache)))[2])
+            self.cache[key] = (now + ttl, int(now), reply, offs)
+            self.cache_bytes += len(reply)
+        return reply
+
+    async def _fallback(self, query: bytes, q: dict, tcp: bool, mark: int, fb: tuple,
+                        p: DirectPath | None = None) -> bytes | None:
+        """Запасной DNS пути mark. Не ответил на имя — проверка запасного в фоне (П31: одно имя без его ответа — ещё не
+        «запасной не отвечает»); пока она идёт и если она не прошла — до DIRECT_RETRY не спрашивается (клиент сразу
+        получает SERVFAIL, а не ждёт зависший сервер), а пробуется в фоне. p — состояние пути, в котором fb был в
+        настройках (SIGHUP, пока имя ждало общие серверы, сменил запасной — решение о прежнем в новое не пишется)."""
+        p = p or self._dp(mark)
+        if p.fb_down or _busy(p.fb_probe):
+            if p.fb_down and time.monotonic() >= p.fb_retry_at and not _busy(p.fb_probe):
+                p.fb_retry_at = time.monotonic() + DIRECT_RETRY
+                self._fb_check(p, mark, tcp, fb)
+            return None
+        reply = await self.forward(query, q, mark, tcp, fb)
+        if reply is not None:
+            self._fb_seen(p, True)
+            self.stats["direct_fallback"] = self.stats.get("direct_fallback", 0) + 1
+        elif not (p.fb_down or _busy(p.fb_probe)):      # на пути одна проверка, сколько бы имён ни остались без ответа
+            self.stats["fb_checks"] = self.stats.get("fb_checks", 0) + 1
+            self._fb_check(p, mark, tcp, fb)
+        return reply
+
+    def _fb_check(self, p: DirectPath, mark: int, tcp: bool, fb: tuple) -> None:
+        """Проверка запасного DNS пути в фоне (П31) — или проба, пока он «не отвечает». Пока она идёт, имена его не ждут."""
+        started, order = time.time(), self._order(mark, fb)
+
+        async def run():
+            ok = await self._check(mark, tcp, fb, order)
+            if ok and not p.fb_down:
+                self.stats["fb_checks_ok"] = self.stats.get("fb_checks_ok", 0) + 1     # ложная тревога, которой не стало
+            # пока шла проверка, запасной ответил на другое имя — он на связи
+            self._fb_seen(p, ok or p.fb_ok_at >= started)
+        p.fb_probe = asyncio.get_running_loop().create_task(run())
+
+    @staticmethod
+    def _fb_seen(p: DirectPath, ok: bool) -> None:
+        if ok:
+            p.fb_ok_at, p.fb_down = time.time(), False
+        else:
+            p.fb_fail_at, p.fb_down, p.fb_retry_at = time.time(), True, time.monotonic() + DIRECT_RETRY
+
+    def _direct_seen(self, ok: bool, fallback: bool, mark: int = 0) -> None:
+        """Ответили ли серверы DNS на пути «напрямую» mark (ответ SERVFAIL — тоже ответ: сервер на связи, сломан сайт).
+        ok=False — решение проверки пути, а не одно имя без ответа (П31). Не отвечают и есть запасной — имена этого пути
+        идут к нему, серверы DNS пробуются снова через DIRECT_RETRY. У каждого пути своё: адрес системы и второй адрес
+        могут выходить через разных провайдеров."""
+        self._seen(self._dp(mark), ok, fallback)
+
+    @staticmethod
+    def _seen(p: DirectPath, ok: bool, fallback: bool) -> None:
+        if ok:
+            p.ok_at, p.down = time.time(), False
+            return
+        p.fail_at = time.time()
+        if fallback:
+            p.down, p.retry_at = True, time.monotonic() + DIRECT_RETRY
+
+    def _doubt(self, p: DirectPath, mark: int, tcp: bool, has_fb: bool) -> None:
+        """Имя на пути «напрямую» осталось без ответа общих серверов DNS. Это ещё не «не отвечают» (П31): одно имя
+        резолвер может разбирать дольше срока, пакет UDP — потеряться. Путь проверяется в фоне (одна проверка на путь,
+        сколько бы имён ни ждали); пока проверка идёт, имена пути — у запасного. Без запасного проверка нужна только для
+        «Серверы DNS не отвечают напрямую» на «Сервере»: недавно не прошла — имена по-прежнему без ответа, новая не
+        нужна (без запасного все имена идут к серверам DNS, и первое же, что получит ответ, вернёт «отвечают»)."""
+        if p.down or _busy(p.probe):
+            return
+        if not has_fb and p.fail_at > p.ok_at and time.time() - p.fail_at < DIRECT_RETRY:
+            p.fail_at = time.time()
+            return
+        self.stats["checks"] = self.stats.get("checks", 0) + 1
+        self._start_check(p, mark, tcp, has_fb)
+
+    def _start_check(self, p: DirectPath, mark: int, tcp: bool, has_fb: bool) -> None:
+        started, order = time.time(), self._order(mark, ())    # серверы — те, о ком был вопрос (SIGHUP мог их сменить)
+
+        async def run():
+            ok = await self._check(mark, tcp, (), order)
+            if ok and not p.down:
+                self.stats["checks_ok"] = self.stats.get("checks_ok", 0) + 1     # ложная тревога, которой не стало
+            # пока шла проверка, другое имя этого пути получило ответ общих серверов — путь работает
+            self._seen(p, ok or p.ok_at >= started, has_fb)
+        p.probe = asyncio.get_running_loop().create_task(run())
+
+    def _probe_direct(self, tcp: bool, mark: int = 0) -> None:
+        """Серверы DNS не отвечают напрямую: раз в DIRECT_RETRY они проверяются снова — контрольным запросом в фоне, тем
+        же путём, а клиенты сразу получают ответ запасного DNS. Ответили — имена пути снова идут к ним."""
+        p = self._dp(mark)
+        if time.monotonic() < p.retry_at or _busy(p.probe):
+            return
+        p.retry_at = time.monotonic() + DIRECT_RETRY
+        self._start_check(p, mark, tcp, True)
+
+    async def _check(self, mark: int, tcp: bool, servers: tuple = (), order: list | None = None) -> bool:
+        """Проверка пути mark (П31): контрольный запрос (check_query) всем серверам сразу — общим из настроек или записям
+        servers (запасной DNS; order — их порядок на момент вопроса), каждому своим способом и на своём новом соединении
+        (_CHECKING). Ответил хоть один (SERVFAIL — тоже ответ: сервер на связи) — True; не ответил никто за CHECK_TIMEOUT
+        — False. Запросы проверки не занимают места клиентов (MAX_INFLIGHT) и не ждут их очереди. Ошибка внутри — False:
+        проверка не роняет цикл."""
+        query = check_query()
+        cq = parse_query(query)
+        tasks = []
+        tok = _CHECKING.set(True)                        # задачи ниже берут копию контекста — с этой отметкой
+        try:
+            tasks = [asyncio.ensure_future(self._ask(query, cq, mark, tcp, servers, s))
+                     for s in (self._order(mark, servers) if order is None else order)]
+        finally:
+            _CHECKING.reset(tok)
+        try:
+            for fut in asyncio.as_completed(tasks, timeout=CHECK_TIMEOUT):
+                try:
+                    if await fut is not None:
+                        return True
+                except Exception:  # noqa: BLE001
+                    pass
+            return False
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            for t in tasks:
+                t.cancel()
+
+    async def forward(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple = ()) -> bytes | None:
+        """Запрос к серверам по очереди: первый, кто ответил по делу, — ответ. Без servers — общие серверы с
+        шифрованием из настроек (cfg encrypt); servers — свой DNS правила или запасной: каждый своим способом, как
+        вписан (srv). Все, кто ответил, ответили SERVFAIL, — этот ответ (серверы на связи, не разрешилось само имя);
+        None — не ответил никто."""
+        servfail = None
+        for server in self._order(mark, servers):
+            reply = await self._ask(query, q, mark, tcp, servers, server)
+            if reply is None:
+                continue
+            if reply[3] & 0xF == RC_SERVFAIL:
+                servfail = reply
+                continue                                              # спросим следующий сервер
+            return reply
+        return servfail
+
+    def _order(self, mark: int, servers: tuple) -> list:
+        """Кого спрашивать: servers или общие серверы из настроек."""
+        order = list(servers or self.cfg.get("upstreams") or [])
+        if servers:
+            # запись своего или запасного DNS, которая только что не ответила, — последней: иначе каждое новое имя
+            # ждало её ENC_TIMEOUT перед второй записью (h3:// у сервера без HTTP/3; П30). Спрашивается как вписана
+            down = self.__dict__.setdefault("entry_down", {})      # (путь, запись) → до какого времени не отвечает
+            now = time.monotonic()
+            order.sort(key=lambda e: down.get((mark, e), 0) > now)
+        return order
+
+    async def _ask(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, server: str) -> bytes | None:
+        """Один сервер для forward и проверки пути: ответ (SERVFAIL тоже) или None — не ответил."""
+        down = self.__dict__.setdefault("entry_down", {})
+        entry, hint = server, None
+        if servers and mark and self.is_direct(mark):
+            # «Напрямую — адрес»: адрес, который панель нашла для имени со своего адреса (адреса системы), сначала не
+            # берётся — имя ищется с этого адреса (_name_addr; проверка 1.25.0, А11); он — только когда этим путём искать
+            # нечем (Д6)
+            hint = None if _literal(server) else srv(server)[1]
+            server = _no_hint(server)
+        mode = srv(server)[0] if servers else (self.cfg.get("encrypt") or "plain")
+        if servers and mode != "plain" and not srv(server)[1]:
+            # имя сервиса без адреса (путь через выход, «Напрямую — адрес»): адрес — этим же путём
+            addr = await self._name_addr(srv(server)[2], mark, tcp, hint)
+            if not addr:
+                self._fail(server, "no address")
+                return None
+            server = server + "#" + addr
+        if mode == "plain" and server == self.self_addr:
+            return None         # общий сервер = адрес этого DNS: спрашивал бы сам себя по кругу (Г20 проверки 1.23.0)
+        qid = secrets.randbelow(65536)       # ID запроса — непредсказуемый (не вихрь Мерсенна)
+        out = struct.pack("!H", qid) + query[2:]
+        checking = _CHECKING.get()
+        try:
+            if mode in ("dot", "doh", "doh3"):
+                reply = await asyncio.wait_for(self._enc(out, server, mark, mode), ENC_TIMEOUT * 2)
+            elif tcp:
+                reply = await self._tcp(out, server, mark)       # путь через SOCKS5: UDP там часто не проходит
+            else:
+                reply = await self._udp(out, server, mark)
+                if reply is None and checking:
+                    reply = await self._udp(out, server, mark)   # проверка пути: один потерянный пакет — ещё не «молчит»
+                if reply is None:
+                    # не ответил по UDP — следующий сервер, а не тот же по TCP (UDP 2 с + TCP 5 с на каждый
+                    # молчащий сервер держали имена клиентов до 14 с перед запасным DNS; проверка 1.25.0, А13)
+                    self._fail(server, "timeout")
+                    if servers:
+                        down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
+                    return None
+                if struct.unpack("!H", reply[2:4])[0] & 0x0200 and not checking:
+                    reply = await self._tcp(out, server, mark)   # ответ не поместился в UDP — по TCP, как у всех
+        except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError,
+                ValueError, IndexError, struct.error) as e:
+            self._fail(server, e)
+            if servers:
+                down[(mark, entry)] = time.monotonic() + ENTRY_DOWN
+            return None
+        if not reply or len(reply) < 12 or struct.unpack("!H", reply[:2])[0] != qid \
+                or reply[12:q["qend"]].lower() != query[12:q["qend"]].lower():
+            self._fail(server, "bad answer")
+            return None
+        if reply[3] & 0xF != RC_SERVFAIL:
+            self.last_ok = time.time()
+            down.pop((mark, entry), None)
+        return reply
+
+    async def _name_addr(self, name: str, mark: int, tcp: bool, hint: str | None = None) -> str | None:
+        """Адрес имени шифрованного сервиса DNS для пути mark — тем же путём (через выход — через выход, «Напрямую —
+        адрес» — с этого адреса): у общих серверов DNS из настроек. На пути «Напрямую — адрес» (А11), если они не
+        ответили, — у записей запасного DNS с адресом (а не с именем: искать нечем) и у общих серверов без шифрования:
+        с адреса системы так же спрашивает резолвер сервера, через который имя ищет панель; сертификат сервиса всё равно
+        проверяется по имени. Этим путём не нашёлся (или искать нечем) — hint: адрес, который панель нашла у себя
+        (запасной DNS, Д6: общие серверы без шифрования не отвечают как раз тогда, когда нужен запасной; соединение всё
+        равно идёт с этого адреса, сертификат — по имени, устаревший адрес даст только «не подключился»). Кэш по (путь,
+        имя) на TTL ответа (NAME_TTL_MIN…NAME_TTL_MAX); не нашёлся — None (или hint) на NAME_FAIL, чтобы запросы клиентов
+        не ждали его каждый раз, а этим путём адрес искался снова."""
+        cache = self.__dict__.setdefault("names", {})
+        now = time.monotonic()
+        hit = cache.get((mark, name))
+        if hit and hit[1] > now:
+            return hit[0]
+        ip, ttl = None, NAME_FAIL
+        cfg = getattr(self, "cfg", None) or {}
+        tries = [()]                                     # общие серверы с шифрованием из настроек
+        if mark and self.is_direct(mark):
+            p = self._dp(mark)
+            if p.down or _busy(p.probe):
+                # этим путём не отвечают или проверяются (П31: проверка — секунды) — не ждать их снова: иначе первое имя
+                # у запасного с именем ждало бы их ещё раз
+                tries = []
+            fb = tuple(e for e in cfg.get("direct_fallback") or () if _literal(e))
+            if fb:
+                tries.append(fb)
+            if (cfg.get("encrypt") or "plain") != "plain":
+                tries.append(tuple(cfg.get("upstreams") or ()))     # те же серверы, обычным DNS
+        got = []
+        try:
+            query = a_query(name)
+            for servers in tries:
+                reply = await self.forward(query, parse_query(query), mark, tcp, servers)
+                got = answer_v4(reply) if reply and reply[3] & 0xF == 0 else []
+                if got:
+                    break
+        except (ValueError, UnicodeError, struct.error, IndexError, TypeError):
+            got = []
+        if got:
+            ip, ttl = got[0][0], max(NAME_TTL_MIN, min(int(got[0][1]), NAME_TTL_MAX))
+        elif hint:
+            ip = hint
+            self.stats["name_hint"] = self.stats.get("name_hint", 0) + 1
+        if len(cache) >= NAMES_MAX:
+            cache.clear()
+        cache[(mark, name)] = (ip, now + ttl)
+        return ip
+
+    def _fail(self, server: str, e) -> None:
+        if isinstance(e, asyncio.TimeoutError):
+            e = "timeout"
+        elif isinstance(e, ssl.SSLCertVerificationError):
+            e = f"certificate: {e.verify_message}"
+        self.last_error, self.last_error_at = f"{server}: {e}"[:200], time.time()
+
+    async def _enc(self, msg: bytes, server: str, mark: int, mode: str) -> bytes:
+        """Запрос по DoT или DoH (HTTP/2 или HTTP/1.1; doh3 — HTTP/3) через пул соединений этого пути и сервера. server —
+        адрес общего сервера (способ — mode из настроек) или запись своего или запасного DNS (адрес, имя, порт и путь —
+        из неё)."""
+        if mode == "doh3":
+            return await self._h3(msg, server, mark)
+        key = (mode, mark, server)
+        pool = self.pools.get(key)
+        if pool is None:
+            kind, ip, name, port, path = srv(server)
+            if kind == "plain":                     # общий сервер: просто адрес
+                ip, name, port, path = server, KNOWN_NAMES.get(server, server), None, "/dns-query"
+            if not ip:
+                raise OSError("no address")         # имя не разобралось в панели
+            if self.cfg.get("upstream_port") or port is None:      # upstream_port — только в тестах
+                port = self.up_port if self.cfg.get("upstream_port") else (DOH_PORT if mode == "doh" else DOT_PORT)
+            server_ip = ip
+
+            async def open_conn():
+                loop = asyncio.get_running_loop()
+                s = self._sock(socket.SOCK_STREAM, mark)
+                try:
+                    await asyncio.wait_for(loop.sock_connect(s, (server_ip, port)), ENC_TIMEOUT)
+                except BaseException:
+                    s.close()
+                    raise
+                # Дальше сокет — у транспорта asyncio, и закрывает его только транспорт (Д10 независимой проверки П31).
+                # Отмена сразу после рукопожатия TLS закрывает соединение «вежливо» — ждёт ответа сервера до 30 с; сокет,
+                # закрытый здесь, освобождал номер дескриптора, который транспорт ещё держит, и до 30 с не открывался ни
+                # один новый сокет с этим номером («File descriptor N is used by transport»): проверка пути ложно не
+                # проходила, пути уходили к запасному. С Python 3.12 open_connection отдаёт сокет транспорту до первого
+                # ожидания, так что отмена сокет без хозяина не оставит.
+                r, w = await asyncio.wait_for(asyncio.open_connection(
+                    sock=s, ssl=self.ctx_doh if mode == "doh" else self.ctx, server_hostname=name), ENC_TIMEOUT)
+                c = Conn(r, w)
+                try:
+                    if mode == "doh" and w.get_extra_info("ssl_object").selected_alpn_protocol() == "h2":
+                        c.h2 = dohttp.H2()               # сервер выбрал HTTP/2: начало соединения и свои настройки
+                        w.write(dohttp.H2_PREFACE)
+                        await w.drain()
+                except BaseException:
+                    c.close()                            # и здесь — через транспорт
+                    raise
+                return c
+            pool = self.pools[key] = Pool(open_conn)
+            dflt = DOH_PORT if mode == "doh" else DOT_PORT
+            pool.host, pool.path = (name if port == dflt or self.cfg.get("upstream_port") else f"{name}:{port}"), path
+        if mode == "dot":
+            def fn(c):
+                return asyncio.wait_for(dot_query(c, msg), ENC_TIMEOUT)
+        else:
+            def fn(c):
+                return asyncio.wait_for(doh_query(c, msg, pool.host, pool.path), ENC_TIMEOUT)
+        # проверка пути — на своём новом соединении, не в очереди за медленными именами (П31)
+        return await (pool.once(fn) if _CHECKING.get() or _FRESH.get() else pool.run(fn))
+
+    async def _h3(self, msg: bytes, server: str, mark: int) -> bytes:
+        """Запрос DoH по HTTP/3 («h3://…»): QUIC из OpenSSL в своих потоках (dohttp.H3Pool), сокет UDP — с меткой
+        пути, как у остальных запросов. OpenSSL без QUIC — запись не отвечает (спрашивается следующая)."""
+        key = (mark, server)
+        pool = self.__dict__.setdefault("h3pools", {}).get(key)
+        if pool is None:
+            _, ip, name, port, path = srv(server)
+            if not ip:
+                raise OSError("no address")
+            if not dohttp.h3_supported():
+                raise OSError("HTTP/3: OpenSSL without QUIC")
+            if self.cfg.get("upstream_port"):                       # только в тестах
+                port = self.up_port
+            pool = self.h3pools[key] = dohttp.H3Pool(lambda: self._sock(socket.SOCK_DGRAM, mark), ip, port, name,
+                                                     POOL_SIZE, POOL_IDLE, self.cfg.get("ca_file") or None)
+            pool.host = name if port == DOH_PORT or self.cfg.get("upstream_port") else f"{name}:{port}"
+            pool.path = path
+        return await dohttp.run_h3(pool, msg, pool.host, pool.path, ENC_TIMEOUT, own=_CHECKING.get())
+
+    @staticmethod
+    def _sock(kind: int, mark: int) -> socket.socket:
+        s = socket.socket(socket.AF_INET, kind)
+        if mark:
+            s.setsockopt(socket.SOL_SOCKET, SO_MARK, mark)
+        if kind == socket.SOCK_STREAM:
+            # без алгоритма Нейгла: после ответа HTTP/2 пишется маленький WINDOW_UPDATE, и следующий запрос на соединении
+            # ждал подтверждения сервера — +40–150 мс на каждое имя (П3 полной проверки 1.25.0)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.setblocking(False)
+        return s
+
+    async def _udp(self, msg: bytes, server: str, mark: int) -> bytes | None:
+        loop = asyncio.get_running_loop()
+        s = self._sock(socket.SOCK_DGRAM, mark)
+        try:
+            await loop.sock_connect(s, (server, self.up_port))
+            await loop.sock_sendall(s, msg)
+            try:
+                return await asyncio.wait_for(loop.sock_recv(s, 65535), UDP_TIMEOUT)
+            except asyncio.TimeoutError:
+                return None
+        finally:
+            s.close()
+
+    async def _tcp(self, msg: bytes, server: str, mark: int) -> bytes | None:
+        loop = asyncio.get_running_loop()
+        s = self._sock(socket.SOCK_STREAM, mark)
+        try:
+            await asyncio.wait_for(loop.sock_connect(s, (server, self.up_port)), TCP_TIMEOUT)
+            await loop.sock_sendall(s, struct.pack("!H", len(msg)) + msg)
+            data = b""
+            while len(data) < 2 or len(data) < 2 + struct.unpack("!H", data[:2])[0]:
+                chunk = await asyncio.wait_for(loop.sock_recv(s, 65535), TCP_TIMEOUT)
+                if not chunk:
+                    return None
+                data += chunk
+            return data[2:2 + struct.unpack("!H", data[:2])[0]]
+        finally:
+            s.close()
+
+    # ---- приём запросов
+    async def handle_tcp(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        ip = (writer.get_extra_info("peername") or ("",))[0]
+        tcp = self.__dict__.setdefault("tcp_conns", {})          # тесты собирают Proxy без __init__
+        tcp[ip] = tcp.get(ip, 0) + 1
+        try:
+            if not self.allowed(ip) or tcp[ip] > CLIENT_TCP_MAX:
+                return          # один клиент не занимает все дескрипторы: иначе SERVFAIL у всех (П43)
+            while True:
+                head = await asyncio.wait_for(reader.readexactly(2), CLIENT_TCP_IDLE)
+                query = await asyncio.wait_for(reader.readexactly(struct.unpack("!H", head)[0]), CLIENT_TCP_IDLE)
+                q = parse_query(query)
+                if not q:
+                    return
+                reply = await self.resolve(query, q, ip)
+                writer.write(struct.pack("!H", len(reply)) + reply)
+                await asyncio.wait_for(writer.drain(), CLIENT_TCP_IDLE)    # клиент не читает ответы — закрыть
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError, OSError):
+            pass
+        finally:
+            tcp[ip] -= 1
+            if not tcp[ip]:
+                tcp.pop(ip, None)
+            writer.close()
+
+    def stats_loop(self) -> None:
+        p = self.cfg.get("stats")
+        if p:
+            try:
+                with open(p + ".tmp", "w") as f:
+                    json.dump({"pid": os.getpid(), "at": time.time(), "cache": len(self.cache),
+                               "encrypt": self.cfg.get("encrypt") or "plain", "last_ok": self.last_ok,
+                               "last_error": self.last_error, "last_error_at": self.last_error_at,
+                               "direct_ok_at": self.direct_ok_at, "direct_fail_at": self.direct_fail_at,
+                               # пути «Напрямую — адрес» (1.25.0): метка → [ответил, не ответил]
+                               "addr_direct": {str(m): [p.ok_at, p.fail_at] for m, p in self.dpaths.items() if m},
+                               "fallback": list(self.cfg.get("direct_fallback") or ()),
+                               # запасной DNS по путям: метка → [ответил, не ответил]
+                               "fb_paths": {str(m): [p.fb_ok_at, p.fb_fail_at] for m, p in self.dpaths.items()},
+                               **self.stats}, f)
+                os.replace(p + ".tmp", p)
+            except OSError:
+                pass
+        asyncio.get_running_loop().call_later(STATS_EVERY, self.stats_loop)
+
+
+class UDPServer(asyncio.DatagramProtocol):
+    def __init__(self, proxy: Proxy):
+        self.proxy = proxy
+        self.transport = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        if not self.proxy.allowed(addr[0]):
+            return
+        q = parse_query(data)
+        if q:
+            asyncio.get_running_loop().create_task(self._answer(data, q, addr))
+
+    async def _answer(self, data, q, addr):
+        try:
+            reply = await self.proxy.resolve(data, q, addr[0])
+        except Exception:  # noqa: BLE001
+            reply = error_reply(data, q, RC_SERVFAIL)
+        if len(reply) > q["udp_max"]:
+            reply = truncated(reply, q)
+        self.transport.sendto(reply, addr)
+
+
+def raise_open_files_limit() -> None:
+    """Мягкий предел открытых файлов, унаследованный от панели (бывает 1024), — до жёсткого, как у sniproxy.py."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < hard:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        except (OSError, ValueError):
+            pass
+
+
+async def main(conf_path: str) -> None:
+    raise_open_files_limit()
+    proxy = Proxy(conf_path)
+    loop = asyncio.get_running_loop()
+    listen, port = proxy.cfg["listen"], int(proxy.cfg.get("port") or PORT)
+    await loop.create_datagram_endpoint(lambda: UDPServer(proxy), local_addr=(listen, port))
+    server = await asyncio.start_server(proxy.handle_tcp, listen, port, reuse_address=True)
+    stop = asyncio.Event()
+    loop.add_signal_handler(signal.SIGHUP, proxy.load)
+    loop.add_signal_handler(signal.SIGUSR1, proxy.resync)
+    loop.add_signal_handler(signal.SIGTERM, stop.set)
+    loop.add_signal_handler(signal.SIGINT, stop.set)
+    print(f"dnsproxy: {listen}:{port}", flush=True)
+    proxy.stats_loop()
+    async with server:
+        await stop.wait()
+
+
+if __name__ == "__main__":
+    asyncio.run(main(sys.argv[1]))
+    # Потоки запросов HTTP/3 и проверки пути (dohttp.run_h3) не прерываются и держали бы выход до своего срока (до 5 с,
+    # а замёрзший сервер — ровно 5 с), а панель на SIGTERM ждёт 5 с и потом убивает процесс — под блокировкой прохода.
+    # Сохранять при выходе нечего (счётчики пишутся раз в STATS_EVERY), поэтому выходим сразу.
+    os._exit(0)

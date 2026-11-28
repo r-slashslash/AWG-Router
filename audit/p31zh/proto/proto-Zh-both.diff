@@ -1,0 +1,120 @@
+--- /home/claude/wt/b87e/app/dnsproxy.py	2026-11-28 14:25:21.429998154 +0800
++++ app/dnsproxy.py	2026-11-28 16:14:59.362900864 +0800
+@@ -79,6 +79,10 @@
+ # с: повтор запроса, который ждёт общие серверы дольше, когда путь «напрямую» с запасным столько же ничего не ответил, —
+ # проверка пути сразу (Е1, _resolve). Столько ждёт одна попытка шифрованного DNS: на исправном пути ответ приходит раньше
+ JOIN_CHECK = 5.0
++# с: повтор запроса, а первый всё ещё ждёт шифрованный общий сервер, — одна попытка того же запроса на новом соединении
++# (мимо пула: его соединения может держать «мёртвое» имя). На пути с потерями (DNSPod DoH из России: 7–9 % запросов без
++# ответа) ответ, потерянный первым, приходит со второй попытки, как до Д1, когда повтор шёл своим запросом
++HEDGE_AFTER = 1.5
+ # Путь «напрямую» и запасной DNS (cfg direct_fallback — записи, как у своего DNS; 1.25.0: включается галочкой и
+ # вписывается вручную или кнопкой «Применить для …»). Серверы DNS из настроек не отвечают (из России, Китая и Ирана по
+ # DoH/DoT это бывает) — имена пути спрашиваются у запасного, а серверы DNS пробуются снова не раньше чем через
+@@ -137,6 +141,8 @@
+ # медленными именами), обычный DNS — второй попыткой, обрезанный ответ (TC) — уже ответ. Задаётся в задаче проверки:
+ # подмены _enc/_udp в тестах этим не задеты.
+ _CHECKING: contextvars.ContextVar = contextvars.ContextVar("awgr_dns_check", default=False)
++# Запрос — на своём новом соединении, мимо пула (вторая попытка запроса, который ждёт, — HEDGE_AFTER)
++_FRESH: contextvars.ContextVar = contextvars.ContextVar("awgr_dns_fresh", default=False)
+ 
+ 
+ def check_query() -> bytes:
+@@ -826,10 +832,19 @@
+         joins = self.__dict__.setdefault("joins", {})            # задача → [сколько ждут сверх первого, когда начата]
+         task = asking.get(wkey)
+         if task is None:
+-            if self.inflight >= MAX_INFLIGHT:
++            # Ж (прототип): запросы, которые сразу идут к запасному (путь проверяется или «не отвечает»), — свои места: в
++            # начале блокировки места MAX_INFLIGHT держат запросы, ждущие общие серверы (10–20 с), и под нагрузкой
++            # (300 и больше новых имён в секунду) всем клиентам «напрямую» шёл SERVFAIL, хотя запасной отвечал сразу
++            if stage:
++                if self.__dict__.get("inflight_fb", 0) >= MAX_INFLIGHT:
++                    self.stats["errors"] += 1
++                    return error_reply(query, q, RC_SERVFAIL)
++                self.inflight_fb = self.__dict__.get("inflight_fb", 0) + 1
++            elif self.inflight >= MAX_INFLIGHT:
+                 self.stats["errors"] += 1
+                 return error_reply(query, q, RC_SERVFAIL)
+-            self.inflight += 1
++            else:
++                self.inflight += 1
+             # своя задача, а не задача первого клиента: его отмена (клиент ушёл) не отменяет ответ остальным
+             task = asking[wkey] = asyncio.ensure_future(self._lookup(query, q, mark, tcp, servers, fallback, key))
+             joins[task] = [0, time.monotonic()]
+@@ -846,6 +861,10 @@
+             info[0] += 1
+             self.followers = self.__dict__.get("followers", 0) + 1
+             self.stats["joined"] = self.stats.get("joined", 0) + 1
++            if len(info) == 2 and not servers and (self.cfg.get("encrypt") or "plain") != "plain" \
++                    and time.monotonic() - info[1] >= HEDGE_AFTER and self.inflight < MAX_INFLIGHT:
++                info.append(True)                      # одна вторая попытка на запрос
++                self._hedge(task, query, q, mark, tcp, key)
+             # Повтор, а первый запрос ждёт общие серверы уже JOIN_CHECK, и этим путём за это время не ответило ничего, —
+             # проверка пути сейчас, а не когда первый дождётся срока (Е1). Без объединения проверку раньше начинал более
+             # быстрый повтор: первому запросу могло достаться «замёрзшее» соединение пула (у него срок — ENC_TIMEOUT × 2 на
+@@ -857,16 +876,53 @@
+                 info[1] = float("inf")
+                 self.stats["join_checks"] = self.stats.get("join_checks", 0) + 1
+                 self._doubt(dp, mark, tcp, True)
+-        reply = await asyncio.shield(task)
++        early = getattr(task, "early", None)
++        if early is None:
++            early = task.early = asyncio.get_running_loop().create_future()
++            task.add_done_callback(lambda t: early.done() or early.set_result(None if t.cancelled() or t.exception()
++                                                                              else t.result()))
++        reply = await asyncio.shield(early)
++        if reply is None and task.done() and not task.cancelled() and task.exception() is None:
++            reply = task.result()
+         if reply is None or reply[3] & 0xF == RC_SERVFAIL:
+             self.stats["errors"] += 1           # SERVFAIL самих серверов не кэшируется (cache_ttl) и уходит клиенту
+             if reply is None:
+                 return error_reply(query, q, RC_SERVFAIL)
+         return _for_client(reply, query, q)
+ 
++    def _hedge(self, task, query: bytes, q: dict, mark: int, tcp: bool, key: tuple) -> None:
++        """Вторая попытка запроса, который ждёт общие серверы: тем же путём, на новом соединении; ответ — тем, кто ждёт
++        task (общая задача отдаёт первый ответ), и в кэш. Без ответа — ничего: решает первый запрос (проверка пути и
++        запасной — как без неё)."""
++        self.inflight += 1
++        self.stats["hedged"] = self.stats.get("hedged", 0) + 1
++        tok = _FRESH.set(True)
++        try:
++            h = asyncio.ensure_future(self.forward(query, q, mark, tcp, ()))
++        finally:
++            _FRESH.reset(tok)
++
++        def done(t):
++            self.inflight -= 1
++            if t.cancelled() or t.exception() is not None:
++                return
++            reply = t.result()
++            if reply is None or reply[3] & 0xF == RC_SERVFAIL:
++                return
++            if self.is_direct(mark):
++                self._seen(self._dp(mark), True, False)
++            self.stats["hedged_ok"] = self.stats.get("hedged_ok", 0) + 1
++            early = getattr(task, "early", None)
++            if early is not None and not early.done():
++                early.set_result(reply)
++        h.add_done_callback(done)
++
+     def _asked(self, wkey: tuple, task) -> None:
+         """Запрос, которого ждали (Д1), кончился: место клиента свободно, следующий такой же — снова к серверам."""
+-        self.inflight -= 1
++        if wkey[-1]:                                    # stage: место среди запросов к запасному
++            self.inflight_fb = self.__dict__.get("inflight_fb", 0) - 1
++        else:
++            self.inflight -= 1
+         self.followers = self.__dict__.get("followers", 0) - self.__dict__.setdefault("joins", {}).pop(task, [0])[0]
+         if self.asking.get(wkey) is task:
+             self.asking.pop(wkey, None)
+@@ -1233,7 +1289,7 @@
+             def fn(c):
+                 return asyncio.wait_for(doh_query(c, msg, pool.host, pool.path), ENC_TIMEOUT)
+         # проверка пути — на своём новом соединении, не в очереди за медленными именами (П31)
+-        return await (pool.once(fn) if _CHECKING.get() else pool.run(fn))
++        return await (pool.once(fn) if _CHECKING.get() or _FRESH.get() else pool.run(fn))
+ 
+     async def _h3(self, msg: bytes, server: str, mark: int) -> bytes:
+         """Запрос DoH по HTTP/3 («h3://…»): QUIC из OpenSSL в своих потоках (dohttp.H3Pool), сокет UDP — с меткой

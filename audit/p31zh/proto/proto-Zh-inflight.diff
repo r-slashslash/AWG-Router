@@ -1,0 +1,36 @@
+--- /home/claude/wt/b87e/app/dnsproxy.py	2026-11-28 14:25:21.429998154 +0800
++++ app/dnsproxy.py	2026-11-28 15:52:57.876423440 +0800
+@@ -826,10 +826,19 @@
+         joins = self.__dict__.setdefault("joins", {})            # задача → [сколько ждут сверх первого, когда начата]
+         task = asking.get(wkey)
+         if task is None:
+-            if self.inflight >= MAX_INFLIGHT:
++            # Ж (прототип): запросы, которые сразу идут к запасному (путь проверяется или «не отвечает»), — свои места: в
++            # начале блокировки места MAX_INFLIGHT держат запросы, ждущие общие серверы (10–20 с), и под нагрузкой
++            # (300 и больше новых имён в секунду) всем клиентам «напрямую» шёл SERVFAIL, хотя запасной отвечал сразу
++            if stage:
++                if self.__dict__.get("inflight_fb", 0) >= MAX_INFLIGHT:
++                    self.stats["errors"] += 1
++                    return error_reply(query, q, RC_SERVFAIL)
++                self.inflight_fb = self.__dict__.get("inflight_fb", 0) + 1
++            elif self.inflight >= MAX_INFLIGHT:
+                 self.stats["errors"] += 1
+                 return error_reply(query, q, RC_SERVFAIL)
+-            self.inflight += 1
++            else:
++                self.inflight += 1
+             # своя задача, а не задача первого клиента: его отмена (клиент ушёл) не отменяет ответ остальным
+             task = asking[wkey] = asyncio.ensure_future(self._lookup(query, q, mark, tcp, servers, fallback, key))
+             joins[task] = [0, time.monotonic()]
+@@ -866,7 +875,10 @@
+ 
+     def _asked(self, wkey: tuple, task) -> None:
+         """Запрос, которого ждали (Д1), кончился: место клиента свободно, следующий такой же — снова к серверам."""
+-        self.inflight -= 1
++        if wkey[-1]:                                    # stage: место среди запросов к запасному
++            self.inflight_fb = self.__dict__.get("inflight_fb", 0) - 1
++        else:
++            self.inflight -= 1
+         self.followers = self.__dict__.get("followers", 0) - self.__dict__.setdefault("joins", {}).pop(task, [0])[0]
+         if self.asking.get(wkey) is task:
+             self.asking.pop(wkey, None)

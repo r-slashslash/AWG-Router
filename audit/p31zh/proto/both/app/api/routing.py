@@ -1,0 +1,302 @@
+"""Общие правила маршрутизации, списки сетей и доменов и «Проверка маршрута»."""
+from __future__ import annotations
+
+import ipaddress
+import re
+import socket
+
+from .. import (awgconf, checks, countries, domains, lists)
+from ..checks import bad
+from ..i18n import Msg
+from ..panel import (app, engine, store)
+from ..store import TEXT_KINDS, Store, new_id
+
+# ------------------------------------------------------------------ routing
+def rule_lists(rules) -> set[str]:
+    return {lid for r in rules or [] if isinstance(r, dict) for lid in r.get("lists") or []}
+
+
+def drop_unused_lists(st: dict, ids) -> list[str]:
+    """Списки, которые убрали из правил (удалили правило или список из него) и которые больше не стоят ни в одном
+    правиле, удаляются вместе с ними (1.23.0, решение владельца 2026-11-19: раздела «Списки» больше нет). Свои сайты
+    выхода — тоже, и выход их забывает. → удалённые (после записи — lists.delete_cidrs)."""
+    gone = [lid for lid in sorted(set(ids)) if Store.lst(st, lid) and not Store.list_refs(st, lid)]
+    if gone:
+        st["lists"] = [l for l in st["lists"] if l["id"] not in gone]
+        for u in st["upstreams"]:
+            if u.get("own_list") in gone:
+                u.pop("own_list", None)
+    return gone
+
+
+def forget_lists(gone: list[str]) -> None:
+    for lid in gone:
+        lists.delete_cidrs(lid)
+
+
+def mutate_paths(fn):
+    """store.mutate для ручных правок выхода или адреса (правила, «По умолчанию», клиент): соединения, чей путь от этого
+    стал другим, оборвутся, когда встанут новые правила (Engine.note_change, 1.25.0). → (результат fn, есть ли такие —
+    тогда браузер скажет «Открытые соединения переподключатся по новому пути»)."""
+    old = store.snapshot()
+    res = store.mutate(fn)
+    return res, engine.note_change(old, store.snapshot())
+
+
+def reconnect(changed: bool) -> dict:
+    return {"reconnect": True} if changed else {}
+
+
+@app.put("/api/routing")
+def put_routing(req):
+    body = req.json()
+
+    def fn(st):
+        before = rule_lists(st["routing"]["rules"])
+        old_rules = st["routing"]["rules"]
+        bal = checks.balance(st, body["balance"]) if "balance" in body else st["routing"].get("balance")
+        strict = checks.strict(body["strict"] if "strict" in body else st["routing"].get("strict"))
+        st["routing"] = {"default": checks.outbound(st, body.get("default")),
+                         "rules": checks.rules(st, body.get("rules", []), engine.dns_listen(), engine.dns_names_check)}
+        keep_quota_marks(old_rules, st["routing"]["rules"])
+        if bal:
+            st["routing"]["balance"] = bal
+        if strict:
+            st["routing"]["strict"] = True
+        return drop_unused_lists(st, before - rule_lists(st["routing"]["rules"]))
+    gone, changed = mutate_paths(fn)
+    forget_lists(gone)
+    engine.trigger()
+    return {"ok": True, **reconnect(changed)}
+
+
+def keep_quota_marks(old_rules, rules: list[dict]) -> None:
+    """Отметки месячного лимита правила («исчерпан», «предупредили о 90%» в этом месяце) остаются, только пока лимит и
+    действие те же. Подняли лимит после исчерпания или правило новое (копия общего в свои правила клиента) — отметки
+    снимаются, как у выходов (api/exits.py): иначе строка правила до конца месяца писала бы «лимит исчерпан», а о новом
+    пределе не пришло бы ни события, ни сообщения."""
+    old = {r.get("id"): r for r in old_rules or () if isinstance(r, dict)}
+    for r in rules:
+        o = old.get(r.get("id"))
+        if o is None or o.get("quota") != r.get("quota") or \
+                (o.get("quota_action") or "notify") != (r.get("quota_action") or "notify"):
+            r.pop("quota_hit", None)
+            r.pop("quota_warned", None)
+
+
+@app.post("/api/trace")
+def trace(req):
+    body = req.json()
+    return trace_target(body.get("client") or None, str(body.get("ip", "")).strip())
+
+
+def trace_target(client: str | None, ip: str) -> dict:
+    """Куда пойдёт трафик до IP или домена (из панели и из Telegram)."""
+    if ":" in ip:
+        try:
+            ipaddress.IPv6Address(ip.strip("[]").split("/", 1)[0])
+        except ValueError:
+            bad("err.ip_or_domain")
+        bad("tr.ipv6")           # в туннеле только IPv4: такой трафик отбрасывается
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}\Z", ip):
+        via = None
+        try:
+            # как разберёт имя DNS клиента — через его выход (resolve_name), а не DNS провайдера хоста
+            if not checks.HOSTNAME_RE.fullmatch(ip.lower().rstrip(".")):
+                raise ValueError(ip)            # не имя в интернете (localhost и т. п.) — как раньше
+            resolved, via = engine.resolve_name(client if client and awgconf.KEY_RE.match(client) else None, ip)
+        except Exception:  # noqa: BLE001  — выхода нет, блок, демо: резолвер панели, как раньше
+            try:
+                infos = socket.getaddrinfo(ip, None, socket.AF_INET)
+                resolved = infos[0][4][0]
+            except Exception:  # noqa: BLE001
+                try:
+                    socket.getaddrinfo(ip, None, socket.AF_INET6)
+                except Exception:  # noqa: BLE001
+                    bad("err.ip_or_domain")
+                bad(Msg("tr.ipv6_only", host=ip))   # у домена только AAAA
+        res = engine.trace(client, resolved, ip.lower().rstrip("."))
+        if via is None:
+            res["steps"].insert(0, Msg("tr.resolved", host=ip, ip=resolved))
+        else:
+            name = Msg("out.direct") if via == "direct" else \
+                (Store.upstream(store.snapshot(), via[3:]) or {}).get("name", via)
+            res["steps"].insert(0, Msg("tr.resolved_via", host=ip, ip=resolved, via=name))
+        res["ip"] = resolved
+        return res
+    try:
+        res = engine.trace(client, ip)
+    except ValueError:
+        bad("err.ip_or_domain")
+    res["ip"] = ip
+    return res
+
+
+# -------------------------------------------------------------------- lists
+def list_view(l: dict | None) -> dict | None:
+    """Список для браузера. Текст ручного списка (до 2 МБ) не отдаём в /api/state,
+    который опрашивается каждые 5 секунд, — только по /api/lists/<id>. busy — скачивается сейчас."""
+    if l is None:
+        return None
+    v = {**l, "busy": l["id"] in engine.lists_busy}
+    v.pop("text", None)                  # метка файла с текстом (Store.list_text) браузеру ни к чему
+    if l.get("kind") in TEXT_KINDS:
+        v["source"] = None
+    return v
+
+
+def _needs_net(l: dict) -> bool:
+    """Списку нужна сеть: страны, ASN, по ссылке и домены со ссылками. Ручной список и домены без ссылок
+    разбираются за доли секунды — их по-прежнему готовим сразу, и ответ уже с числом записей."""
+    if l["kind"] in ("country", "asn", "url"):
+        return True
+    return l["kind"] == "domains" and bool(domains.split_source(l.get("source") or store.list_text(l["id"]))[0])
+
+
+def refresh_now_or_bg(lid: str) -> dict | None:
+    l = Store.lst(store.snapshot(), lid)
+    if l and _needs_net(l):
+        engine.refresh_lists_bg([lid])
+    else:
+        engine.refresh_lists(False, [lid])
+    return list_view(Store.lst(store.snapshot(), lid))
+
+
+@app.get("/api/rule-top/{rid}")
+def rule_top(req, rid):
+    """Клиенты, больше всех потратившие по правилу за этот месяц (окно правила, 1.24.0)."""
+    # только клиенты с общими правилами: свои правила клиента — копия общих с теми же id
+    own = store.peek(lambda st: {pk for pk, c in st["clients"].items() if c.get("rules_mode") == "custom"})
+    names = {c["public_key"]: c.get("name") or c.get("ip") or "" for c in engine.clients if c["public_key"] not in own}
+    return {"top": [{"pk": pk, "name": names[pk], "rx": v[0], "tx": v[1]}
+                    for pk, v in engine.traffic.rule_top(rid) if pk in names]}
+
+
+@app.get("/api/lists/{lid}")
+def get_list(req, lid):
+    l = Store.lst(store.snapshot(), lid)
+    if not l:
+        bad("err.not_found", 404)
+    out = {k: v for k, v in l.items() if k != "text"}
+    if l["kind"] in TEXT_KINDS:
+        out["source"] = store.list_text(lid)      # текст ручного списка — из его файла
+    return out
+
+
+@app.post("/api/lists")
+def add_list(req):
+    body = req.json()
+
+    def fn(st):
+        d = checks.list_fields(body)
+        lid = d["source"] if d["kind"] == "country" else new_id("l")
+        if d["kind"] == "country" and Store.lst(st, lid):
+            bad("err.country_exists")
+        st["lists"].append({"id": lid, **d})
+        return lid
+    lid = store.mutate(fn)
+    return {"id": lid, **(refresh_now_or_bg(lid) or {})}
+
+
+# что остаётся у правила страны при повторном «Применить для …»: имя, ограничения скорости, месячный лимит и его отметки
+KEEP_ON_APPLY = ("id", "comment", "quota", "quota_action", "quota_hit", "quota_warned", "rate_down", "rate_up")
+
+
+@app.post("/api/country-preset")
+def country_preset(req):
+    """Готовое правило страны (countries.PRESETS): список страны по адресам и список её доменов — готовые или новые;
+    с apply — ещё и два правила «Напрямую» в конце общих: по доменам со своим DNS страны и по адресам («Применить
+    для …»), и запасной DNS для «Напрямую» — DNS страны. Повторное нажатие (1.25.0, владелец 2026-11-27) снова делает
+    правила страны такими, как при первом. Без apply — только списки."""
+    body = req.json()
+    p = countries.preset(body.get("cc"))
+    if not p:
+        bad("err.bad_value")
+    cc = str(body["cc"]).lower()
+    want = domains.parse(countries.zones_text(cc))
+    st0 = store.snapshot()
+    same = next((l["id"] for l in st0["lists"] if l["kind"] == "domains"
+                 and domains.parse(domains.split_source(store.list_text(l["id"]))[1]) == want), None)
+    name = " ".join(p["zones"])[:40]          # «.ru .su .рф»: в выборе списка не спутать со страной «Россия»
+
+    def fn(st):
+        made = []
+        if not Store.lst(st, cc):
+            st["lists"].append({"id": cc, **checks.list_fields({"kind": "country", "source": cc})})
+            made.append(cc)
+        dom = same if same and Store.lst(st, same) else None
+        if not dom:
+            dom = new_id("l")
+            st["lists"].append({"id": dom, **checks.list_fields(
+                {"kind": "domains", "source": countries.zones_text(cc), "name": name})})
+            made.append(dom)
+        if body.get("apply"):
+            r = st["routing"]
+            # и повторное нажатие (владелец 2026-11-27): правила страны — снова такие, как делает кнопка: «Напрямую»,
+            # включены, у правила доменов — нынешний DNS страны, в конце общих (как при первом нажатии). Ограничения
+            # скорости, месячный лимит и имя, добавленные человеком, остаются; балансировка уходит — у «Напрямую» её нет.
+            # Другие правила с тем же единственным списком убираются: раньше в списке они перехватывали бы сайты страны
+            def country_rule(lists: list, extra: dict) -> dict:
+                old = next((x for x in r["rules"] if x["lists"] == lists), None) or {}
+                keep = {k: old[k] for k in KEEP_ON_APPLY if k in old}
+                return {"comment": "", **keep, "lists": lists, "outbound": "direct", "enabled": True, **extra}
+            mine = [country_rule([dom], {"dns": list(p["dns"])}), country_rule([cc], {})]
+            r["rules"] = checks.rules(st, [x for x in r["rules"] if x["lists"] not in ([dom], [cc])] + mine)
+            # и запасной DNS для «Напрямую» — DNS этой страны, включён (1.25.0, владелец 2026-11-26: заменяет вписанный)
+            st["settings"].update(fallback_dns=list(p["dns"]), fallback_dns_on=True)
+        return {"country": cc, "domains": dom, "made": made}
+    out, changed = mutate_paths(fn)
+    out = {**out, **reconnect(changed)}
+    for lid in out["made"]:          # новые списки — окно правила удалит их, если правило так и не сохранят
+        refresh_now_or_bg(lid)
+    engine.trigger()
+    return out
+
+
+@app.put("/api/lists/{lid}")
+def edit_list(req, lid):
+    body = req.json()
+
+    def fn(st):
+        l = Store.lst(st, lid)
+        if not l:
+            bad("err.not_found", 404)
+        if body.get("kind", l["kind"]) != l["kind"]:
+            # вид списка не меняется: от него зависят правила (домены не смешиваются с сетями),
+            # а у стран id = код страны
+            bad("err.list_kind_change")
+        # без нового текста в запросе (только название) проверяется прежний текст — из его файла
+        d = checks.list_fields(body, {**l, "source": store.list_text(lid)} if l["kind"] in TEXT_KINDS else l)
+        if l["kind"] == "country":
+            d["source"] = l["source"]  # страну у существующего списка не меняем
+        l.update(d)
+    store.mutate(fn)
+    return refresh_now_or_bg(lid)
+
+
+@app.delete("/api/lists/{lid}")
+def del_list(req, lid):
+    def fn(st):
+        if not Store.lst(st, lid):
+            bad("err.not_found", 404)
+        refs = Store.list_refs(st, lid)
+        if refs:
+            bad(Msg("err.list_in_use", refs=refs[:6]))
+        st["lists"] = [l for l in st["lists"] if l["id"] != lid]
+    store.mutate(fn)
+    lists.delete_cidrs(lid)
+    engine.trigger()
+    return {"ok": True}
+
+
+@app.post("/api/lists/{lid}/refresh")
+def refresh_list(req, lid):
+    if not Store.lst(store.snapshot(), lid):
+        bad("err.not_found", 404)
+    return refresh_now_or_bg(lid)
+
+
+@app.get("/api/lists/{lid}/cidrs")
+def list_cidrs(req, lid):
+    c = lists.load_cidrs(lid)
+    return {"count": len(c), "sample": c[:300]}

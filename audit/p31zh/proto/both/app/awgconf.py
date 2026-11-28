@@ -1,0 +1,430 @@
+"""Разбор конфигов выходов: AmneziaWG (.conf и ссылки vpn://) и прокси SOCKS5."""
+from __future__ import annotations
+
+import base64
+import ipaddress
+import json
+import re
+import socket
+import threading
+import urllib.parse
+import zlib
+from dataclasses import dataclass, field
+
+from .i18n import Msg, MsgError
+
+# Ключи, которые понимает только awg-quick; в `awg setconf` их передавать нельзя
+QUICK_ONLY_KEYS = {"address", "dns", "mtu", "table", "preup", "postup",
+                   "predown", "postdown", "saveconfig"}
+
+# Настройки локального интерфейса, которые в чужом конфиге выхода опасны:
+# FwMark может совпасть с метками маршрутизации панели (0x2000+N) и зациклить трафик,
+# ListenPort — занять порт сервера. Отбрасываем: порт туннеля выбирается случайно.
+LOCAL_ONLY_KEYS = {"fwmark", "listenport"}
+
+KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=\Z")
+
+
+class ConfigError(MsgError, ValueError):
+    pass
+
+
+# Сколько ждать ответа DNS при разборе имени из Endpoint (секунды)
+RESOLVE_TIMEOUT = 8
+# Предел распакованной ссылки vpn:// в байтах. Настоящие — килобайты, а zlib сжимает нули в тысячу раз:
+# ссылка в полмегабайта без предела заняла бы гигабайт памяти.
+LINK_MAX = 4 * 1024 * 1024
+
+
+# Параметры, по которым определяем поколение протокола AmneziaWG
+# Ключи конфига по версиям протокола (amneziawg-go v3.1, README «[AWG 3+]»). Отдельного набора для 3.0
+# у amneziawg-go нет: всё «AWG 3+» — это 3.1, которую понимают amneziawg-go и модуль ядра 3.x.
+AWG3_KEYS = {"headerprotectionkey", "contentpaddingaddition", "rekeyaftertime", "rekeytimeout",
+             "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts", "randomtrailers",
+             "disablecookies", "advancedsecurity"}
+AWG2_KEYS = {"s3", "s4"}                          # 2.0: паддинг cookie и транспорта, H1–H4 — диапазоны
+AWG15_KEYS = {"i1", "i2", "i3", "i4", "i5"}        # 1.5: пакеты-имитации перед рукопожатием
+AWG1_KEYS = {"jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"}
+
+
+def protocol_version(params) -> str:
+    """Самая младшая версия AmneziaWG, которая понимает этот конфиг: '3.1' | '2.0' | '1.5' | '1.0' |
+    '' (обычный WireGuard). params — {ключ: значение} (регистр ключей любой); пустые значения не в счёт.
+    H1–H4 диапазоном («100-200») — это уже 2.0."""
+    p = {str(k).lower(): str(v).strip() for k, v in params.items() if str(v).strip()}
+    if p.keys() & AWG3_KEYS:
+        return "3.1"
+    if p.keys() & AWG2_KEYS or any("-" in p.get(h, "") for h in ("h1", "h2", "h3", "h4")):
+        return "2.0"
+    if p.keys() & AWG15_KEYS:
+        return "1.5"
+    if p.keys() & AWG1_KEYS:
+        return "1.0"
+    return ""
+
+
+@dataclass
+class UpstreamConf:
+    raw: str                       # нормализованный текст .conf
+    setconf: str                   # то, что уходит в `awg setconf`
+    address: str                   # IPv4 адрес клиента на удалённом сервере
+    mtu: int
+    endpoint: str
+    peer_public_key: str
+    rekey_after: int = 120
+    params: dict = field(default_factory=dict)
+    version: str = ""
+    kind: str = "awg"              # "awg" | "socks5"
+    socks: dict = field(default_factory=dict)   # host, port, user, password
+
+
+SOCKS_MTU = 8500                   # как советует hev-socks5-tunnel: TCP он завершает сам
+_SOCKS_URL = re.compile(r"^socks(?:5h?|5)?://", re.I)
+_HOST_PORT_USER_PASS = re.compile(r"^([A-Za-z0-9.-]+):(\d{1,5}):([^:\s]+):(\S+)\Z")
+_HOSTNAME = re.compile(r"^(?=.{1,253}\Z)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\Z")
+
+
+def is_socks(text: str) -> bool:
+    t = text.strip()
+    # «хост:порт» без логина — тоже прокси (форма выхода так его и понимает): раньше он уходил в разбор
+    # конфига AWG и получал ошибку про ссылку vpn://
+    return bool(_SOCKS_URL.match(t) or (("\n" not in t) and "[Interface]" not in t and
+                                        (_HOST_PORT_USER_PASS.match(t) or re.match(r"^[^\s/@]+@[^\s/@]+:\d+\Z", t)
+                                         or re.match(r"^[A-Za-z0-9.-]+:\d{1,5}\Z", t))))
+
+
+def parse_socks(text: str) -> UpstreamConf:
+    """socks5://[логин:пароль@]хост:порт (также socks5h://, socks://, «логин:пароль@хост:порт»
+    и «хост:порт:логин:пароль», как их выдают продавцы прокси)."""
+    t = text.strip()
+    m = _HOST_PORT_USER_PASS.match(t)
+    if m and not _SOCKS_URL.match(t):
+        host, port, user, pw = m.group(1), m.group(2), m.group(3), m.group(4)
+    else:
+        if not _SOCKS_URL.match(t):
+            t = "socks5://" + t
+        try:
+            u = urllib.parse.urlsplit(t)
+            host = u.hostname or ""
+        except ValueError:
+            raise ConfigError(Msg("cfg.socks_bad")) from None
+        try:
+            port = u.port
+        except ValueError:                     # порт вне 0–65535 или не число — о порте, а не «не похоже» (П65)
+            raise ConfigError(Msg("cfg.socks_port")) from None
+        if u.path not in ("", "/") or u.query or u.fragment:
+            raise ConfigError(Msg("cfg.socks_bad")) from None
+        user = urllib.parse.unquote(u.username or "")
+        pw = urllib.parse.unquote(u.password or "")
+    try:
+        port = int(port or 0)
+    except ValueError:
+        port = 0
+    if not 0 < port < 65536:
+        raise ConfigError(Msg("cfg.socks_port"))
+    try:
+        ip = ipaddress.ip_address(host)
+        host = str(ip)
+    except ValueError:
+        if not _HOSTNAME.match(host or ""):
+            raise ConfigError(Msg("cfg.socks_host")) from None
+        host = host.lower()
+    if len(user) > 255 or len(pw) > 255 or bool(pw) and not user:
+        raise ConfigError(Msg("cfg.socks_auth"))
+    q = lambda x: urllib.parse.quote(x, safe="")
+    auth = f"{q(user)}:{q(pw)}@" if user else ""
+    hp = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    return UpstreamConf(raw=f"socks5://{auth}{hp}", setconf="", address="", mtu=SOCKS_MTU,
+                        endpoint=hp, peer_public_key="", rekey_after=0, kind="socks5",
+                        socks={"host": host, "port": port, "user": user, "password": pw})
+
+
+def _parse_sections(text: str, strict: bool = True) -> list[tuple[str, list[tuple[str, str]]]]:
+    sections: list[tuple[str, list[tuple[str, str]]]] = []
+    cur = None
+    for line in text.replace("\r", "").split("\n"):
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith(";"):
+            continue
+        if s.startswith("[") and s.endswith("]"):
+            cur = (s[1:-1].strip().lower(), [])
+            sections.append(cur)
+            continue
+        if "=" not in s or cur is None:
+            if not strict:
+                continue
+            if cur is None:
+                raise ConfigError(Msg("cfg.outside_section"))
+            raise ConfigError(Msg("cfg.bad_line", line=s[:60]))
+        k, v = s.split("=", 1)
+        cur[1].append((k.strip(), v.strip()))
+    return sections
+
+
+def _b64_any(s: str) -> bytes:
+    s = s.strip()
+    s += "=" * (-len(s) % 4)
+    try:
+        return base64.urlsafe_b64decode(s)
+    except Exception:
+        return base64.b64decode(s)
+
+
+def _find_conf_in_json(obj) -> str | None:
+    """Ищет текст [Interface]... внутри JSON-экспорта Amnezia (vpn://)."""
+    if isinstance(obj, str):
+        st = obj.strip()
+        if st.startswith("{"):  # last_config — это JSON, вложенный строкой
+            try:
+                return _find_conf_in_json(json.loads(st))
+            except ValueError:
+                pass
+        return obj if "[Interface]" in obj else None
+    if isinstance(obj, dict):
+        # приоритет: containers[].awg.last_config.config
+        for key in ("last_config", "config"):
+            if key in obj:
+                r = _find_conf_in_json(obj[key])
+                if r:
+                    return r
+        for v in obj.values():
+            r = _find_conf_in_json(v)
+            if r:
+                return r
+    if isinstance(obj, list):
+        for v in obj:
+            r = _find_conf_in_json(v)
+            if r:
+                return r
+    return None
+
+
+def _inflate(data: bytes) -> bytes | None:
+    """zlib с пределом размера (LINK_MAX). None — это не поток zlib или он оборван."""
+    d = zlib.decompressobj()
+    try:
+        out = d.decompress(data, LINK_MAX + 1)
+    except zlib.error:
+        return None
+    if len(out) > LINK_MAX:
+        raise ConfigError(Msg("cfg.bad_vpn_link")) from None
+    return out if d.eof else None
+
+
+def extract_conf_text(user_input: str) -> str:
+    """Принимает .conf, JSON или vpn://… и возвращает текст .conf."""
+    try:
+        return _extract_conf_text(user_input)
+    except RecursionError:              # JSON с тысячами уровней вложенности — не конфиг
+        raise ConfigError(Msg("cfg.unrecognized")) from None
+
+
+def _extract_conf_text(user_input: str) -> str:
+    t = user_input.strip()
+    if not t:
+        raise ConfigError(Msg("cfg.empty"))
+    if "[Interface]" in t:
+        return t
+    if t.startswith("vpn://"):
+        t = t[len("vpn://"):]
+    if t.startswith("{"):
+        conf = _find_conf_in_json(t)
+        if conf:
+            return conf
+        raise ConfigError(Msg("cfg.no_awg_in_json"))
+    try:
+        raw = _b64_any(t)
+    except Exception:
+        raise ConfigError(Msg("cfg.unrecognized")) from None
+    data = None
+    # qCompress: 4 байта длины (big-endian) + zlib
+    for cand in (raw[4:], raw):
+        data = _inflate(cand)
+        if data is not None:
+            break
+    if data is None:
+        data = raw
+    text = data.decode("utf-8", errors="replace")
+    if "[Interface]" in text and not text.lstrip().startswith("{"):
+        return text
+    try:
+        obj = json.loads(text)
+    except Exception:
+        raise ConfigError(Msg("cfg.bad_vpn_link")) from None
+    conf = _find_conf_in_json(obj)
+    if not conf:
+        raise ConfigError(Msg("cfg.vpn_no_awg"))
+    return conf
+
+
+def _range_max(v: str, default: int) -> int:
+    nums = [int(x) for x in re.findall(r"\d+", v or "")]
+    return max(nums) if nums else default
+
+
+def parse_upstream(user_input: str) -> UpstreamConf:
+    if is_socks(user_input):
+        return parse_socks(user_input)
+    text = extract_conf_text(user_input)
+    sections = _parse_sections(text)
+    ifaces = [s for s in sections if s[0] == "interface"]
+    peers = [s for s in sections if s[0] == "peer"]
+    if len(ifaces) != 1:
+        raise ConfigError(Msg("cfg.one_interface"))
+    if not peers:
+        raise ConfigError(Msg("cfg.no_peer"))
+    if len(peers) > 1:
+        raise ConfigError(Msg("cfg.many_peers"))
+
+    iface = ifaces[0][1]
+    peer = peers[0][1]
+    ilow = {k.lower(): v for k, v in iface}
+    plow = {k.lower(): v for k, v in peer}
+
+    if not KEY_RE.match(ilow.get("privatekey", "")):
+        raise ConfigError(Msg("cfg.bad_privkey"))
+    if not KEY_RE.match(plow.get("publickey", "")):
+        raise ConfigError(Msg("cfg.bad_pubkey"))
+    endpoint = plow.get("endpoint", "")
+    if not endpoint or ":" not in endpoint:
+        raise ConfigError(Msg("cfg.no_endpoint"))
+
+    address = None
+    for a in re.split(r"[,\s]+", ilow.get("address", "")):
+        if not a:
+            continue
+        try:
+            ip = ipaddress.ip_interface(a)
+        except ValueError:
+            continue
+        if ip.version == 4:
+            address = str(ip.ip)
+            break
+    if not address:
+        raise ConfigError(Msg("cfg.no_ipv4"))
+
+    try:
+        mtu = int(ilow.get("mtu", "") or 1280)
+    except ValueError:
+        mtu = 1280
+    mtu = max(1100, min(mtu, 1500))
+
+    # [Interface] для setconf: без ключей awg-quick и без пустых значений
+    out = ["[Interface]"]
+    params = {}
+    for k, v in iface:
+        if k.lower() in QUICK_ONLY_KEYS or k.lower() in LOCAL_ONLY_KEYS or v == "":
+            continue
+        out.append(f"{k} = {v}")
+        if k.lower() != "privatekey":
+            params[k] = v
+    out.append("")
+    out.append("[Peer]")
+    has_keepalive = False
+    for k, v in peer:
+        if v == "":
+            continue
+        kl = k.lower()
+        if kl == "allowedips":
+            v = "0.0.0.0/0"  # маршруты задаёт панель; принимаем любой IPv4
+        if kl == "persistentkeepalive":
+            has_keepalive = True
+            # AWG 3 допускает диапазон «22-30»; выключенный keepalive включаем —
+            # без него не определить, жив ли туннель
+            if v.strip("() ").lower() in ("0", "off", ""):
+                v = "25"
+        out.append(f"{k} = {v}")
+    if not has_keepalive:
+        out.append("PersistentKeepalive = 25")
+    setconf = "\n".join(out) + "\n"
+
+    return UpstreamConf(
+        raw=text.strip() + "\n",
+        setconf=setconf,
+        address=address,
+        mtu=mtu,
+        endpoint=endpoint,
+        peer_public_key=plow["publickey"],
+        rekey_after=_range_max(ilow.get("rekeyaftertime", ""), 120),
+        params=params,
+        version=protocol_version(ilow),
+    )
+
+
+def split_endpoint(endpoint: str) -> tuple[str, str]:
+    """«host:port» или «[v6]:port» → (host, port). Порт остаётся строкой, как в конфиге."""
+    host, _, port = endpoint.strip().rpartition(":")
+    return host.strip("[]"), port
+
+
+def _lookup(host: str, out: list) -> None:
+    """Разбор имени в отдельном потоке: getaddrinfo нельзя прервать, а ждать его без предела нельзя."""
+    for fam in (socket.AF_INET, socket.AF_INET6):
+        try:
+            out.append(socket.getaddrinfo(host, None, fam, socket.SOCK_STREAM)[0][4][0])
+            return
+        except OSError:
+            continue
+
+
+def resolve_host(host: str, timeout: float | None = None) -> str:
+    """IP-адрес для имени из Endpoint: IPv4, а если его нет — IPv6. Разбор идёт в сети панели
+    (её resolv.conf): внутри сети контейнера Amnezia нет ни резолвера из конфига Docker, ни
+    127.0.0.53 от systemd-resolved, и `awg setconf` с именем ждал бы тайм-аута."""
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    out: list[str] = []
+    th = threading.Thread(target=_lookup, args=(host, out), daemon=True)
+    th.start()
+    th.join(RESOLVE_TIMEOUT if timeout is None else timeout)
+    if not out:
+        raise ConfigError(Msg("cfg.endpoint_resolve", host=host))
+    return out[0]
+
+
+def resolve_many(hosts, timeout: float) -> dict[str, str]:
+    """Несколько имён сразу, параллельно: общее ожидание — не больше timeout. Не разобранных в ответе нет."""
+    res: dict[str, str] = {}
+
+    def one(h):
+        try:
+            res[h] = resolve_host(h, timeout)
+        except ConfigError:
+            pass
+    ths = [threading.Thread(target=one, args=(h,), daemon=True) for h in hosts]
+    for th in ths:
+        th.start()
+    for th in ths:
+        th.join(timeout + 1)
+    return dict(res)
+
+
+def with_fwmark(setconf: str, mark: int) -> str:
+    """Текст `awg setconf` с меткой внешних пакетов туннеля (FwMark, 1.25.0): с какого исходящего адреса сервер
+    подключается к выходу. 0 — без метки (адрес системы); своя FwMark конфига выхода заменяется."""
+    lines = [ln for ln in setconf.split("\n") if ln.split("=", 1)[0].strip().lower() != "fwmark"]
+    if not mark:
+        return "\n".join(lines)
+    out = []
+    for ln in lines:
+        out.append(ln)
+        if ln.strip().lower() == "[interface]":
+            out.append(f"FwMark = {int(mark):#x}")
+    return "\n".join(out)
+
+
+def setconf_for(pc: UpstreamConf, ip: str) -> str:
+    """Текст для `awg setconf` с уже найденным адресом Endpoint (`resolve_host`)."""
+    host, port = split_endpoint(pc.endpoint)
+    if ip == host:
+        return pc.setconf
+    addr = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
+    out = []
+    for line in pc.setconf.split("\n"):
+        if line.split("=", 1)[0].strip().lower() == "endpoint" and "=" in line:
+            line = f"{line.split('=', 1)[0].rstrip()} = {addr}"
+        out.append(line)
+    return "\n".join(out)

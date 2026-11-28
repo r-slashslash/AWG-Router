@@ -1,0 +1,2143 @@
+"""Управление панелью из Telegram: команды и кнопки (включается в настройках уведомлений).
+
+Бот слушает getUpdates (long polling) тем же путём, что и уведомления: напрямую или через
+туннель выхода. Команды принимаются только из чата, указанного в настройках; всё остальное
+молча пропускается. Менять параметры сервера из бота нельзя: токен бота — это доступ к серверу,
+поэтому здесь в основном то, что легко вернуть назад; удаление клиента — только с подтверждением.
+
+Тексты бота уходят в Telegram, а не в браузер, поэтому, как и в notify.py, каталог на четырёх
+языках лежит здесь (TEXTS). Действия из бота пишутся в журнал событий панели (tg.act_*).
+"""
+from __future__ import annotations
+
+import collections
+import hashlib
+import html
+import json
+import logging
+import math
+import os
+import queue
+import re
+import threading
+import time
+
+from . import config, limits, notify, qr, tgcard, uitext
+from .i18n import Msg
+
+log = logging.getLogger("awgr.tgbot")
+
+STATE = os.path.join(config.DATA_DIR, "tgbot.json")
+POLL = 25                 # long polling: столько секунд Telegram держит запрос
+PAGE = 8                  # клиентов на странице списка
+ONLINE = 180              # handshake не старше — «в сети»
+OLD = 600                 # сообщения старше (например, пока панель была выключена) не выполняем
+ASK_TTL = 900             # сколько ждём ответа на «как назвать клиента?»
+DAY = 86400
+LOGO = os.path.join(os.path.dirname(__file__), "static", "icons", "tg-logo.png")   # фото главного меню
+_LOGO_SUM: list[str] = []
+
+
+def logo_sum() -> str:
+    """Отпечаток картинки меню (один раз за запуск): по нему видно, что file_id в Telegram — от прежней."""
+    if not _LOGO_SUM:
+        try:
+            with open(LOGO, "rb") as f:
+                _LOGO_SUM.append(hashlib.sha256(f.read()).hexdigest()[:16])
+        except OSError:
+            _LOGO_SUM.append("")
+    return _LOGO_SUM[0]
+CAPTION_MAX = 1024         # длиннее подпись к фото Telegram не примет — такой экран идёт текстом
+GB = 1024 ** 3
+COMMANDS = ("status", "clients", "add", "exits", "route", "backup", "panel", "help")
+
+TEXTS = {
+    "ru": {
+        "help": "🤖 <b>Пульт AWG Router</b>\n"
+                "/status — сервер, клиенты и выходы\n"
+                "/clients — клиенты: включить, выключить, QR, продлить, удалить\n"
+                "/add — новый клиент\n"
+                "/exits — выходы: проверить, сменить основной\n"
+                "/route — куда пойдёт трафик до адреса или домена\n"
+                "/backup — резервная копия сейчас\n"
+                "/panel — ссылка на панель",
+        "cmd_status": "Сервер, клиенты и выходы", "cmd_clients": "Клиенты", "cmd_add": "Новый клиент",
+        "cmd_exits": "Выходы", "cmd_route": "Куда пойдёт трафик до адреса",
+        "cmd_backup": "Резервная копия сейчас", "cmd_help": "Что умеет бот",
+        "b_status": "📊 Состояние", "b_clients": "👥 Клиенты", "b_exits": "🌐 Выходы",
+        "b_route": "🧭 Маршрут", "kbd_menu": "☰ Меню",
+        "kbd_off": "Управление из Telegram выключено в панели.",
+        "b_add": "➕ Новый клиент", "b_backup": "💾 Копия", "b_list": "‹ Клиенты",
+        "b_refresh": "🔄 Обновить", "b_on": "▶️ Включить", "b_off": "⏸ Выключить",
+        "b_config": "📱 QR и файл", "b_share": "🔗 Личная ссылка", "b_days": "+30 дней",
+        "b_gb": "+10 ГБ", "b_client": "👤 Клиент", "b_check": "🔍 Проверить «{name}»",
+        "b_update": "⬆️ Обновить до {version}", "b_update_go": "✅ Да, обновить", "b_cancel": "Отмена",
+        "st_default": "⭐ Основной выход: {out}",
+        "st_balance": "⚖️ Балансировка между выходами",
+        "st_balance_hint": "«Сделать основным» выключит балансировку.",
+        "cd_exit_bal": "Выход: {out} (балансировка)",
+        "ex_title": "<b>🌐 Выходы</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — выключен",
+        "ex_down": "🔴 {name} — не работает, его трафик: {to}",
+        "ex_quota": "📦 {name} — лимит исчерпан, его трафик: {to}",
+        "ex_none": "Выходов пока нет: весь трафик идёт напрямую. Выходы добавляются в панели.",
+        "o_direct": "напрямую", "o_block": "блокируется", "o_exit": "«{name}»", "o_direct_at": "напрямую — {addr}",
+        "cl_title": "<b>👥 Клиенты</b> · {n}", "cl_empty": "Клиентов пока нет.",
+        "cl_legend": "🟢 в сети · ⚪ не в сети · ⏸ выключен",
+        "cd_online": "🟢 В сети", "cd_seen": "⚪ Был в сети {ago} назад", "cd_never": "⚪ Ещё не подключался",
+        "cd_off": "⏸ Выключен", "cd_off_exp": "⏸ Выключен: истёк срок",
+        "cd_off_quota": "⏸ Выключен: исчерпан лимит трафика",
+        "cd_ip": "Адрес в туннеле: {ip}", "cd_traffic": "📊 Трафик: {month} за месяц, {total} всего",
+        "cd_until": "📅 Действует до {date}", "cd_quota_month": "📦 Лимит: {used} из {quota} за месяц",
+        "cd_quota_total": "📦 Лимит: {used} из {quota} всего", "cd_exit": "Выход: {out}",
+        "cd_app": "📱 Создан в приложении AmneziaVPN: конфиг есть только на устройстве.",
+        "ago_m": "{n} мин", "ago_h": "{n} ч", "ago_d": "{n} дн.",
+        "u_mb": "МБ", "u_gb": "ГБ", "u_tb": "ТБ",
+        "ok_on": "▶️ «{name}» включён", "ok_off": "⏸ «{name}» выключен",
+        "ok_days": "✅ «{name}» действует до {date}", "ok_gb": "✅ «{name}»: лимит {gb} ГБ",
+        "cfg_caption": "<b>{name}</b>: отсканируйте QR в AmneziaWG или AmneziaVPN или импортируйте файл.",
+        "cfg_link": "Ключ для приложения AmneziaVPN (вставьте его при добавлении сервера):",
+        "cfg_qr_big": "Конфиг слишком длинный для QR-кода — используйте файл.",
+        "share": "🔗 Личная ссылка <b>{name}</b>:\n{url}\n\nПо ней можно скачать конфиг, отсканировать QR и "
+                 "посмотреть свой трафик без входа в панель.",
+        "add_ask": "Как назвать нового клиента? Ответьте на это сообщение именем.",
+        "add_ok": "✅ Клиент <b>{name}</b> создан.",
+        "rt_ask": "Какой IP-адрес или домен проверить? Ответьте на это сообщение.",
+        "rt_res": "🧭 {target} ({ip}) → {out}", "rt_res_ip": "🧭 {ip} → {out}",
+        "rt_rule": "Правило: список {list} ({net})", "rt_default": "Ни одно правило не подошло: основной выход",
+        "rt_now": "Сейчас: {out} (выход не работает)", "rt_local": "Локальный адрес: через выходы не идёт.",
+        "rt_bad": "Это не похоже на IPv4-адрес или домен.", "rt_v6": "IPv6 внутри туннеля не маршрутизируется.",
+        "pr_wait": "Проверяю «{name}»…", "pr_ok": "🔍 «{name}»: выход в интернет с {ip} {cc}, {ms} мс", "pr_udp": ", UDP проходит", "pr_no_udp": ", UDP не проходит",
+        "pr_fail": "🔍 «{name}» не отвечает: {error}",
+        "df_ok": "⭐ Основной выход: {out}",
+        "bk_wait": "Готовлю копию…", "bk_fail": "⚠️ Копия не отправлена: {error}",
+        "up_ask": "Обновить панель до {version}? Она перезапустится, это займёт несколько минут. "
+                  "Когда панель вернётся, бот напишет.",
+        "up_started": "⬆️ Обновляю до {version}…", "up_none": "Новой версии нет: {version} — последняя.",
+        "up_done": "✅ Панель обновлена до {version}.",
+        "up_failed": "⚠️ Обновление не удалось, работает версия {version}. Подробности — в панели, «Система».",
+        "deny": "⛔ Нет доступа: бот выполняет команды только из чата, указанного в его панели.\nChat ID этого чата: <code>{chat}</code>. Если бот ваш, впишите этот номер в панели: «Система» → «Уведомления в Telegram» → Chat ID.", "deny_toast": "⛔ Нет доступа",
+        "gone": "Такого клиента больше нет.", "gone_exit": "Такого выхода больше нет.",
+        "fail": "⚠️ Не получилось: {error}",
+        "unknown": "Не знаю такой команды. /help — что я умею.",
+        "start": "🌍 VPN-сервер: <code>{host}</code>\n🌐 Выходы онлайн: {exits}\n🏷 Версия панели: {version}\n👥 Клиенты: {clients}\n🟢 Клиенты онлайн: {online}\n📶 Общий трафик: {traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "VPN-сервер", "pc_exits": "Выходы онлайн", "pc_version": "Версия панели",
+        "pc_clients": "Клиенты", "pc_online": "Клиенты онлайн", "pc_traffic": "Общий трафик",
+        "pc_of": "{n} из {total}", "pc_none": "нет", "ps_awg": "Версия AWG", "ps_engine": "Движок",
+        "ps_kernel": "модуль ядра {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "определяется…",
+        "ps_v4_fail": "не определён", "ps_v6_none": "на сервере нет", "ps_dns": "DNS на сервере",
+        "ps_dns_off": "выключен", "ps_dns_err": "не работает",
+        "ps_dns_err_sub": "подробности в панели, вкладка «Сервер»", "ps_dns_upfail": "серверы DNS не отвечают",
+        "ps_uptime": "Время работы сервера", "ps_ram": "RAM", "ps_online": "Клиентов онлайн",
+        "ps_month": "Трафик за месяц", "ps_ok": "Работает", "ps_bad": "Сервер AmneziaWG недоступен",
+        "ps_upd": "доступна {version}",
+        "b_menu": "‹ Меню", "bk_done": "💾 Копия отправлена (файл выше).", "cfg_done": "📱 Конфиг отправлен (QR и файл выше).",
+        "cmd_panel": "Ссылка на панель", "b_panel": "🖥 Панель", "b_open": "🖥 Открыть панель",
+        "pn_text": "🖥 <b>Панель AWG Router</b>\n{url}",
+        "pn_ssh": "🖥 Панель открывается только через SSH-туннель. Запустите на своём компьютере\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\nи откройте {url}",
+        "b_delete": "🗑 Удалить", "b_delete_go": "🗑 Да, удалить",
+        "del_ask": "Удалить клиента <b>{name}</b>?\nЕго конфиг перестанет работать, срок, лимиты и личная "
+                   "ссылка будут удалены. Отменить это нельзя.",
+        "ok_deleted": "🗑 «{name}» удалён",
+        "b_server": "🗄 Сервер", "b_back_server": "‹ Сервер",
+        "b_back_exits": "‹ Выходы", "sv_title": "🗄 <b>Сервер</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>Панель › Сервер</b>",
+        "st_panel": "🏷 Версия панели: {version}", "st_panel_up": "🏷 Версия панели: {version} (доступна {latest})",
+        "st_awg": "🛡 Версия AWG: {version}", "st_engine_kernel": "⚙️ Движок: модуль ядра {version}", "st_engine_go": "⚙️ Движок: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Время работы сервера: {time}",
+        "st_v4_wait": "🌐 IPv4: определяется…",
+        "st_v4_fail": "🌐 IPv4: не определён — проверка «напрямую» не прошла, панель пробует снова раз в 10 минут",
+        "st_v6_none": "🌐 IPv6: на сервере нет",
+        "st_dns_off": "🧭 DNS на сервере: выключен",
+        "st_dns_on": "🧭 DNS на сервере: работает на <code>{addr}</code>, {mode}",
+        "st_dns_stats": "   запросов {q}, из кэша {c}",
+        "st_dns_plain": "без шифрования",
+        "st_dns_upfail": "   ⚠️ серверы DNS не отвечают",
+        "st_dns_err": "⚠️ DNS на сервере: не работает — подробности в панели, вкладка «Сервер»",
+        "st_ram": "🧠 RAM: {used} из {total}", "st_online": "🟢 Клиентов онлайн: {online} из {total}",
+        "st_traffic": "📶 Трафик за месяц: {size}", "st_ok": "✅ Статус: работает",
+        "st_bad": "⚠️ Статус: сервер AmneziaWG недоступен", "up_dh": "{d} дн. {h} ч",
+        "up_hm": "{h} ч {m} мин", "ex_pick": "Нажмите на выход, чтобы проверить его или сделать основным.",
+        "ex_direct": "Напрямую", "eo_default": "⭐ Основной выход",
+        "eo_month": "📶 Трафик за месяц: {size}", "eo_direct": "🏠 Через IP этого сервера",
+        "b_probe_one": "🔍 Проверить выход", "b_make_default": "⭐ Сделать основным",
+        "me_need_link": "🤖 Это бот VPN-сервера. Чтобы смотреть здесь свой доступ (состояние, трафик, срок и конфиг), откройте приглашение, которое вам прислали.\n\nНомер этого чата: <code>{chat}</code> — он нужен только владельцу сервера.",
+        "me_bad_link": "Приглашение не подошло: оно устарело или скопировано не целиком. Попросите новое у того, кто выдал вам доступ.",
+        "me_gone": "🚫 Это приглашение больше не действует: доступ удалили или выдали новое приглашение. Попросите новое у того, кто выдал вам доступ.",
+        "cd_title": "🔐 <b>Ваш доступ</b>", "cfg_caption_me": "📲 Отсканируйте QR в AmneziaWG или AmneziaVPN или импортируйте файл.", "cfg_file_me": "📄 Файл конфига для приложения",
+        "me_hint": "🔄 «Обновить» — свежие данные\n📱 «QR и файл» — конфиг для приложения",
+        "me_cfg_wait": "Конфиг только что отправлен — подождите полминуты",
+        "share_bot": "🤖 Приглашение в бота (там клиент сам смотрит свой доступ):\n{url}",
+        "rm_expiring": "⏳ Ваш доступ закончится {date} — через {days} дн. Чтобы продлить, напишите тому, кто выдал вам доступ.",
+        "rm_quota_warn": "⚠️ Израсходовано 90% лимита трафика: {used} из {quota}.",
+        "rm_expired": "⏰ Ваш доступ выключен: закончился срок. Чтобы продлить, напишите тому, кто выдал вам доступ.",
+        "rm_quota_month": "📦 Ваш доступ выключен: израсходован лимит трафика {quota} за месяц. Он снова включится в начале следующего месяца.",
+        "rm_quota_total": "📦 Ваш доступ выключен: израсходован лимит трафика {quota}. Чтобы продолжить, напишите тому, кто выдал вам доступ.",
+        "rm_quota_reset": "✅ Ваш доступ снова включён: начался новый месяц.",
+    },
+    "en": {
+        "help": "🤖 <b>AWG Router remote</b>\n"
+                "/status — server, clients and exits\n"
+                "/clients — clients: turn on or off, QR, extend, delete\n"
+                "/add — new client\n"
+                "/exits — exits: check, change the default\n"
+                "/route — where traffic to an address or domain goes\n"
+                "/backup — backup now\n"
+                "/panel — link to the panel",
+        "cmd_status": "Server, clients and exits", "cmd_clients": "Clients", "cmd_add": "New client",
+        "cmd_exits": "Exits", "cmd_route": "Where traffic to an address goes",
+        "cmd_backup": "Backup now", "cmd_help": "What the bot can do",
+        "b_status": "📊 Status", "b_clients": "👥 Clients", "b_exits": "🌐 Exits",
+        "b_route": "🧭 Route", "kbd_menu": "☰ Menu",
+        "kbd_off": "Control from Telegram is turned off in the panel.",
+        "b_add": "➕ New client", "b_backup": "💾 Backup", "b_list": "‹ Clients",
+        "b_refresh": "🔄 Refresh", "b_on": "▶️ Turn on", "b_off": "⏸ Turn off",
+        "b_config": "📱 QR and file", "b_share": "🔗 Personal link", "b_days": "+30 days",
+        "b_gb": "+10 GB", "b_client": "👤 Client", "b_check": "🔍 Check “{name}”",
+        "b_update": "⬆️ Update to {version}", "b_update_go": "✅ Yes, update", "b_cancel": "Cancel",
+        "st_default": "⭐ Default exit: {out}",
+        "st_balance": "⚖️ Load balancing across exits",
+        "st_balance_hint": "“Make default” turns load balancing off.",
+        "cd_exit_bal": "Exit: {out} (load balancing)",
+        "ex_title": "<b>🌐 Exits</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — turned off",
+        "ex_down": "🔴 {name} — not working, its traffic: {to}",
+        "ex_quota": "📦 {name} — limit used up, its traffic: {to}",
+        "ex_none": "No exits yet: all traffic goes direct. Exits are added in the panel.",
+        "o_direct": "direct", "o_block": "blocked", "o_exit": "“{name}”", "o_direct_at": "direct — {addr}",
+        "cl_title": "<b>👥 Clients</b> · {n}", "cl_empty": "No clients yet.",
+        "cl_legend": "🟢 online · ⚪ offline · ⏸ turned off",
+        "cd_online": "🟢 Online", "cd_seen": "⚪ Last seen {ago} ago", "cd_never": "⚪ Never connected",
+        "cd_off": "⏸ Turned off", "cd_off_exp": "⏸ Turned off: access period ended",
+        "cd_off_quota": "⏸ Turned off: traffic limit used up",
+        "cd_ip": "Tunnel address: {ip}", "cd_traffic": "📊 Traffic: {month} this month, {total} in all",
+        "cd_until": "📅 Access until {date}", "cd_quota_month": "📦 Limit: {used} of {quota} this month",
+        "cd_quota_total": "📦 Limit: {used} of {quota} in all", "cd_exit": "Exit: {out}",
+        "cd_app": "📱 Created in the AmneziaVPN app: the config exists only on the device.",
+        "ago_m": "{n} min", "ago_h": "{n} h", "ago_d": "{n} d",
+        "u_mb": "MB", "u_gb": "GB", "u_tb": "TB",
+        "ok_on": "▶️ “{name}” is on", "ok_off": "⏸ “{name}” is off",
+        "ok_days": "✅ “{name}” works until {date}", "ok_gb": "✅ “{name}”: limit {gb} GB",
+        "cfg_caption": "<b>{name}</b>: scan the QR code in AmneziaWG or AmneziaVPN, or import the file.",
+        "cfg_link": "Key for the AmneziaVPN app (paste it when adding a server):",
+        "cfg_qr_big": "The config is too long for a QR code — use the file.",
+        "share": "🔗 Personal link for <b>{name}</b>:\n{url}\n\nIt lets them download the config, scan the QR "
+                 "code and see their traffic without signing in to the panel.",
+        "add_ask": "What should the new client be called? Reply to this message with a name.",
+        "add_ok": "✅ Client <b>{name}</b> created.",
+        "rt_ask": "Which IP address or domain should I check? Reply to this message.",
+        "rt_res": "🧭 {target} ({ip}) → {out}", "rt_res_ip": "🧭 {ip} → {out}",
+        "rt_rule": "Rule: list {list} ({net})", "rt_default": "No rule matched: the default exit",
+        "rt_now": "Right now: {out} (the exit isn't working)", "rt_local": "A local address: it doesn't go through exits.",
+        "rt_bad": "That doesn't look like an IPv4 address or a domain.", "rt_v6": "IPv6 isn't routed inside the tunnel.",
+        "pr_wait": "Checking “{name}”…", "pr_ok": "🔍 “{name}”: internet via {ip} {cc}, {ms} ms", "pr_udp": ", UDP passes", "pr_no_udp": ", UDP doesn't pass",
+        "pr_fail": "🔍 “{name}” doesn't answer: {error}",
+        "df_ok": "⭐ Default exit: {out}",
+        "bk_wait": "Preparing a backup…", "bk_fail": "⚠️ The backup wasn't sent: {error}",
+        "up_ask": "Update the panel to {version}? It will restart, which takes a few minutes. "
+                  "The bot will write when the panel is back.",
+        "up_started": "⬆️ Updating to {version}…", "up_none": "No new version: {version} is the latest.",
+        "up_done": "✅ The panel is updated to {version}.",
+        "up_failed": "⚠️ The update failed; version {version} keeps running. Details are in the panel, System.",
+        "deny": "⛔ No access: the bot runs commands only from the chat set in its panel.\nThis chat's Chat ID: <code>{chat}</code>. If the bot is yours, put this number in the panel: System → Telegram notifications → Chat ID.", "deny_toast": "⛔ No access",
+        "gone": "This client no longer exists.", "gone_exit": "This exit no longer exists.",
+        "fail": "⚠️ That didn't work: {error}",
+        "unknown": "I don't know this command. /help — what I can do.",
+        "start": "🌍 VPN server: <code>{host}</code>\n🌐 Exits online: {exits}\n🏷 Panel version: {version}\n👥 Clients: {clients}\n🟢 Clients online: {online}\n📶 Total traffic: {traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "VPN server", "pc_exits": "Exits online", "pc_version": "Panel version",
+        "pc_clients": "Clients", "pc_online": "Clients online", "pc_traffic": "Total traffic",
+        "pc_of": "{n} of {total}", "pc_none": "none", "ps_awg": "AWG version", "ps_engine": "Engine",
+        "ps_kernel": "kernel module {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "detecting…",
+        "ps_v4_fail": "not detected", "ps_v6_none": "none on the server", "ps_dns": "DNS on the server",
+        "ps_dns_off": "off", "ps_dns_err": "not working", "ps_dns_err_sub": "details in the panel, Server tab",
+        "ps_dns_upfail": "DNS servers don't answer", "ps_uptime": "Server uptime", "ps_ram": "RAM",
+        "ps_online": "Clients online", "ps_month": "Traffic this month", "ps_ok": "Running",
+        "ps_bad": "AmneziaWG server unavailable", "ps_upd": "{version} available",
+        "b_menu": "‹ Menu", "bk_done": "💾 Backup sent (the file is above).", "cfg_done": "📱 Config sent (QR and file above).",
+        "cmd_panel": "Link to the panel", "b_panel": "🖥 Panel", "b_open": "🖥 Open the panel",
+        "pn_text": "🖥 <b>AWG Router panel</b>\n{url}",
+        "pn_ssh": "🖥 The panel opens only through an SSH tunnel. Run on your computer\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\nand open {url}",
+        "b_delete": "🗑 Delete", "b_delete_go": "🗑 Yes, delete",
+        "del_ask": "Delete client <b>{name}</b>?\nIts config stops working; its end date, limits and personal "
+                   "link are removed. This cannot be undone.",
+        "ok_deleted": "🗑 “{name}” deleted",
+        "b_server": "🗄 Server", "b_back_server": "‹ Server",
+        "b_back_exits": "‹ Exits", "sv_title": "🗄 <b>Server</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>Panel › Server</b>",
+        "st_panel": "🏷 Panel version: {version}", "st_panel_up": "🏷 Panel version: {version} ({latest} available)",
+        "st_awg": "🛡 AWG version: {version}", "st_engine_kernel": "⚙️ Engine: kernel module {version}", "st_engine_go": "⚙️ Engine: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ Server uptime: {time}",
+        "st_v4_wait": "🌐 IPv4: detecting…",
+        "st_v4_fail": "🌐 IPv4: unknown — the “direct” check failed, the panel retries every 10 minutes",
+        "st_v6_none": "🌐 IPv6: none on the server",
+        "st_dns_off": "🧭 DNS on the server: off",
+        "st_dns_on": "🧭 DNS on the server: running on <code>{addr}</code>, {mode}",
+        "st_dns_stats": "   {q} queries, {c} from cache",
+        "st_dns_plain": "no encryption",
+        "st_dns_upfail": "   ⚠️ DNS servers don't answer",
+        "st_dns_err": "⚠️ DNS on the server: not working — details in the panel, Server tab",
+        "st_ram": "🧠 RAM: {used} of {total}", "st_online": "🟢 Clients online: {online} of {total}",
+        "st_traffic": "📶 Traffic this month: {size}", "st_ok": "✅ Status: running",
+        "st_bad": "⚠️ Status: AmneziaWG server unavailable", "up_dh": "{d} d {h} h",
+        "up_hm": "{h} h {m} min", "ex_pick": "Tap an exit to check it or make it the default.",
+        "ex_direct": "Direct", "eo_default": "⭐ Default exit",
+        "eo_month": "📶 Traffic this month: {size}", "eo_direct": "🏠 Through this server's IP",
+        "b_probe_one": "🔍 Check exit", "b_make_default": "⭐ Make default",
+        "me_need_link": "🤖 This is a VPN server's bot. To see your access here (status, traffic, expiry and config), open the invitation you were sent.\n\nThis chat's number: <code>{chat}</code> — only the server's owner needs it.",
+        "me_bad_link": "This invitation didn't work: it is outdated or wasn't copied whole. Ask the person who gave you access for a new one.",
+        "me_gone": "🚫 This invitation no longer works: the access was removed or a new invitation was issued. Ask the person who gave you access for a new one.",
+        "cd_title": "🔐 <b>Your access</b>", "cfg_caption_me": "📲 Scan the QR code in AmneziaWG or AmneziaVPN, or import the file.", "cfg_file_me": "📄 Config file for the app",
+        "me_hint": "🔄 “Refresh” — fresh data\n📱 “QR and file” — the config for the app",
+        "me_cfg_wait": "The config was just sent — wait half a minute",
+        "share_bot": "🤖 Invitation to the bot (the client checks their own access there):\n{url}",
+        "rm_expiring": "⏳ Your access ends on {date} — in {days} d. To extend it, message the person who gave you access.",
+        "rm_quota_warn": "⚠️ 90% of the traffic limit is used: {used} of {quota}.",
+        "rm_expired": "⏰ Your access is turned off: its period ended. To extend it, message the person who gave you access.",
+        "rm_quota_month": "📦 Your access is turned off: the monthly traffic limit of {quota} is used up. It turns on again at the start of next month.",
+        "rm_quota_total": "📦 Your access is turned off: the traffic limit of {quota} is used up. To go on, message the person who gave you access.",
+        "rm_quota_reset": "✅ Your access is on again: a new month has started.",
+    },
+    "zh": {
+        "help": "🤖 <b>AWG Router 遥控</b>\n"
+                "/status — 服务器、客户端和出口\n"
+                "/clients — 客户端：启用、停用、二维码、延期、删除\n"
+                "/add — 新建客户端\n"
+                "/exits — 出口：检查、更换默认出口\n"
+                "/route — 访问某地址或域名的流量走哪里\n"
+                "/backup — 立即备份\n"
+                "/panel — 面板链接",
+        "cmd_status": "服务器、客户端和出口", "cmd_clients": "客户端", "cmd_add": "新建客户端",
+        "cmd_exits": "出口", "cmd_route": "访问某地址的流量走哪里",
+        "cmd_backup": "立即备份", "cmd_help": "机器人能做什么",
+        "b_status": "📊 状态", "b_clients": "👥 客户端", "b_exits": "🌐 出口",
+        "b_route": "🧭 路由", "kbd_menu": "☰ 菜单",
+        "kbd_off": "已在面板中关闭通过 Telegram 控制。",
+        "b_add": "➕ 新建客户端", "b_backup": "💾 备份", "b_list": "‹ 客户端",
+        "b_refresh": "🔄 刷新", "b_on": "▶️ 启用", "b_off": "⏸ 停用",
+        "b_config": "📱 二维码和文件", "b_share": "🔗 个人链接", "b_days": "+30 天",
+        "b_gb": "+10 GB", "b_client": "👤 客户端", "b_check": "🔍 检查“{name}”",
+        "b_update": "⬆️ 更新到 {version}", "b_update_go": "✅ 是的，更新", "b_cancel": "取消",
+        "st_default": "⭐ 默认出口：{out}",
+        "st_balance": "⚖️ 出口负载均衡",
+        "st_balance_hint": "“设为默认”会关闭负载均衡。",
+        "cd_exit_bal": "出口：{out}（负载均衡）",
+        "ex_title": "<b>🌐 出口</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — 已停用",
+        "ex_down": "🔴 {name} — 无法工作，其流量：{to}",
+        "ex_quota": "📦 {name} — 限额已用完，其流量：{to}",
+        "ex_none": "还没有出口：所有流量直连。出口在面板中添加。",
+        "o_direct": "直连", "o_block": "被阻止", "o_exit": "“{name}”", "o_direct_at": "直连 — {addr}",
+        "cl_title": "<b>👥 客户端</b> · {n}", "cl_empty": "还没有客户端。",
+        "cl_legend": "🟢 在线 · ⚪ 离线 · ⏸ 已停用",
+        "cd_online": "🟢 在线", "cd_seen": "⚪ {ago}前在线", "cd_never": "⚪ 从未连接",
+        "cd_off": "⏸ 已停用", "cd_off_exp": "⏸ 已停用：使用期限已到",
+        "cd_off_quota": "⏸ 已停用：流量限额已用完",
+        "cd_ip": "隧道地址：{ip}", "cd_traffic": "📊 流量：本月 {month}，总计 {total}",
+        "cd_until": "📅 有效期至 {date}", "cd_quota_month": "📦 限额：本月已用 {used}，共 {quota}",
+        "cd_quota_total": "📦 限额：总计已用 {used}，共 {quota}", "cd_exit": "出口：{out}",
+        "cd_app": "📱 在 AmneziaVPN 应用中创建：配置只存在于设备上。",
+        "ago_m": "{n} 分钟", "ago_h": "{n} 小时", "ago_d": "{n} 天",
+        "u_mb": "MB", "u_gb": "GB", "u_tb": "TB",
+        "ok_on": "▶️ “{name}”已启用", "ok_off": "⏸ “{name}”已停用",
+        "ok_days": "✅ “{name}”有效期至 {date}", "ok_gb": "✅ “{name}”：限额 {gb} GB",
+        "cfg_caption": "<b>{name}</b>：在 AmneziaWG 或 AmneziaVPN 中扫描二维码，或导入文件。",
+        "cfg_link": "AmneziaVPN 应用的密钥（添加服务器时粘贴）：",
+        "cfg_qr_big": "配置太长，无法生成二维码——请使用文件。",
+        "share": "🔗 <b>{name}</b> 的个人链接：\n{url}\n\n无需登录面板，即可通过它下载配置、扫描二维码并查看自己的流量。",
+        "add_ask": "新客户端叫什么名字？请回复此消息并输入名称。",
+        "add_ok": "✅ 客户端 <b>{name}</b> 已创建。",
+        "rt_ask": "要检查哪个 IP 地址或域名？请回复此消息。",
+        "rt_res": "🧭 {target}（{ip}）→ {out}", "rt_res_ip": "🧭 {ip} → {out}",
+        "rt_rule": "规则：列表 {list}（{net}）", "rt_default": "没有匹配的规则：默认出口",
+        "rt_now": "当前：{out}（该出口无法工作）", "rt_local": "本地地址：不经过出口。",
+        "rt_bad": "这看起来不像 IPv4 地址或域名。", "rt_v6": "隧道内不路由 IPv6。",
+        "pr_wait": "正在检查“{name}”…", "pr_ok": "🔍 “{name}”：经由 {ip} {cc} 访问互联网，{ms} 毫秒", "pr_udp": "，UDP 可通过", "pr_no_udp": "，UDP 不通",
+        "pr_fail": "🔍 “{name}”无响应：{error}",
+        "df_ok": "⭐ 默认出口：{out}",
+        "bk_wait": "正在准备备份…", "bk_fail": "⚠️ 备份未发送：{error}",
+        "up_ask": "将面板更新到 {version}？面板会重启，需要几分钟。面板恢复后机器人会通知你。",
+        "up_started": "⬆️ 正在更新到 {version}…", "up_none": "没有新版本：{version} 已是最新。",
+        "up_done": "✅ 面板已更新到 {version}。",
+        "up_failed": "⚠️ 更新失败，仍在运行 {version} 版本。详情见面板的“系统”。",
+        "deny": "⛔ 无权访问：机器人只执行其面板中所设置聊天的命令。\n此聊天的 Chat ID：<code>{chat}</code>。如果这是你的机器人，请在面板中填写该号码：系统 → Telegram 通知 → Chat ID。", "deny_toast": "⛔ 无权访问",
+        "gone": "该客户端已不存在。", "gone_exit": "该出口已不存在。",
+        "fail": "⚠️ 操作失败：{error}",
+        "unknown": "不认识这个命令。/help — 我能做什么。",
+        "start": "🌍 VPN 服务器：<code>{host}</code>\n🌐 在线出口：{exits}\n🏷 面板版本：{version}\n👥 客户端：{clients}\n🟢 在线客户端：{online}\n📶 总流量：{traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "VPN 服务器", "pc_exits": "在线出口", "pc_version": "面板版本", "pc_clients": "客户端", "pc_online": "在线客户端",
+        "pc_traffic": "总流量", "pc_of": "{n} / {total}", "pc_none": "无", "ps_awg": "AWG 版本", "ps_engine": "引擎",
+        "ps_kernel": "内核模块 {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "正在检测…", "ps_v4_fail": "未检测到",
+        "ps_v6_none": "服务器上没有", "ps_dns": "服务器上的 DNS", "ps_dns_off": "已关闭", "ps_dns_err": "未运行",
+        "ps_dns_err_sub": "详情见面板的「服务器」选项卡", "ps_dns_upfail": "DNS 服务器无响应", "ps_uptime": "服务器运行时间", "ps_ram": "内存",
+        "ps_online": "在线客户端", "ps_month": "本月流量", "ps_ok": "运行中", "ps_bad": "AmneziaWG 服务器不可用",
+        "ps_upd": "可更新至 {version}",
+        "b_menu": "‹ 菜单", "bk_done": "💾 备份已发送（文件在上方）。", "cfg_done": "📱 配置已发送（二维码和文件在上方）。",
+        "cmd_panel": "面板链接", "b_panel": "🖥 面板", "b_open": "🖥 打开面板",
+        "pn_text": "🖥 <b>AWG Router 面板</b>\n{url}",
+        "pn_ssh": "🖥 面板只能通过 SSH 隧道打开。请在您的电脑上运行\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\n然后打开 {url}",
+        "b_delete": "🗑 删除", "b_delete_go": "🗑 是的，删除",
+        "del_ask": "删除客户端 <b>{name}</b>？\n其配置将失效，有效期、限额和个人链接也会被删除。此操作无法撤销。",
+        "ok_deleted": "🗑 “{name}”已删除",
+        "b_server": "🗄 服务器", "b_back_server": "‹ 服务器",
+        "b_back_exits": "‹ 出口", "sv_title": "🗄 <b>服务器</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>面板 › 服务器</b>",
+        "st_panel": "🏷 面板版本：{version}", "st_panel_up": "🏷 面板版本：{version}（可更新至 {latest}）",
+        "st_awg": "🛡 AWG 版本：{version}", "st_engine_kernel": "⚙️ 引擎：内核模块 {version}", "st_engine_go": "⚙️ 引擎：amneziawg-go", "st_v4": "🌐 IPv4：<code>{ip}</code>",
+        "st_v6": "🌐 IPv6：<code>{ip}</code>", "st_uptime": "⏱ 服务器运行时间：{time}",
+        "st_v4_wait": "🌐 IPv4：正在检测…",
+        "st_v4_fail": "🌐 IPv4：未知——「直连」检测失败，面板每 10 分钟重试一次",
+        "st_v6_none": "🌐 IPv6：服务器上没有",
+        "st_dns_off": "🧭 服务器上的 DNS：已关闭",
+        "st_dns_on": "🧭 服务器上的 DNS：运行于 <code>{addr}</code>，{mode}",
+        "st_dns_stats": "   查询 {q} 次，缓存命中 {c} 次",
+        "st_dns_plain": "不加密",
+        "st_dns_upfail": "   ⚠️ DNS 服务器无响应",
+        "st_dns_err": "⚠️ 服务器上的 DNS：未运行——详情见面板的「服务器」选项卡",
+        "st_ram": "🧠 内存：{used} / {total}", "st_online": "🟢 在线客户端：{online} / {total}",
+        "st_traffic": "📶 本月流量：{size}", "st_ok": "✅ 状态：运行中",
+        "st_bad": "⚠️ 状态：AmneziaWG 服务器不可用", "up_dh": "{d} 天 {h} 小时",
+        "up_hm": "{h} 小时 {m} 分钟", "ex_pick": "点击出口可检查它或设为默认。",
+        "ex_direct": "直连", "eo_default": "⭐ 默认出口",
+        "eo_month": "📶 本月流量：{size}", "eo_direct": "🏠 通过本服务器的 IP",
+        "b_probe_one": "🔍 检查出口", "b_make_default": "⭐ 设为默认",
+        "me_need_link": "🤖 这是 VPN 服务器的机器人。要在这里查看你的访问（状态、流量、到期时间和配置），请打开发给你的邀请。\n\n本聊天的编号：<code>{chat}</code> —— 只有服务器所有者需要它。",
+        "me_bad_link": "邀请无效：它已过期或没有完整复制。请向给你访问权限的人索取新的邀请。",
+        "me_gone": "🚫 此邀请已失效：访问已被删除或已发出新的邀请。请向给你访问权限的人索取新的邀请。",
+        "cd_title": "🔐 <b>你的访问</b>", "cfg_caption_me": "📲 在 AmneziaWG 或 AmneziaVPN 中扫描二维码，或导入文件。", "cfg_file_me": "📄 应用的配置文件",
+        "me_hint": "🔄「刷新」——最新数据\n📱「二维码和文件」——应用的配置",
+        "me_cfg_wait": "配置刚刚发送过——请等半分钟",
+        "share_bot": "🤖 机器人邀请（客户端可在其中查看自己的访问）：\n{url}",
+        "rm_expiring": "⏳ 你的访问将于 {date} 到期（还剩 {days} 天）。如需延期，请联系给你开通访问的人。",
+        "rm_quota_warn": "⚠️ 流量限额已用掉 90%：{used} / {quota}。",
+        "rm_expired": "⏰ 你的访问已停用：使用期限已到。如需延期，请联系给你开通访问的人。",
+        "rm_quota_month": "📦 你的访问已停用：本月 {quota} 的流量限额已用完。下个月初会自动重新启用。",
+        "rm_quota_total": "📦 你的访问已停用：{quota} 的流量限额已用完。如需继续使用，请联系给你开通访问的人。",
+        "rm_quota_reset": "✅ 你的访问已重新启用：新的一个月开始了。",
+    },
+    "fa": {
+        "help": "🤖 <b>کنترل از راه دور AWG Router</b>\n"
+                "/status — سرور، کلاینت‌ها و خروجی‌ها\n"
+                "/clients — کلاینت‌ها: فعال و غیرفعال کردن، QR، تمدید، حذف\n"
+                "/add — کلاینت تازه\n"
+                "/exits — خروجی‌ها: بررسی، تغییر خروجی اصلی\n"
+                "/route — ترافیک به یک نشانی یا دامنه از کجا می‌رود\n"
+                "/backup — پشتیبان‌گیری همین حالا\n"
+                "/panel — پیوند پنل",
+        "cmd_status": "سرور، کلاینت‌ها و خروجی‌ها", "cmd_clients": "کلاینت‌ها", "cmd_add": "کلاینت تازه",
+        "cmd_exits": "خروجی‌ها", "cmd_route": "ترافیک به یک نشانی از کجا می‌رود",
+        "cmd_backup": "پشتیبان‌گیری همین حالا", "cmd_help": "ربات چه کارهایی می‌کند",
+        "b_status": "📊 وضعیت", "b_clients": "👥 کلاینت‌ها", "b_exits": "🌐 خروجی‌ها",
+        "b_route": "🧭 مسیر", "kbd_menu": "☰ منو",
+        "kbd_off": "کنترل از تلگرام در پنل خاموش شد.",
+        "b_add": "➕ کلاینت تازه", "b_backup": "💾 پشتیبان", "b_list": "کلاینت‌ها ›",
+        "b_refresh": "🔄 تازه‌سازی", "b_on": "▶️ فعال کردن", "b_off": "⏸ غیرفعال کردن",
+        "b_config": "📱 QR و فایل", "b_share": "🔗 پیوند شخصی", "b_days": "+۳۰ روز",
+        "b_gb": "+۱۰ گیگابایت", "b_client": "👤 کلاینت", "b_check": "🔍 بررسی «{name}»",
+        "b_update": "⬆️ به‌روزرسانی به {version}", "b_update_go": "✅ بله، به‌روزرسانی کن", "b_cancel": "لغو",
+        "st_default": "⭐ خروجی اصلی: {out}",
+        "st_balance": "⚖️ توزیع بار بین خروجی‌ها",
+        "st_balance_hint": "«اصلی کردن» توزیع بار را خاموش می‌کند.",
+        "cd_exit_bal": "خروجی: {out} (توزیع بار)",
+        "ex_title": "<b>🌐 خروجی‌ها</b>", "ex_up": "🟢 {name}", "ex_off": "⚪ {name} — خاموش",
+        "ex_down": "🔴 {name} — کار نمی‌کند، ترافیک آن: {to}",
+        "ex_quota": "📦 {name} — سقف تمام شده، ترافیک آن: {to}",
+        "ex_none": "هنوز خروجی‌ای نیست: همهٔ ترافیک مستقیم می‌رود. خروجی‌ها در پنل اضافه می‌شوند.",
+        "o_direct": "مستقیم", "o_block": "مسدود", "o_exit": "«{name}»", "o_direct_at": "مستقیم — {addr}",
+        "cl_title": "<b>👥 کلاینت‌ها</b> · {n}", "cl_empty": "هنوز کلاینتی نیست.",
+        "cl_legend": "🟢 آنلاین · ⚪ آفلاین · ⏸ غیرفعال",
+        "cd_online": "🟢 آنلاین", "cd_seen": "⚪ آخرین اتصال {ago} پیش", "cd_never": "⚪ هنوز وصل نشده",
+        "cd_off": "⏸ غیرفعال", "cd_off_exp": "⏸ غیرفعال: مدت اعتبار تمام شد",
+        "cd_off_quota": "⏸ غیرفعال: سقف ترافیک تمام شد",
+        "cd_ip": "نشانی در تونل: {ip}", "cd_traffic": "📊 ترافیک: {month} در این ماه، {total} در کل",
+        "cd_until": "📅 معتبر تا {date}", "cd_quota_month": "📦 سقف: {used} از {quota} در این ماه",
+        "cd_quota_total": "📦 سقف: {used} از {quota} در کل", "cd_exit": "خروجی: {out}",
+        "cd_app": "📱 در برنامهٔ AmneziaVPN ساخته شده: پیکربندی فقط روی دستگاه است.",
+        "ago_m": "{n} دقیقه", "ago_h": "{n} ساعت", "ago_d": "{n} روز",
+        "u_mb": "مگابایت", "u_gb": "گیگابایت", "u_tb": "ترابایت",
+        "ok_on": "▶️ «{name}» فعال شد", "ok_off": "⏸ «{name}» غیرفعال شد",
+        "ok_days": "✅ «{name}» تا {date} معتبر است", "ok_gb": "✅ «{name}»: سقف {gb} گیگابایت",
+        "cfg_caption": "<b>{name}</b>: QR را در AmneziaWG یا AmneziaVPN اسکن کنید یا فایل را وارد کنید.",
+        "cfg_link": "کلید برای برنامهٔ AmneziaVPN (هنگام افزودن سرور آن را بچسبانید):",
+        "cfg_qr_big": "پیکربندی برای QR بیش از حد بلند است — از فایل استفاده کنید.",
+        "share": "🔗 پیوند شخصی <b>{name}</b>:\n{url}\n\nبا آن می‌توان بدون ورود به پنل پیکربندی را دریافت کرد، "
+                 "QR را اسکن کرد و ترافیک خود را دید.",
+        "add_ask": "نام کلاینت تازه چه باشد؟ در پاسخ به این پیام نام را بفرستید.",
+        "add_ok": "✅ کلاینت <b>{name}</b> ساخته شد.",
+        "rt_ask": "کدام نشانی IP یا دامنه بررسی شود؟ در پاسخ به این پیام بفرستید.",
+        "rt_res": "🧭 {target} ({ip}) ← {out}", "rt_res_ip": "🧭 {ip} ← {out}",
+        "rt_rule": "قانون: فهرست {list} ({net})", "rt_default": "هیچ قانونی جور نشد: خروجی اصلی",
+        "rt_now": "اکنون: {out} (خروجی کار نمی‌کند)", "rt_local": "نشانی محلی: از خروجی‌ها نمی‌رود.",
+        "rt_bad": "این شبیه نشانی IPv4 یا دامنه نیست.", "rt_v6": "IPv6 درون تونل مسیریابی نمی‌شود.",
+        "pr_wait": "در حال بررسی «{name}»…", "pr_ok": "🔍 «{name}»: اینترنت از {ip} {cc}، {ms} میلی‌ثانیه", "pr_udp": "، UDP عبور می‌کند", "pr_no_udp": "، UDP عبور نمی‌کند",
+        "pr_fail": "🔍 «{name}» پاسخ نمی‌دهد: {error}",
+        "df_ok": "⭐ خروجی اصلی: {out}",
+        "bk_wait": "در حال آماده کردن پشتیبان…", "bk_fail": "⚠️ پشتیبان فرستاده نشد: {error}",
+        "up_ask": "پنل به {version} به‌روزرسانی شود؟ پنل دوباره راه‌اندازی می‌شود و چند دقیقه طول می‌کشد. "
+                  "وقتی پنل برگردد، ربات خبر می‌دهد.",
+        "up_started": "⬆️ در حال به‌روزرسانی به {version}…", "up_none": "نسخهٔ تازه‌ای نیست: {version} آخرین نسخه است.",
+        "up_done": "✅ پنل به {version} به‌روزرسانی شد.",
+        "up_failed": "⚠️ به‌روزرسانی انجام نشد؛ نسخهٔ {version} همچنان کار می‌کند. جزئیات در پنل، بخش سیستم.",
+        "deny": "⛔ دسترسی ندارید: ربات فقط از چتی که در پنلش تعیین شده فرمان می‌برد.\nChat ID این چت: <code>{chat}</code>. اگر ربات مال شماست، این عدد را در پنل وارد کنید: سیستم ← اعلان‌های تلگرام ← Chat ID.", "deny_toast": "⛔ دسترسی ندارید",
+        "gone": "این کلاینت دیگر وجود ندارد.", "gone_exit": "این خروجی دیگر وجود ندارد.",
+        "fail": "⚠️ انجام نشد: {error}",
+        "unknown": "این دستور را نمی‌شناسم. ‎/help — کارهایی که می‌کنم.",
+        "start": "🌍 سرور VPN: <code>{host}</code>\n🌐 خروجی‌های آنلاین: {exits}\n🏷 نسخهٔ پنل: {version}\n👥 کلاینت‌ها: {clients}\n🟢 کلاینت‌های آنلاین: {online}\n📶 ترافیک کل: {traffic}",
+        # картинки меню и «Состояния» (1.24.0, app/tgcard.py): после правки — python3 tools/tgcard_atlas.py
+        "pc_server": "سرور VPN", "pc_exits": "خروجی‌های آنلاین", "pc_version": "نسخهٔ پنل",
+        "pc_clients": "کلاینت‌ها", "pc_online": "کلاینت‌های آنلاین", "pc_traffic": "ترافیک کل",
+        "pc_of": "{n} از {total}", "pc_none": "ندارد", "ps_awg": "نسخهٔ AWG", "ps_engine": "موتور",
+        "ps_kernel": "ماژول هسته {version}", "ps_v4": "IPv4", "ps_v6": "IPv6", "ps_v4_wait": "در حال تشخیص…",
+        "ps_v4_fail": "تشخیص داده نشد", "ps_v6_none": "روی سرور نیست", "ps_dns": "DNS روی سرور",
+        "ps_dns_off": "خاموش", "ps_dns_err": "کار نمی‌کند", "ps_dns_err_sub": "جزئیات در پنل، زبانهٔ «سرور»",
+        "ps_dns_upfail": "سرورهای DNS پاسخ نمی‌دهند", "ps_uptime": "مدت کارکرد سرور", "ps_ram": "RAM",
+        "ps_online": "کلاینت‌های آنلاین", "ps_month": "ترافیک این ماه", "ps_ok": "در حال کار",
+        "ps_bad": "سرور AmneziaWG در دسترس نیست", "ps_upd": "نسخهٔ {version} موجود است",
+        "b_menu": "منو ›", "bk_done": "💾 پشتیبان فرستاده شد (فایل بالاتر است).", "cfg_done": "📱 پیکربندی فرستاده شد (QR و فایل بالاتر است).",
+        "cmd_panel": "پیوند پنل", "b_panel": "🖥 پنل", "b_open": "🖥 باز کردن پنل",
+        "pn_text": "🖥 <b>پنل AWG Router</b>\n{url}",
+        "pn_ssh": "🖥 پنل فقط از طریق تونل SSH باز می‌شود. روی رایانهٔ خود اجرا کنید\n"
+                  "<code>ssh -N -L {port}:127.0.0.1:{port}{sport} {user}@{host}</code>\nو {url} را باز کنید",
+        "b_delete": "🗑 حذف", "b_delete_go": "🗑 بله، حذف کن",
+        "del_ask": "کلاینت <b>{name}</b> حذف شود؟\nکانفیگ آن دیگر کار نمی‌کند و تاریخ پایان، سقف‌ها و پیوند "
+                   "شخصی آن حذف می‌شوند. این کار برگشت‌پذیر نیست.",
+        "ok_deleted": "🗑 «{name}» حذف شد",
+        "b_server": "🗄 سرور", "b_back_server": "سرور ›",
+        "b_back_exits": "خروجی‌ها ›", "sv_title": "🗄 <b>سرور</b>\n<code>{host}</code>",
+        "st_title": "📊 <b>پنل › سرور</b>",
+        "st_panel": "🏷 نسخهٔ پنل: {version}", "st_panel_up": "🏷 نسخهٔ پنل: {version} (نسخهٔ {latest} موجود است)",
+        "st_awg": "🛡 نسخهٔ AWG: {version}", "st_engine_kernel": "⚙️ موتور: ماژول هسته {version}", "st_engine_go": "⚙️ موتور: amneziawg-go", "st_v4": "🌐 IPv4: <code>{ip}</code>",
+        "st_v6": "🌐 IPv6: <code>{ip}</code>", "st_uptime": "⏱ مدت کارکرد سرور: {time}",
+        "st_v4_wait": "🌐 IPv4: در حال تشخیص…",
+        "st_v4_fail": "🌐 IPv4: نامشخص — بررسی «مستقیم» انجام نشد، پنل هر ۱۰ دقیقه دوباره تلاش می‌کند",
+        "st_v6_none": "🌐 IPv6: روی سرور نیست",
+        "st_dns_off": "🧭 DNS روی سرور: خاموش",
+        "st_dns_on": "🧭 DNS روی سرور: روی <code>{addr}</code> کار می‌کند، {mode}",
+        "st_dns_stats": "   {q} پرسش، {c} از حافظهٔ موقت",
+        "st_dns_plain": "بدون رمزگذاری",
+        "st_dns_upfail": "   ⚠️ سرورهای DNS پاسخ نمی‌دهند",
+        "st_dns_err": "⚠️ DNS روی سرور: کار نمی‌کند — جزئیات در پنل، زبانهٔ «سرور»",
+        "st_ram": "🧠 RAM: {used} از {total}", "st_online": "🟢 کلاینت‌های آنلاین: {online} از {total}",
+        "st_traffic": "📶 ترافیک این ماه: {size}", "st_ok": "✅ وضعیت: در حال کار",
+        "st_bad": "⚠️ وضعیت: سرور AmneziaWG در دسترس نیست", "up_dh": "{d} روز {h} ساعت",
+        "up_hm": "{h} ساعت {m} دقیقه", "ex_pick": "روی یک خروجی بزنید تا آن را بررسی یا اصلی کنید.",
+        "ex_direct": "مستقیم", "eo_default": "⭐ خروجی اصلی",
+        "eo_month": "📶 ترافیک این ماه: {size}", "eo_direct": "🏠 از طریق IP همین سرور",
+        "b_probe_one": "🔍 بررسی خروجی", "b_make_default": "⭐ اصلی کردن",
+        "me_need_link": "🤖 این ربات متعلق به یک سرور VPN است. برای دیدن دسترسی خود در اینجا (وضعیت، ترافیک، مهلت و پیکربندی) دعوتی را که برایتان فرستاده‌اند باز کنید.\n\nشمارهٔ این چت: <code>{chat}</code> — فقط مالک سرور به آن نیاز دارد.",
+        "me_bad_link": "این دعوت کار نکرد: قدیمی است یا کامل کپی نشده. از کسی که به شما دسترسی داده دعوت تازه بخواهید.",
+        "me_gone": "🚫 این دعوت دیگر معتبر نیست: دسترسی حذف شده یا دعوت تازه‌ای صادر شده است. از کسی که به شما دسترسی داده دعوت تازه بخواهید.",
+        "cd_title": "🔐 <b>دسترسی شما</b>", "cfg_caption_me": "📲 QR را در AmneziaWG یا AmneziaVPN اسکن کنید یا فایل را وارد کنید.", "cfg_file_me": "📄 فایل پیکربندی برای برنامه",
+        "me_hint": "🔄 «تازه‌سازی» — داده‌های تازه\n📱 «QR و فایل» — پیکربندی برای برنامه",
+        "me_cfg_wait": "پیکربندی همین الان فرستاده شد — نیم دقیقه صبر کنید",
+        "share_bot": "🤖 دعوت به ربات (کلاینت دسترسی خود را آنجا می‌بیند):\n{url}",
+        "rm_expiring": "⏳ دسترسی شما {date} تمام می‌شود — {days} روز دیگر. برای تمدید به کسی که دسترسی را به شما داده پیام دهید.",
+        "rm_quota_warn": "⚠️ ۹۰٪ از سقف ترافیک مصرف شده است: {used} از {quota}.",
+        "rm_expired": "⏰ دسترسی شما خاموش شد: مهلت آن تمام شده است. برای تمدید به کسی که دسترسی را به شما داده پیام دهید.",
+        "rm_quota_month": "📦 دسترسی شما خاموش شد: سقف ترافیک ماهانهٔ {quota} مصرف شده است. ابتدای ماه بعد دوباره روشن می‌شود.",
+        "rm_quota_total": "📦 دسترسی شما خاموش شد: سقف ترافیک {quota} مصرف شده است. برای ادامه به کسی که دسترسی را به شما داده پیام دهید.",
+        "rm_quota_reset": "✅ دسترسی شما دوباره روشن شد: ماه تازه‌ای شروع شده است.",
+    },
+}
+
+
+def _button_refused(e: Exception) -> bool:
+    """Telegram не принял кнопку со ссылкой («Панель»), а не сохранённую картинку: отказ в file_id тоже говорит «URL»
+    («wrong file identifier/HTTP URL specified») — тогда картинку надо загрузить заново (П54)."""
+    s = str(e).lower()
+    return "url" in s and "file identifier" not in s
+
+
+def tr(lang: str, key: str, html_safe: bool = True, **params) -> str:
+    """Текст бота. Параметры экранируются для parse_mode=HTML (html_safe=False — для всплывающих
+    подсказок, там разметки нет)."""
+    tx = TEXTS.get(lang) or TEXTS["en"]
+    s = tx.get(key) or TEXTS["en"][key]
+
+    # один проход по шаблону: имя клиента «{gb}» не должно подменяться следующим параметром
+    def fill(m):
+        if m.group(1) not in params:
+            return m.group(0)
+        v = str(params[m.group(1)])
+        return html.escape(v, quote=False) if html_safe else v
+    return re.sub(r"\{(\w+)\}", fill, s)
+
+
+def size_parts(n: int | float, lang: str) -> tuple[str, str]:
+    """Размер → (число, ключ единицы): «44,5» и u_gb. Картинке (tgcard) число и единица нужны порознь."""
+    n = float(n or 0)
+    if n >= 1024 ** 4:
+        v, u = n / 1024 ** 4, "u_tb"
+    elif n >= GB:
+        v, u = n / GB, "u_gb"
+    else:
+        v, u = n / 1024 ** 2, "u_mb"
+    s = f"{v:.0f}" if v >= 100 or u == "u_mb" else f"{v:.1f}".rstrip("0").rstrip(".")
+    if lang == "ru":
+        s = s.replace(".", ",")
+    return s, u
+
+
+def fmt_size(n: int | float, lang: str) -> str:
+    s, u = size_parts(n, lang)
+    return f"{s} {tr(lang, u)}"
+
+
+def fmt_ago(sec: float, lang: str) -> str:
+    sec = max(0, sec)
+    if sec < 3600:
+        return tr(lang, "ago_m", n=max(1, int(sec // 60)))
+    if sec < 2 * DAY:
+        return tr(lang, "ago_h", n=int(sec // 3600))
+    return tr(lang, "ago_d", n=int(sec // DAY))
+
+
+def fmt_uptime(sec: int | None, lang: str) -> str:
+    """Время работы сервера: дни и часы, а меньше суток — часы и минуты."""
+    if sec is None:
+        return "—"
+    sec = max(0, int(sec))
+    if sec >= DAY:
+        return tr(lang, "up_dh", d=sec // DAY, h=sec % DAY // 3600)
+    return tr(lang, "up_hm", h=sec // 3600, m=sec % 3600 // 60)
+
+
+def fmt_date(ts: float) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))
+
+
+# Меню — кнопки в одном сообщении (1.12.0); всё управление открывается в нём же.
+# Надписи кнопок клавиатуры внизу экрана из 1.10.0–1.11.0: у людей она остаётся до следующего /start
+MENU = (("b_status", "status"), ("b_clients", "clients"), ("b_exits", "exits"), ("b_add", "add"),
+        ("b_panel", "panel"), ("b_backup", "backup"))
+OLD_MENU = (("kbd_menu", "menu"), ("b_route", "route"))
+DENY_EVERY = 600          # «нет доступа» в один и тот же чужой чат — не чаще раза в 10 минут
+# клиенты по приглашению (1.22.0): чат → {pk, tok, lang, t} в tgbot.json (не в state.json и не в копиях: чат
+# подключён к этому боту, а не к панели). Ключ сверяется со «shares» на каждое сообщение.
+LINKS_MAX = 5000
+CLIENT_EVERY = 1.0        # запросов клиента — не чаще раза в секунду на чат
+CFG_EVERY = 30            # конфиг в чат клиента — не чаще раза в 30 с
+CLIENT_LANGS = ("ru", "zh", "fa")   # язык Telegram клиента → язык бота; остальные — английский
+# Напоминания клиенту в его чат (1.22.0, «Напоминать клиентам»): событие движка → текст бота. Те же события, что
+# и уведомления владельцу о клиенте (limits.py ставит их один раз на срок или лимит), кроме «подключился впервые».
+REMIND = {"ev.client_expiring": "rm_expiring", "ev.client_quota_warn": "rm_quota_warn",
+          "ev.client_expired": "rm_expired", "ev.client_quota": "rm_quota", "ev.client_quota_reset": "rm_quota_reset"}
+REMIND_MAX = 1000                     # напоминаний в очереди (больше — старые выбрасываются)
+REMIND_AGE = 86400                    # не дошедшее за сутки — уже не новость
+REMIND_PAUSES = (30, 60, 120, 300)    # повтор, когда Telegram недоступен
+REMIND_GAP = 0.05                     # между сообщениями: предел Telegram — около 30 в секунду
+REMIND_REPEAT = 3600                  # то же напоминание тому же клиенту — не чаще раза в час (отметки limits.py
+                                     # не записались, например диск полон, — событие повторялось бы каждый проход)
+
+
+def client_lang(frm: dict | None) -> str:
+    code = str((frm or {}).get("language_code") or "").lower()
+    return next((L for L in CLIENT_LANGS if code.startswith(L)), "en")
+
+
+def admin_on(c: dict) -> bool:
+    """Управление ботом действует: бот включён (1.23.0: «Включить бот» — главный выключатель), управление включено
+    и указан числовой номер чата."""
+    chat = str(c.get("chat_id") or "")
+    return bool(c.get("enabled") and c.get("token") and c.get("control") and chat and not chat.startswith("@"))
+
+
+def clients_on(c: dict) -> bool:
+    """Клиенты по приглашению видят свой доступ и получают напоминания: бот включён и галочка клиентов стоит."""
+    return bool(c.get("enabled") and c.get("token") and c.get("clients"))
+
+
+def menu_action(text: str) -> str | None:
+    """Кнопка клавиатуры → команда. Надписи на всех языках: язык могли сменить после её отправки;
+    «☰ Меню» — кнопка из 1.10.0, «🧭 Маршрут» — из 1.10.5."""
+    for tx in TEXTS.values():
+        for key, cmd in MENU + OLD_MENU:
+            if text == tx[key]:
+                return cmd
+    return None
+
+
+def kb(*rows) -> dict:
+    """Кнопки: строки из пар (текст, данные). Пустые строки пропускаются."""
+    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows if row]}
+
+
+def notify_buttons(key: str, p: dict, lang: str) -> dict | None:
+    """Кнопки под уведомлением (notify.Notifier.buttons_fn)."""
+    pk, uid = p.get("pk"), p.get("uid")
+    if key == "exit_down" and uid:
+        return kb([(tr(lang, "b_check", False, name=p.get("name", "")), "pr:" + uid)],
+                  [(tr(lang, "b_exits"), "ex")])
+    if key.startswith("exit_quota") and uid:
+        return kb([(tr(lang, "b_exits"), "ex")])
+    if key in ("client_expired", "client_expiring") and pk:
+        return kb([(tr(lang, "b_days"), "d30:" + pk), (tr(lang, "b_client"), "c:" + pk)])
+    if key in ("client_quota", "client_quota_warn") and pk:
+        return kb([(tr(lang, "b_gb"), "g10:" + pk), (tr(lang, "b_client"), "c:" + pk)])
+    if key in ("client_quota_reset", "client_first") and pk:
+        return kb([(tr(lang, "b_client"), "c:" + pk)])
+    if key == "update_available" and p.get("version"):
+        return kb([(tr(lang, "b_update", False, version=p["version"]), "up")])
+    if key in ("target_lost", "server_start_failed", "target_restarted"):
+        return kb([(tr(lang, "b_status"), "st")])
+    return None
+
+
+class BotError(Exception):
+    """Ошибка действия, понятная человеку: ключ текста бота и параметры."""
+
+    def __init__(self, key: str, **params):
+        super().__init__(key)
+        self.key, self.params = key, params
+
+
+class Bot:
+    """Цикл getUpdates и разбор команд. ops — действия панели (их собирает app/api/telegram.py):
+    тот же код, что за кнопками в браузере."""
+
+    def __init__(self, store, ops, stop_ev: threading.Event | None = None):
+        self.store = store
+        self.ops = ops
+        self.stop_ev = stop_ev or threading.Event()
+        self.wake = threading.Event()
+        self.state = "off"                     # off | ok | error
+        self.error = None                      # str | Msg — последняя ошибка опроса
+        self.last_cmd: float | None = None
+        self._ask: dict | None = None          # ждём ответа: {"kind": add|route, "msg": id, "t": …}
+        self._denied: dict[str, float] = {}       # чужой чат → когда ответили «нет доступа»
+        self._webhook_dropped = False
+        self.last_chat: dict | None = None        # последний чат, написавший боту ({id, title, bot, t})
+        self._client_t: dict[str, float] = {}     # чат клиента → время последнего ответа (CLIENT_EVERY)
+        self._cfg_t: dict[str, float] = {}        # чат клиента → когда отправили конфиг (CFG_EVERY)
+        self._remind_q: queue.Queue = queue.Queue(maxsize=REMIND_MAX)
+        self._reminders: collections.deque = collections.deque(maxlen=REMIND_MAX)   # не дошедшие напоминания
+        self._reminded: dict[tuple, float] = {}  # (напоминание, ключ клиента) → когда поставлено (REMIND_REPEAT)
+        self._st = self._load()
+        # сообщение-меню (обычно одно): его правим на месте, старые удаляем; переживает перезапуск
+        self._panel_msgs: list[int] = [m for m in self._st.get("panel") or [] if isinstance(m, int)]
+
+    # ------------------------------------------------------------- состояние
+    def _load(self) -> dict:
+        try:
+            with open(STATE) as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self) -> None:
+        try:
+            # 0600: в файле ключи личных ссылок клиентов (по ним открывается конфиг)
+            fd = os.open(STATE + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(self._st, f)
+            os.replace(STATE + ".tmp", STATE)
+        except OSError as e:
+            log.warning("tgbot state: %s", e)
+
+    def view(self) -> dict:
+        skew = notify.clock_skew
+        return {"state": self.state, "error": self.error, "last": self.last_cmd,
+                # часы сервера сбиты: на это стоит обратить внимание (вход по коду тоже от них зависит)
+                "skew": round(skew) if abs(skew) >= 120 else None,
+                "username": self.username(), "linked": len(self._st.get("links") or {})}
+
+    def username(self) -> str | None:
+        """Имя бота для приглашений клиентов — только пока бот работает для клиентов (его опрос идёт)."""
+        me = self._st.get("me") or {}
+        c = notify.cfg_of(self.store.peek(lambda st: {"settings": {"telegram": dict(
+            (st.get("settings") or {}).get("telegram") or {})}}))
+        if not clients_on(c) or me.get("bot") != c["token"].split(":", 1)[0]:
+            return None
+        name = me.get("username")
+        return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_]{3,64}", name) else None
+
+    def _learn_name(self, c: dict) -> None:
+        """Имя бота (getMe) — один раз на токен: из него собирается приглашение t.me/<имя>?start=…"""
+        bot_id = c["token"].split(":", 1)[0]
+        if (self._st.get("me") or {}).get("bot") == bot_id:
+            return
+        me = notify._call(c["token"], "getMe", {}, via=c["via"])
+        if isinstance(me, dict) and me.get("username"):
+            self._st["me"] = {"bot": bot_id, "username": str(me["username"])}
+            self._save()
+
+    def _foreign(self, chat: dict, c: dict, qid: str = "") -> None:
+        """Команда из чата, которого нет в настройках: не выполняем. В личном чате отвечаем
+        «нет доступа» и номером этого чата — чтобы владелец сразу видел, что вписать в панель."""
+        cid = str(chat.get("id", ""))
+        log.info("telegram: a command from chat %s is not run: the panel listens to chat %s", cid, c.get("chat_id"))
+        if qid:
+            self._toast(c, qid, tr(c["lang"], "deny_toast", False))
+        if chat.get("type") != "private" or time.time() - self._denied.get(cid, 0) < DENY_EVERY:
+            return
+        self._denied[cid] = time.time()
+        try:
+            notify.send(c["token"], cid, tr(c["lang"], "deny", chat=cid), c["via"],
+                        {"remove_keyboard": True}, html=True)
+        except notify.NotifyError as e:
+            log.info("telegram: %s", e)
+
+    # ------------------------------------------------------------- клиенты по приглашению
+    def _client_send(self, c: dict, cid: str, text: str, markup: dict | None = None,
+                     msg: dict | None = None) -> None:
+        """Ответ в чат клиента: по кнопке — правкой того же сообщения, иначе новым."""
+        mid = (msg or {}).get("message_id")
+        if mid and not self._is_photo(msg):
+            try:
+                notify._call(c["token"], "editMessageText",
+                             {"chat_id": cid, "message_id": mid, "parse_mode": "HTML", "text": text,
+                              "disable_web_page_preview": True, "reply_markup": markup or {"inline_keyboard": []}},
+                             via=c["via"])
+                return
+            except notify.NotifyError as e:
+                if "not modified" in str(e):
+                    return
+        notify.send(c["token"], cid, text, c["via"], markup, html=True)
+
+    def on_client(self, c: dict, chat: dict, frm: dict | None, text: str | None = None, data: str | None = None,
+                  qid: str = "", msg: dict | None = None) -> None:
+        """Личный чат с клиентом: /start <ключ> из приглашения привязывает чат к клиенту; дальше — его карточка
+        (как личная ссылка: состояние, трафик, срок, лимит, конфиг). Ничего из панели, кроме своего."""
+        cid = str(chat.get("id", ""))
+        L = client_lang(frm)
+        now = time.time()
+        if now - self._client_t.get(cid, 0) < CLIENT_EVERY:
+            if qid:
+                self._toast(c, qid)
+            return
+        self._client_t[cid] = now
+        if len(self._client_t) > LINKS_MAX:
+            self._client_t = {k: v for k, v in self._client_t.items() if now - v < 60}
+        links = self._st.setdefault("links", {})
+        if text is not None:
+            cmd, _, arg = text.partition(" ")
+            if cmd.split("@", 1)[0].lower() == "/start" and arg.strip():
+                tok = arg.strip()
+                pk = self.ops.share_pk(tok)
+                if not pk:
+                    if self._may_tell(cid, now):
+                        self._client_send(c, cid, tr(L, "me_bad_link"))
+                    return
+                links.pop(cid, None)
+                links[cid] = {"pk": pk, "tok": tok, "lang": L, "t": now}
+                while len(links) > LINKS_MAX:                       # самые давние привязки — первыми
+                    links.pop(min(links, key=lambda k: links[k].get("t") or 0))
+                self._save()
+                name = (getattr(self.ops, "client_name", None) or (lambda _: ""))(pk) or pk[:8]
+                self.ops.audit(Msg("ev.tg_client_linked", name=name))
+                self.client_card(c, cid, L, tok)
+                return
+        link = links.get(cid)
+        if not link or self.ops.share_pk(link.get("tok")) != link.get("pk"):
+            if link:                    # приглашение обновили или клиента удалили
+                links.pop(cid, None)
+                self._save()
+            if qid:
+                self._toast(c, qid)
+            if link or self._may_tell(cid, now):      # «приглашение не действует» — один раз, при отвязке
+                self._client_send(c, cid, tr(L, "me_gone" if link else "me_need_link", chat=cid))
+            return
+        if qid:
+            self._toast(c, qid)
+        if data == "me:c":
+            if now - self._cfg_t.get(cid, 0) < CFG_EVERY:
+                self._client_send(c, cid, tr(L, "me_cfg_wait"))
+                return
+            self._cfg_t[cid] = now
+            self.client_config(c, cid, L, link["tok"])
+            self.client_card(c, cid, L, link["tok"])
+            return
+        self.client_card(c, cid, L, link["tok"], msg if data == "me:r" else None)
+
+    def _may_tell(self, cid: str, now: float) -> bool:
+        """Ответ чату без приглашения (незнакомцу) — не чаще раза в DENY_EVERY, как «нет доступа» до 1.22.0: иначе
+        много таких чатов разом съели бы предел отправки бота, и уведомления владельцу задерживались бы."""
+        if now - self._denied.get(cid, 0) < DENY_EVERY:
+            return False
+        self._denied[cid] = now
+        if len(self._denied) > LINKS_MAX:
+            self._denied = {k: v for k, v in self._denied.items() if now - v < DENY_EVERY}
+        return True
+
+    def client_card(self, c: dict, cid: str, L: str, tok: str, msg: dict | None = None) -> None:
+        d = self.ops.share_info(tok, False)
+        if not d:
+            self._client_send(c, cid, tr(L, "me_gone", chat=cid))
+            return
+        lim = d.get("limits") or {}
+        tv = d.get("traffic") or {}
+        now = time.time()
+        lines = [tr(L, "cd_title")]                   # без имени: его дал клиенту владелец панели, клиенту оно ни к чему
+        hs = d.get("handshake") or 0
+        if not d.get("enabled"):
+            ao = lim.get("auto_off") or ""
+            lines.append(tr(L, "cd_off_exp" if ao == "exp" else "cd_off_quota" if ao.startswith("quota:")
+                            else "cd_off"))
+        elif hs and now - hs < ONLINE:
+            lines.append(tr(L, "cd_online"))
+        else:
+            lines.append(tr(L, "cd_seen", ago=fmt_ago(now - hs, L)) if hs else tr(L, "cd_never"))
+        lines.append(tr(L, "cd_traffic", month=fmt_size(tv.get("month_rx", 0) + tv.get("month_tx", 0), L),
+                        total=fmt_size(tv.get("total_rx", 0) + tv.get("total_tx", 0), L)))
+        if lim.get("expires"):
+            lines.append(tr(L, "cd_until", date=fmt_date(lim["expires"])))
+        if lim.get("quota"):
+            period = lim.get("period") or "month"
+            used = (tv.get("month_rx", 0) + tv.get("month_tx", 0)) if period == "month" \
+                else (tv.get("total_rx", 0) + tv.get("total_tx", 0))
+            lines.append(tr(L, "cd_quota_" + period, used=fmt_size(used, L), quota=fmt_size(lim["quota"], L)))
+        if not d.get("has_config"):
+            lines += ["", tr(L, "cd_app")]
+        lines += ["", tr(L, "me_hint")]
+        row = [(tr(L, "b_refresh"), "me:r")]
+        if d.get("has_config"):
+            row.append((tr(L, "b_config"), "me:c"))
+        self._client_send(c, cid, "\n".join(lines), kb(row), msg)
+
+    def client_config(self, c: dict, cid: str, L: str, tok: str) -> None:
+        d = self.ops.share_info(tok, True) or {}
+        cfg = d.get("config")
+        if not cfg or not cfg.get("conf"):
+            self._client_send(c, cid, tr(L, "cd_app"))
+            return
+        caption = tr(L, "cfg_caption_me")
+        try:
+            notify.send_photo(c["token"], cid, qr.png(cfg["conf"]), caption, c["via"], html=True)
+            caption = tr(L, "cfg_file_me")
+        except qr.QRTooBig:
+            caption += "\n" + tr(L, "cfg_qr_big")
+        notify.send_document(c["token"], cid, cfg.get("filename") or "awg.conf", cfg["conf"].encode(), caption,
+                             c["via"], html=True)
+        if cfg.get("link"):
+            notify.send(c["token"], cid, tr(L, "cfg_link") + "\n<code>" + html.escape(cfg["link"]) + "</code>",
+                        c["via"], html=True)
+
+    # ------------------------------------------------------------- напоминания клиентам
+    def remind(self, key: str, pk: str) -> None:
+        """Событие движка о клиенте (Notifier.client_fn) → напоминание в чаты, привязанные к нему приглашением.
+        Только ставит в очередь: событие приходит из прохода движка, а сеть — в потоке tgbot-remind."""
+        rk = REMIND.get(key)
+        if not rk or not pk:
+            return
+        try:            # у клиента нет чата с ботом — напоминать некому: тысяча клиентов с одним сроком не займёт очередь
+            if not any(l.get("pk") == pk for l in list((self._st.get("links") or {}).values())):
+                return
+        except RuntimeError:            # чаты меняет поток опроса — тогда просто в очередь
+            pass
+        now = time.time()
+        seen = self.__dict__.setdefault("_reminded", {})
+        if now - seen.get((rk, pk), 0) < REMIND_REPEAT:
+            return
+        seen[(rk, pk)] = now
+        if len(seen) > REMIND_MAX * 4:
+            self._reminded = {k: v for k, v in seen.items() if now - v < REMIND_REPEAT}
+        try:
+            self._remind_q.put_nowait((rk, pk, now))
+        except queue.Full:
+            log.warning("telegram: reminders queue is full, a reminder is dropped")
+
+    def _remind_loop(self) -> None:
+        fails, retry_at = 0, 0.0
+        while not self.stop_ev.is_set():
+            wait = max(0.0, retry_at - time.monotonic()) if self._reminders else None
+            try:
+                self._reminders.append(list(self._remind_q.get(timeout=wait)) + [set()])
+                while True:
+                    self._reminders.append(list(self._remind_q.get_nowait()) + [set()])
+            except queue.Empty:
+                pass
+            if self._reminders and time.monotonic() < retry_at:
+                continue            # Telegram недоступен: новые ждут паузы вместе со старыми, а не будят повтор
+            try:
+                ok = self.remind_flush()
+            except Exception:  # noqa: BLE001  — поток напоминаний не должен умирать
+                log.exception("telegram reminders")
+                ok = False
+            fails = 0 if ok else fails + 1
+            retry_at = 0.0 if ok else time.monotonic() + REMIND_PAUSES[min(fails - 1, len(REMIND_PAUSES) - 1)]
+
+    def remind_flush(self, now: float | None = None) -> bool:
+        """Отправить накопленные напоминания. False — Telegram недоступен, остаток ждёт повтора. Каждое — по
+        настройкам и состоянию клиента сейчас: напоминания выключили, срок продлили или клиента снова включили,
+        пока ждали связи, — устаревшее не отправляется."""
+        c = notify.cfg_of(self.store.snapshot())
+        if not clients_on(c):          # напоминания — та же галочка, что и клиенты в боте (1.23.0)
+            self._reminders.clear()
+            return True
+        while self._reminders:
+            rk, pk, ts, done = self._reminders[0]
+            t = time.time() if now is None else now
+            if t - ts <= REMIND_AGE:
+                for cid, link in list((self._st.get("links") or {}).items()):
+                    if cid in done or link.get("pk") != pk or self.ops.share_pk(link.get("tok")) != pk:
+                        continue
+                    L = link.get("lang") or "en"
+                    text = self._remind_text(rk, L, link["tok"], t)
+                    if text:
+                        try:
+                            notify.send(c["token"], cid, text, c["via"], kb([(tr(L, "b_refresh"), "me:r")]),
+                                        html=True)
+                        except notify.NotifyError as e:
+                            if e.net:
+                                log.warning("telegram reminder: %s", e)
+                                return False
+                            log.info("telegram reminder to chat %s: %s", cid, e)   # клиент удалил чат с ботом
+                        if REMIND_GAP and now is None:
+                            time.sleep(REMIND_GAP)
+                    done.add(cid)
+            self._reminders.popleft()
+        return True
+
+    def _remind_text(self, rk: str, L: str, tok: str, now: float) -> str | None:
+        """Текст напоминания по тому, что у клиента сейчас (как карточка); None — уже не к месту."""
+        d = self.ops.share_info(tok, False)
+        if not d:
+            return None
+        lim = d.get("limits") or {}
+        tv = d.get("traffic") or {}
+        on = bool(d.get("enabled"))
+        period = lim.get("period") or "month"
+        used = (tv.get("month_rx", 0) + tv.get("month_tx", 0)) if period == "month" \
+            else (tv.get("total_rx", 0) + tv.get("total_tx", 0))
+        exp, quota = lim.get("expires"), lim.get("quota")
+        if rk == "rm_expiring":
+            # срок продлили, пока ждали связи, — «скоро закончится» уже не к месту
+            if not (on and exp and now < exp <= now + limits.WARN_DAYS * DAY):
+                return None
+            return tr(L, rk, date=fmt_date(exp), days=max(1, math.ceil((exp - now) / DAY)))
+        if rk == "rm_quota_warn":
+            if not (on and quota and quota * limits.WARN_SHARE <= used < quota):     # лимит подняли — тоже
+                return None
+            return tr(L, rk, used=fmt_size(used, L), quota=fmt_size(quota, L))
+        if rk == "rm_expired":
+            return None if on else tr(L, rk)
+        if rk == "rm_quota":
+            return None if on or not quota else tr(L, "rm_quota_" + period, quota=fmt_size(quota, L))
+        if rk == "rm_quota_reset":
+            return tr(L, rk) if on else None
+        return None
+
+    def start(self) -> None:
+        threading.Thread(target=self._loop, name="tgbot", daemon=True).start()
+        threading.Thread(target=self._remind_loop, name="tgbot-remind", daemon=True).start()
+
+    # ------------------------------------------------------------- опрос
+    def _loop(self) -> None:
+        while not self.stop_ev.is_set():
+            c = notify.cfg_of(self.store.snapshot())
+            # бот выключен — молчит совсем (1.23.0); включён — управление и клиенты по своим галочкам: клиенты по
+            # приглашению работают и без управления (тогда команды панели не принимаются ни из какого чата)
+            if not (c["enabled"] and c["token"] and ((c["chat_id"] and c["control"]) or c.get("clients"))):
+                self.state, self.error = "off", None
+                try:
+                    self._drop_commands(c)
+                except Exception:  # noqa: BLE001  — поток бота не должен умирать из-за меню команд
+                    log.exception("telegram bot: commands")
+                self.wake.wait(10)
+                self.wake.clear()
+                continue
+            try:
+                self.poll_once(c, fresh=lambda: notify.cfg_of(self.store.snapshot()))
+                if c["control"] and c["chat_id"].startswith("@"):     # настройка до 1.21.0: команды не принимаются
+                    self.state, self.error = "error", Msg("err.tg_control_id")
+                else:
+                    self.state, self.error = "ok", None
+            except notify.NotifyError as e:
+                if "webhook" in str(e).lower() and self._drop_webhook(c):
+                    continue
+                if e.code == 409 and "webhook" not in str(e).lower():
+                    # «terminated by other getUpdates request»: этого же бота читает ещё одна программа —
+                    # обычно вторая панель с тем же токеном. Команды достаются то ей, то этой панели
+                    e.msg = e.msg or Msg("err.tg_conflict")
+                self.state, self.error = "error", e.msg or str(e)
+                log.warning("telegram bot: %s", e)
+                self.wake.wait(30)
+                self.wake.clear()
+            except Exception as e:  # noqa: BLE001
+                self.state, self.error = "error", str(e)[:300]
+                log.exception("telegram bot")
+                self.wake.wait(30)
+                self.wake.clear()
+
+    def poll_once(self, c: dict, timeout: int = POLL, fresh=None) -> None:
+        """fresh — настройки после ожидания getUpdates (поток бота: notify.cfg_of из состояния)."""
+        self._set_commands(c)
+        if admin_on(c):
+            self._announce_update(c)
+        if c.get("clients"):
+            self._learn_name(c)
+        bot = c["token"].split(":", 1)[0]
+        if self._st.get("offset_bot") != bot:
+            # другой бот (сменили токен): номера событий у него свои — со старой отметкой Telegram молча выбросил бы его
+            # команды и приглашения, а панель писала бы «работает» (П28). Файл до 1.25.0 без номера — тот же бот
+            if self._st.get("offset_bot") is not None:
+                self._st["offset"] = 0
+            self._st["offset_bot"] = bot
+        ups = notify._call(c["token"], "getUpdates",
+                           {"offset": int(self._st.get("offset") or 0), "timeout": timeout,
+                            "allowed_updates": ["message", "callback_query"]},
+                           timeout=timeout + 15, via=c["via"])
+        # пока ждали (до POLL секунд), управление могли выключить или сменить чат: команды — по настройкам сейчас
+        now = fresh() if fresh else c
+        same = now["token"] == c["token"]
+        now = {**now, "_admin": bool(same and admin_on(now) and now["chat_id"] == c["chat_id"]),
+               "_clients": bool(same and clients_on(now))}
+        live = now["_admin"] or now["_clients"]
+        for u in ups if isinstance(ups, list) else []:
+            # отметку сохраняем до выполнения: после перезапуска команда не повторится
+            self._st["offset"] = int(u.get("update_id", 0)) + 1
+            self._save()
+            if ch := self._seen(u):         # для «Найти» Chat ID: бот сам забирает сообщения раньше кнопки
+                self.last_chat = {**ch, "bot": c["token"].split(":", 1)[0], "t": time.time()}
+            if not live:
+                continue
+            try:
+                self.handle(u, now)
+            except Exception:  # noqa: BLE001
+                log.exception("telegram update")
+
+    def _drop_webhook(self, c: dict) -> bool:
+        """На токене висит webhook (бота раньше подключали к другому сервису): пока он есть,
+        Telegram не отдаёт команды через getUpdates. Управление включили в панели — значит,
+        бот теперь её: снимаем webhook один раз. True — сняли, можно опрашивать снова."""
+        if self._webhook_dropped:
+            return False
+        self._webhook_dropped = True
+        try:
+            notify._call(c["token"], "deleteWebhook", {"drop_pending_updates": False}, via=c["via"])
+        except notify.NotifyError as e:
+            log.warning("telegram: deleteWebhook: %s", e)
+            return False
+        log.warning("telegram: the bot had a webhook set by another service; removed it to receive commands")
+        return True
+
+    def _seen(self, u: dict) -> dict | None:
+        """Чат, который годится для «Найти» Chat ID: сообщение, а не нажатие кнопки, и не от клиента по
+        приглашению (ни из привязанного чата, ни само приглашение «/start <ключ>»). Иначе «Найти» могло подставить
+        чат клиента, и уведомления, управление и копии с ключами ушли бы ему."""
+        if "callback_query" in u:
+            return None
+        ch = notify.chat_of(u)
+        if not ch or ch["id"] in (self._st.get("links") or {}):
+            return None
+        cmd, _, arg = str((u.get("message") or {}).get("text") or "").strip().partition(" ")
+        if cmd.split("@", 1)[0].lower() == "/start" and arg.strip():
+            return None
+        return ch
+
+    def _set_commands(self, c: dict) -> None:
+        """Меню команд панели — только в чате панели (1.22.0). Раньше оно стояло у всех личных чатов бота, а
+        теперь в бота пишут и клиенты: им команды панели ни к чему."""
+        if not admin_on(c):
+            self._drop_commands(c)
+            return
+        sig = f'v2|{c["token"][:12]}|{c["lang"]}|{c["chat_id"]}'
+        old = self._st.get("cmds") or ""
+        if old == sig:
+            return
+        if old and not old.startswith("v2|"):
+            notify._call(c["token"], "deleteMyCommands", {}, via=c["via"])        # меню до 1.22.0 — у всех
+        elif old.startswith("v2|") and old.split("|")[3] != c["chat_id"]:
+            self._drop_chat_commands(c, old.split("|")[3])
+        cmds = [{"command": k, "description": tr(c["lang"], "cmd_" + k, False)} for k in COMMANDS]
+        try:
+            notify._call(c["token"], "setMyCommands",
+                         {"commands": cmds, "scope": {"type": "chat", "chat_id": int(c["chat_id"])}}, via=c["via"])
+        except notify.NotifyError as e:
+            if e.net or e.code == 429 or e.code >= 500:
+                raise                       # Telegram недоступен или занят — попробовать снова на следующем опросе
+            # отказ самого Telegram: в канале меню команд не бывает («can't change commands in channel chats»),
+            # у группы, ставшей супергруппой, — старый номер. Без меню бот работает; иначе опрос не начинался вовсе
+            log.warning("telegram: no command menu for this chat: %s", e)
+        self._st["cmds"] = sig
+        self._save()
+
+    def _drop_chat_commands(self, c: dict, chat: str) -> None:
+        try:
+            notify._call(c["token"], "deleteMyCommands", {"scope": {"type": "chat", "chat_id": int(chat)}},
+                         via=c["via"])
+        except (notify.NotifyError, ValueError) as e:
+            log.info("telegram: %s", e)
+
+    def _drop_commands(self, c: dict) -> None:
+        """Управление выключили — убираем меню команд и кнопку «Меню», чтобы бот не обещал лишнего."""
+        if not (self._st.get("cmds") or self._st.get("kbd")) or not c["token"]:
+            return
+        try:
+            old = self._st.get("cmds") or ""
+            if old.startswith("v2|"):
+                self._drop_chat_commands(c, old.split("|")[3])
+            else:
+                notify._call(c["token"], "deleteMyCommands", {}, via=c["via"])
+            if self._st.get("kbd") and c["chat_id"]:
+                self._send(c, tr(c["lang"], "kbd_off"), {"remove_keyboard": True})
+        except notify.NotifyError as e:
+            log.info("telegram: %s", e)
+        self._st.pop("cmds", None)
+        self._st.pop("kbd", None)
+        self._save()
+
+    def _announce_update(self, c: dict) -> None:
+        """После обновления, запущенного из бота, — сообщить, чем оно кончилось."""
+        a = self._st.get("update")
+        if not a:
+            return
+        s = self.ops.update_state()
+        if s.get("state") == "running" and time.time() - a.get("t", 0) < 3600:
+            return
+        self._st.pop("update", None)
+        self._save()
+        if s.get("state") == "done" and self.ops.version == a.get("to"):
+            self._send(c, tr(c["lang"], "up_done", version=self.ops.version))
+        elif s.get("state") in ("failed", "done"):
+            self._send(c, tr(c["lang"], "up_failed", version=self.ops.version))
+
+    # ------------------------------------------------------------- отправка
+    def _send(self, c: dict, text: str, markup: dict | None = None, panel: bool = False) -> dict:
+        r = notify.send(c["token"], c["chat_id"], text, c["via"], markup, html=True)
+        if panel:
+            self._set_panel(c, r, photo=False)
+        return r
+
+    def _set_panel(self, c: dict, r, photo: bool) -> None:
+        """Управление — в одном сообщении: новое становится меню, прежнее убираем."""
+        if not (isinstance(r, dict) and r.get("message_id")):
+            return
+        if self._st.get("panel_chat") in (None, str(c["chat_id"])):
+            for mid in self._panel_msgs:
+                self._delete(c, mid)        # номера — из этого же чата: после смены Chat ID удалилось бы чужое (П54)
+        self._panel_msgs = [r["message_id"]]
+        self._st["panel"] = self._panel_msgs
+        self._st["panel_chat"] = str(c["chat_id"])
+        if photo:
+            self._st["photo"] = r["message_id"]
+        else:
+            self._st.pop("photo", None)
+            self._st.pop("pic", None)          # в сообщении-меню больше нет картинки
+            self._st.pop("pic_sum", None)
+        self._save()
+
+    def _send_logo(self, c: dict, caption: str, markup: dict | None) -> dict:
+        """Меню — фото с логотипом и подписью. Файл загружаем один раз, дальше — по file_id
+        (он свой у каждого бота: другой токен — загружаем заново)."""
+        fid = self._st.get("logo")
+        # file_id годен, пока тот же бот и та же картинка: новый логотип в выпуске загружается заново
+        if fid and self._st.get("logo_bot") == c["token"].split(":", 1)[0] and self._st.get("logo_sum") == logo_sum():
+            try:
+                r = notify._call(c["token"], "sendPhoto", {"chat_id": c["chat_id"], "photo": fid, "caption": caption,
+                                                           "parse_mode": "HTML", "reply_markup": markup},
+                                 via=c["via"])
+                self._st["pic"] = "logo"
+                self._set_panel(c, r, photo=True)
+                return r
+            except notify.NotifyError as e:
+                if _button_refused(e):
+                    raise                   # кнопку «Панель» не приняли — решает show_menu
+                log.info("telegram: logo file_id refused (%s), uploading again", e)
+        with open(LOGO, "rb") as f:
+            png = f.read()
+        r = notify.send_photo(c["token"], c["chat_id"], png, caption, c["via"], html=True, markup=markup,
+                              filename="awg-router.png")
+        sizes = (r or {}).get("photo") if isinstance(r, dict) else None
+        if sizes and isinstance(sizes, list) and isinstance(sizes[-1], dict) and sizes[-1].get("file_id"):
+            self._st["logo"] = sizes[-1]["file_id"]
+            self._st["logo_bot"] = c["token"].split(":", 1)[0]
+            self._st["logo_sum"] = logo_sum()
+        self._st["pic"] = "logo"
+        self._set_panel(c, r, photo=True)
+        return r
+
+    def _is_photo(self, msg: dict | None) -> bool:
+        mid = (msg or {}).get("message_id")
+        return bool((msg or {}).get("photo")) or (mid is not None and mid == self._st.get("photo"))
+
+    # ------------------------------------------------------------- картинки (1.24.0)
+    def _menu_info(self) -> dict:
+        """Цифры главного меню: адрес VPN-сервера (как в конфигах клиентов), выходы онлайн из включённых,
+        версия, клиенты и общий трафик."""
+        s = self.ops.status()
+        clients = self.ops.clients()
+        now = time.time()
+        ups = [u for u in self.ops.snapshot().get("upstreams") or [] if u.get("enabled", True)]
+        vpn = getattr(self.ops, "vpn_host", None)
+        tv = s.get("server_traffic") or {}
+        return {"host": (vpn() if vpn else "") or self.ops.panel().get("host") or "—",
+                "exits": (sum(1 for u in ups if self._exit_icon(u) == "🟢"), len(ups)),
+                "version": (s.get("version") or {}).get("current") or self.ops.version,
+                "clients": len(clients), "online": sum(1 for x in clients if self._online(x, now)),
+                "bytes": tv.get("total_rx", 0) + tv.get("total_tx", 0)}
+
+    @staticmethod
+    def _card(lang: str, kind: str, d: dict) -> bytes | None:
+        """PNG меню или «Состояния»; не вышло (нет атласа, слова) — None, и экран уходит текстом, как до 1.24.0."""
+        lang = lang if lang in TEXTS else "en"
+        try:
+            if kind == "menu":
+                return tgcard.menu(TEXTS[lang], lang, {**d, "traffic": size_parts(d["bytes"], lang)})
+            return tgcard.status(TEXTS[lang], lang, d)
+        except Exception as e:  # noqa: BLE001 — картинка не должна ломать меню
+            log.warning("telegram %s picture: %s", kind, e)
+            return None
+
+    def _got_card(self, c: dict, kind: str, total: str, r) -> None:
+        """Запомнить, какая картинка в сообщении-меню; у меню — и file_id, чтобы вернуть её без загрузки."""
+        self._st["pic"] = kind
+        self._st["pic_sum"] = total
+        sizes = (r or {}).get("photo") if isinstance(r, dict) else None
+        if kind == "menu" and sizes and isinstance(sizes, list) and isinstance(sizes[-1], dict) \
+                and sizes[-1].get("file_id"):
+            self._st["menu_pic"] = {"fid": sizes[-1]["file_id"], "sum": total, "bot": c["token"].split(":", 1)[0]}
+        self._save()
+
+    def _show_card(self, c: dict, kind: str, png: bytes, caption: str, markup: dict | None, msg: dict | None,
+                   move: bool = False) -> None:
+        """Экран-картинка: в сообщении-меню меняется сама картинка (editMessageMedia), иначе — новое сообщение.
+        Та же картинка уже стоит — меняются только подпись и кнопки; та же картинка меню — уходит по file_id."""
+        total = hashlib.sha256(png).hexdigest()[:16]
+        mid = (msg or {}).get("message_id")
+        bot = c["token"].split(":", 1)[0]
+        if not move and mid and mid in self._panel_msgs and self._is_photo(msg):
+            try:
+                if self._st.get("pic") == kind and self._st.get("pic_sum") == total:
+                    notify._call(c["token"], "editMessageCaption",
+                                 {"chat_id": c["chat_id"], "message_id": mid, "caption": caption, "parse_mode": "HTML",
+                                  "reply_markup": markup or {"inline_keyboard": []}}, via=c["via"])
+                    return
+                r = notify.edit_photo(c["token"], c["chat_id"], mid, png, caption, markup, c["via"],
+                                      filename=f"awg-router-{kind}.png")
+                self._got_card(c, kind, total, r)
+                return
+            except notify.NotifyError as e:
+                if "not modified" in str(e):
+                    return
+                if _button_refused(e):
+                    raise                   # кнопку «Панель» не приняли — решает show_menu
+                log.info("telegram: picture not replaced in place (%s), sending anew", e)
+        mp = self._st.get("menu_pic") or {}
+        if kind == "menu" and mp.get("sum") == total and mp.get("bot") == bot:
+            try:
+                r = notify._call(c["token"], "sendPhoto", {"chat_id": c["chat_id"], "photo": mp["fid"], "caption": caption,
+                                                           "parse_mode": "HTML", "reply_markup": markup}, via=c["via"])
+                self._st["pic"], self._st["pic_sum"] = kind, total
+                self._set_panel(c, r, photo=True)
+                return
+            except notify.NotifyError as e:
+                if _button_refused(e):
+                    raise
+                log.info("telegram: menu picture file_id refused (%s), uploading again", e)
+        r = notify.send_photo(c["token"], c["chat_id"], png, caption, c["via"], html=True, markup=markup,
+                              filename=f"awg-router-{kind}.png")
+        self._got_card(c, kind, total, r)
+        self._set_panel(c, r, photo=True)
+
+    def _menu_back(self, c: dict, mid, text: str, markup: dict | None) -> bool:
+        """Экран, который не картинка, ушёл из «Состояния»: в сообщение возвращается картинка меню (по file_id,
+        если она того же бота, иначе рисуется заново) с текстом экрана в подписи. False — не вышло."""
+        mp = self._st.get("menu_pic") or {}
+        try:
+            if mp.get("fid") and mp.get("bot") == c["token"].split(":", 1)[0]:
+                notify.edit_photo(c["token"], c["chat_id"], mid, None, text, markup, c["via"], fid=mp["fid"])
+                self._st["pic"], self._st["pic_sum"] = "menu", mp.get("sum")
+                self._save()
+                return True
+            png = self._card(c["lang"], "menu", self._menu_info())
+            if png is None:
+                return False
+            r = notify.edit_photo(c["token"], c["chat_id"], mid, png, text, markup, c["via"],
+                                  filename="awg-router-menu.png")
+            self._got_card(c, "menu", hashlib.sha256(png).hexdigest()[:16], r)
+            return True
+        except notify.NotifyError as e:
+            log.info("telegram: menu picture not restored (%s)", e)
+            return False
+
+    def _delete(self, c: dict, mid) -> None:
+        try:
+            notify._call(c["token"], "deleteMessage", {"chat_id": c["chat_id"], "message_id": mid}, via=c["via"])
+        except notify.NotifyError:
+            pass       # старше 48 часов или уже удалено
+
+    def _show(self, c: dict, text: str, markup: dict | None, msg: dict | None) -> None:
+        """Экран меню: если кнопку нажали в сообщении-меню — меняем его на месте."""
+        mid = (msg or {}).get("message_id")
+        photo = self._is_photo(msg)
+        # меню-фото: экраны меняют подпись под логотипом; слишком длинный экран — текстом
+        if mid and mid in self._panel_msgs and not (photo and len(_plain(text)) > CAPTION_MAX):
+            # над остальными экранами — картинка меню (1.24.0): из «Состояния» она возвращается
+            if photo and self._st.get("pic") not in (None, "menu", "logo") and \
+                    self._menu_back(c, mid, text, markup or {"inline_keyboard": []}):
+                return
+            p = {"chat_id": c["chat_id"], "message_id": mid, "parse_mode": "HTML",
+                 "reply_markup": markup or {"inline_keyboard": []}}
+            if photo:
+                p["caption"] = text
+            else:
+                p.update(text=text, disable_web_page_preview=True)
+            try:
+                notify._call(c["token"], "editMessageCaption" if photo else "editMessageText", p, via=c["via"])
+                return
+            except notify.NotifyError as e:
+                if "not modified" in str(e):
+                    return
+        self._send(c, text, markup, panel=True)
+
+    def _toast(self, c: dict, qid: str, text: str = "") -> None:
+        try:
+            notify._call(c["token"], "answerCallbackQuery",
+                         {"callback_query_id": qid, "text": text[:190]}, via=c["via"])
+        except notify.NotifyError:
+            pass       # кнопку нажали давно — подсказка уже не нужна
+
+    # ------------------------------------------------------------- разбор
+    @staticmethod
+    def allowed(chat: dict, c: dict) -> bool:
+        """Команды — только из чата с тем числовым ID, что указан в панели. По @имени — нет: имя можно
+        сменить, и освободившееся займёт другой человек; в группе с @именем пишут все её участники."""
+        want = str(c.get("chat_id") or "")
+        if not want or not chat or want.startswith("@"):
+            return False
+        return str(chat.get("id")) == want
+
+    def handle(self, u: dict, c: dict) -> None:
+        admin = c.get("_admin", bool(c.get("control")))
+        clients = c.get("_clients", bool(c.get("clients")))
+        if "callback_query" in u:
+            q = u["callback_query"]
+            msg = q.get("message") or {}
+            chat = msg.get("chat") or {}
+            data = str(q.get("data") or "")
+            if admin and self.allowed(chat, c):
+                self.last_cmd = time.time()
+                self.on_button(c, data, q.get("id", ""), msg)
+            elif clients and chat.get("type") == "private" and data.startswith("me:"):
+                self.on_client(c, chat, q.get("from"), data=data, qid=q.get("id", ""), msg=msg)
+            elif chat and admin:
+                self._foreign(chat, c, q.get("id", ""))
+            return
+        m = u.get("message") or {}
+        if self._migration(m, c):
+            return
+        if (m.get("from") or {}).get("is_bot") or not m.get("chat"):
+            return
+        if not (admin and self.allowed(m["chat"], c)):
+            text = (m.get("text") or "").strip()
+            if clients and m["chat"].get("type") == "private":
+                if text:
+                    self.on_client(c, m["chat"], m.get("from"), text=text)
+            elif admin and (text.startswith("/") or menu_action(text)):
+                self._foreign(m["chat"], c)
+            return
+        # возраст — по часам Telegram (Date его ответа), а не сервера: те бывают сбиты
+        age = time.time() - notify.clock_skew - (m.get("date") or 0)
+        if m.get("date") and age > OLD:
+            log.info("telegram: a message from %d s ago is skipped (sent while the panel was off)", int(age))
+            return
+        text = (m.get("text") or "").strip()
+        if not text:
+            return
+        self.last_cmd = time.time()
+        action = menu_action(text)
+        if action:
+            self._ask = None
+            self.on_command(c, action, "")
+            return
+        if text.startswith("/"):
+            cmd, _, arg = text[1:].partition(" ")
+            self._ask = None
+            self.on_command(c, cmd.split("@", 1)[0].lower(), arg.strip())
+            return
+        ask = self._ask
+        reply_to = (m.get("reply_to_message") or {}).get("message_id")
+        if ask and time.time() - ask["t"] < ASK_TTL and (reply_to in (None, ask["msg"])):
+            self._ask = None
+            if ask.get("msg"):
+                self._delete(c, ask["msg"])          # вопрос «как назвать?» больше не нужен
+            if ask["kind"] == "add":
+                self._guard(c, self.do_add, text)
+            else:
+                self._guard(c, self.do_route, text)
+            return
+        if m["chat"].get("type") != "private" and not self._to_me(m, text):
+            return          # в группе бот видит и разговор людей: меню — только на обращение к нему
+        self.on_command(c, "menu", "")
+
+    def _to_me(self, m: dict, text: str) -> bool:
+        """Сообщение в группе обращено к боту: упоминание @имени или ответ на его сообщение."""
+        name = (self._st.get("me") or {}).get("username")
+        if name and ("@" + str(name).lower()) in text.lower():
+            return True
+        return bool(((m.get("reply_to_message") or {}).get("from") or {}).get("is_bot"))
+
+    @staticmethod
+    def _migration(m: dict, c: dict) -> bool:
+        """Служебное сообщение «группа стала супергруппой» — из чата настроек (старый номер) или из новой
+        супергруппы (с указанием старого): новый номер — в настройки, иначе команды и уведомления пропадут."""
+        chat = str((m.get("chat") or {}).get("id", ""))
+        want = str(c.get("chat_id") or "")
+        old = new = None
+        if m.get("migrate_to_chat_id") and chat == want:
+            old, new = want, str(m["migrate_to_chat_id"])
+        elif m.get("migrate_from_chat_id") and str(m["migrate_from_chat_id"]) == want:
+            old, new = want, chat
+        if not (old and new):
+            return False
+        if notify.on_migrate:
+            notify.on_migrate(old, new)
+        return True
+
+    def _guard(self, c: dict, fn, *args) -> None:
+        try:
+            fn(c, *args)
+        except BotError as e:
+            self._send(c, tr(c["lang"], e.key, **e.params))
+        except Exception as e:  # noqa: BLE001
+            log.warning("telegram action: %s", e)
+            self._send(c, tr(c["lang"], "fail", error=self._err(e, c["lang"])))
+
+    @staticmethod
+    def _err(e, lang: str = "en") -> str:
+        """Ошибка для человека: фраза панели на языке бота (тексты из i18n.js), а не её ключ."""
+        m = e if isinstance(e, Msg) else getattr(e, "detail", None) or getattr(e, "msg", None)
+        if isinstance(m, Msg):
+            return uitext.text(lang, m)[:300]
+        return str(e)[:300]
+
+    def on_command(self, c: dict, cmd: str, arg: str) -> None:
+        self._drop_keyboard(c)
+        if cmd in ("start", "menu"):
+            self._guard(c, self.show_menu, None)
+        elif cmd == "help":
+            self._show(c, tr(c["lang"], "help"), kb(self._back(c)), None)
+        elif cmd == "panel":
+            self._guard(c, self.show_panel, None)
+        elif cmd == "status":
+            self._guard(c, self.show_status, None)
+        elif cmd == "clients":
+            self._guard(c, self.show_clients, 0, None)
+        elif cmd == "exits":
+            self._guard(c, self.show_exits, None)
+        elif cmd == "add":
+            if arg:
+                self._guard(c, self.do_add, arg)
+            else:
+                self.ask(c, "add")
+        elif cmd == "route":
+            if arg:
+                self._guard(c, self.do_route, arg)
+            else:
+                self.ask(c, "route")
+        elif cmd == "backup":
+            self._guard(c, self.do_backup)
+        else:
+            self._guard(c, self.show_menu, None, tr(c["lang"], "unknown"))
+
+    def ask(self, c: dict, kind: str) -> None:
+        r = notify.send(c["token"], c["chat_id"], tr(c["lang"], "add_ask" if kind == "add" else "rt_ask"),
+                        c["via"], {"force_reply": True, "input_field_placeholder": "…"}, html=True)
+        self._ask = {"kind": kind, "msg": (r or {}).get("message_id"), "t": time.time()}
+
+    def on_button(self, c: dict, data: str, qid: str, msg: dict) -> None:
+        L = c["lang"]
+        op, _, arg = data.partition(":")
+        toast = ""
+        try:
+            if op in ("m", "x"):
+                self.show_menu(c, msg)
+            elif op == "pn":
+                self.show_panel(c, msg)
+            elif op == "sv":
+                self.show_server(c, msg)
+            elif op == "st":
+                self.show_status(c, msg)
+            elif op == "cl":
+                self.show_clients(c, int(arg or 0), msg)
+            elif op == "c":
+                self.show_client(c, arg, msg)
+            elif op in ("on", "off"):
+                cl = self._client(arg)
+                self.ops.set_enabled(arg, op == "on")
+                self.ops.audit(Msg("tg.act_" + op, name=self._name(cl)))
+                toast = tr(L, "ok_" + op, False, name=self._name(cl))
+                self.show_client(c, arg, msg)
+            elif op == "d30":
+                toast = self.do_days(c, arg)
+                self.show_client(c, arg, msg)
+            elif op == "g10":
+                toast = self.do_gb(c, arg)
+                self.show_client(c, arg, msg)
+            elif op == "cfg":
+                self._toast(c, qid)
+                qid = ""
+                self.send_config(c, arg)
+                self.show_client(c, arg, None, tr(L, "cfg_done"))      # меню — под файлами
+            elif op == "sh":
+                self.show_client(c, arg, msg, self.do_share(c, arg))
+            elif op == "dl":
+                self.ask_delete(c, arg, msg)
+            elif op == "dlgo":
+                toast = self.do_delete(c, arg)
+                self.show_clients(c, 0, msg)
+            elif op == "add":
+                self.ask(c, "add")
+            elif op == "rt":
+                self.ask(c, "route")
+            elif op == "ex":
+                self.show_exits(c, msg)
+            elif op == "eo":
+                self.show_exit(c, arg, msg)
+            elif op == "pr":
+                self._toast(c, qid, tr(L, "pr_wait", False, name=self._exit_name(arg, L)))
+                qid = ""
+                self.show_exit(c, arg, msg, self.do_probe(c, arg))
+            elif op == "df":
+                toast = self.do_default(c, arg)
+                self.show_exit(c, arg.removeprefix("up:"), msg)
+            elif op == "bk":
+                self._toast(c, qid, tr(L, "bk_wait", False))
+                qid = ""
+                self.do_backup(c)
+            elif op == "up":
+                self.ask_update(c, msg)
+            elif op == "upgo":
+                self.do_update(c, msg)
+        except BotError as e:
+            toast = tr(L, e.key, False, **e.params)
+            if not qid:              # на кнопку уже ответили — ошибку пишем сообщением
+                self._send(c, tr(L, e.key, **e.params))
+        except Exception as e:  # noqa: BLE001
+            log.warning("telegram button %s: %s", op, e)
+            toast = tr(L, "fail", False, error=self._err(e, L))
+            if not qid:
+                self._send(c, tr(L, "fail", error=self._err(e, L)))
+        if qid:
+            self._toast(c, qid, toast)
+
+    # ------------------------------------------------------------- экраны
+    def _drop_keyboard(self, c: dict) -> None:
+        """Клавиатуру внизу экрана (1.10.0–1.11.0) убирает только сообщение с remove_keyboard:
+        отправляем его и сразу удаляем — клавиатура уходит, в чате ничего не остаётся."""
+        if not self._st.get("kbd"):
+            return
+        try:
+            r = notify.send(c["token"], c["chat_id"], "⌨️", c["via"], {"remove_keyboard": True})
+            if isinstance(r, dict) and r.get("message_id"):
+                self._delete(c, r["message_id"])
+        except notify.NotifyError as e:
+            log.info("telegram: %s", e)
+            return
+        self._st.pop("kbd", None)
+        self._save()
+
+    def _back(self, c: dict) -> list:
+        return [(tr(c["lang"], "b_menu"), "m")]
+
+    def _back_server(self, c: dict) -> list:
+        return [(tr(c["lang"], "b_back_server"), "sv")]
+
+    def _menu_kb(self, c: dict, url: bool = True) -> dict:
+        L = c["lang"]
+        b = lambda key, data: {"text": tr(L, key, False), "callback_data": data}
+        p = self.ops.panel() if url else {}
+        panel = ({"text": tr(L, "b_panel", False), "url": p["url"]} if p and not p.get("ssh")
+                 else b("b_panel", "pn"))
+        # «Обновить» — заново читает цифры в шапке меню
+        return {"inline_keyboard": [[b("b_server", "sv"), b("b_clients", "cl:0")],
+                                    [panel, b("b_backup", "bk")],
+                                    [b("b_refresh", "m")]]}
+
+    def show_menu(self, c: dict, msg: dict | None, note: str = "", move: bool = False) -> None:
+        """Главное меню. Кнопка «Панель» — сразу ссылка; если Telegram её не примет (адрес ему
+        не нравится), — экран со ссылкой."""
+        # адрес сервера — видно, какой это сервер, если ботов несколько
+        L = c["lang"]
+        d = self._menu_info()
+        up, total = d["exits"]
+        # картинка с цифрами (1.24.0), подпись — только заметка («Копия отправлена»); текст — если картинки нет
+        png = self._card(L, "menu", d)
+        text = tr(L, "start", host=d["host"], exits=tr(L, "pc_of", n=up, total=total) if total else tr(L, "pc_none"),
+                  version=d["version"], clients=d["clients"], online=d["online"], traffic=fmt_size(d["bytes"], L))
+        text += f"\n\n{note}" if note else ""
+
+        def show(c_, t_, m_):
+            if png is not None:
+                self._show_card(c_, "menu", png, note, m_, msg, move)
+                return
+            mid = (msg or {}).get("message_id")
+            if not move and mid in self._panel_msgs and self._is_photo(msg):
+                self._show(c_, t_, m_, msg)          # меню уже фото — меняем подпись на месте
+                return
+            try:
+                self._send_logo(c_, t_, m_)          # фото с логотипом новым сообщением
+            except OSError as e:
+                log.warning("telegram logo: %s", e)
+                self._send(c_, "<b>AWG Router</b>\n" + t_, m_, panel=True)
+        try:
+            show(c, text, self._menu_kb(c))
+        except notify.NotifyError as e:
+            if "url" not in str(e).lower():
+                raise
+            log.info("telegram: panel button refused (%s)", e)
+            show(c, text, self._menu_kb(c, url=False))
+
+    def show_panel(self, c: dict, msg: dict | None) -> None:
+        L = c["lang"]
+        p = self.ops.panel()
+        if p.get("ssh"):
+            self._show(c, tr(L, "pn_ssh", url=p["url"], port=p["port"], host=p.get("host") or "SERVER_IP",
+                          user=p.get("user") or "root", sport=f' -p {p["sport"]}' if p.get("sport") else ""),
+                       kb(self._back(c)), msg)
+            return
+        text = tr(L, "pn_text", url=p["url"])
+        try:
+            self._show(c, text, {"inline_keyboard": [[{"text": tr(L, "b_open", False), "url": p["url"]}],
+                                                     [{"text": tr(L, "b_menu", False), "callback_data": "m"}]]}, msg)
+        except notify.NotifyError as e:
+            log.info("telegram: panel button refused (%s), sending the link only", e)
+            self._show(c, text, kb(self._back(c)), msg)
+
+    def out_label(self, c: dict, out, st: dict) -> str:
+        """Выход из настроек ('direct' | 'direct@<адрес>' | 'block' | 'up:<id>') или фактический (номер туннеля)."""
+        L = c["lang"]
+        if out == "direct" or out == "direct@system":
+            return tr(L, "o_direct")
+        if isinstance(out, str) and out.startswith("direct@"):      # «Напрямую — адрес» (1.25.0)
+            return tr(L, "o_direct_at", False, addr=out[7:])
+        if out == "block":
+            return tr(L, "o_block")
+        for u in st.get("upstreams", []):
+            if out == "up:" + u["id"] or out == u.get("num"):
+                # без экранирования: подпись идёт параметром в tr, который экранирует сам (иначе «&amp;»; П54)
+                return tr(L, "o_exit", False, name=u["name"])
+        return str(out)
+
+    def show_server(self, c: dict, msg: dict | None) -> None:
+        """Раздел «Сервер»: состояние и выходы."""
+        L = c["lang"]
+        self._show(c, tr(L, "sv_title", host=self.ops.panel().get("host") or "—"),
+                   kb([(tr(L, "b_status"), "st"), (tr(L, "b_exits"), "ex")], self._back(c)), msg)
+
+    def show_status(self, c: dict, msg: dict | None) -> None:
+        L = c["lang"]
+        s = self.ops.status()
+        h = self.ops.host_info()
+        clients = self.ops.clients()
+        now = time.time()
+        online = sum(1 for x in clients if self._online(x, now))
+        v = s.get("version") or {}
+        cur = v.get("current") or self.ops.version
+        upd = bool(v.get("available") and v.get("latest"))
+        mem = h.get("memory")
+        tv = s.get("server_traffic") or {}
+        lines = [tr(L, "st_title"),
+                 tr(L, "st_panel_up", version=cur, latest=v["latest"]) if upd else tr(L, "st_panel", version=cur),
+                 tr(L, "st_awg", version=h.get("awg") or "—"),
+                 *self._engine_line(L, h.get("engine")),
+                 tr(L, "st_v4", ip=h["v4"]) if h.get("v4") else
+                 tr(L, "st_v4_fail" if h.get("v4_state") == "failed" else "st_v4_wait"),
+                 tr(L, "st_v6", ip=h["v6"]) if h.get("v6") else tr(L, "st_v6_none"),
+                 *self._dns_lines(L, h.get("dns")),
+                 tr(L, "st_uptime", time=fmt_uptime(h.get("uptime"), L)),
+                 tr(L, "st_ram", used=fmt_size(mem[0], L) if mem else "—", total=fmt_size(mem[1], L) if mem else "—"),
+                 tr(L, "st_online", online=online, total=len(clients)),
+                 tr(L, "st_traffic", size=fmt_size(tv.get("month_rx", 0) + tv.get("month_tx", 0), L)),
+                 tr(L, "st_ok" if s.get("server_ok") else "st_bad")]
+        rows = []
+        if upd:
+            rows.append([(tr(L, "b_update", False, version=v["latest"]), "up")])
+        rows.append([(tr(L, "b_refresh"), "st")] + self._back_server(c))
+        e = h.get("engine") or {}
+        png = self._card(L, "status", {
+            "ok": bool(s.get("server_ok")), "version": cur, "latest": v["latest"] if upd else None,
+            "awg": h.get("awg"), "engine": ("kernel", e.get("version")) if e.get("server") == "kernel" else
+            ("go",) if e.get("server") == "go" else None,
+            "v4": h.get("v4"), "v4_state": h.get("v4_state"), "v6": h.get("v6"), "dns": h.get("dns"),
+            "uptime": h.get("uptime"), "memory": (size_parts(mem[0], L), size_parts(mem[1], L)) if mem else None,
+            "online": online, "total": len(clients),
+            "month": size_parts(tv.get("month_rx", 0) + tv.get("month_tx", 0), L)})
+        if png is not None:
+            self._show_card(c, "status", png, "", kb(*rows), msg)
+        else:
+            self._show(c, "\n".join(lines), kb(*rows), msg)
+
+    @staticmethod
+    def _engine_line(L: str, e: dict | None) -> list[str]:
+        """«Движок»: модуль ядра (с версией) или amneziawg-go; сервер ещё не прочитан — строки нет."""
+        e = e or {}
+        if e.get("server") == "kernel":
+            return [tr(L, "st_engine_kernel", version=e.get("version") or "?")]
+        if e.get("server") == "go":
+            return [tr(L, "st_engine_go")]
+        return []
+
+    @staticmethod
+    def _dns_lines(L: str, d: dict | None) -> list[str]:
+        """Строки «DNS на сервере» для экрана состояния: выключен, работает (со счётчиками) или ошибка."""
+        if not d:
+            return [tr(L, "st_dns_off")]
+        if d.get("state") != "on":
+            return [tr(L, "st_dns_err")]
+        enc = d.get("encrypt") or "plain"
+        mode = {"doh": "DoH", "dot": "DoT"}.get(enc) or tr(L, "st_dns_plain")
+        out = [tr(L, "st_dns_on", addr=d.get("listen") or "—", mode=mode)]
+        if d.get("queries") is not None:
+            out.append(tr(L, "st_dns_stats", q=d["queries"], c=d.get("cached") or 0))
+        if d.get("upstream_error"):
+            out.append(tr(L, "st_dns_upfail"))
+        return out
+
+    def _exit_line(self, c: dict, u: dict, st: dict) -> str:
+        L = c["lang"]
+        h = self.ops.health(u["id"])
+        if not u.get("enabled", True):
+            return tr(L, "ex_off", name=u["name"])
+        eff = self.ops.resolve("up:" + u["id"], st)
+        to = self.out_label(c, eff, st)
+        if h.get("healthy"):
+            if self.ops.over_quota(u):
+                return tr(L, "ex_quota", name=u["name"], to=to)
+            return tr(L, "ex_up", name=u["name"])
+        return tr(L, "ex_down", name=u["name"], to=to)
+
+    @staticmethod
+    def _online(x: dict, now: float) -> bool:
+        hs = (x.get("live") or {}).get("handshake") or 0
+        return bool(x.get("enabled")) and hs > 0 and now - hs < ONLINE
+
+    @staticmethod
+    def _name(x: dict) -> str:
+        return x.get("name") or x.get("ip") or x["public_key"][:8]
+
+    def _icon(self, x: dict, now: float) -> str:
+        if not x.get("enabled"):
+            return "⏸"
+        return "🟢" if self._online(x, now) else "⚪"
+
+    def show_clients(self, c: dict, page: int, msg: dict | None) -> None:
+        L = c["lang"]
+        clients = sorted(self.ops.clients(), key=lambda x: self._name(x).casefold())
+        if not clients:
+            self._show(c, tr(L, "cl_empty"), kb([(tr(L, "b_add"), "add")], self._back(c)), msg)
+            return
+        pages = max(1, math.ceil(len(clients) / PAGE))
+        page = min(max(0, page), pages - 1)
+        now = time.time()
+        rows = [[(tr(L, "b_add"), "add")]]           # «Новый клиент» — первой кнопкой над списком
+        for x in clients[page * PAGE:(page + 1) * PAGE]:
+            month = self.ops.traffic_month(x["public_key"])
+            rows.append([(f"{self._icon(x, now)} {self._name(x)} · {fmt_size(month, L)}",
+                          "c:" + x["public_key"])])
+        if pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(("‹", f"cl:{page - 1}"))
+            nav.append((f"{page + 1}/{pages}", f"cl:{page}"))
+            if page < pages - 1:
+                nav.append(("›", f"cl:{page + 1}"))
+            rows.append(nav)
+        rows.append(self._back(c))
+        text = tr(L, "cl_title", n=len(clients)) + "\n" + tr(L, "cl_legend")
+        self._show(c, text, kb(*rows), msg)
+
+    def _client(self, pk: str) -> dict:
+        x = next((x for x in self.ops.clients() if x["public_key"] == pk), None)
+        if not x:
+            raise BotError("gone")
+        return x
+
+    def show_client(self, c: dict, pk: str, msg: dict | None, note: str = "") -> None:
+        """Карточка клиента. msg=None — новым сообщением внизу (после файлов), note — строка снизу."""
+        L = c["lang"]
+        x = self._client(pk)
+        st = self.ops.snapshot()
+        lim = (st.get("limits") or {}).get(pk) or {}
+        now = time.time()
+        lines = [f"<b>{html.escape(self._name(x))}</b>"]
+        if not x.get("enabled"):
+            ao = lim.get("auto_off") or ""
+            lines.append(tr(L, "cd_off_exp" if ao == "exp" else "cd_off_quota" if ao.startswith("quota:")
+                            else "cd_off"))
+        elif self._online(x, now):
+            lines.append(tr(L, "cd_online"))
+        else:
+            hs = (x.get("live") or {}).get("handshake") or 0
+            lines.append(tr(L, "cd_seen", ago=fmt_ago(now - hs, L)) if hs else tr(L, "cd_never"))
+        lines.append(tr(L, "cd_ip", ip=x.get("ip") or "—"))
+        tv = self.ops.traffic_view(pk)
+        lines.append(tr(L, "cd_traffic", month=fmt_size(tv.get("month_rx", 0) + tv.get("month_tx", 0), L),
+                        total=fmt_size(tv.get("total_rx", 0) + tv.get("total_tx", 0), L)))
+        if lim.get("expires"):
+            lines.append(tr(L, "cd_until", date=fmt_date(lim["expires"])))
+        if lim.get("quota"):
+            period = lim.get("period") or "month"
+            lines.append(tr(L, "cd_quota_" + period, used=fmt_size(self.ops.used(pk, period), L),
+                            quota=fmt_size(lim["quota"], L)))
+        lines.append(tr(L, "cd_exit_bal" if self.ops.balanced(pk) else "cd_exit",
+                        out=self.out_label(c, self.ops.client_out(pk), st)))
+        if not x.get("has_config"):
+            lines.append("")
+            lines.append(tr(L, "cd_app"))
+        row1 = [(tr(L, "b_off"), "off:" + pk) if x.get("enabled") else (tr(L, "b_on"), "on:" + pk)]
+        if x.get("has_config"):
+            row1.append((tr(L, "b_config"), "cfg:" + pk))
+        row2 = [(tr(L, "b_share"), "sh:" + pk), (tr(L, "b_delete"), "dl:" + pk)]
+        row3 = []
+        if lim.get("expires"):
+            row3.append((tr(L, "b_days"), "d30:" + pk))
+        if lim.get("quota"):
+            row3.append((tr(L, "b_gb"), "g10:" + pk))
+        if note:
+            lines += ["", note]
+        self._show(c, "\n".join(lines), kb(row1, row2, row3, [(tr(L, "b_list"), "cl:0")] + self._back(c)), msg)
+
+    def _exit_icon(self, u: dict) -> str:
+        if not u.get("enabled", True):
+            return "⚪"
+        if not self.ops.health(u["id"]).get("healthy"):
+            return "🔴"
+        return "📦" if self.ops.over_quota(u) else "🟢"
+
+    def show_exits(self, c: dict, msg: dict | None, note: str = "") -> None:
+        """Список выходов кнопками; выход открывает свой экран (проверить, сделать основным)."""
+        L = c["lang"]
+        st = self.ops.snapshot()
+        ups = st.get("upstreams") or []
+        d = st["routing"]["default"]
+        bal = bool((st["routing"].get("balance") or {}).get("on"))
+        lines = [tr(L, "ex_title"), tr(L, "st_balance") if bal else tr(L, "st_default", out=self.out_label(c, d, st)), ""]
+        if bal:
+            lines[-1:-1] = [tr(L, "st_balance_hint")]
+            d = None            # звезда «основной» не стоит ни на одном: выход выбирает балансировка
+        lines.append(tr(L, "ex_pick") if ups else tr(L, "ex_none"))
+        if note:
+            lines += ["", note]
+        star = lambda out: " ⭐" if d == out else ""
+        rows = [[("🏠 " + tr(L, "ex_direct", False) + star("direct"), "eo:direct")]]
+        rows += [[(f"{self._exit_icon(u)} {u['name']}{star('up:' + u['id'])}", "eo:" + u["id"])] for u in ups]
+        rows.append([(tr(L, "b_refresh"), "ex")] + self._back_server(c))
+        self._show(c, "\n".join(lines), kb(*rows), msg)
+
+    def show_exit(self, c: dict, uid: str, msg: dict | None, note: str = "") -> None:
+        """Экран одного выхода ('direct' или id): состояние, трафик за месяц и две кнопки."""
+        L = c["lang"]
+        st = self.ops.snapshot()
+        d = st["routing"]["default"]
+        if uid == "direct":
+            out = "direct"
+            lines = [f"<b>🏠 {html.escape(tr(L, 'ex_direct', False))}</b>", tr(L, "eo_direct")]
+        else:
+            u = next((u for u in st.get("upstreams", []) if u["id"] == uid), None)
+            if not u:
+                raise BotError("gone_exit")
+            out = "up:" + uid
+            lines = [f"<b>🌐 {html.escape(u['name'])}</b>", self._exit_line(c, u, st)]
+        if d == out:
+            lines.append(tr(L, "eo_default"))
+        if self.ops.acct_ok():
+            tv = self.ops.out_view(uid)
+            lines.append(tr(L, "eo_month", size=fmt_size(tv.get("month_rx", 0) + tv.get("month_tx", 0), L)))
+        if note:
+            lines += ["", note]
+        self._show(c, "\n".join(lines),
+                   kb([(tr(L, "b_probe_one"), "pr:" + uid), (tr(L, "b_make_default"), "df:" + out)],
+                      [(tr(L, "b_back_exits"), "ex")] + self._back(c)), msg)
+
+    # ------------------------------------------------------------- действия
+    def do_days(self, c: dict, pk: str) -> str:
+        x = self._client(pk)
+        L = (self.ops.snapshot().get("limits") or {}).get(pk) or {}
+        exp = int(max(time.time(), L.get("expires") or 0) + 30 * DAY)
+        self.ops.apply_limits(pk, exp, L.get("quota"), L.get("period") or "month")
+        self.ops.audit(Msg("tg.act_days", name=self._name(x), date=fmt_date(exp)))
+        return tr(c["lang"], "ok_days", False, name=self._name(x), date=fmt_date(exp))
+
+    def do_gb(self, c: dict, pk: str) -> str:
+        x = self._client(pk)
+        L = (self.ops.snapshot().get("limits") or {}).get(pk) or {}
+        quota = int((L.get("quota") or 0) + 10 * GB)
+        self.ops.apply_limits(pk, L.get("expires"), quota, L.get("period") or "month")
+        gb = f"{quota / GB:.2f}".rstrip("0").rstrip(".")        # не «1e+03» при лимите от 1000 ГБ
+        self.ops.audit(Msg("tg.act_gb", name=self._name(x), gb=gb))
+        return tr(c["lang"], "ok_gb", False, name=self._name(x), gb=gb)
+
+    def do_add(self, c: dict, name: str) -> None:
+        pk = self.ops.add_client(name.strip()[:60])
+        x = self._client_wait(pk)
+        ok = tr(c["lang"], "add_ok", name=self._name(x) if x else name)
+        self.send_config(c, pk)
+        if x:                         # карточка нового клиента — меню под файлами
+            self.show_client(c, pk, None, ok)
+        else:
+            self.show_menu(c, None, ok, move=True)
+
+    def _client_wait(self, pk: str) -> dict | None:
+        """Новый клиент появляется в списке движка после следующего опроса сервера."""
+        for _ in range(20):
+            x = next((x for x in self.ops.clients() if x["public_key"] == pk), None)
+            if x:
+                return x
+            self.ops.refresh_clients()
+            time.sleep(0.5)
+        return None
+
+    def send_config(self, c: dict, pk: str) -> None:
+        L = c["lang"]
+        try:
+            cfg = self.ops.client_config(pk)
+        except Exception as e:  # noqa: BLE001
+            key = getattr(getattr(e, "detail", None) or getattr(e, "msg", None), "key", "")
+            if key == "usr.no_key":
+                raise BotError("cd_app") from None
+            if key == "err.not_found":
+                raise BotError("gone") from None
+            raise
+        name = cfg.get("name") or pk[:8]
+        caption = tr(L, "cfg_caption", name=name)
+        try:
+            notify.send_photo(c["token"], c["chat_id"], qr.png(cfg["conf"]), caption, c["via"], html=True)
+            caption = html.escape(name, quote=False)    # подпись — разметка HTML: «Мама <3» иначе не отправится
+        except qr.QRTooBig:
+            caption += "\n" + tr(L, "cfg_qr_big")
+        notify.send_document(c["token"], c["chat_id"], cfg.get("filename") or "awg.conf",
+                             cfg["conf"].encode(), caption, c["via"], html=True)
+        if cfg.get("link"):
+            self._send(c, tr(L, "cfg_link") + "\n<code>" + html.escape(cfg["link"]) + "</code>")
+        self.ops.audit(Msg("tg.act_config", name=name))
+
+    def do_share(self, c: dict, pk: str) -> str:
+        """Личная ссылка — строкой в карточке клиента."""
+        x = self._client(pk)
+        url = self.ops.share(pk)
+        self.ops.audit(Msg("tg.act_share", name=self._name(x)))
+        text = tr(c["lang"], "share", name=self._name(x), url=url)
+        invite = self.ops.invite(pk)
+        return text + "\n\n" + tr(c["lang"], "share_bot", url=invite) if invite else text
+
+    def ask_delete(self, c: dict, pk: str, msg: dict | None) -> None:
+        """Удаление — только после подтверждения; «Отмена» возвращает карточку клиента."""
+        L = c["lang"]
+        x = self._client(pk)
+        self._show(c, tr(L, "del_ask", name=self._name(x)),
+                   kb([(tr(L, "b_delete_go"), "dlgo:" + pk), (tr(L, "b_cancel"), "c:" + pk)]), msg)
+
+    def do_delete(self, c: dict, pk: str) -> str:
+        x = self._client(pk)
+        self.ops.delete_client(pk)
+        self.ops.audit(Msg("tg.act_delete", name=self._name(x)))
+        for _ in range(20):           # список клиентов движка обновится после следующего опроса сервера
+            if not any(y["public_key"] == pk for y in self.ops.clients()):
+                break
+            self.ops.refresh_clients()
+            time.sleep(0.5)
+        return tr(c["lang"], "ok_deleted", False, name=self._name(x))
+
+    def _exit_name(self, uid: str, lang: str = "en") -> str:
+        if uid == "direct":
+            return tr(lang, "ex_direct", False)
+        u = next((u for u in self.ops.snapshot().get("upstreams", []) if u["id"] == uid), None)
+        if not u:
+            raise BotError("gone_exit")
+        return u["name"]
+
+    def do_probe(self, c: dict, uid: str) -> str:
+        """Проверка выхода → строка для экрана «Выходы»."""
+        L = c["lang"]
+        name = self._exit_name(uid, L)
+        r = self.ops.probe("direct" if uid == "direct" else "up:" + uid)
+        if r.get("ok"):
+            cc = r.get("cc") or ""
+            text = tr(L, "pr_ok", name=name, ip=r.get("ip") or "?", cc=f"({cc})" if cc else "",
+                      ms=r.get("latency_ms") if r.get("latency_ms") is not None else "?")
+            if r.get("udp") is not None:
+                text += tr(L, "pr_udp" if r["udp"] else "pr_no_udp", False)
+        else:
+            err = r.get("error")
+            text = tr(L, "pr_fail", name=name, error=self._err(err, L) if isinstance(err, Msg) else (err or "?"))
+        return text.replace("  ", " ")
+
+    def do_default(self, c: dict, out: str) -> str:
+        st = self.ops.snapshot()
+        if out != "direct" and not any(out == "up:" + u["id"] for u in st.get("upstreams", [])):
+            raise BotError("gone_exit")
+        self.ops.set_default(out)
+        label = self.out_label(c, out, st)
+        # в журнал панели — сообщением: его переводит браузер на язык панели, а не бота
+        name = next((u["name"] for u in st.get("upstreams", []) if out == "up:" + u["id"]), "")
+        self.ops.audit(Msg("tg.act_default", name=name) if name else Msg("tg.act_default_direct"))
+        return tr(c["lang"], "df_ok", False, out=label)
+
+    def do_route(self, c: dict, text: str) -> None:
+        L = c["lang"]
+        target = text.strip().split()[0][:253] if text.strip() else ""
+        try:
+            r = self.ops.trace(target)
+        except Exception as e:  # noqa: BLE001
+            key = getattr(getattr(e, "detail", None), "key", "")
+            if key in ("tr.ipv6", "tr.ipv6_only"):
+                raise BotError("rt_v6") from None
+            if key == "err.ip_or_domain":
+                raise BotError("rt_bad") from None
+            raise
+        st = self.ops.snapshot()
+        ip = r.get("ip") or target
+        out = self.out_label(c, r.get("result"), st)
+        lines = [tr(L, "rt_res_ip", ip=ip, out=out) if ip == target
+                 else tr(L, "rt_res", target=target, ip=ip, out=out)]
+        steps = r.get("steps") or []
+        match = next((s for s in steps if isinstance(s, Msg) and s.key == "tr.match"), None)
+        cloud = next((s for s in steps if isinstance(s, Msg) and s.key == "tr.cloud_meta"), None)
+        if cloud:                              # служебный адрес облака: закрыт всегда, не «по умолчанию» (П50)
+            lines.append(uitext.text(L, cloud))
+        elif any(isinstance(s, Msg) and s.key == "tr.local" for s in steps):
+            lines = [tr(L, "rt_res_ip", ip=ip, out=tr(L, "o_direct")), tr(L, "rt_local")]
+        elif match:
+            lines.append(tr(L, "rt_rule", list=self.ops.list_name(match.p.get("list")),
+                            net=match.p.get("net")))
+        else:
+            lines.append(tr(L, "rt_default"))
+        eff, res = r.get("effective"), r.get("result")
+        if res and res.startswith("up:") and _tunnel_num(st, res) != eff:
+            lines.append(tr(L, "rt_now", out=self.out_label(c, eff, st)))
+        self._send(c, "\n".join(lines))
+
+    def do_backup(self, c: dict) -> None:
+        try:
+            self.ops.backup(c)
+        except Exception as e:  # noqa: BLE001
+            raise BotError("bk_fail", error=self._err(e, c["lang"])) from None
+        self.ops.audit(Msg("tg.act_backup"))
+        self.show_menu(c, None, tr(c["lang"], "bk_done"), move=True)    # меню — под файлом
+
+    def ask_update(self, c: dict, msg: dict | None = None) -> None:
+        L = c["lang"]
+        v = self.ops.update_info()
+        if not v.get("available") or not v.get("latest"):
+            self._show(c, tr(L, "up_none", version=v.get("current") or self.ops.version), kb(self._back(c)), msg)
+            return
+        self._show(c, tr(L, "up_ask", version=v["latest"]),
+                   kb([(tr(L, "b_update_go"), "upgo"), (tr(L, "b_cancel"), "m")]), msg)
+
+    def do_update(self, c: dict, msg: dict | None = None) -> None:
+        L = c["lang"]
+        v = self.ops.update_info()
+        if not v.get("available") or not v.get("latest"):
+            self._show(c, tr(L, "up_none", version=v.get("current") or self.ops.version), kb(self._back(c)), msg)
+            return
+        self.ops.start_update(v["latest"])
+        self._st["update"] = {"to": v["latest"], "t": time.time()}
+        self._save()
+        self.ops.audit(Msg("tg.act_update", version=v["latest"]))
+        self._show(c, tr(L, "up_started", version=v["latest"]), kb(self._back(c)), msg)
+
+
+def _plain(text: str) -> str:
+    """Текст без разметки HTML — так Telegram считает длину подписи."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+
+def _tunnel_num(st: dict, out: str):
+    """'up:<id>' → номер туннеля выхода (так выход выглядит после resolve, когда он работает)."""
+    u = next((u for u in st.get("upstreams", []) if "up:" + u["id"] == out), None)
+    return u.get("num") if u else None
