@@ -348,10 +348,19 @@ class FakeUpstream:
                 r = answer(data, True)
                 self.request.sendall(struct.pack("!H", len(r)) + r)
 
-        self.udp = socketserver.ThreadingUDPServer(("127.0.0.1", 0), U)
-        port = self.udp.server_address[1]
         socketserver.ThreadingTCPServer.allow_reuse_address = True
-        self.tcp = socketserver.ThreadingTCPServer(("127.0.0.1", port), T)
+        for attempt in range(20):
+            self.udp = socketserver.ThreadingUDPServer(("127.0.0.1", 0), U)
+            port = self.udp.server_address[1]
+            try:
+                self.tcp = socketserver.ThreadingTCPServer(("127.0.0.1", port), T)
+                break
+            except OSError:
+                # тот же номер у TCP уже занят (исходящее соединение другого теста): ещё раз с другим портом —
+                # иначе «Address already in use» изредка ронял тест на машине GitHub (net-tests, 2026-11-28)
+                self.udp.server_close()
+                if attempt == 19:
+                    raise
         self.port = port
         for srv in (self.udp, self.tcp):
             threading.Thread(target=srv.serve_forever, daemon=True).start()
