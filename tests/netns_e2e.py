@@ -94,18 +94,6 @@ for name in sys.argv[2].split(","):
     out.append([who, round(time.monotonic() - t0, 3)])
 print(json.dumps(out))
 """
-# как dnsproxy.py открывает соединение DoH (ALPN h2, имя dns.google, начало HTTP/2) — и держит его: сколько байт уходит
-# до первого запроса (для правила «отбросить после рукопожатия»)
-DOH_HANDSHAKE = r"""
-import os,socket,ssl,sys,time
-sys.path.insert(0, os.getcwd())
-from app.dohttp import H2_PREFACE
-ctx = ssl.create_default_context(cafile=sys.argv[2]); ctx.set_alpn_protocols(["h2", "http/1.1"])
-s = socket.create_connection(("8.8.8.8", int(sys.argv[1])), 5)
-s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-t = ctx.wrap_socket(s, server_hostname="dns.google"); t.sendall(H2_PREFACE)
-print("ok", flush=True); time.sleep(30)
-"""
 CLIENT = r"""
 import socket,sys
 s=socket.socket(); s.settimeout(2)
@@ -347,23 +335,16 @@ def dns_fallback():
                 check("П31: следующие имена — у DoH, а не у запасного", [w for w, _ in got[2:]] == ["shared"] * 3)]
 
     # настоящая блокировка в пути
-    # сколько байт уходит от dnsproxy.py к DoH до первого запроса: правило «замерзания» — чуть больше
-    block(f"ip daddr 8.8.8.8 tcp dport {port} ct state != invalid counter")      # ct — модуль conntrack загружен
-    sysctl("inet", "net.netfilter.nf_conntrack_acct", 1)        # счёт байт соединений — для ct original bytes
-    h = subprocess.Popen(["nsenter", "--net=/var/run/netns/amz", "--", sys.executable, "-c", DOH_HANDSHAKE, str(port),
-                          crt], stdout=subprocess.PIPE, text=True)
-    h.stdout.readline()
-    time.sleep(1.0)
-    rules = json.loads(sh("inet", "nft", "-j", "list", "table", "ip", "p31").stdout)["nftables"]
-    hs = next(x["counter"]["bytes"] for r in rules if "rule" in r for x in r["rule"]["expr"] if "counter" in x)
-    h.kill()
-    h.wait()
-    print(f"    рукопожатие TLS и начало HTTP/2: {hs} байт от dnsproxy.py к DoH")
     for label, rule in (("SYN отбрасывается", "tcp flags & (syn|ack) == syn drop"),
                         ("RST после ClientHello", "ip length > 120 reject with tcp reset"),
                         ("ClientHello отбрасывается", "ip length > 120 drop"),
-                        # запрос: имя в 200 букв — сам по себе больше запаса в 200 байт
-                        ("замерзание после рукопожатия", f"ct original bytes > {hs + 200} drop")):
+                        # Отбрасываются пакеты dnsproxy.py, в которых начинается запись TLS с данными (тип 0x17): в TLS 1.3
+                        # это всё после рукопожатия — начало HTTP/2, запросы, контрольный «. NS». ClientHello (0x16),
+                        # ChangeCipherSpec с Finished (0x14 в начале пакета) и пустые подтверждения TCP проходят, поэтому
+                        # рукопожатие доходит. Прежний порог «байты рукопожатия + 200» зависел от числа подтверждений TCP и
+                        # пропускал короткий «. NS» на новом соединении: проверка проходила, и следующее имя отвечал DoH
+                        # (красный 4 раза из 40 на машинах GitHub, проверка Ж4)
+                        ("замерзание после рукопожатия", "@ih,0,8 0x17 drop")):
         block(f"ip daddr 8.8.8.8 tcp dport {port} {rule}")
         p = start()
         was = handshakes()

@@ -45,6 +45,24 @@ SETTLE_SECS = 90         # с: после смены движка или пер�
 MEM_ALERT, MEM_OK = 90, 85   # % занятой памяти: выше — тревога, ниже — снова норма
 CPU_ALERT, CPU_OK = 95, 80   # % загрузки процессора
 RES_ALERT_SECS = 300     # с: столько значение должно держаться выше порога, чтобы стать тревогой
+WMEM_MIN = 16 << 20      # байт: net.core.wmem_max, которое панель советует поднять в LXC (wmem_msg), если nft не назвал больше
+
+
+def wmem_msg(err: str) -> Msg | None:
+    """Отказ nft по размеру (Ж3 проверки Ж): без CAP_NET_ADMIN в начальном пространстве имён (Docker в
+    непривилегированном LXC) netlink берёт за раз не больше net.core.wmem_max хоста — по умолчанию 212 992 байта, а таблица
+    панели со списком России (12 302 сети) больше. nft пишет «Message too long» (musl — «too large») и «Please, rise
+    /proc/sys/net/core/wmem_max on the host namespace. Hint: N bytes»; по-английски и без слова, где это делать. → текст,
+    что сделать на хосте (значение — не меньше подсказки nft и WMEM_MIN, с запасом на рост списков), или None. Делить
+    таблицу на части нельзя: правила постояли бы без списков (путь мимо выхода)."""
+    if "Message too l" not in err and "wmem_max" not in err:
+        return None
+    need = WMEM_MIN
+    hint = err.rsplit("Hint:", 1)[1].split()[0] if "Hint:" in err else ""
+    if hint.isdigit():
+        need = max(need, -(-int(hint) // (1 << 20)) << 20)           # вверх до целых МБ
+    return Msg("err.nft_wmem", cmd=f"sysctl -w net.core.wmem_max={need}",
+               keep=f"echo net.core.wmem_max={need} > /etc/sysctl.d/90-awg-router.conf")
 
 
 class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMixin, DiagMixin, AddrsMixin):
@@ -559,6 +577,9 @@ class Engine(TunnelsMixin, RoutesMixin, SniMixin, DnsMixin, ServerMixin, SpeedMi
                 except system.SysError as e:
                     if not present:
                         self._close_forward(t)  # новая сеть без таблицы панели: не «без правил» (П14)
+                    big = wmem_msg(str(e))
+                    if big:
+                        raise system.SysError(big) from e
                     if self.limits_on() and self.rule_limits(st) and "limit" in str(e) and \
                             self._kernel_blames(t, st, sniff, quic, "_rlim_ok"):
                         # ядро без «limit» в nftables (урезанные сборки): правила — без ограничения скорости, остальное

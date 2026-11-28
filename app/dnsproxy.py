@@ -73,12 +73,24 @@ TTL_MAX = 3600              # дольше часа не храним, даже 
 NEG_TTL_MAX = 300           # «нет такого имени» / «нет записей» — не дольше 5 минут
 NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
 STATS_EVERY = 15
-MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
+# Одновременных запросов к серверам; больше — отказ (SERVFAIL). Столько же — отдельно у запросов, которые сразу идут к
+# запасному DNS (путь «напрямую» проверяется или «не отвечает»; inflight_fb, Ж2 проверки Ж): в начале блокировки места
+# держат запросы, которые ждут заблокированные общие серверы (10–20 с), и на большом сервере (300 и больше новых имён в
+# секунду) все клиенты «напрямую» 15 с получали SERVFAIL, хотя запасной уже отвечал сразу.
+MAX_INFLIGHT = 512
 JOIN_MAX = 1024             # клиентов, которые ждут один и тот же запрос в пути (Д1, Е3); больше — отказ (SERVFAIL)
 JOIN_ALL = 8192             # и всех таких ждущих вместе: MAX_INFLIGHT разных «мёртвых» имён по JOIN_MAX — гигабайты
 # с: повтор запроса, который ждёт общие серверы дольше, когда путь «напрямую» с запасным столько же ничего не ответил, —
 # проверка пути сразу (Е1, _resolve). Столько ждёт одна попытка шифрованного DNS: на исправном пути ответ приходит раньше
 JOIN_CHECK = 5.0
+# с: повтор запроса, а тот всё ещё ждёт шифрованный DNS дольше, — одна вторая попытка того же запроса на новом соединении,
+# мимо пула (Ж1 проверки Ж; _hedge). До Д1 повтор шёл к серверу своим запросом и выручал потерянный ответ (сервер с
+# потерями, «мигающая» блокировка); с объединением повтор ждал срока первого — 6–15 с вместо 1–4, а на тихом пути ещё и
+# начинал проверку пути (JOIN_CHECK), и имена на её время уходили к запасному без шифрования, хотя путь работал.
+HEDGE_AFTER = 1.5
+# вторых попыток одновременно на путь: в начале настоящей блокировки каждая ждёт до конца первого запроса (10–20 с)
+# соединением к заблокированному серверу — без предела при 100 новых именах в секунду память росла вдвое (40 → 84 МБ)
+HEDGE_MAX = 32
 # Путь «напрямую» и запасной DNS (cfg direct_fallback — записи, как у своего DNS; 1.25.0: включается галочкой и
 # вписывается вручную или кнопкой «Применить для …»). Серверы DNS из настроек не отвечают (из России, Китая и Ирана по
 # DoH/DoT это бывает) — имена пути спрашиваются у запасного, а серверы DNS пробуются снова не раньше чем через
@@ -137,6 +149,9 @@ RC_SERVFAIL, RC_NXDOMAIN, RC_REFUSED = 2, 3, 5
 # медленными именами), обычный DNS — второй попыткой, обрезанный ответ (TC) — уже ответ. Задаётся в задаче проверки:
 # подмены _enc/_udp в тестах этим не задеты.
 _CHECKING: contextvars.ContextVar = contextvars.ContextVar("awgr_dns_check", default=False)
+# Запрос — на своём новом соединении DoT/DoH, мимо пула и его очереди: вторая попытка (Ж1) не должна ждать соединения,
+# которое держит сам первый запрос или «мёртвое» имя. Задаётся в задаче второй попытки (_hedge).
+_FRESH: contextvars.ContextVar = contextvars.ContextVar("awgr_dns_fresh", default=False)
 
 
 def check_query() -> bytes:
@@ -491,6 +506,19 @@ async def doh_query(conn: Conn, msg: bytes, host: str, path: str = "/dns-query")
 
 
 # ---------------------------------------------------------------- сервер
+class Asking:
+    """Запрос в пути, который ждут одинаковые запросы (Д1): сколько ждут сверх первого (waiting, Е3), когда начат; fb —
+    место среди запросов к запасному (Ж2): начат, когда путь «напрямую» проверялся или «не отвечал», и идёт к запасному;
+    checked — повтор уже начал проверку пути (Е1, одна на запрос); вторая попытка (Ж1): hedge — её задача, early — её
+    ответ, пока первый не пришёл (future; done — ответ уже есть или ждать вторую попытку больше незачем), spare — её
+    SERVFAIL (ответ, если первый не получит никакого), path — состояние пути, взятое до ожидания (DirectPath)."""
+    __slots__ = ("waiting", "started", "fb", "checked", "hedge", "early", "spare", "path")
+
+    def __init__(self, fb: bool = False):
+        self.waiting, self.started, self.fb, self.checked = 0, time.monotonic(), fb, False
+        self.hedge = self.early = self.spare = self.path = None
+
+
 class DirectPath:
     """Серверы DNS на одном пути «напрямую»: когда последний раз ответили (ok_at) и когда проверка решила «не отвечают»
     (fail_at), down — не отвечают (имена у запасного DNS), retry_at — когда пробовать снова (в фоне), probe — идущая
@@ -527,6 +555,8 @@ class Proxy:
         self.dpaths: dict[int, DirectPath] = {}
         self.last_error, self.last_error_at = "", 0.0
         self.inflight = 0
+        self.inflight_fb = 0                # и тех, что сразу идут к запасному (Ж2)
+        self.hedging: dict[int, int] = {}   # метка пути → вторых попыток сейчас (Ж1, HEDGE_MAX)
         self.pools: dict[tuple, Pool] = {}
         self.dom_lists: dict[str, set[str]] = {}
         self._dom_files: dict[str, tuple] = {}       # путь → (признаки файла, разобранное): SIGHUP не разбирает заново
@@ -534,8 +564,8 @@ class Proxy:
         self.pending: dict[str, int] = {}            # адрес → секунд, ещё не отправленные в nftables
         self._flush_at = 0.0
         self.asking: dict[tuple, asyncio.Future] = {}    # одинаковые запросы в пути (Д1): ключ → общая задача
-        self.joins: dict[asyncio.Future, list] = {}      # общая задача → [сколько ждут сверх первого (Е3), когда начата]
-        self.followers = 0                               # их всех вместе
+        self.joins: dict[asyncio.Future, Asking] = {}    # общая задача → её запрос (ждущие, места, вторая попытка)
+        self.followers = 0                               # ждущих сверх первого у всех вместе (Е3)
         self.load()
 
     def load(self) -> None:
@@ -696,16 +726,22 @@ class Proxy:
         """Адреса (адрес, срок) — в набор: одна транзакция nft на пачку (Е2 проверки исправлений П31). Слишком большую
         транзакцию nft не отправит, если у него нет CAP_NET_ADMIN в начальном пространстве имён (Docker в LXC): netlink
         берёт не больше net.core.wmem_max (по умолчанию ~5000 адресов), nft отвечает «Message too long» (musl — «too
-        large»). Тогда — частями вдвое меньше, и этот предел запоминается (_set_tx) для следующих пачек."""
+        large»). Тогда — частями вдвое меньше, и этот предел запоминается (_set_tx) для следующих пачек. Отказ по размеру
+        и у части SET_TX_MIN (меньше не делим) — запись кончается: остальные части такого же размера nft отверг бы так же,
+        а каждый запуск читает всю таблицу панели (со списком России — 135–160 мс на 1 vCPU)."""
         lim, done = _set_tx[0] or len(items) or 1, 0
         while done < len(items):
             part = items[done:done + lim]
             err = Proxy._nft_tx(table, name, part)
-            if err and len(part) > SET_TX_MIN and ("Message too l" in err or "wmem_max" in err):
+            big = bool(err) and ("Message too l" in err or "wmem_max" in err)
+            if big and len(part) > SET_TX_MIN:
                 lim = _set_tx[0] = max(SET_TX_MIN, len(part) // 2)
                 continue                                 # та же часть — вдвое меньшими транзакциями
             if err:
                 print(f"dnsproxy: nft: {err[:200]}", flush=True)
+            if big:
+                print(f"dnsproxy: nft: {len(items) - done} addresses not written", flush=True)
+                return
             done += len(part)
 
     @staticmethod
@@ -823,38 +859,51 @@ class Proxy:
             stage = bool(dp.down or _busy(dp.probe))
         wkey = key + (tcp, bool(fallback), stage)
         asking = self.__dict__.setdefault("asking", {})          # тесты собирают Proxy и через __new__
-        joins = self.__dict__.setdefault("joins", {})            # задача → [сколько ждут сверх первого, когда начата]
+        joins = self.__dict__.setdefault("joins", {})            # задача → её запрос (Asking)
         task = asking.get(wkey)
         if task is None:
-            if self.inflight >= MAX_INFLIGHT:
+            # Места: запрос, который сразу идёт к запасному (stage), — среди своих (Ж2), остальные — среди тех, кто ждёт
+            # серверы DNS. Запрос к запасному короткий (обычно UDP, доли секунды), а места ждущих общие серверы в начале
+            # блокировки заняты по 10–20 с.
+            busy = "inflight_fb" if stage else "inflight"
+            if self.__dict__.get(busy, 0) >= MAX_INFLIGHT:
                 self.stats["errors"] += 1
+                self.stats[busy + "_full"] = self.stats.get(busy + "_full", 0) + 1
                 return error_reply(query, q, RC_SERVFAIL)
-            self.inflight += 1
+            setattr(self, busy, self.__dict__.get(busy, 0) + 1)
+            rec = Asking(stage)
             # своя задача, а не задача первого клиента: его отмена (клиент ушёл) не отменяет ответ остальным
-            task = asking[wkey] = asyncio.ensure_future(self._lookup(query, q, mark, tcp, servers, fallback, key))
-            joins[task] = [0, time.monotonic()]
-            task.add_done_callback(lambda t: self._asked(wkey, t))
+            task = asking[wkey] = asyncio.ensure_future(self._lookup(query, q, mark, tcp, servers, fallback, key, rec))
+            joins[task] = rec
+            task.add_done_callback(lambda t: self._asked(wkey, t, rec))
         else:
             # Ждущие не занимают мест MAX_INFLIGHT (повторы не вытесняют другие имена), но и без предела не копятся (Е3):
             # поток тысяч одинаковых запросов к имени без ответа держал каждый в памяти до конца задачи (35 → 191–218 МБ
             # за 30 с). Сверх JOIN_MAX у одной задачи или JOIN_ALL у всех вместе — сразу SERVFAIL, как сверх MAX_INFLIGHT.
-            info = joins.setdefault(task, [0, time.monotonic()])
-            if info[0] >= JOIN_MAX or self.__dict__.get("followers", 0) >= JOIN_ALL:
+            rec = joins.get(task)
+            if rec is None:                     # задача уже кончилась (_asked убрал её) — ответ готов, ждать нечего
+                rec = Asking()
+            if rec.waiting >= JOIN_MAX or self.__dict__.get("followers", 0) >= JOIN_ALL:
                 self.stats["errors"] += 1
                 self.stats["join_full"] = self.stats.get("join_full", 0) + 1
                 return error_reply(query, q, RC_SERVFAIL)
-            info[0] += 1
-            self.followers = self.__dict__.get("followers", 0) + 1
+            if task in joins:
+                rec.waiting += 1
+                self.followers = self.__dict__.get("followers", 0) + 1
             self.stats["joined"] = self.stats.get("joined", 0) + 1
+            age = time.monotonic() - rec.started
+            if age >= HEDGE_AFTER:
+                self._hedge(rec, query, q, mark, tcp, servers)
             # Повтор, а первый запрос ждёт общие серверы уже JOIN_CHECK, и этим путём за это время не ответило ничего, —
             # проверка пути сейчас, а не когда первый дождётся срока (Е1). Без объединения проверку раньше начинал более
             # быстрый повтор: первому запросу могло достаться «замёрзшее» соединение пула (у него срок — ENC_TIMEOUT × 2 на
             # сервер), а повтор шёл по новому; с объединением запрос один, и в начале блокировки «популярное» имя ждало до
-            # 15 с вместо 11. Медленное имя на исправном пути проверку не начинает: другие имена в это время отвечаются
-            # (ok_at свежее); одна такая проверка на запрос.
-            if dp is not None and not stage and time.monotonic() - info[1] >= JOIN_CHECK \
+            # 15 с вместо 11. Медленное имя проверку не начинает, если путь в это время отвечал: на занятом пути — другие
+            # имена, на тихом — вторая попытка этого же запроса (Ж1: она отвечает раньше JOIN_CHECK, ok_at свежее). Одна
+            # такая проверка на запрос.
+            if dp is not None and not stage and not rec.checked and age >= JOIN_CHECK \
                     and time.time() - dp.ok_at >= JOIN_CHECK:
-                info[1] = float("inf")
+                rec.checked = True
                 self.stats["join_checks"] = self.stats.get("join_checks", 0) + 1
                 self._doubt(dp, mark, tcp, True)
         reply = await asyncio.shield(task)
@@ -864,19 +913,106 @@ class Proxy:
                 return error_reply(query, q, RC_SERVFAIL)
         return _for_client(reply, query, q)
 
-    def _asked(self, wkey: tuple, task) -> None:
-        """Запрос, которого ждали (Д1), кончился: место клиента свободно, следующий такой же — снова к серверам."""
-        self.inflight -= 1
-        self.followers = self.__dict__.get("followers", 0) - self.__dict__.setdefault("joins", {}).pop(task, [0])[0]
+    def _asked(self, wkey: tuple, task, rec: Asking) -> None:
+        """Запрос, которого ждали (Д1), кончился: его место свободно, следующий такой же — снова к серверам. rec — из
+        замыкания, а не из joins: счёт мест и ждущих возвращается к нулю, что бы ни случилось с joins и asking (SIGHUP)."""
+        busy = "inflight_fb" if rec.fb else "inflight"
+        setattr(self, busy, self.__dict__.get(busy, 0) - 1)
+        self.followers = self.__dict__.get("followers", 0) - rec.waiting
+        rec.waiting = 0
+        self.__dict__.setdefault("joins", {}).pop(task, None)
         if self.asking.get(wkey) is task:
             self.asking.pop(wkey, None)
+        if rec.hedge is not None and not rec.hedge.done():
+            rec.hedge.cancel()                  # _first уже отменяет её; здесь — если задачу отменили снаружи
         if not task.cancelled():
             task.exception()                    # ошибка уже ушла ждавшим; без них asyncio писал бы её в журнал
 
+    def _hedge(self, rec: Asking, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple) -> None:
+        """Вторая попытка запроса rec (Ж1): тем же путём, с той же меткой, на новом соединении (_FRESH) — пока первая
+        ещё ждёт ответа шифрованного DNS. Одна на запрос, не больше HEDGE_MAX на путь сразу; места клиентов не занимает.
+        Ответ — всем ждущим и в кэш (через _lookup, как ответ первой), и путь отвечает (ok_at). Без ответа — ничего:
+        решает первая попытка (проверка пути и запасной — как без второй). Обычный DNS без шифрования — без второй
+        попытки: потерянный пакет UDP стоит UDP_TIMEOUT, а не ENC_TIMEOUT. У своего DNS правила — тоже, если в нём есть DoH
+        или DoT; записи h3:// вторая попытка пропускает (_ask): запрос HTTP/3 идёт в потоке, который отмена не прерывает, и
+        в начале блокировки вторые попытки заняли бы потоки до срока."""
+        if rec.hedge is not None or rec.early is None or rec.early.done():
+            return                              # уже была, или запрос не ждёт серверы (запасной, конец)
+        if not self._encrypted(servers):
+            return
+        hedging = self.__dict__.setdefault("hedging", {})
+        if hedging.get(mark, 0) >= HEDGE_MAX:
+            self.stats["hedge_full"] = self.stats.get("hedge_full", 0) + 1
+            return
+        hedging[mark] = hedging.get(mark, 0) + 1
+        self.stats["hedges"] = self.stats.get("hedges", 0) + 1
+
+        async def run():
+            try:
+                reply = await self.forward(query, q, mark, tcp, servers)
+            finally:
+                left = hedging.get(mark, 1) - 1
+                if left > 0:
+                    hedging[mark] = left
+                else:
+                    hedging.pop(mark, None)
+            if reply is None:
+                return
+            if rec.path is not None:
+                # путь ответил — на тихом пути с потерями повторы больше не начинают проверку (JOIN_CHECK); решение —
+                # в состояние, взятое до ожидания (SIGHUP мог его заменить)
+                self._seen(rec.path, True, False)
+            if rec.early.done():
+                return
+            if reply[3] & 0xF == RC_SERVFAIL:
+                rec.spare = reply               # ответ, если первая попытка не получит никакого
+            else:
+                rec.early.set_result(reply)
+        tok = _FRESH.set(True)                  # задача берёт копию контекста — с этой отметкой
+        try:
+            rec.hedge = asyncio.ensure_future(run())
+        finally:
+            _FRESH.reset(tok)
+
+    def _encrypted(self, servers: tuple) -> bool:
+        """Запрос идёт к шифрованному DNS, у которого бывает вторая попытка (Ж1): общие серверы с DoH или DoT, свой DNS
+        правила с записью DoH или DoT."""
+        if servers:
+            return any(srv(s)[0] in ("doh", "dot") for s in servers)
+        return ((getattr(self, "cfg", None) or {}).get("encrypt") or "plain") != "plain"
+
+    async def _first(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, rec: Asking | None,
+                     p: DirectPath | None) -> bytes | None:
+        """forward для _lookup; если повтор начал вторую попытку (Ж1, _hedge) — первый ответ из двух. Вторая попытка
+        ничего не задерживает: первая кончилась без ответа — вторая отменяется, дальше как без неё (проверка пути,
+        запасной), и при настоящей блокировке переключение не медленнее."""
+        if rec is None or not self._encrypted(servers):
+            return await self.forward(query, q, mark, tcp, servers)
+        rec.early, rec.path = asyncio.get_running_loop().create_future(), p
+        main = asyncio.ensure_future(self.forward(query, q, mark, tcp, servers))
+        try:
+            await asyncio.wait((main, rec.early), return_when=asyncio.FIRST_COMPLETED)
+            got = rec.early.result() if rec.early.done() else None      # ответ второй попытки (не SERVFAIL)
+            if main.done():
+                reply = main.result()
+                if reply is not None and (reply[3] & 0xF != RC_SERVFAIL or got is None):
+                    return reply
+                return got or reply or rec.spare
+            self.stats["hedge_won"] = self.stats.get("hedge_won", 0) + 1
+            return got
+        finally:
+            if not main.done():
+                main.cancel()                   # первая так и ждёт (потерянный ответ): её соединение закрывает Pool.run
+            if not rec.early.done():
+                rec.early.cancel()              # новых вторых попыток не будет
+            if rec.hedge is not None and not rec.hedge.done():
+                rec.hedge.cancel()
+
     async def _lookup(self, query: bytes, q: dict, mark: int, tcp: bool, servers: tuple, fallback: bool,
-                      key: tuple) -> bytes | None:
+                      key: tuple, rec: Asking | None = None) -> bytes | None:
         """Ответ на имя для _resolve: общие серверы или свой DNS правила, на пути «напрямую» — запасной DNS, если общие
-        не ответили. → ответ сервера (с его ID) или None; ответ с TTL — в кэш."""
+        не ответили. → ответ сервера (с его ID) или None; ответ с TTL — в кэш. rec — запрос, который ждут одинаковые
+        (_resolve): его место и вторая попытка."""
         now = time.monotonic()
         cfg = getattr(self, "cfg", None) or {}       # тесты собирают Proxy без load()
         direct = not servers and self.is_direct(mark)
@@ -884,13 +1020,21 @@ class Proxy:
         has_fb = direct and bool(cfg.get("direct_fallback"))     # у пути есть запасной (у этого имени — fb)
         p = self._dp(mark) if direct else None
         reply = None
-        if fb and (p.down or _busy(p.probe)):
+        if fb and ((rec is not None and rec.fb) or p.down or _busy(p.probe)):
             # серверы DNS этого пути не отвечают или проверяются — имя сразу у запасного; клиент не ждёт ни
-            # проверки, ни пробы: серверы DNS пробуются в фоне
+            # проверки, ни пробы: серверы DNS пробуются в фоне. Запрос, начатый в это время (rec.fb), идёт к запасному,
+            # даже если проверка кончилась «в порядке», пока задача не началась: его ждут повторы, пришедшие тогда же (Е1),
+            # и он держит место среди запросов к запасному (Ж2), а не среди ждущих общие серверы
             if p.down:
                 self._probe_direct(tcp, mark)
         else:
-            reply = await self.forward(query, q, mark, tcp, servers)
+            if rec is not None and rec.fb:
+                # начат к запасному, а запасного уже нет (SIGHUP выключил его до начала задачи): место — среди ждущих
+                # серверы DNS, иначе такой запрос держал бы место у запросов к запасному до 10–20 с
+                rec.fb = False
+                self.inflight_fb -= 1
+                self.inflight += 1
+            reply = await self._first(query, q, mark, tcp, servers, rec, p)
             if direct:
                 # p — состояние, взятое до ожидания: SIGHUP с новыми серверами или запасным за это время заменил его
                 # новым, и решение о прежних серверах в новое не пишется
@@ -1078,6 +1222,8 @@ class Proxy:
             hint = None if _literal(server) else srv(server)[1]
             server = _no_hint(server)
         mode = srv(server)[0] if servers else (self.cfg.get("encrypt") or "plain")
+        if mode == "doh3" and _FRESH.get():
+            return None         # вторая попытка (Ж1) — без HTTP/3: его поток отмена не прерывает (_hedge)
         if servers and mode != "plain" and not srv(server)[1]:
             # имя сервиса без адреса (путь через выход, «Напрямую — адрес»): адрес — этим же путём
             addr = await self._name_addr(srv(server)[2], mark, tcp, hint)
@@ -1232,12 +1378,14 @@ class Proxy:
         else:
             def fn(c):
                 return asyncio.wait_for(doh_query(c, msg, pool.host, pool.path), ENC_TIMEOUT)
-        # проверка пути — на своём новом соединении, не в очереди за медленными именами (П31)
-        return await (pool.once(fn) if _CHECKING.get() else pool.run(fn))
+        # проверка пути — на своём новом соединении, не в очереди за медленными именами (П31); вторая попытка (Ж1) — тоже:
+        # соединение пула, на котором потерялся ответ, держит первая попытка
+        return await (pool.once(fn) if _CHECKING.get() or _FRESH.get() else pool.run(fn))
 
     async def _h3(self, msg: bytes, server: str, mark: int) -> bytes:
         """Запрос DoH по HTTP/3 («h3://…»): QUIC из OpenSSL в своих потоках (dohttp.H3Pool), сокет UDP — с меткой
-        пути, как у остальных запросов. OpenSSL без QUIC — запись не отвечает (спрашивается следующая)."""
+        пути, как у остальных запросов. OpenSSL без QUIC — запись не отвечает (спрашивается следующая). Свои потоки и
+        соединение (own) — только у проверки пути; второй попытки (Ж1) у HTTP/3 нет (_ask)."""
         key = (mark, server)
         pool = self.__dict__.setdefault("h3pools", {}).get(key)
         if pool is None:
