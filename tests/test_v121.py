@@ -673,8 +673,8 @@ class DnsDomainTest(unittest.TestCase):
         self.addCleanup(loop.close)
 
         async def go():
-            with mock.patch.object(dnsproxy.subprocess, "run", side_effect=lambda c, **k: calls.append(c) or
-                                   subprocess.CompletedProcess(c, 0, "", "")):
+            with mock.patch.object(dnsproxy.subprocess, "run", side_effect=lambda c, **k: calls.append((c, k.get("input")))
+                                   or subprocess.CompletedProcess(c, 0, "", "")):
                 p.remember(dns_answer("youtube.com", ["142.250.1.1"], ttl=20))
                 p.remember(dns_answer("youtube.com", ["142.250.1.1"], ttl=20))   # уже в наборе — не повторяем
                 await asyncio.sleep(dnsproxy.SET_FLUSH + 0.1)
@@ -682,9 +682,9 @@ class DnsDomainTest(unittest.TestCase):
                 await asyncio.sleep(dnsproxy.SET_FLUSH + 0.1)
         loop.run_until_complete(go())
         self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0][:6], ["nft", "add", "element", "ip", "awgr", "dom4"])
-        self.assertIn(f"142.250.1.1 timeout {dnsproxy.SET_MIN}s", calls[0][6])
-        self.assertIn("142.250.1.1 timeout", calls[1][6])
+        self.assertEqual(calls[0][0], ["nft", "-f", "-"])                        # одна транзакция на пачку (Е2)
+        self.assertIn(f"add element ip awgr dom4 {{ 142.250.1.1 timeout {dnsproxy.SET_MIN}s }}", calls[0][1])
+        self.assertIn("142.250.1.1 timeout", calls[1][1])
 
 
 class EngineDomainDnsTest(DomainsAnyExitTest):

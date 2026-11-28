@@ -7,6 +7,7 @@
 #                                (открытое соединение остаётся на прежнем выходе);
 #   tests/container_e2e.py     — свой контейнер сервера AWG ставит правила панели до подъёма сервера, события Docker;
 #   tests/movehost_e2e.py      — перенос сервера на хост; служба awg-quick ставит правила «до панели».
+# Задание dns-set: набор «фильтра по DNS» на настоящем nftables двух ядер (tests/dns_set_check.py).
 # Задание kernel: модуль ядра AmneziaWG ставится той же командой, что у пользователей
 # (install.sh --install-kernel), и настоящий туннель идёт на нём и вперемешку с amneziawg-go.
 # awg, amneziawg-go и hev-socks5-tunnel собираются из стадий текущего Dockerfile — те же версии и флаги,
@@ -135,6 +136,33 @@ jobs:
         # последним: ставит awg-quick@awg0 на саму машину (одноразовую)
         if: always()
         run: sudo env PATH="$RUNNER_TEMP/bin:$PATH" PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/movehost_e2e.py
+
+  dns-set:
+    # «Фильтр по DNS» на настоящем nftables (tests/dns_set_check.py): повторная запись адреса обновляет его срок в наборе,
+    # пакеты к нему ни разу не проходят мимо набора, resync — одной транзакцией. Две машины: на 22.04 ядро 6.8 (повторный
+    # add element срок не продлевает вовсе — адрес выпадал через 30 минут, Е2 проверки исправлений П31), на 24.04 — 7.x
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: "3.15"
+
+      - name: nftables
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nftables >/dev/null
+          nft --version
+          uname -r
+
+      - name: DNS filter set on the real kernel (dns_set_check.py)
+        run: sudo unshare -n "$(which python)" tests/dns_set_check.py
 
   kernel:
     # Не держит выпуск: сборка DKMS зависит от PPA Amnezia и ядра машины GitHub. Падение видно в прогоне

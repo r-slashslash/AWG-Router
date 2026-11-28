@@ -74,6 +74,11 @@ NEG_TTL_MAX = 300           # «нет такого имени» / «нет за
 NEG_TTL_DEFAULT = 30        # если в ответе нет SOA
 STATS_EVERY = 15
 MAX_INFLIGHT = 512          # одновременных запросов к серверам; больше — отказ (SERVFAIL)
+JOIN_MAX = 1024             # клиентов, которые ждут один и тот же запрос в пути (Д1, Е3); больше — отказ (SERVFAIL)
+JOIN_ALL = 8192             # и всех таких ждущих вместе: MAX_INFLIGHT разных «мёртвых» имён по JOIN_MAX — гигабайты
+# с: повтор запроса, который ждёт общие серверы дольше, когда путь «напрямую» с запасным столько же ничего не ответил, —
+# проверка пути сразу (Е1, _resolve). Столько ждёт одна попытка шифрованного DNS: на исправном пути ответ приходит раньше
+JOIN_CHECK = 5.0
 # Путь «напрямую» и запасной DNS (cfg direct_fallback — записи, как у своего DNS; 1.25.0: включается галочкой и
 # вписывается вручную или кнопкой «Применить для …»). Серверы DNS из настроек не отвечают (из России, Китая и Ирана по
 # DoH/DoT это бывает) — имена пути спрашиваются у запасного, а серверы DNS пробуются снова не раньше чем через
@@ -121,6 +126,8 @@ SET_FLUSH = 0.05
 # (счётчик set_late в stats).
 SET_WAIT = 1.0
 SET_LIVE_MAX = 200000       # живых адресов в памяти для повторного добавления; больше — старые забываются
+SET_TX_MIN = 1000           # адресов в транзакции nft, если он отказал по размеру (_nft_add); меньше не делим
+_set_tx = [0]               # предел адресов в одной транзакции nft: 0 — нет; ставит отказ nft по размеру
 
 T_OPT, T_SOA, T_A, T_AAAA, T_NS = 41, 6, 1, 28, 2
 T_SVCB, T_HTTPS = 64, 65   # записи SVCB и HTTPS: в HTTPS браузер берёт ключи ECH
@@ -527,6 +534,8 @@ class Proxy:
         self.pending: dict[str, int] = {}            # адрес → секунд, ещё не отправленные в nftables
         self._flush_at = 0.0
         self.asking: dict[tuple, asyncio.Future] = {}    # одинаковые запросы в пути (Д1): ключ → общая задача
+        self.joins: dict[asyncio.Future, list] = {}      # общая задача → [сколько ждут сверх первого (Е3), когда начата]
+        self.followers = 0                               # их всех вместе
         self.load()
 
     def load(self) -> None:
@@ -611,10 +620,13 @@ class Proxy:
         for addr, ttl in ips:
             secs = max(SET_MIN, min(int(ttl), SET_MAX))
             until = self.live.get(addr, 0)
+            w = writing.get(addr)
+            if w is not None and w not in need:
+                # команда, которая его добавляет, ещё идёт — ответ ждёт её: и когда адрес уже записан «почти на тот же
+                # срок», и когда этот ответ продлевает срок (TTL больше SET_MIN): до конца первой команды адреса в наборе
+                # может ещё не быть, а соединение пошло бы мимо
+                need.append(w)
             if until - now > secs - 60:                         # уже в наборе почти на тот же срок
-                w = writing.get(addr)
-                if w is not None and w not in need:
-                    need.append(w)                               # …но его команда ещё идёт — ответ ждёт её
                 continue
             self.pending[addr] = secs
             if len(self.live) >= SET_LIVE_MAX:
@@ -681,15 +693,43 @@ class Proxy:
 
     @staticmethod
     def _nft_add(table: str, name: str, items: list) -> None:
-        for i in range(0, len(items), 2000):             # одна команда — не больше 2000 адресов
-            elems = ", ".join(f"{a} timeout {t}s" for a, t in items[i:i + 2000])
-            try:
-                r = subprocess.run(["nft", "add", "element", "ip", table, name, "{ " + elems + " }"],
-                                   capture_output=True, text=True, timeout=10)
-                if r.returncode:
-                    print(f"dnsproxy: nft: {r.stderr.strip()[:200]}", flush=True)
-            except (OSError, subprocess.SubprocessError) as e:
-                print(f"dnsproxy: nft: {e}", flush=True)
+        """Адреса (адрес, срок) — в набор: одна транзакция nft на пачку (Е2 проверки исправлений П31). Слишком большую
+        транзакцию nft не отправит, если у него нет CAP_NET_ADMIN в начальном пространстве имён (Docker в LXC): netlink
+        берёт не больше net.core.wmem_max (по умолчанию ~5000 адресов), nft отвечает «Message too long» (musl — «too
+        large»). Тогда — частями вдвое меньше, и этот предел запоминается (_set_tx) для следующих пачек."""
+        lim, done = _set_tx[0] or len(items) or 1, 0
+        while done < len(items):
+            part = items[done:done + lim]
+            err = Proxy._nft_tx(table, name, part)
+            if err and len(part) > SET_TX_MIN and ("Message too l" in err or "wmem_max" in err):
+                lim = _set_tx[0] = max(SET_TX_MIN, len(part) // 2)
+                continue                                 # та же часть — вдвое меньшими транзакциями
+            if err:
+                print(f"dnsproxy: nft: {err[:200]}", flush=True)
+            done += len(part)
+
+    @staticmethod
+    def _nft_tx(table: str, name: str, items: list) -> str:
+        """Одна транзакция `nft -f -`: «add со сроком 1 с → delete → add с нужным сроком». Повторный add адреса, который
+        уже в наборе, срок не продлевает (ядро 6.8 — никогда, 6.18 и 7.0 — при том же сроке), и адрес, который
+        продолжают спрашивать, выпадал из набора через SET_MIN; delete без первого add отказал бы на адресе, которого в
+        наборе нет, и с ним — вся транзакция. Ядро применяет транзакцию целиком: адрес ни на миг не пропадает из набора.
+        Одна команда nft и читает таблицу панели один раз (resync после пересборки — один процесс, а не по процессу на
+        2000 адресов). Адреса в items не повторяются (ключи словаря): второй delete того же адреса отказал бы.
+        → текст ошибки или ""."""
+        lines = []
+        for i in range(0, len(items), 2000):             # строка — не больше 2000 адресов
+            part = items[i:i + 2000]
+            lines.append(f"add element ip {table} {name} {{ " + ", ".join(f"{a} timeout 1s" for a, _t in part) + " }")
+            lines.append(f"delete element ip {table} {name} {{ " + ", ".join(a for a, _t in part) + " }")
+            lines.append(f"add element ip {table} {name} {{ " + ", ".join(f"{a} timeout {t}s" for a, t in part) + " }")
+        try:
+            # срок — как прежде на команду, и сверх того на объём: resync с 200 000 адресов на 1 vCPU — секунды
+            r = subprocess.run(["nft", "-f", "-"], input="\n".join(lines) + "\n", capture_output=True, text=True,
+                               timeout=10 + len(items) // 1000)
+            return (r.stderr.strip() or "nft failed") if r.returncode else ""
+        except (OSError, subprocess.SubprocessError) as e:
+            return str(e) or type(e).__name__
 
     def _dp(self, mark: int) -> DirectPath:
         d = self.__dict__.setdefault("dpaths", {})          # тесты собирают Proxy и через __new__
@@ -773,8 +813,17 @@ class Proxy:
         # проверку пути. Ключ — всё, от чего зависит ответ: ключ кэша (путь, свой DNS правила, имя, тип, класс, флаги
         # запроса), TCP и можно ли к запасному (клиент через выход и имя правила без пути с обычным клиентом не
         # смешиваются). ID и регистр букв вопроса у каждого клиента свои (_for_client), размер под UDP — свой (UDPServer).
-        wkey = key + (tcp, bool(fallback))
+        # И ещё — «путь „напрямую“ с запасным сейчас не отвечает или проверяется» (Е1 проверки исправлений П31): в это
+        # время запрос идёт к запасному сам (_lookup), а не ждёт того, кто начал раньше и ещё ждёт общие серверы (до
+        # ENC_TIMEOUT × 2 на каждый). Устройство, которое повторяет запрос через 1–2 с (Windows, Linux), в начале блокировки
+        # ждало ответа до 20 с вместо 10–15; повторы друг к другу по-прежнему присоединяются.
+        stage, dp = False, None
+        if fallback and not servers and self.is_direct(mark) and (getattr(self, "cfg", None) or {}).get("direct_fallback"):
+            dp = self._dp(mark)
+            stage = bool(dp.down or _busy(dp.probe))
+        wkey = key + (tcp, bool(fallback), stage)
         asking = self.__dict__.setdefault("asking", {})          # тесты собирают Proxy и через __new__
+        joins = self.__dict__.setdefault("joins", {})            # задача → [сколько ждут сверх первого, когда начата]
         task = asking.get(wkey)
         if task is None:
             if self.inflight >= MAX_INFLIGHT:
@@ -783,9 +832,31 @@ class Proxy:
             self.inflight += 1
             # своя задача, а не задача первого клиента: его отмена (клиент ушёл) не отменяет ответ остальным
             task = asking[wkey] = asyncio.ensure_future(self._lookup(query, q, mark, tcp, servers, fallback, key))
+            joins[task] = [0, time.monotonic()]
             task.add_done_callback(lambda t: self._asked(wkey, t))
         else:
+            # Ждущие не занимают мест MAX_INFLIGHT (повторы не вытесняют другие имена), но и без предела не копятся (Е3):
+            # поток тысяч одинаковых запросов к имени без ответа держал каждый в памяти до конца задачи (35 → 191–218 МБ
+            # за 30 с). Сверх JOIN_MAX у одной задачи или JOIN_ALL у всех вместе — сразу SERVFAIL, как сверх MAX_INFLIGHT.
+            info = joins.setdefault(task, [0, time.monotonic()])
+            if info[0] >= JOIN_MAX or self.__dict__.get("followers", 0) >= JOIN_ALL:
+                self.stats["errors"] += 1
+                self.stats["join_full"] = self.stats.get("join_full", 0) + 1
+                return error_reply(query, q, RC_SERVFAIL)
+            info[0] += 1
+            self.followers = self.__dict__.get("followers", 0) + 1
             self.stats["joined"] = self.stats.get("joined", 0) + 1
+            # Повтор, а первый запрос ждёт общие серверы уже JOIN_CHECK, и этим путём за это время не ответило ничего, —
+            # проверка пути сейчас, а не когда первый дождётся срока (Е1). Без объединения проверку раньше начинал более
+            # быстрый повтор: первому запросу могло достаться «замёрзшее» соединение пула (у него срок — ENC_TIMEOUT × 2 на
+            # сервер), а повтор шёл по новому; с объединением запрос один, и в начале блокировки «популярное» имя ждало до
+            # 15 с вместо 11. Медленное имя на исправном пути проверку не начинает: другие имена в это время отвечаются
+            # (ok_at свежее); одна такая проверка на запрос.
+            if dp is not None and not stage and time.monotonic() - info[1] >= JOIN_CHECK \
+                    and time.time() - dp.ok_at >= JOIN_CHECK:
+                info[1] = float("inf")
+                self.stats["join_checks"] = self.stats.get("join_checks", 0) + 1
+                self._doubt(dp, mark, tcp, True)
         reply = await asyncio.shield(task)
         if reply is None or reply[3] & 0xF == RC_SERVFAIL:
             self.stats["errors"] += 1           # SERVFAIL самих серверов не кэшируется (cache_ttl) и уходит клиенту
@@ -796,6 +867,7 @@ class Proxy:
     def _asked(self, wkey: tuple, task) -> None:
         """Запрос, которого ждали (Д1), кончился: место клиента свободно, следующий такой же — снова к серверам."""
         self.inflight -= 1
+        self.followers = self.__dict__.get("followers", 0) - self.__dict__.setdefault("joins", {}).pop(task, [0])[0]
         if self.asking.get(wkey) is task:
             self.asking.pop(wkey, None)
         if not task.cancelled():

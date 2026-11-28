@@ -166,7 +166,7 @@ class DnsFlushThreadTest(unittest.TestCase):
 
         def slow(cmd, **kw):          # nft ждёт блокировку таблицы, пока панель её пересобирает
             time.sleep(0.5)
-            calls.append(cmd)
+            calls.append((cmd, kw.get("input")))
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         async def go():
@@ -180,8 +180,8 @@ class DnsFlushThreadTest(unittest.TestCase):
             return lag
         lag = asyncio.run(go())
         self.assertLess(lag, 0.3)
-        self.assertEqual(calls[0][:6], ["nft", "add", "element", "ip", "awgr", "dom4"])
-        self.assertIn("142.250.1.1 timeout 1800s", calls[0][6])
+        self.assertEqual(calls[0][0], ["nft", "-f", "-"])                 # одна транзакция (Е2 проверки исправлений П31)
+        self.assertIn("add element ip awgr dom4 { 142.250.1.1 timeout 1800s }", calls[0][1])
 
 
     def test_resync_without_delay(self):
@@ -198,13 +198,13 @@ class DnsFlushThreadTest(unittest.TestCase):
 
         async def go():
             p.live = {"142.250.1.1": time.time() + 1000}
-            with mock.patch.object(dnsproxy.subprocess, "run",
-                                   side_effect=lambda c, **k: calls.append(c) or subprocess.CompletedProcess(c, 0, "", "")):
+            with mock.patch.object(dnsproxy.subprocess, "run", side_effect=lambda c, **k: calls.append(k.get("input"))
+                                   or subprocess.CompletedProcess(c, 0, "", "")):
                 p.resync()
                 await asyncio.sleep(min(0.1, dnsproxy.SET_FLUSH / 3))
         asyncio.run(go())
         self.assertEqual(len(calls), 1)
-        self.assertIn("142.250.1.1 timeout", calls[0][6])
+        self.assertIn("142.250.1.1 timeout", calls[0])
 
 
 # ------------------------------------------------------------------ пульс прошлого sniproxy.py

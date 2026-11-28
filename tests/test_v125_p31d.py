@@ -8,6 +8,7 @@ python3 -m unittest tests.test_v125_p31d"""
 import asyncio
 import json
 import os
+import re
 import socket
 import ssl
 import struct
@@ -385,23 +386,77 @@ class CacheFlagsTest(unittest.TestCase):
 
 
 # ------------------------------------------------------------------ Д2
+class FakeSet:
+    """Набор nftables, как в ядре 6.8 (Е2 проверки исправлений П31): add адреса, который уже есть, срок не меняет; delete
+    адреса, которого нет, — отказ; транзакция (`nft -f -`) применяется целиком или не применяется. Понимает и прежнюю
+    команду `nft add element ip T S { … }` — тест падает на прежнем коде поведением, а не формой команды. Срок — по
+    time.monotonic(); too_big — больше стольких адресов в транзакции nft отказывает «Message too long» (нет CAP_NET_ADMIN)."""
+
+    LINE = re.compile(r"(add|delete) element ip (\S+) (\S+) \{ (.*) \}")
+
+    def __init__(self):
+        self.elems: dict[str, float] = {}       # адрес → когда выпадет
+        self.too_big = 0
+
+    def _apply(self, ops: list, now: float) -> str:
+        new = dict(self.elems)
+        for op, items in ops:
+            for item in items:
+                addr, _, t = item.partition(" timeout ")
+                if op == "add":
+                    if addr not in new or new[addr] <= now:
+                        new[addr] = now + float(t.rstrip("s"))
+                elif addr not in new or new[addr] <= now:
+                    return "Error: Could not process rule: No such file or directory"
+                else:
+                    del new[addr]
+        self.elems = new
+        return ""
+
+    def run(self, cmd, input=None, **kw) -> subprocess.CompletedProcess:
+        now = time.monotonic()
+        if cmd[:3] == ["nft", "add", "element"]:              # прежняя форма: одна команда add
+            ops = [("add", [x.strip() for x in cmd[6].strip("{} ").split(",")])]
+        else:
+            assert cmd == ["nft", "-f", "-"], cmd
+            ops = []
+            for line in input.splitlines():
+                m = self.LINE.fullmatch(line)
+                assert m, line
+                ops.append((m.group(1), [x.strip() for x in m.group(4).split(",")]))
+            if self.too_big and sum(len(x) for _, x in ops) > 3 * self.too_big:
+                return subprocess.CompletedProcess(cmd, 1, "", "netlink: Error: Could not process rule: Message too long\n"
+                                                   "Please, rise /proc/sys/net/core/wmem_max on the host namespace.")
+        err = self._apply(ops, now)
+        return subprocess.CompletedProcess(cmd, 1 if err else 0, "", err)
+
+    def left(self, addr: str) -> float | None:
+        """Сколько секунд адрес ещё в наборе (None — нет)."""
+        t = self.elems.get(addr)
+        return None if t is None or t <= time.monotonic() else t - time.monotonic()
+
+
 class SetWriteTest(unittest.TestCase):
     """Д2: «фильтр по DNS» — адрес из ответа на имя правила, которого ещё нет в наборе nftables, сначала записывается в
     набор, потом ответ уходит клиенту: клиент соединяется сразу, и соединение к адресу не из набора шло по правилам
     адресов — мимо выхода. Уже известный адрес — без ожидания; nft, который ждёт пересборку таблицы, держит ответ не
-    дольше SET_WAIT. nft подменён (subprocess.run в потоке, как настоящий)."""
+    дольше SET_WAIT. nft подменён (subprocess.run в потоке, как настоящий; набор — как в ядре, FakeSet)."""
 
     def setUp(self):
-        self.calls = []                       # (начало, конец, адреса)
+        self.calls = []                       # (начало, конец, текст транзакции)
+        self.timeouts = []                    # срок, с которым вызван nft
         self.delay = 0.05
         self.lock = threading.Lock()
+        self.kernel = FakeSet()
 
     def fake_run(self, cmd, **kw):
         t0 = time.monotonic()
         time.sleep(self.delay)
         with self.lock:
-            self.calls.append((t0, time.monotonic(), cmd[6]))
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+            r = self.kernel.run(cmd, **kw)
+            self.calls.append((t0, time.monotonic(), kw.get("input") or cmd[6]))
+            self.timeouts.append(kw.get("timeout"))
+        return r
 
     def _proxy(self):
         net = DelayNet()
@@ -507,6 +562,107 @@ class SetWriteTest(unittest.TestCase):
             self.assertGreaterEqual(t, self.written(f"192.0.2.{100 + i}"), i)
         self.assertEqual(who(other), "shared")
         self.assertLess(lag, 0.05)
+
+    def test_kept_address_stays_in_the_set(self):
+        """Е2: адрес, который продолжают спрашивать, через SET_MIN − 60 с записывается снова — и его срок в наборе правда
+        растёт (на ядре 6.8 повторный add срок не менял: адрес выпадал через 30 минут, и соединения к сайту шли мимо
+        выхода). Время сдвинуто: адрес «записан 29 минут назад»."""
+        net, p = self._proxy()
+        net.ips["www.youtube.com."] = "192.0.2.20"
+
+        async def go():
+            await resolve(p, q_msg("www.youtube.com"))
+            self.assertGreater(self.kernel.left("192.0.2.20"), 1700)
+            self.kernel.elems["192.0.2.20"] = time.monotonic() + 50        # 29 минут спустя
+            p.live["192.0.2.20"] = time.time() + 50
+            await resolve(p, q_msg("www.youtube.com", qid=2))
+        self._run(go)
+        self.assertEqual(len(self.calls), 2)
+        self.assertGreater(self.kernel.left("192.0.2.20"), 1700)
+
+    def test_one_transaction_add_delete_add(self):
+        """Е2: пачка — одна транзакция `nft -f -`: «add со сроком 1 с → delete → add со сроком», адрес нового и адрес,
+        который уже есть, — в одной. Текст — как ждёт nft (FakeSet разбирает строки)."""
+        net, p = self._proxy()
+        self.kernel.elems["192.0.2.21"] = time.monotonic() + 30
+        items = [("192.0.2.21", 1800), ("192.0.2.22", 3600)]
+        with mock.patch.object(dnsproxy.subprocess, "run", side_effect=self.fake_run), \
+                mock.patch.object(dnsproxy, "_set_tx", [0], create=True):
+            dnsproxy.Proxy._nft_add("awgr", "dom4", items)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][2].splitlines(), [
+            "add element ip awgr dom4 { 192.0.2.21 timeout 1s, 192.0.2.22 timeout 1s }",
+            "delete element ip awgr dom4 { 192.0.2.21, 192.0.2.22 }",
+            "add element ip awgr dom4 { 192.0.2.21 timeout 1800s, 192.0.2.22 timeout 3600s }"])
+        self.assertGreater(self.kernel.left("192.0.2.21"), 1700)
+        self.assertGreater(self.kernel.left("192.0.2.22"), 3500)
+
+    def test_resync_one_process_or_halves(self):
+        """resync после пересборки таблицы — одна транзакция на все адреса (раньше — процесс nft на каждые 2000, и каждый
+        заново читал таблицу). nft без CAP_NET_ADMIN (Docker в LXC) отказывает слишком большой транзакции — тогда частями
+        вдвое меньше, все адреса в наборе, и следующая пачка сразу идёт такими частями."""
+        net, p = self._proxy()
+        now = time.time()
+        p.live = {f"10.{i // 65536}.{i // 256 % 256}.{i % 256}": now + 1800 for i in range(10000)}
+        self.delay = 0.0
+
+        async def go():
+            p.resync()
+            await p._flushing
+        with mock.patch.object(dnsproxy, "_set_tx", [0], create=True):
+            self._run(go)
+            self.assertEqual(len(self.calls), 1)
+            self.assertEqual(len(self.kernel.elems), 10000)
+            self.assertGreaterEqual(self.timeouts[0], 20)             # срок растёт с объёмом (1 vCPU — секунды)
+            self.calls.clear()
+            self.kernel.elems.clear()
+            self.kernel.too_big = 3000
+            self._run(go)
+            self.assertEqual(len(self.kernel.elems), 10000)
+            self.assertEqual(len(self.calls), 6)                       # 10000 и 5000 — отказ, затем 4 × 2500
+            self.assertEqual(dnsproxy._set_tx[0], 2500)
+            self.calls.clear()
+            self._run(go)
+            self.assertEqual(len(self.calls), 4)                       # предел запомнен
+        self.assertEqual(len(self.kernel.elems), 10000)
+
+    def test_missing_table_one_try(self):
+        """Таблицы нет (выключают фильтр, панель остановили): транзакция не проходит — одна попытка и строка в журнале, без
+        дробления (дробится только отказ по размеру)."""
+        items = [(f"10.0.{i // 256}.{i % 256}", 1800) for i in range(3000)]
+
+        def run_(cmd, **kw):
+            self.calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, "", "Error: No such file or directory")
+        with mock.patch.object(dnsproxy.subprocess, "run", side_effect=run_), \
+                mock.patch.object(dnsproxy, "_set_tx", [0], create=True), mock.patch("builtins.print") as out:
+            dnsproxy.Proxy._nft_add("awgr", "dom4", items)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("No such file", out.call_args[0][0])
+
+    def test_refresh_waits_for_the_first_write(self):
+        """Тот же адрес в ответе с TTL больше SET_MIN (продление), пока первая команда, которая его добавляет, ещё идёт:
+        адреса в наборе может ещё не быть — ответ ждёт первую команду, а не уходит сразу (найдено при исправлениях по
+        проверке Е: два имени одного сайта с разным TTL)."""
+        net, p = self._proxy()
+        net.ips.update({"a.youtube.com.": "192.0.2.23", "b.youtube.com.": "192.0.2.23"})
+        self.delay = 0.2
+
+        async def enc(msg, server, mark, mode):
+            name = dnsproxy.read_name(msg, 12)
+            # у b — TTL 7200: продлевает срок
+            return a_reply(msg, [net.ips[name]], ttl=7200 if name == "b.youtube.com." else 300)
+        p._enc = enc
+
+        async def go():
+            first = asyncio.ensure_future(resolve(p, q_msg("a.youtube.com")))
+            await asyncio.sleep(0.05)                     # первая команда идёт
+            await resolve(p, q_msg("b.youtube.com"))
+            t = time.monotonic()
+            await first
+            return t
+        t = self._run(go)
+        self.assertGreaterEqual(t, self.calls[0][1])
 
     def test_without_the_filter_nothing_waits(self):
         """Охрана: без набора (галочка выключена) и для имён не из правил — как раньше, nft не вызывается."""

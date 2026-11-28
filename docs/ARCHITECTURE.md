@@ -180,8 +180,9 @@ prerouting, `dstnat`) that redirects UDP and TCP port 53 from the clients' inter
 `dnsproxy.py` (`Engine.dns_redirect`, `nftgen.generate(dns_to=…)`). It is in the rules before the panel too, so while the
 panel restarts names don't resolve rather than go another way.
 DNS on the server (`dnsproxy.py`) resolves names from domain rules through the rule's exit. With the DNS
-filter setting, only addresses that it returned for those names (the `dom4` set with timeouts, refilled after
-every rebuild of the table) are redirected to the handler.
+filter setting, only addresses that it returned for those names (the `dom4` set with timeouts, written by one nft
+transaction per batch that also renews the timeout of an address already there, refilled after every rebuild of the
+table) are redirected to the handler.
 On the direct path only, when the shared servers don't answer (DoH/DoT is often cut in Russia, China and Iran), it
 asks the fallback DNS (`direct_fallback`: **Server → DNS → Fallback DNS for "Direct"**, `settings.fallback_dns_on` and
 `fallback_dns`; **Apply for …** fills in the country's DNS) and skips the shared servers for `DIRECT_RETRY`, then tries

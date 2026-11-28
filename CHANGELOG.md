@@ -85,11 +85,11 @@ it grows, so every user-visible change gets a new version.
   to half the names SERVFAIL; now none). The same query already on its way waits for its answer instead of going to the
   servers again (`Proxy.asking`): a dead name repeated every second or two held a pool connection per repeat until its
   deadline, and every Direct name waited 3–9 s; the key keeps paths, rules without a path and the RD, CD, EDNS and DO
-  flags apart, each client gets its own ID and letter case, and followers take no `MAX_INFLIGHT` place. With **Domain
-  rules only for addresses from this DNS's answers**, an address that isn't in the set yet goes there before the answer
-  leaves (one `nft` command per batch in a thread, at most `SET_WAIT` = 1 s while the panel rebuilds its table, counted
-  as `set_late`): clients connect at once, and the first connection to a new address went by the address rules — past
-  the exit. A name that waited for the shared servers while the fallback was changed or switched off goes to the current
+  flags apart, each client gets its own ID and letter case, and followers take no `MAX_INFLIGHT` place (their own limits
+  and the path state in the key — below). With **Domain rules only for addresses from this DNS's answers**, an address
+  that isn't in the set yet goes there before the answer leaves (one `nft` command per batch in a thread, at most
+  `SET_WAIT` = 1 s while the panel rebuilds its table, counted as `set_late`): clients connect at once, and the first
+  connection to a new address went by the address rules — past the exit. A name that waited for the shared servers while the fallback was changed or switched off goes to the current
   one. "The fallback DNS doesn't answer either" shows only together with "The DNS servers don't answer directly" (once
   the shared servers answered again nobody asked the fallback, and the line stayed up to 15 minutes). A fallback written
   by name (`tls://…`) on Direct — address with unencrypted shared servers that don't answer uses the address the panel
@@ -98,6 +98,28 @@ it grows, so every user-visible change gets a new version.
 - **The DNS cache keeps the query flags apart** (RD, CD, EDNS, DO; found while fixing the above, as old as DNS on the
   server): a device that validates DNSSEC itself (systemd-resolved with `DNSSEC=yes`) got a cached answer without
   signatures when a phone had asked the name first, and the name failed for it.
+- **Fixes from the check of the P31 fixes.** With **Domain rules only for addresses from this DNS's answers**, an
+  address that devices keep asking for no longer drops out of the `dom4` set after `SET_MIN` (30 minutes) — so since
+  1.24.0: a repeated `nft add element` doesn't renew the timeout of an element already in the set (Linux 6.8 never,
+  6.18 and 7.0 only with another timeout), and for minutes connections to the site went by the address rules and
+  Default, past the exit. A batch is now one `nft -f -` transaction "add with 1 s → delete → add with the timeout"
+  (`Proxy._nft_tx`): the timeout is renewed on every kernel, the address is never missing (100–1000 rewrites in a row,
+  not one of 1–4 million packets past the set on 6.8 and 7.0), and `resync` after a table rebuild is one nft process
+  instead of one per 2000 addresses (50 000 live addresses with 100 000 networks in the table: 15–18 s → 1.1–1.2 s).
+  Without CAP_NET_ADMIN in the initial namespace (Docker in LXC) nft refuses a transaction over `net.core.wmem_max`
+  ("Message too long", about 5000 addresses by default): such a batch is written in halves, and the size is remembered
+  (`_set_tx`). An answer that renews an address (TTL over `SET_MIN`) while the command adding it still runs waits for
+  that command as well. A device that repeats a question (Windows, Linux — every 1–2 s) no longer waits up to 20 s at
+  the start of real blocking: while a Direct path with a fallback is checked or down, a query doesn't join one that
+  still waits for the shared servers (`stage` in the key) and goes to the fallback itself; a repeat that joins a query
+  older than `JOIN_CHECK` (5 s) on a path that answered nothing for as long starts the path check at once — before,
+  a faster repeat of its own did (test VPS in Russia, real Cloudflare and Google, repeats every second: the longest
+  wait 10–15 s before the same-query fix, 20 s with it, now 6–10 s; a slow name on a working path starts no check).
+  Clients waiting for one query are limited — `JOIN_MAX` (1024) per query and `JOIN_ALL` (8192) in all, then SERVFAIL
+  at once (`join_full`): a flood of one query kept every copy in memory (3000 a second for 30 s: 35 → 224 MB and 40 % of
+  the queries unanswered; now 35 MB, all answered; 600 different dead names: 263 → 73 MB). "The fallback DNS
+  doesn't answer either" compares paths: with two **Direct — address** paths it showed for the other one's fallback.
+  Network tests: job `dns-set` (`tests/dns_set_check.py` on the kernels 6.8 and 7.x).
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't

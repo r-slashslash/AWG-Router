@@ -277,15 +277,19 @@ class DnsMixin:
                     # серверы DNS не отвечают на пути «напрямую» — с адреса системы или с любого «Напрямую — адрес»
                     # (последняя попытка — неудачная, за 15 минут); с запасным DNS — ответил ли он (fallback: "used" —
                     # сейчас имена ищет он, "down" — и он не отвечает)
-                    paths = [(s.get("direct_ok_at"), s.get("direct_fail_at")), *(s.get("addr_direct") or {}).values()]
-                    if any(_down(o, f) for o, f in paths):
+                    # пути — по метке (str), у адреса системы — "0"
+                    paths = {"0": (s.get("direct_ok_at"), s.get("direct_fail_at")), **(s.get("addr_direct") or {})}
+                    down = {m for m, (o, f) in paths.items() if _down(o, f)}
+                    if down:
                         v["direct_down"] = True
-                    fbs = list((s.get("fb_paths") or {}).values())
-                    # «Запасной DNS тоже не отвечает» — только вместе с «Серверы DNS не отвечают напрямую»: когда общие
-                    # снова отвечают, запасной больше не спрашивают, и строка висела до 15 минут (Д8)
-                    if s.get("fallback") and v.get("direct_down") and any(_down(o, f) for o, f in fbs):
+                    # Запасной — у тех путей, где общие не отвечают: только вместе с «Серверы DNS не отвечают напрямую»
+                    # (когда общие снова отвечают, запасной больше не спрашивают, и строка висела до 15 минут, Д8) и
+                    # только у того же пути (Е6 проверки исправлений П31: при двух «Напрямую — адрес» строка «Запасной DNS
+                    # тоже не отвечает» шла по чужому пути, хотя имена «не отвечающего» шли через его исправный запасной)
+                    fbs = [of for m, of in (s.get("fb_paths") or {}).items() if m in down]
+                    if s.get("fallback") and any(_down(o, f) for o, f in fbs):
                         v["fallback"] = "down"
-                    elif s.get("fallback") and v.get("direct_down") and \
+                    elif s.get("fallback") and \
                             any(float(o or 0) > float(f or 0) and time.time() - float(o or 0) < 900 for o, f in fbs):
                         v["fallback"] = "used"
             except (OSError, ValueError, TypeError):
