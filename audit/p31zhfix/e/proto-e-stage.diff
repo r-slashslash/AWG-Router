@@ -1,0 +1,19 @@
+diff --git a/tmp/new/app/dnsproxy.py b/tmp/fix/app/dnsproxy.py
+index 76a68f7..d21a2f1 100644
+--- a/tmp/new/app/dnsproxy.py
++++ b/tmp/fix/app/dnsproxy.py
+@@ -773,7 +773,13 @@ class Proxy:
+         # проверку пути. Ключ — всё, от чего зависит ответ: ключ кэша (путь, свой DNS правила, имя, тип, класс, флаги
+         # запроса), TCP и можно ли к запасному (клиент через выход и имя правила без пути с обычным клиентом не
+         # смешиваются). ID и регистр букв вопроса у каждого клиента свои (_for_client), размер под UDP — свой (UDPServer).
+-        wkey = key + (tcp, bool(fallback))
++        # прототип проверки Е: путь «напрямую» не отвечает или проверяется — запрос не ждёт ведущего, который ещё ждёт
++        # общие серверы, а идёт к запасному своей задачей (как без объединения)
++        stage = False
++        if fallback and not servers and self.is_direct(mark) and (getattr(self, "cfg", None) or {}).get("direct_fallback"):
++            dp = self._dp(mark)
++            stage = bool(dp.down or _busy(dp.probe))
++        wkey = key + (tcp, bool(fallback), stage)
+         asking = self.__dict__.setdefault("asking", {})          # тесты собирают Proxy и через __new__
+         task = asking.get(wkey)
+         if task is None:
