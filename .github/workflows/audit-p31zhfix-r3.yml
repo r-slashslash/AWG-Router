@@ -1,0 +1,179 @@
+# Временная проверка исправлений по проверке Ж (1.25.0), третий круг: предел 8 на путь, ответ второй попытки не меняет состояние пути: код до исправлений Д (d7a90cc, «old»), ветка до этих исправлений
+# (b87eaa5, «new») и исправления (эта ветка, «fix») рядом — сетевой тест «замерзание» без порога (Ж4), вторая попытка (Ж1:
+# повторы при полной блокировке, «мигание», медленный исправный путь, сценарии П31), свои места запросов к запасному (Ж2:
+# 1000 устройств в начале блокировки), пути на ядре, нагрузка, поток имён, долгий прогон, nft без CAP_NET_ADMIN (Ж3, Ж5).
+name: audit p31zhfix r3
+on:
+  push:
+    branches: [audit-tmp-p31zhfix-r3]
+permissions:
+  contents: read
+jobs:
+  retry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 20
+      - name: Code before
+        run: |
+          git worktree add "$RUNNER_TEMP/old" d7a90cc
+          git worktree add "$RUNNER_TEMP/new" b87eaa5
+      - name: Repeated queries under full blocking, 80 ms - old / new / fix
+        run: |
+          sudo modprobe sch_netem || true
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
+            -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
+            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null; N=audit/p31zhfix/e/e_net.sh; sh $N cert
+            sh $N run r_hello_doh_1 80 0 e_retry.py stream kind=hello enc=doh retry=1 dur=25 &
+            sh $N run r_hello_doh_2 80 0 e_retry.py stream kind=hello enc=doh retry=2 dur=25 &
+            wait
+            sh $N run r_hello_doh_5 80 0 e_retry.py stream kind=hello enc=doh retry=5 dur=25 &
+            sh $N run r_syn_doh_1 80 0 e_retry.py stream kind=syn enc=doh retry=1 dur=25 &
+            wait
+            sh $N run r_syn_doh_5 80 0 e_retry.py stream kind=syn enc=doh retry=5 dur=25 &
+            sh $N run r_freeze_doh_2 80 0 e_retry.py stream kind=freeze enc=doh retry=2 dur=25 pre_open=1 &
+            wait
+            sh $N run r_freeze_doh_1 80 0 e_retry.py stream kind=freeze enc=doh retry=1 dur=25 pre_open=1 &
+            sh $N run r_udp_plain_1 80 0 e_retry.py stream kind=udp enc=plain retry=1 dur=25 &
+            wait
+            sh $N run r_udp_plain_2 80 0 e_retry.py stream kind=udp enc=plain retry=2 dur=25 &
+            sh $N run r_hello_dot_1 80 0 e_retry.py stream kind=hello enc=dot retry=1 dur=25 &
+            wait
+            sh $N run r_pop_hello_1 80 0 e_retry.py popular kind=hello enc=doh retry=1 dur=25 &
+            sh $N run r_pop_hello_2 80 0 e_retry.py popular kind=hello enc=doh retry=2 dur=25 &
+            wait
+            sh $N run r_pop_hello_5 80 0 e_retry.py popular kind=hello enc=doh retry=5 dur=25 &
+            sh $N run r_freezeold_doh_1 80 0 e_retry.py stream kind=freezeold enc=doh retry=1 dur=25 pre_open=1 &
+            wait
+            sh $N run r_freezeold_doh_2 80 0 e_retry.py stream kind=freezeold enc=doh retry=2 dur=25 pre_open=1 &
+            sh $N run r_freezeold_dot_1 80 0 e_retry.py stream kind=freezeold enc=dot retry=1 dur=25 pre_open=1 &
+            wait
+            sh $N run r_none_doh_1 80 0 e_retry.py stream kind=none enc=doh retry=1 dur=25 &
+            sh $N run r_pop_none_1 80 0 e_retry.py popular kind=none enc=doh retry=1 dur=25 &
+            wait'
+
+  blink:
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3, 4]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 20
+      - name: Code before
+        run: |
+          git worktree add "$RUNNER_TEMP/old" d7a90cc
+          git worktree add "$RUNNER_TEMP/new" b87eaa5
+      - name: Blinking block (D3), clients repeat every 1-2 s, 80 ms
+        run: |
+          sudo modprobe sch_netem || true
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
+            -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
+            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null; N=audit/p31zhfix/e/e_net.sh; sh $N cert
+            sh $N run b10_1 80 0 e_retry.py stream kind=blink10 enc=doh retry=1 dur=300 every=1 &
+            sh $N run b30_1 80 0 e_retry.py stream kind=blink30 enc=doh retry=1 dur=300 every=1 &
+            wait
+            sh $N run b50_1 80 0 e_retry.py stream kind=blink50 enc=doh retry=1 dur=300 every=1 &
+            sh $N run b70_1 80 0 e_retry.py stream kind=blink70 enc=doh retry=1 dur=300 every=1 &
+            wait
+            sh $N run b30_2 80 0 e_retry.py stream kind=blink30 enc=doh retry=2 dur=300 every=1 &
+            sh $N run b50_2 80 0 e_retry.py stream kind=blink50 enc=doh retry=2 dur=300 every=1 &
+            wait
+            sh $N run fo_1 80 0 e_retry.py stream kind=freezeold enc=doh retry=1 dur=300 every=1 pre_open=1 &
+            sh $N run fl30 80 0 scen.py flaky pass_pct=30 mode=freeze dur=300 &
+            wait'
+
+  slow:
+    strategy:
+      fail-fast: false
+      matrix:
+        lat: ["dnspod", "dnspod1"]
+        rep: [1, 2]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 20
+      - name: Code before
+        run: |
+          git worktree add "$RUNNER_TEMP/old" d7a90cc
+          git worktree add "$RUNNER_TEMP/new" b87eaa5
+      - name: Live but slow path - checks started by repeats (one user and five), 80 ms
+        env:
+          LAT: ${{ matrix.lat }}
+          REP: ${{ matrix.rep }}
+        run: |
+          sudo modprobe sch_netem || true
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
+            -e PYTHONDONTWRITEBYTECODE=1 -e LAT="$LAT" -e REP="$REP" "$img" sh -c '
+            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null; N=audit/p31zhfix/e/e_net.sh; sh $N cert
+            sh $N run sp_u1_r1 80 0 zh_slowpath.py lat=$LAT retry=1 users=1 every=8 dur=900 slow=0.1 seed=1$REP &
+            sh $N run sp_u1_r2 80 0 zh_slowpath.py lat=$LAT retry=2 users=1 every=8 dur=900 slow=0.1 seed=2$REP &
+            sh $N run sp_u5_r1 80 0 zh_slowpath.py lat=$LAT retry=1 users=5 every=4 dur=900 slow=0.1 seed=3$REP &
+            wait'
+
+  load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 20
+      - name: Code before
+        run: |
+          git worktree add "$RUNNER_TEMP/old" d7a90cc
+          git worktree add "$RUNNER_TEMP/new" b87eaa5
+      - name: Burst load, floods, 1000 devices at the start of blocking (panel image)
+        run: |
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
+            -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
+            apk add -q --no-cache openssl nftables util-linux >/dev/null; E=audit/p31zhfix/e; sh $E/e_net.sh cert; python3 --version
+            python3 -I $E/e_fd.py /w/app /tmp/lab/c.crt /tmp/lab/c.key | grep RESULT | sed "s/^/FDFIX /"
+            for v in old new fix; do mkdir -p /tmp/dbg$v; done
+            cp -r /old/app/. /tmp/dbgold && cp -r /new/app/. /tmp/dbgnew && cp -r /w/app/. /tmp/dbgfix
+            for v in old new fix; do python3 -I $E/dbgpatch.py /tmp/dbg$v/dnsproxy.py; done
+            for v in dbgold dbgnew dbgfix dbgold dbgnew dbgfix; do
+              LAB_NEW=/tmp/$v LAB_CERT_DIR=/tmp/lab unshare -rn python3 -I $E/load.py new 200 120 300 > /tmp/out.json 2> /tmp/out.err
+              d=$(ls -td /tmp/p31-new-* | head -1)
+              echo "LOAD $v checkfail=$(grep -c CHECKFAIL $d/log.txt) descriptor=$(grep -c "is used by transport" $d/log.txt)"
+              cut -c1-3000 /tmp/out.json; echo
+              tail -2 /tmp/out.err | cut -c1-300
+            done
+            for v in old new fix; do for n in 1 600; do
+              LAB_OLD=/old/app LAB_NEW=/new/app LAB_FIX=/w/app LAB_CERT_DIR=/tmp/lab unshare -rn python3 -I $E/e_flood.py $v 3000 30 $n > /tmp/f.json 2>/tmp/f.err
+              echo "FLOOD $v names=$n $(python3 -c "import json;d=json.load(open(\"/tmp/f.json\"));print(d[\"sent\"],d[\"answers\"],d[\"rss_max_kb\"],d[\"stats\"])")"
+            done; done
+            for rate in 30 100 300 1000; do for v in old new fix; do
+              LAB_OLD=/old/app LAB_NEW=/new/app LAB_FIX=/w/app LAB_CERT_DIR=/tmp/lab unshare -rn python3 -I $E/zh_crowd.py $v $rate 60 20 > /tmp/c.json 2>/tmp/c.err
+              echo "CROWD $rate $v"; cut -c1-4000 /tmp/c.json; echo; tail -1 /tmp/c.err | cut -c1-300
+            done; done'
+
+  soak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 175
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 20
+      - name: Code before
+        run: |
+          git worktree add "$RUNNER_TEMP/old" d7a90cc
+          git worktree add "$RUNNER_TEMP/new" b87eaa5
+      - name: Long run 150 min, blocking in circles, fallback in circles (panel image)
+        run: |
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
+            -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
+            apk add -q --no-cache openssl nftables util-linux >/dev/null; E=audit/p31zhfix/e; sh $E/e_net.sh cert
+            LAB_OLD=/old/app LAB_NEW=/new/app LAB_FIX=/w/app LAB_VERS=old,new,fix LAB_CERT_DIR=/tmp/lab unshare -rn python3 -I $E/soak.py 9000 > /tmp/s.json 2>/tmp/s.err
+            python3 -I $E/zh_sum.py soak /tmp/s.json; grep -v "Task was destroyed\|task: <Task" /tmp/s.err | tail -20 | cut -c1-300'
