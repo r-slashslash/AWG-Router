@@ -1,0 +1,42 @@
+# Временная проверка Ж: повтор заданий ядра — без CAP_NET_ADMIN на ядре 6.8 и цена записи со списком размера ru (сети
+# без пересечений: nft 1.0.2 на 22.04 отказывал на пересечениях в прошлом прогоне).
+name: audit p31zh k
+on:
+  push:
+    branches: [audit-tmp-p31zh-k]
+permissions:
+  contents: read
+jobs:
+  kernel:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: "3.15"
+      - name: Host nftables
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq nftables >/dev/null
+          nft --version; uname -r; nproc
+      - name: Without CAP_NET_ADMIN, wmem_max 212992 (host nft and the panel image nft)
+        if: always()
+        run: |
+          sudo sysctl -qw net.core.wmem_max=212992
+          rm -rf /tmp/zhw && mkdir /tmp/zhw && cp -r app audit /tmp/zhw/ && chmod -R a+rX /tmp/zhw
+          sudo env ZH_WMEM=212992 unshare -rn "$(which python)" -I /tmp/zhw/audit/p31zh/e/zh_nft.py /tmp/zhw/app wmem 1000 3000 5000 8000 20000 50000 200000
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -w /w -e PYTHONDONTWRITEBYTECODE=1 -e ZH_WMEM=212992 "$img" sh -c '
+            apk add -q --no-cache nftables util-linux >/dev/null; nft --version
+            unshare -rn python3 -I audit/p31zh/e/zh_nft.py /w/app wmem 1000 5000 8000 50000 200000'
+      - name: Cost of one write by set size, list of the ru size (host nft and image nft)
+        if: always()
+        run: |
+          sudo unshare -n "$(which python)" -I audit/p31zh/e/zh_delcost.py
+          img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          docker run --rm --privileged -v "$PWD:/w:ro" -w /w -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
+            apk add -q --no-cache nftables util-linux >/dev/null; unshare -n python3 -I audit/p31zh/e/zh_delcost.py'

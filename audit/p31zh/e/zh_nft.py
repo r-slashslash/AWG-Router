@@ -78,14 +78,8 @@ _NETS = {}
 def nets(n: int) -> list[str]:
     if n in _NETS:
         return _NETS[n]
-    out, seen = [], set()
-    rr = random.Random(3)
-    while len(out) < n:
-        a = ipaddress.ip_network(f"{rr.randrange(1, 223)}.{rr.randrange(256)}.{rr.randrange(256)}.0/"
-                                 f"{rr.choice([16, 20, 22, 24])}", strict=False)
-        if not any(a.overlaps(b) for b in ()) and a not in seen:
-            seen.add(a)
-            out.append(str(a))
+    # не пересекаются и не соседствуют (auto-merge не сливает их, а nft 1.0.2 не ругается на пересечения)
+    out = [f"{20 + (2 * i) // 65536}.{((2 * i) // 256) % 256}.{(2 * i) % 256}.0/24" for i in range(n)]
     _NETS[n] = out
     return out
 
@@ -157,7 +151,10 @@ def part_sem():
 
 def part_wmem():
     shim()
-    wm = open("/proc/sys/net/core/wmem_max").read().strip()
+    try:                                    # в своём пространстве пользователей на 6.8 этого файла не видно
+        wm = open("/proc/sys/net/core/wmem_max").read().strip()
+    except OSError:
+        wm = os.environ.get("ZH_WMEM", "-1")
     out = {"wmem_max": int(wm), "nft": subprocess.run(["nft", "--version"], capture_output=True, text=True).stdout.strip()}
     for n in ARGS or [1000, 3000, 5000, 8000, 20000, 50000]:
         table()

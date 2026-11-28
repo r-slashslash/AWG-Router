@@ -22,14 +22,8 @@ def nft(text: str) -> float:
 
 
 def nets(n: int) -> list[str]:
-    out, seen = [], set()
-    while len(out) < n:
-        p = R.choice([16, 20, 22, 24])
-        a = ipaddress.ip_network(f"{R.randrange(1, 223)}.{R.randrange(256)}.{R.randrange(256)}.0/{p}", strict=False)
-        if a not in seen:
-            seen.add(a)
-            out.append(str(a))
-    return out
+    """n сетей /24, которые не пересекаются и не соседствуют (nft 1.0.2 на 22.04 отказывал на пересечениях)."""
+    return [f"{20 + (2 * i) // 65536}.{((2 * i) // 256) % 256}.{(2 * i) % 256}.0/24" for i in range(n)]
 
 
 def addrs(n: int, base: int = 0) -> list[str]:
