@@ -114,12 +114,32 @@ it grows, so every user-visible change gets a new version.
   still waits for the shared servers (`stage` in the key) and goes to the fallback itself; a repeat that joins a query
   older than `JOIN_CHECK` (5 s) on a path that answered nothing for as long starts the path check at once — before,
   a faster repeat of its own did (test VPS in Russia, real Cloudflare and Google, repeats every second: the longest
-  wait 10–15 s before the same-query fix, 20 s with it, now 6–10 s; a slow name on a working path starts no check).
+  wait 10–15 s before the same-query fix, 20 s with it, now 6–10 s; a slow name on a busy working path starts no check).
   Clients waiting for one query are limited — `JOIN_MAX` (1024) per query and `JOIN_ALL` (8192) in all, then SERVFAIL
   at once (`join_full`): a flood of one query kept every copy in memory (3000 a second for 30 s: 35 → 224 MB and 40 % of
   the queries unanswered; now 35 MB, all answered; 600 different dead names: 263 → 73 MB). "The fallback DNS
   doesn't answer either" compares paths: with two **Direct — address** paths it showed for the other one's fallback.
   Network tests: job `dns-set` (`tests/dns_set_check.py` on the kernels 6.8 and 7.x).
+- **Fixes from the check of those fixes.** A repeat that joins a query still waiting for encrypted DNS (DoH or DoT —
+  the shared servers or a rule's own DNS) for over `HEDGE_AFTER` (1.5 s) starts one second attempt of the same query by
+  the same path on a new connection (`_hedge`); the first answer of the two goes to everyone waiting and into the cache,
+  and the path counts as answering. Before the same-query fix a repeat asked the server itself and covered a lost answer;
+  with it the repeat waited for the first query's deadline — 6–15 s instead of 1–4 where encrypted DNS answers only now
+  and then (a server that loses answers, a block that comes and goes) — and on a quiet path it also started a path check,
+  so names went to the unencrypted fallback while the path worked. The second attempt delays nothing: when the first ends
+  without an answer it is cancelled and the check and the fallback go as before (full blocking: the same times to the
+  hundredth); at most `HEDGE_MAX` (8) per path at once (each one waiting for a blocked server holds ~0.35 MB); plain DNS and `h3://` entries have none. GitHub machines, 80 ms,
+  15 minutes: a model of DNSPod DoH from Russia (8 % of answers lost) — names waiting over 5 s 16 → 2 for one user (checks
+  from repeats 14 → 2), 125 → 23 for five users, none sent to the fallback; a block that drops 30 % of queries — names
+  waiting over 3 s 88–98 → 24–34 of 300; connections that freeze after a while — 5 names at the fallback → none, the
+  longest wait 5.5 → 2.5 s. Queries that go straight to the fallback (a Direct path checked or down) have their own
+  `MAX_INFLIGHT` places (`inflight_fb`): at the start of blocking the places were held by queries waiting 10–20 s for the
+  blocked servers, and on a big server (300 and more new names a second) every Direct client got SERVFAIL for 15 s although
+  the fallback answered at once. With Docker in an unprivileged LXC container the panel's rule table with a country list
+  doesn't fit `net.core.wmem_max` of the host (nft: "Message too long"); the panel now says what to run on the host
+  instead of nft's English error (README too). A set write that nft refuses by size even at `SET_TX_MIN` addresses ends
+  instead of trying every part. The network test "frozen after the handshake" drops the client's TLS data records
+  instead of counting bytes (it was red 4 times in 40, now 0 in 40).
 - **A rule's own DNS and the fallback DNS take DoH and DoT**: `77.88.8.8` (plain), `https://name[:port]/path` (DoH),
   `tls://name[:port]` (DoT), the name or an IPv4 (`app/dnsaddr.py`). Each is asked exactly the way it is written — an
   encrypted one that doesn't answer is never asked as plain DNS; the second entry is asked when the first doesn't
