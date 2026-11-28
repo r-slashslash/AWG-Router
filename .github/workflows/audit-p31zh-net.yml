@@ -32,34 +32,43 @@ jobs:
       - name: Transaction semantics (real code)
         run: sudo unshare -n "$(which python)" -I audit/p31zh/e/zh_nft.py "$PWD/app" sem
       - name: Address that devices keep asking for (SET_MIN 20 s) - c934013 and branch
+        if: always()
         run: |
           for a in "$RUNNER_TEMP/new/app" "$PWD/app"; do
             sudo unshare -n "$(which python)" -I audit/p31zh/e/e_expire.py "$a" | tail -3 | sed "s|^|EXPIRE $a |"
           done
       - name: The author's set check
+        if: always()
         run: sudo unshare -n "$(which python)" tests/dns_set_check.py
       - name: Cost of one write by set size (old command vs transaction)
+        if: always()
         run: sudo unshare -n "$(which python)" -I audit/p31zh/e/zh_delcost.py
       - name: Without CAP_NET_ADMIN in the initial namespace, wmem_max 212992 (host nft)
+        if: always()
         run: |
           sudo sysctl -qw net.core.wmem_max=212992
-          sudo unshare -rn "$(which python)" -I audit/p31zh/e/zh_nft.py "$PWD/app" wmem 1000 3000 5000 8000 20000 50000 200000
+          # в своём пространстве пользователей файлы бегуна (/home/runner — 750) не видны: копия в /tmp
+          rm -rf /tmp/zhw && mkdir /tmp/zhw && cp -r app audit /tmp/zhw/ && chmod -R a+rX /tmp/zhw
+          sudo unshare -rn "$(which python)" -I /tmp/zhw/audit/p31zh/e/zh_nft.py /tmp/zhw/app wmem 1000 3000 5000 8000 20000 50000 200000
       - name: Resync, rebuild during a transaction, two at once, neighbours (host nft)
+        if: always()
         run: |
           sudo unshare -n "$(which python)" -I audit/p31zh/e/zh_nft.py "$PWD/app" resync 50000 200000
           sudo unshare -n "$(which python)" -I audit/p31zh/e/zh_nft.py "$PWD/app" rebuild 100000
           sudo unshare -n "$(which python)" -I audit/p31zh/e/zh_nft.py "$PWD/app" neigh
       - name: Panel image nft (musl) - semantics, wmem 212992, resync
+        if: always()
         run: |
           img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
           docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
-            apk add -q --no-cache nftables util-linux >/dev/null && nft --version && python3 --version &&
-            unshare -n python3 -I audit/p31zh/e/zh_nft.py /w/app sem &&
-            unshare -rn python3 -I audit/p31zh/e/zh_nft.py /w/app wmem 1000 5000 8000 50000 200000 &&
-            unshare -n python3 -I audit/p31zh/e/zh_nft.py /w/app resync 50000 200000 &&
-            unshare -n python3 -I audit/p31zh/e/e_expire.py /w/app | tail -3 | sed "s/^/EXPIRE-IMG /" &&
+            apk add -q --no-cache nftables util-linux >/dev/null; nft --version; python3 --version
+            unshare -n python3 -I audit/p31zh/e/zh_nft.py /w/app sem
+            unshare -rn python3 -I audit/p31zh/e/zh_nft.py /w/app wmem 1000 5000 8000 50000 200000
+            unshare -n python3 -I audit/p31zh/e/zh_nft.py /w/app resync 50000 200000
+            unshare -n python3 -I audit/p31zh/e/e_expire.py /w/app | tail -3 | sed "s/^/EXPIRE-IMG /"
             unshare -n python3 -I audit/p31zh/e/zh_delcost.py'
       - name: Packets never miss the set during rewrites (counters)
+        if: always()
         run: sudo unshare -n "$(which python)" -I audit/p31zh/e/zh_gap.py "$PWD/app" 300
 
   retry:
@@ -79,7 +88,7 @@ jobs:
           img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
           docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
             -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
-            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null && N=audit/p31zh/e/e_net.sh && sh $N cert &&
+            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null; N=audit/p31zh/e/e_net.sh; sh $N cert
             sh $N run r_hello_doh_1 80 0 e_retry.py stream kind=hello enc=doh retry=1 dur=25 &
             sh $N run r_hello_doh_2 80 0 e_retry.py stream kind=hello enc=doh retry=2 dur=25 &
             wait
@@ -125,7 +134,7 @@ jobs:
           img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
           docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
             -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
-            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null && N=audit/p31zh/e/e_net.sh && sh $N cert &&
+            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null; N=audit/p31zh/e/e_net.sh; sh $N cert
             sh $N run b10_1 80 0 e_retry.py stream kind=blink10 enc=doh retry=1 dur=300 every=1 &
             sh $N run b30_1 80 0 e_retry.py stream kind=blink30 enc=doh retry=1 dur=300 every=1 &
             wait
@@ -159,7 +168,7 @@ jobs:
           img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
           docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
             -e PYTHONDONTWRITEBYTECODE=1 -e LAT="$LAT" "$img" sh -c '
-            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null && N=audit/p31zh/e/e_net.sh && sh $N cert &&
+            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null; N=audit/p31zh/e/e_net.sh; sh $N cert
             sh $N run sp_u1_r1 80 0 zh_slowpath.py lat=$LAT retry=1 users=1 every=8 dur=900 slow=0.1 &
             sh $N run sp_u1_r2 80 0 zh_slowpath.py lat=$LAT retry=2 users=1 every=8 dur=900 slow=0.1 seed=2 &
             sh $N run sp_u5_r1 80 0 zh_slowpath.py lat=$LAT retry=1 users=5 every=4 dur=900 slow=0.1 seed=3 &
@@ -182,7 +191,7 @@ jobs:
           img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
           docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
             -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
-            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null && N=audit/p31zh/e/e_net.sh && sh $N cert &&
+            apk add -q --no-cache openssl iproute2 nftables util-linux iproute2-tc >/dev/null; N=audit/p31zh/e/e_net.sh; sh $N cert
             sh $N run s_slow_one 80 0 scen.py slow_one &
             sh $N run s_slow_repeat1 80 0 scen.py slow_repeat rate=1 &
             wait
@@ -240,7 +249,7 @@ jobs:
           img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
           docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
             -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
-            apk add -q --no-cache openssl util-linux >/dev/null && E=audit/p31zh/e && sh $E/e_net.sh cert && python3 --version
+            apk add -q --no-cache openssl nftables util-linux >/dev/null; E=audit/p31zh/e; sh $E/e_net.sh cert; python3 --version
             python3 -I $E/e_fd.py /w/app /tmp/lab/c.crt /tmp/lab/c.key | grep RESULT | sed "s/^/FDFIX /"
             for v in old new fix; do mkdir -p /tmp/dbg$v; done
             cp -r /old/app/. /tmp/dbgold && cp -r /new/app/. /tmp/dbgnew && cp -r /w/app/. /tmp/dbgfix
@@ -276,9 +285,9 @@ jobs:
           img=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
           docker run --rm --privileged -v "$PWD:/w:ro" -v "$RUNNER_TEMP/old:/old:ro" -v "$RUNNER_TEMP/new:/new:ro" -w /w \
             -e PYTHONDONTWRITEBYTECODE=1 "$img" sh -c '
-            apk add -q --no-cache openssl util-linux >/dev/null && E=audit/p31zh/e && sh $E/e_net.sh cert &&
+            apk add -q --no-cache openssl nftables util-linux >/dev/null; E=audit/p31zh/e; sh $E/e_net.sh cert
             LAB_OLD=/old/app LAB_NEW=/new/app LAB_FIX=/w/app LAB_VERS=old,new,fix LAB_CERT_DIR=/tmp/lab unshare -rn python3 -I $E/soak.py 9000 > /tmp/s.json 2>/tmp/s.err
-            python3 -I $E/zh_sum.py soak /tmp/s.json; tail -3 /tmp/s.err | cut -c1-300'
+            python3 -I $E/zh_sum.py soak /tmp/s.json; grep -v "Task was destroyed\|task: <Task" /tmp/s.err | tail -20 | cut -c1-300'
 
   freeze:
     strategy:
@@ -298,6 +307,7 @@ jobs:
           python -m pip install -q --target "$RUNNER_TEMP/py" pyroute2==0.9.7
       - name: netns_e2e.py dns four times (the test as it is) and with a deterministic freeze rule
         run: |
+          set +e
           for i in 1 2 3 4; do
             sudo env PYTHONPATH="$RUNNER_TEMP/py:." "$(which python)" tests/netns_e2e.py dns > /tmp/d$i.log 2>&1; rc=$?
             echo "FREEZE-RUN ${{ matrix.n }}.$i rc=$rc $(grep -c "^BAD" /tmp/d$i.log) bad"
