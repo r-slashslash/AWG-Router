@@ -343,6 +343,7 @@ AmneziaWG 可以作为 Linux 内核模块运行，也可以作为 `amneziawg-go`
 - AmneziaVPN 容器模式下经 IPv6 的出口需要 Docker 启用 IPv6：容器网络默认没有 IPv6，面板会直接说明原因，而不只是显示“无连接”。在 `/etc/docker/daemon.json` 中加入 `"ipv6": true, "fixed-cidr-v6": "fd5a:3c71:9e20::/64", "ip6tables": true`（保留文件中已有的设置；Docker 27 之前的版本还需要 `"experimental": true`），然后运行 `systemctl restart docker`——这会重启所有容器。也可以为出口改用 IPv4 地址或带 A 记录的域名。不想重启 Docker：用 `awg-router reconfigure` 把 AmneziaWG 服务器迁移到主机上（密钥、端口和客户端不变，客户端配置继续可用）——在主机上，出口使用主机自身的网络，包括 IPv6。
 - 国家列表基于注册数据生成。针对特定服务，ASN 列表更准确。
 - 按规则统计流量以及规则的每月限额和速度限制需要内核支持连接标签（`ct label`；部分 OpenVZ/LXC 服务器没有）。没有时面板会提示不统计按规则的流量；其他功能照常工作。
+- 运行在非特权 LXC 容器（Proxmox 等）中的 Docker 无法加载带国家列表的面板规则：内核一次最多接受宿主机的 `net.core.wmem_max`（默认 212992 字节，俄罗斯列表需要约 2 MB）。面板会在页头提示；请在运行 LXC 的宿主机上执行 `sysctl -w net.core.wmem_max=16777216`，并把 `net.core.wmem_max=16777216` 写入 `/etc/sysctl.d/`，使其在重启后仍然生效。
 - 负载均衡（默认的和规则内的）只按负载在出口之间迁移客户端：它看不出某个网站不喜欢某个出口的地址（例如 Google 在那里总是要求“我不是机器人”验证）。请用单独的规则让这类网站只走一个出口。
 - 限制客户端上传和出口下载需要内核的 `ifb` 模块。安装程序会自动安装（云服务器内核使用 `linux-modules-extra` 软件包）；如果该内核没有这样的软件包，面板会提示，其他限制照常生效。
 
