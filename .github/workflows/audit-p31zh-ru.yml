@@ -1,0 +1,76 @@
+# Временная проверка Ж на тестовом VPS в России (ядро 6.8, 1 vCPU): запись в набор (транзакция, resync 200 000, пакеты
+# во время перезаписи, цена записи), «фильтр по DNS» под потоком новых адресов со списком размера ru, настоящая блокировка
+# к Cloudflare и Google с клиентами, которые повторяют запрос, и живой, но медленный путь к настоящим DNSPod, Quad9,
+# Cloudflare и Google — d7a90cc, c934013 и ветка рядом. Только вне понедельничного окна E2E; образов не собирает.
+name: audit p31zh ru
+on:
+  push:
+    branches: [audit-tmp-p31zh-ru]
+permissions:
+  contents: read
+jobs:
+  ru:
+    runs-on: [self-hosted, russia]
+    timeout-minutes: 200
+    steps:
+      - name: Workspace owner
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 10
+      - name: Code before
+        run: |
+          rm -rf "$RUNNER_TEMP/oldwt" "$RUNNER_TEMP/newwt"; git worktree prune
+          git worktree add "$RUNNER_TEMP/oldwt" d7a90cc
+          git worktree add "$RUNNER_TEMP/newwt" c934013
+      - name: Disk
+        run: df -h / | tail -1
+      - name: DNS filter set on this kernel (panel image)
+        run: |
+          IMG=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          sudo docker run --rm --privileged -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD:/w:ro" -v "$RUNNER_TEMP/oldwt:/old:ro" \
+            -v "$RUNNER_TEMP/newwt:/new:ro" -w /w "$IMG" sh -c '
+            apk add -q --no-cache nftables util-linux >/dev/null && nproc && uname -r && nft --version && E=audit/p31zh/e &&
+            unshare -n python3 -I $E/zh_nft.py /w/app sem;
+            unshare -n python3 -I $E/zh_delcost.py;
+            unshare -n python3 -I $E/zh_gap.py /w/app 300;
+            for a in /new/app /w/app; do python3 -I $E/e_expire.py $a | tail -3 | sed "s|^|EXPIRE $a |"; done;
+            unshare -n python3 -I $E/zh_nft.py /w/app resync 50000 200000;
+            unshare -n python3 -I $E/zh_nft.py /w/app rebuild 100000;
+            python3 -I $E/e_mkdbg.py /new/app /tmp/dnew && python3 -I $E/e_mkdbg.py /w/app /tmp/dfix &&
+            for rate in 5 20; do for v in dnew dfix; do
+              unshare -n python3 -I $E/e_setload_dbg.py /tmp/$v $rate 30 12302 2>&1 | tail -2 | sed "s/^/SETLOAD $rate $v /" | cut -c1-3000
+            done; done'
+      - name: Real blocking to Cloudflare and Google, clients repeat every 1 s
+        run: |
+          export IMG=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1) DK="sudo docker" OLD="$RUNNER_TEMP/oldwt" NEW="$RUNNER_TEMP/newwt" PAR=2 RETRY=1
+          export CASES="hello doh cloudflare 1;freeze doh cloudflare 1;syn doh google 0;hello dot cloudflare 0;rst doh cloudflare 0;freeze doh google 1"
+          sh audit/p31zh/e/zh_realblk.sh
+      - name: Real blocking, clients repeat every 2 s and 5 s
+        run: |
+          export IMG=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1) DK="sudo docker" OLD="$RUNNER_TEMP/oldwt" NEW="$RUNNER_TEMP/newwt" PAR=2
+          export CASES="hello doh cloudflare 1;syn doh google 0"
+          RETRY=2 sh audit/p31zh/e/zh_realblk.sh
+          RETRY=5 sh audit/p31zh/e/zh_realblk.sh
+      - name: Live but slow path to real servers - fallback answers and checks started by repeats
+        run: |
+          IMG=$(sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' Dockerfile | head -1)
+          run() { sudo docker run --rm --privileged -e PYTHONDONTWRITEBYTECODE=1 -e LAB_OLD=/old/app -e LAB_NEW=/new/app \
+            -e LAB_FIX=/w/app -e LAB_VERS=old,new,fix -e RETRY=$1 -v "$PWD:/w:ro" -v "$RUNNER_TEMP/oldwt:/old:ro" \
+            -v "$RUNNER_TEMP/newwt:/new:ro" -w /w "$IMG" sh -c "python3 -I audit/p31zh/e/zh_realslow.py $2 $3 $4 $5 2>/tmp/e.txt; tail -2 /tmp/e.txt | cut -c1-300"; }
+          run 1 dnspod 1 6 1500 &
+          run 1 quad9 1 6 900 &
+          wait
+          run 2 dnspod 1 6 1200 &
+          run 1 dnspod 3 3 900 &
+          wait
+          run 1 cloudflare 1 6 600 &
+          run 1 google 1 6 600 &
+          wait
+      - name: Clean up
+        if: always()
+        run: |
+          git worktree remove --force "$RUNNER_TEMP/oldwt" || true
+          git worktree remove --force "$RUNNER_TEMP/newwt" || true
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
+          df -h / | tail -1
